@@ -168,6 +168,34 @@ elisp/
 └── emacs-mcp-api.el       # Stable API for Claude
 ```
 
+## Tested & Working
+
+All features verified through the Clojure MCP → Emacs integration:
+
+| Feature | Status | 
+|---------|--------|
+| Context API | ✓ Full buffer/project/git/memory info |
+| Memory persistence | ✓ Notes saved to JSON per-project |
+| Memory query | ✓ Retrieves stored notes, conventions |
+| Workflows | ✓ `quick-note`, `commit` registered |
+| Notifications | ✓ Messages displayed in Emacs |
+| Jump to file:line | ✓ Opens file with line highlight |
+| Show in buffer | ✓ Creates buffer with content |
+| Synergy functions | ✓ Full dev-tools + emacs-bridge integration |
+
+```clojure
+;; Example: Get full context with memory
+(require '[emacs-mcp.synergy :as syn])
+(syn/get-full-context!)
+;; => {:buffer {...} :project {...} :git {...} :memory {:notes [...]}}
+
+;; Jump to a specific location
+(syn/jump-to! "src/myfile.clj" 42)
+
+;; Show results in Emacs
+(syn/show-in-buffer! "*Results*" "# Analysis\n..." "markdown-mode")
+```
+
 ## Meta: MCP Servers Editing MCP Servers
 
 This project demonstrates an interesting recursive pattern: **an MCP server can be developed using another MCP server**.
