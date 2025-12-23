@@ -6,6 +6,7 @@
     "elisp/emacs-mcp-addons.el",
     "elisp/addons/emacs-mcp-claude-code.el",
     "elisp/addons/emacs-mcp-cider.el",
+    "elisp/addons/emacs-mcp-org-ai.el",
     "elisp/addons/emacs-mcp-addon-template.el"
   ],
   "cloned_repos": [
@@ -17,25 +18,24 @@
     "Moved claude-code-mcp.el to addons/emacs-mcp-claude-code.el",
     "Created CIDER integration addon stub (emacs-mcp-cider.el)",
     "Created addon template for user extensions",
-    "Cloned and analyzed cider-mcp-server (TypeScript/Deno nREPL bridge)",
-    "Cloned and analyzed org-ai (AI in org-mode package)"
+    "Cloned and analyzed cider-mcp-server and org-ai repos",
+    "Created org-ai-mcp addon (emacs-mcp-org-ai.el)",
+    "Updated README.md with addon system documentation",
+    "Tested addon loading in Emacs - all 4 addons discovered and loaded",
+    "Merged feat/addon-system to staging and pushed to origin"
   ],
-  "in_progress_tasks": [
-    "org-ai-mcp addon stub - not yet created",
-    "README addon documentation - not yet updated"
-  ],
+  "in_progress_tasks": [],
   "blocking_issues": [],
   "next_actions": [
-    "Create org-ai-mcp addon stub (elisp/addons/emacs-mcp-org-ai.el)",
-    "Update README.md with addon system documentation",
-    "Merge feat/addon-system to staging",
-    "Test addon loading in Emacs",
-    "Consider adding emacs-mcp to vibe_kanban for task tracking"
+    "Test addon loading in user's actual Emacs config",
+    "Consider creating PR from staging to main",
+    "Add more addons as needed (magit, projectile, etc.)"
   ],
   "decisions_made": [
     "Addon architecture: Lazy-loaded via with-eval-after-load for performance",
     "Naming convention: emacs-mcp-<package>.el in addons/ directory",
     "Auto-discovery: Addons found automatically in addon directories",
     "User extensibility: Template provided, custom directories supported"
-  ]
+  ],
+  "vibe_kanban_project_id": "b70720e8-3a52-41ba-a115-964b81369bb5"
 }
