@@ -9,6 +9,9 @@
         {:git/url "https://github.com/unravel-team/mcp-clojure-sdk.git"
          :git/sha "039cf220ac6bb3858f71e823016035e257a5380d"}
 
+        ;; nREPL client support  
+        nrepl/bencode {:mvn/version "1.2.0"}
+
         ;; Logging
         com.taoensso/timbre {:mvn/version "6.8.0"}
         org.slf4j/slf4j-nop {:mvn/version "2.0.16"}}

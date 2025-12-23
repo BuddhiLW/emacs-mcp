@@ -10,19 +10,36 @@
 
 (defn eval-elisp
   "Execute elisp code in running Emacs and return the result.
-   Returns a map with :success, :result or :error keys."
+   Returns a map with :success, :result or :error keys.
+   Includes timing information for observability."
   [code]
   (log/debug "Executing elisp:" code)
-  (try
-    (let [{:keys [exit out err]} (sh *emacsclient-path* "--eval" code)]
-      (if (zero? exit)
-        {:success true
-         :result (str/trim out)}
-        {:success false
-         :error (str/trim err)}))
-    (catch Exception e
-      {:success false
-       :error (str "Failed to execute emacsclient: " (.getMessage e))})))
+  (let [start (System/currentTimeMillis)]
+    (try
+      (let [{:keys [exit out err]} (sh *emacsclient-path* "--eval" code)
+            duration (- (System/currentTimeMillis) start)]
+        (if (zero? exit)
+          (do
+            (log/debug :emacsclient-success {:duration-ms duration
+                                             :result-length (count out)})
+            {:success true
+             :result (str/trim out)
+             :duration-ms duration})
+          (do
+            (log/warn :emacsclient-failure {:duration-ms duration
+                                            :exit-code exit
+                                            :error err})
+            {:success false
+             :error (str/trim err)
+             :duration-ms duration})))
+      (catch Exception e
+        (let [duration (- (System/currentTimeMillis) start)]
+          (log/error :emacsclient-exception {:duration-ms duration
+                                             :exception (.getMessage e)}
+                     e)
+          {:success false
+           :error (str "Failed to execute emacsclient: " (.getMessage e))
+           :duration-ms duration})))))
 
 (defn eval-elisp!
   "Execute elisp and return result string, or throw on error."

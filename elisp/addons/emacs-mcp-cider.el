@@ -186,6 +186,41 @@
   (setq emacs-mcp-cider-auto-log-results (not emacs-mcp-cider-auto-log-results))
   (message "Auto-log %s" (if emacs-mcp-cider-auto-log-results "enabled" "disabled")))
 
+;;;; MCP Tool API Functions
+;; These functions are called by the emacs-mcp Clojure server as MCP tools
+
+;;;###autoload
+(defun emacs-mcp-cider-eval-silent (code)
+  "Evaluate CODE via CIDER silently, return result.
+Fast evaluation without REPL buffer output."
+  (if (and (featurep 'cider) (cider-connected-p))
+      (let ((result (cider-nrepl-sync-request:eval code)))
+        (or (nrepl-dict-get result "value")
+            (nrepl-dict-get result "err")
+            (nrepl-dict-get result "out")))
+    (error "CIDER not connected")))
+
+;;;###autoload
+(defun emacs-mcp-cider-eval-explicit (code)
+  "Evaluate CODE via CIDER interactively.
+Shows output in REPL buffer for collaborative debugging."
+  (if (and (featurep 'cider) (cider-connected-p))
+      (progn
+        (cider-interactive-eval code)
+        (format "Sent to REPL: %s" (truncate-string-to-width code 50 nil nil "...")))
+    (error "CIDER not connected")))
+
+;;;###autoload
+(defun emacs-mcp-cider-status ()
+  "Return CIDER connection status as JSON-compatible plist."
+  (list :connected (and (featurep 'cider) (cider-connected-p))
+        :repl-buffer (when (and (featurep 'cider) (cider-connected-p))
+                       (buffer-name (car (cider-repl-buffers))))
+        :namespace (when (and (featurep 'cider) (cider-connected-p))
+                     (cider-current-ns))
+        :repl-type (when (and (featurep 'cider) (boundp 'cider-repl-type))
+                     cider-repl-type)))
+
 ;;;; Minor Mode
 
 ;;;###autoload

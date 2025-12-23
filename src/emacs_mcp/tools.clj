@@ -1,19 +1,28 @@
 (ns emacs-mcp.tools
   "MCP tool definitions for Emacs interaction."
   (:require [emacs-mcp.emacsclient :as ec]
+            [emacs-mcp.telemetry :as telemetry]
+            [emacs-mcp.validation :as v]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]))
 
 ;; Tool handlers
 
 (defn handle-eval-elisp
-  "Execute arbitrary elisp code."
-  [{:keys [code]}]
-  (log/info "eval-elisp:" code)
-  (let [{:keys [success result error]} (ec/eval-elisp code)]
-    (if success
-      {:type "text" :text result}
-      {:type "text" :text (str "Error: " error) :isError true})))
+  "Execute arbitrary elisp code with telemetry."
+  [params]
+  (try
+    (v/validate-code (:code params))
+    (let [{:keys [code]} params]
+      (telemetry/with-eval-telemetry :elisp code nil
+        (let [{:keys [success result error]} (ec/eval-elisp code)]
+          (if success
+            {:type "text" :text result}
+            {:type "text" :text (str "Error: " error) :isError true}))))
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :validation (:type (ex-data e)))
+        (v/wrap-validation-error e)
+        (throw e)))))
 
 (defn handle-list-buffers
   "List all open buffers."
@@ -23,12 +32,19 @@
 
 (defn handle-get-buffer-content
   "Get content of a specific buffer."
-  [{:keys [buffer_name]}]
-  (log/info "get-buffer-content:" buffer_name)
+  [params]
   (try
-    {:type "text" :text (ec/buffer-content buffer_name)}
-    (catch Exception e
-      {:type "text" :text (str "Error: " (.getMessage e)) :isError true})))
+    (v/validate-buffer-request params)
+    (let [{:keys [buffer_name]} params]
+      (log/info "get-buffer-content:" buffer_name)
+      (try
+        {:type "text" :text (ec/buffer-content buffer_name)}
+        (catch Exception e
+          {:type "text" :text (str "Error: " (.getMessage e)) :isError true})))
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :validation (:type (ex-data e)))
+        (v/wrap-validation-error e)
+        (throw e)))))
 
 (defn handle-current-buffer
   "Get current buffer name and file."
@@ -61,10 +77,17 @@
 
 (defn handle-goto-line
   "Go to a specific line."
-  [{:keys [line]}]
-  (log/info "goto-line:" line)
-  (ec/goto-line line)
-  {:type "text" :text (str "Moved to line " line)})
+  [params]
+  (try
+    (v/validate-goto-line-request params)
+    (let [{:keys [line]} params]
+      (log/info "goto-line:" line)
+      (ec/goto-line line)
+      {:type "text" :text (str "Moved to line " line)})
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :validation (:type (ex-data e)))
+        (v/wrap-validation-error e)
+        (throw e)))))
 
 (defn handle-insert-text
   "Insert text at cursor position."
@@ -256,6 +279,169 @@
       {:type "text" :text result}
       {:type "text" :text (str "Error: " error) :isError true})))
 
+;; ============================================================================
+;; CIDER Integration Tools
+;; ============================================================================
+
+(defn handle-cider-status
+  "Get CIDER connection status."
+  [_]
+  (log/info "cider-status")
+  (let [elisp "(require 'emacs-mcp-cider nil t)
+               (if (fboundp 'emacs-mcp-cider-status)
+                   (json-encode (emacs-mcp-cider-status))
+                 (json-encode (list :connected nil :error \"emacs-mcp-cider not loaded\")))"
+        {:keys [success result error]} (ec/eval-elisp elisp)]
+    (if success
+      {:type "text" :text result}
+      {:type "text" :text (str "Error: " error) :isError true})))
+
+(defn handle-cider-eval-silent
+  "Evaluate Clojure code via CIDER silently with telemetry."
+  [params]
+  (try
+    (v/validate-cider-eval-request params)
+    (let [{:keys [code]} params]
+      (telemetry/with-eval-telemetry :cider-silent code nil
+        (let [elisp (format "(require 'emacs-mcp-cider nil t)
+                             (if (fboundp 'emacs-mcp-cider-eval-silent)
+                                 (emacs-mcp-cider-eval-silent %s)
+                               (error \"emacs-mcp-cider not loaded\"))"
+                            (pr-str code))
+              {:keys [success result error]} (ec/eval-elisp elisp)]
+          (if success
+            {:type "text" :text result}
+            {:type "text" :text (str "Error: " error) :isError true}))))
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :validation (:type (ex-data e)))
+        (v/wrap-validation-error e)
+        (throw e)))))
+
+(defn handle-cider-eval-explicit
+  "Evaluate Clojure code via CIDER interactively (shows in REPL) with telemetry."
+  [params]
+  (try
+    (v/validate-cider-eval-request params)
+    (let [{:keys [code]} params]
+      (telemetry/with-eval-telemetry :cider-explicit code nil
+        (let [elisp (format "(require 'emacs-mcp-cider nil t)
+                             (if (fboundp 'emacs-mcp-cider-eval-explicit)
+                                 (emacs-mcp-cider-eval-explicit %s)
+                               (error \"emacs-mcp-cider not loaded\"))"
+                            (pr-str code))
+              {:keys [success result error]} (ec/eval-elisp elisp)]
+          (if success
+            {:type "text" :text result}
+            {:type "text" :text (str "Error: " error) :isError true}))))
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :validation (:type (ex-data e)))
+        (v/wrap-validation-error e)
+        (throw e)))))
+
+;;; ============================================================================
+;;; Kanban Tools (org-kanban integration)
+;;; ============================================================================
+
+(defn kanban-addon-available?
+  "Check if emacs-mcp-org-kanban addon is loaded."
+  []
+  (let [{:keys [success result]} (ec/eval-elisp "(featurep 'emacs-mcp-org-kanban)")]
+    (and success (= result "t"))))
+
+(defn handle-mcp-kanban-status
+  "Get kanban status including tasks by status, progress, and backend info."
+  [_]
+  (if (kanban-addon-available?)
+    (let [result (ec/eval-elisp "(json-encode (emacs-mcp-kanban-api-status))")]
+      {:content [{:type "text"
+                  :text (str result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-org-kanban addon not loaded. Run (emacs-mcp-addon-load 'org-kanban)"}]}))
+
+(defn handle-mcp-kanban-list-tasks
+  "List kanban tasks, optionally filtered by status."
+  [{:keys [status]}]
+  (if (kanban-addon-available?)
+    (let [elisp (if status
+                  (format "(json-encode (emacs-mcp-kanban-list-tasks nil \"%s\"))" status)
+                  "(json-encode (emacs-mcp-kanban-list-tasks))")
+          result (ec/eval-elisp elisp)]
+      {:content [{:type "text"
+                  :text (str result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-org-kanban addon not loaded."}]}))
+
+(defn handle-mcp-kanban-create-task
+  "Create a new kanban task."
+  [{:keys [title description]}]
+  (if (kanban-addon-available?)
+    (let [elisp (if description
+                  (format "(json-encode (emacs-mcp-kanban-create-task \"%s\" \"%s\"))"
+                          (v/escape-elisp-string title)
+                          (v/escape-elisp-string description))
+                  (format "(json-encode (emacs-mcp-kanban-create-task \"%s\"))"
+                          (v/escape-elisp-string title)))
+          result (ec/eval-elisp elisp)]
+      {:content [{:type "text"
+                  :text (str "Created task: " result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-org-kanban addon not loaded."}]}))
+
+(defn handle-mcp-kanban-update-task
+  "Update a kanban task's status or title."
+  [{:keys [task_id status title]}]
+  (if (kanban-addon-available?)
+    (let [props (cond-> ""
+                  status (str (format ":status \"%s\" " status))
+                  title (str (format ":title \"%s\" " (v/escape-elisp-string title))))
+          elisp (format "(emacs-mcp-kanban-update-task \"%s\" %s)" task_id props)
+          result (ec/eval-elisp elisp)]
+      {:content [{:type "text"
+                  :text (str "Updated task: " result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-org-kanban addon not loaded."}]}))
+
+(defn handle-mcp-kanban-move-task
+  "Move a task to a new status column."
+  [{:keys [task_id new_status]}]
+  (if (kanban-addon-available?)
+    (let [elisp (format "(emacs-mcp-kanban-move-task \"%s\" \"%s\")" task_id new_status)
+          result (ec/eval-elisp elisp)]
+      {:content [{:type "text"
+                  :text (str "Moved task to " new_status)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-org-kanban addon not loaded."}]}))
+
+(defn handle-mcp-kanban-roadmap
+  "Get roadmap view with milestones and progress."
+  [_]
+  (if (kanban-addon-available?)
+    (let [result (ec/eval-elisp "(json-encode (emacs-mcp-kanban-api-roadmap))")]
+      {:content [{:type "text"
+                  :text (str result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-org-kanban addon not loaded."}]}))
+
+(defn handle-mcp-kanban-my-tasks
+  "Get tasks assigned to or modified by the current agent."
+  [_]
+  (if (kanban-addon-available?)
+    (let [result (ec/eval-elisp "(json-encode (emacs-mcp-kanban-api-my-tasks))")]
+      {:content [{:type "text"
+                  :text (str result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-org-kanban addon not loaded."}]}))
+
+(defn handle-mcp-kanban-sync
+  "Sync tasks between vibe-kanban and standalone backends."
+  [_]
+  (if (kanban-addon-available?)
+    (let [result (ec/eval-elisp "(emacs-mcp-kanban-sync-all)")]
+      {:content [{:type "text"
+                  :text (str "Sync complete: " result)}]})
+    {:content [{:type "text"
+                :text "emacs-mcp-org-kanban addon not loaded."}]}))
+
 ;; Tool definitions
 
 (def tools
@@ -424,7 +610,93 @@
                   :properties {"buffer_name" {:type "string"
                                               :description "Name of the buffer to inspect"}}
                   :required ["buffer_name"]}
-    :handler handle-mcp-buffer-info}])
+    :handler handle-mcp-buffer-info}
+
+   ;; CIDER Integration Tools (requires emacs-mcp-cider addon)
+   {:name "cider_status"
+    :description "Get CIDER connection status including connected state, REPL buffer name, current namespace, and REPL type."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-cider-status}
+
+   {:name "cider_eval_silent"
+    :description "Evaluate Clojure code via CIDER silently. Fast evaluation without REPL buffer output. Use for routine/automated evals."
+    :inputSchema {:type "object"
+                  :properties {"code" {:type "string"
+                                       :description "Clojure code to evaluate"}}
+                  :required ["code"]}
+    :handler handle-cider-eval-silent}
+
+   {:name "cider_eval_explicit"
+    :description "Evaluate Clojure code via CIDER interactively. Shows output in REPL buffer for collaborative debugging. Use when stuck or want user to see output."
+    :inputSchema {:type "object"
+                  :properties {"code" {:type "string"
+                                       :description "Clojure code to evaluate"}}
+                  :required ["code"]}
+    :handler handle-cider-eval-explicit}
+
+   ;; Kanban Integration Tools (requires emacs-mcp-org-kanban addon)
+   {:name "mcp_kanban_status"
+    :description "Get kanban status including tasks by status, progress percentage, backend info, and roadmap. Use at session start."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-mcp-kanban-status}
+
+   {:name "mcp_kanban_list_tasks"
+    :description "List kanban tasks, optionally filtered by status (todo, inprogress, inreview, done)."
+    :inputSchema {:type "object"
+                  :properties {"status" {:type "string"
+                                         :enum ["todo" "inprogress" "inreview" "done"]
+                                         :description "Filter by status (optional)"}}
+                  :required []}
+    :handler handle-mcp-kanban-list-tasks}
+
+   {:name "mcp_kanban_create_task"
+    :description "Create a new kanban task with title and optional description."
+    :inputSchema {:type "object"
+                  :properties {"title" {:type "string"
+                                        :description "Task title"}
+                               "description" {:type "string"
+                                              :description "Task description (optional)"}}
+                  :required ["title"]}
+    :handler handle-mcp-kanban-create-task}
+
+   {:name "mcp_kanban_update_task"
+    :description "Update a kanban task's status or title."
+    :inputSchema {:type "object"
+                  :properties {"task_id" {:type "string"
+                                          :description "Task ID to update"}
+                               "status" {:type "string"
+                                         :enum ["todo" "inprogress" "inreview" "done"]
+                                         :description "New status (optional)"}
+                               "title" {:type "string"
+                                        :description "New title (optional)"}}
+                  :required ["task_id"]}
+    :handler handle-mcp-kanban-update-task}
+
+   {:name "mcp_kanban_move_task"
+    :description "Move a task to a new status column. Shorthand for update with status change."
+    :inputSchema {:type "object"
+                  :properties {"task_id" {:type "string"
+                                          :description "Task ID to move"}
+                               "new_status" {:type "string"
+                                             :enum ["todo" "inprogress" "inreview" "done"]
+                                             :description "Target status column"}}
+                  :required ["task_id" "new_status"]}
+    :handler handle-mcp-kanban-move-task}
+
+   {:name "mcp_kanban_roadmap"
+    :description "Get roadmap view with milestones, phases, and progress indicators."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-mcp-kanban-roadmap}
+
+   {:name "mcp_kanban_my_tasks"
+    :description "Get tasks assigned to or modified by the current agent session."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-mcp-kanban-my-tasks}
+
+   {:name "mcp_kanban_sync"
+    :description "Sync tasks between vibe-kanban cloud and standalone org-file backends."
+    :inputSchema {:type "object" :properties {}}
+    :handler handle-mcp-kanban-sync}])
 
 (defn get-tool-by-name
   "Find a tool definition by name."
