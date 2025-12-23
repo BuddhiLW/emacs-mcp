@@ -1,0 +1,364 @@
+#+TITLE: emacs-mcp Addons
+#+AUTHOR: Pedro G. Branquinho
+#+STARTUP: overview
+#+OPTIONS: toc:2
+
+* Overview
+
+The addon system provides modular integrations between emacs-mcp and other Emacs packages.
+Addons are *lazy-loaded* only when their target packages are detected, keeping startup fast.
+
+** Design Principles
+
+- *Lazy loading*: Addons load via =with-eval-after-load= when target packages are used
+- *Non-intrusive*: Never modify target packages, only extend them
+- *Consistent API*: All addons register via =emacs-mcp-addon-register=
+- *User extensible*: Custom addon directories supported
+
+* Built-in Addons
+
+| Addon        | Target Package | MCP Tools | Transient |
+|--------------+----------------+-----------+-----------|
+| claude-code  | claude-code.el | -         | ✓         |
+| cider        | CIDER          | ✓         | ✓         |
+| org-ai       | org-ai         | -         | ✓         |
+| org-kanban   | org-kanban     | ✓         | ✓         |
+
+** Feature Matrix
+
+| Feature            | claude-code | cider | org-ai | org-kanban |
+|--------------------+:-----------:+:-----:+:------:+:----------:|
+| Context injection  | ✓           | ✓     | ✓      | -          |
+| Memory integration | ✓           | ✓     | ✓      | -          |
+| Agent tracking     | -           | -     | -      | ✓          |
+| Cloud sync         | -           | -     | -      | ✓          |
+| Transient menu     | ✓           | ✓     | ✓      | ✓          |
+| MCP tools          | -           | ✓     | -      | ✓          |
+
+* claude-code Addon
+:PROPERTIES:
+:CUSTOM_ID: claude-code
+:END:
+
+Integrates [[https://github.com/karthink/claude-code][claude-code.el]] (Claude Code CLI interface) with emacs-mcp.
+
+** Features
+
+- Auto-inject MCP context into Claude commands
+- Save conversations to project memory
+- Run MCP workflows from Claude interface
+- Notification integration
+
+** Installation
+
+#+begin_src elisp
+(emacs-mcp-addon-load 'claude-code)
+(claude-code-mcp-mode 1)
+#+end_src
+
+** Keybindings
+
+| Key     | Command                         |
+|---------+---------------------------------|
+| =C-c c M= | Open MCP transient menu         |
+| =c=       | Show context (in transient)     |
+| =s=       | Send with context               |
+| =m=       | Save to memory                  |
+| =q=       | Query memory                    |
+| =w=       | Run workflow                    |
+
+** Customization
+
+#+begin_src elisp
+;; Auto-inject context into all commands
+(setq claude-code-mcp-auto-context t)
+
+;; Log conversations to memory
+(setq claude-code-mcp-log-conversations t)
+
+;; Context format: 'compact, 'full, or 'smart
+(setq claude-code-mcp-context-format 'smart)
+#+end_src
+
+* cider Addon
+:PROPERTIES:
+:CUSTOM_ID: cider
+:END:
+
+Integrates [[https://github.com/clojure-emacs/cider][CIDER]] (Clojure IDE) with emacs-mcp.
+
+** Features
+
+- Add Clojure namespace/project context to MCP
+- Save REPL results to memory
+- Query memory for previous solutions
+- Auto-log significant REPL sessions
+
+** Installation
+
+#+begin_src elisp
+(emacs-mcp-addon-load 'cider)
+(emacs-mcp-cider-mode 1)
+#+end_src
+
+** MCP Tools
+
+| Tool               | Description                          |
+|--------------------+--------------------------------------|
+| =cider_status=       | Get CIDER connection status          |
+| =cider_eval_silent=  | Evaluate Clojure code silently       |
+| =cider_eval_explicit= | Evaluate with REPL output (visible) |
+
+** Keybindings (Transient)
+
+| Key | Command              |
+|-----+----------------------|
+| =e=   | Eval with context    |
+| =s=   | Save last result     |
+| =d=   | Save defun           |
+| =q=   | Query solutions      |
+| =L=   | Toggle auto-log      |
+
+** Customization
+
+#+begin_src elisp
+;; Auto-log results above threshold
+(setq emacs-mcp-cider-auto-log-results t)
+(setq emacs-mcp-cider-log-threshold 100)
+#+end_src
+
+* org-ai Addon
+:PROPERTIES:
+:CUSTOM_ID: org-ai
+:END:
+
+Integrates [[https://github.com/rksm/org-ai][org-ai]] with emacs-mcp.
+
+** Features
+
+- Inject MCP context into org-ai prompts
+- Save AI conversations to project memory
+- Query memory for relevant context
+- Auto-context for org-ai blocks
+
+** Installation
+
+#+begin_src elisp
+(emacs-mcp-addon-load 'org-ai)
+(emacs-mcp-org-ai-mode 1)
+#+end_src
+
+** Keybindings (Transient)
+
+| Key | Command                    |
+|-----+----------------------------|
+| =c=   | Inject context into block  |
+| =s=   | Save conversation          |
+| =q=   | Query memory               |
+| =C=   | Toggle auto-context        |
+| =S=   | Toggle auto-save           |
+
+** Customization
+
+#+begin_src elisp
+;; Auto-inject context into new blocks
+(setq emacs-mcp-org-ai-auto-context t)
+
+;; Auto-save conversations
+(setq emacs-mcp-org-ai-auto-save t)
+
+;; Context sections to include
+(setq emacs-mcp-org-ai-context-sections '(buffer project git))
+#+end_src
+
+* org-kanban Addon
+:PROPERTIES:
+:CUSTOM_ID: org-kanban
+:END:
+
+Dual-backend kanban task tracking with [[https://github.com/gizmomogwai/org-kanban][org-kanban]] visualization.
+
+** Architecture
+
+Follows SOLID/DDD principles with Strategy Pattern for interchangeable backends:
+
+#+begin_src
+┌─────────────────────────────────────────────────────────┐
+│                   Unified API                           │
+│  emacs-mcp-kanban-{list,create,update,move}-task       │
+├─────────────────────┬───────────────────────────────────┤
+│   Standalone        │         Vibe-Kanban               │
+│   Backend           │         Backend                   │
+│                     │                                   │
+│   Local .org file   │   MCP Server (cloud)              │
+│   Personal/offline  │   Team collaboration              │
+└─────────────────────┴───────────────────────────────────┘
+#+end_src
+
+** Backends
+
+| Backend      | Use Case         | Storage              |
+|--------------+------------------+----------------------|
+| =standalone=   | Personal/offline | Local =.org= file      |
+| =vibe=         | Team/cloud       | vibe-kanban MCP      |
+
+** Features
+
+- *Agent tracking*: Records which AI agent created/modified tasks
+- *Session continuity*: Links tasks to conversation sessions
+- *Bidirectional sync*: Push/pull between backends
+- *org-mode integration*: Works with agenda views, org-kanban board
+
+** Installation
+
+#+begin_src elisp
+(emacs-mcp-addon-load 'org-kanban)
+(emacs-mcp-kanban-mode 1)
+
+;; For standalone backend (default)
+(setq emacs-mcp-kanban-backend 'standalone)
+
+;; For vibe-kanban cloud sync
+(setq emacs-mcp-kanban-backend 'vibe)
+(setq emacs-mcp-kanban-default-project "your-project-uuid")
+
+;; Enable dual-backend with auto-sync
+(setq emacs-mcp-kanban-enable-dual-backend t)
+(setq emacs-mcp-kanban-auto-sync t)
+#+end_src
+
+** MCP Tools
+
+| Tool                  | Description                        |
+|-----------------------+------------------------------------|
+| =mcp_kanban_status=     | Get board status and progress      |
+| =mcp_kanban_list_tasks= | List tasks (optionally by status)  |
+| =mcp_kanban_create_task= | Create new task                   |
+| =mcp_kanban_update_task= | Update task properties            |
+| =mcp_kanban_move_task=  | Move to new status column          |
+| =mcp_kanban_roadmap=    | Get roadmap view with milestones   |
+| =mcp_kanban_my_tasks=   | Get tasks for current agent        |
+| =mcp_kanban_sync=       | Sync between backends              |
+
+** Keybindings (Transient)
+
+| Key | Command             |
+|-----+---------------------|
+| =s=   | Show status         |
+| =l=   | List tasks          |
+| =c=   | Create task         |
+| =m=   | Move task           |
+| =b=   | Show board          |
+| =S=   | Sync all            |
+| =B=   | Switch backend      |
+
+** Org File Structure
+
+The standalone backend uses this org structure:
+
+#+begin_src org
+,#+TITLE: emacs-mcp Kanban
+,#+TODO: TODO IN-PROGRESS IN-REVIEW | DONE CANCELLED
+
+,* Project Name
+:PROPERTIES:
+:ID: <project-uuid>
+:END:
+
+,** TODO Task title
+:PROPERTIES:
+:ID: <task-uuid>
+:VIBE_ID: <vibe-kanban-uuid>  ; if synced
+:AGENT: emacs-1234            ; which agent created
+:SESSION: 20251223-143022     ; session timestamp
+:DESCRIPTION: Task details
+:END:
+#+end_src
+
+** Agent Tracking
+
+Tasks automatically track which AI agent worked on them:
+
+#+begin_src elisp
+;; Enable agent tracking (default: t)
+(setq emacs-mcp-kanban-track-agents t)
+#+end_src
+
+Properties recorded:
+- =AGENT=: Agent identifier (e.g., =emacs-7572= or =CLAUDE_SESSION_ID=)
+- =SESSION=: Session timestamp for continuity
+- =LAST_AGENT=: Last agent to modify the task
+
+* Creating Custom Addons
+
+** Template
+
+Copy the template to start:
+
+#+begin_src bash
+cp elisp/addons/emacs-mcp-addon-template.el \
+   elisp/addons/emacs-mcp-my-addon.el
+#+end_src
+
+** Structure
+
+#+begin_src elisp
+;;; emacs-mcp-my-addon.el --- My integration -*- lexical-binding: t; -*-
+
+(require 'emacs-mcp-api)
+
+;; Soft dependencies
+(declare-function target-package-function "target-package")
+
+;;; Customization
+(defgroup emacs-mcp-my-addon nil
+  "My addon settings."
+  :group 'emacs-mcp)
+
+;;; Integration functions
+(defun emacs-mcp-my-addon-do-thing ()
+  "Integration function."
+  (interactive)
+  ;; Your code here
+  )
+
+;;; Minor mode
+(define-minor-mode emacs-mcp-my-addon-mode
+  "My addon mode."
+  :lighter " MCP-My"
+  :global t)
+
+;;; Registration
+(with-eval-after-load 'emacs-mcp-addons
+  (emacs-mcp-addon-register
+   'my-addon
+   :version "0.1.0"
+   :description "My integration"
+   :requires '(target-package emacs-mcp-api)
+   :provides '(emacs-mcp-my-addon-mode)))
+
+(provide 'emacs-mcp-my-addon)
+#+end_src
+
+** Custom Addon Directory
+
+#+begin_src elisp
+(add-to-list 'emacs-mcp-addon-directories "~/my-addons")
+#+end_src
+
+** Listing Available Addons
+
+#+begin_src elisp
+M-x emacs-mcp-addon-info
+#+end_src
+
+* Auto-Loading
+
+Enable automatic addon loading when target packages are detected:
+
+#+begin_src elisp
+;; In init.el after loading emacs-mcp
+(emacs-mcp-addons-auto-load)
+#+end_src
+
+This sets up =with-eval-after-load= hooks so addons load only when needed.

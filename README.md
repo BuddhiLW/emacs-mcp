@@ -210,115 +210,21 @@ elisp/
 
 ## Addon System
 
-The addon system provides a modular way to integrate emacs-mcp with other Emacs packages. Addons are **lazy-loaded** only when needed, keeping startup fast.
+Modular integrations with other Emacs packages. Addons are **lazy-loaded** when target packages are detected.
 
-### Built-in Addons
+| Addon | Integration | MCP Tools | Description |
+|-------|-------------|:---------:|-------------|
+| [claude-code](ADDONS.org#claude-code) | [claude-code.el](https://github.com/karthink/claude-code) | - | Context injection for Claude CLI |
+| [cider](ADDONS.org#cider) | [CIDER](https://github.com/clojure-emacs/cider) | ✓ | Clojure REPL integration |
+| [org-ai](ADDONS.org#org-ai) | [org-ai](https://github.com/rksm/org-ai) | - | AI conversation context |
+| [org-kanban](ADDONS.org#org-kanban) | [org-kanban](https://github.com/gizmomogwai/org-kanban) | ✓ | Dual-backend kanban tracking |
 
-| Addon | Integration | Description |
-|-------|-------------|-------------|
-| **claude-code** | [claude-code.el](https://github.com/karthink/claude-code) | Auto-inject MCP context into Claude Code CLI commands |
-| **cider** | [CIDER](https://github.com/clojure-emacs/cider) | Add Clojure namespace/project context to MCP |
-| **org-ai** | [org-ai](https://github.com/rksm/org-ai) | Inject MCP context into org-ai prompts, save conversations to memory |
-| **org-kanban** | [org-kanban](https://github.com/gizmomogwai/org-kanban) | Dual-backend kanban with vibe-kanban sync |
-
-### Addon Feature Matrix
-
-| Feature | claude-code | cider | org-ai | org-kanban |
-|---------|:-----------:|:-----:|:------:|:----------:|
-| Context injection | ✓ | ✓ | ✓ | - |
-| Memory integration | ✓ | ✓ | ✓ | - |
-| Agent tracking | - | - | - | ✓ |
-| Cloud sync | - | - | - | ✓ |
-| Transient menu | ✓ | ✓ | ✓ | ✓ |
-| MCP tools | - | ✓ | - | ✓ |
-
-### org-kanban Addon Details
-
-The org-kanban addon provides **dual-backend** kanban task tracking following SOLID/DDD principles:
-
-| Backend | Use Case | Storage |
-|---------|----------|---------|
-| **standalone** | Personal/offline | Local `.org` file |
-| **vibe** | Team/cloud | vibe-kanban MCP server |
-
-**Features:**
-- **Agent tracking**: Records which AI agent created/modified tasks
-- **Session continuity**: Links tasks to conversation sessions
-- **Bidirectional sync**: Push/pull between backends
-- **org-mode integration**: Works with existing org tools, agenda views
-
-**MCP Tools:**
-```
-mcp_kanban_status     - Get board status and progress
-mcp_kanban_list_tasks - List tasks (optionally by status)
-mcp_kanban_create_task - Create new task
-mcp_kanban_update_task - Update task properties
-mcp_kanban_move_task   - Move to new status column
-mcp_kanban_roadmap     - Get roadmap view
-mcp_kanban_my_tasks    - Get tasks for current agent
-mcp_kanban_sync        - Sync between backends
-```
-
-**Quick Start:**
+**Quick start:**
 ```elisp
-(emacs-mcp-addon-load 'org-kanban)
-(emacs-mcp-kanban-mode 1)
-
-;; For vibe-kanban sync
-(setq emacs-mcp-kanban-default-project "your-project-uuid")
-(setq emacs-mcp-kanban-enable-dual-backend t)
+(emacs-mcp-addons-auto-load)  ; Auto-load when packages detected
 ```
 
-### Enabling Addons
-
-#### Manual Loading
-
-```elisp
-;; Load specific addons on-demand
-(emacs-mcp-addon-load 'claude-code)
-(emacs-mcp-addon-load 'cider)
-(emacs-mcp-addon-load 'org-ai)
-```
-
-#### Auto-loading
-
-Enable automatic loading when trigger packages are detected:
-
-```elisp
-;; In your init.el, after loading emacs-mcp
-(emacs-mcp-addons-auto-load)
-```
-
-This automatically loads addons when their target packages are loaded.
-
-### Creating Custom Addons
-
-1. Copy the template:
-   ```bash
-   cp elisp/addons/emacs-mcp-addon-template.el elisp/addons/emacs-mcp-my-addon.el
-   ```
-
-2. Edit the new file:
-   - Replace `template` with `my-addon` throughout
-   - Implement your integration functions
-   - Register with `emacs-mcp-addon-register`
-
-3. Load your addon:
-   ```elisp
-   (emacs-mcp-addon-load 'my-addon)
-   ```
-
-#### Custom Addon Directory
-
-```elisp
-(add-to-list 'emacs-mcp-addon-directories "~/my-emacs-addons")
-```
-
-### Listing Addons
-
-```elisp
-M-x emacs-mcp-addon-info
-```
+📖 **Full documentation:** [ADDONS.org](ADDONS.org)
 
 ## Tested & Working
 
