@@ -1,4 +1,4 @@
-;;; claude-code-mcp.el --- Integrate claude-code.el with emacs-mcp  -*- lexical-binding: t; -*-
+;;; emacs-mcp-claude-code.el --- Integrate claude-code.el with emacs-mcp  -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2025 Pedro G. Branquinho
 ;; Author: Pedro G. Branquinho <pedrogbranquinho@gmail.com>
@@ -355,5 +355,15 @@ Key bindings under `C-c c m' prefix (customizable)."
                    #'claude-code-mcp--advise-send-command)
     (message "claude-code-mcp disabled")))
 
-(provide 'claude-code-mcp)
-;;; claude-code-mcp.el ends here
+;;;; Addon Registration
+
+(with-eval-after-load 'emacs-mcp-addons
+  (emacs-mcp-addon-register
+   'claude-code
+   :version "0.1.0"
+   :description "Integration with claude-code.el (Claude Code CLI)"
+   :requires '(claude-code emacs-mcp-api)
+   :provides '(claude-code-mcp-mode claude-code-mcp-transient)))
+
+(provide 'emacs-mcp-claude-code)
+;;; emacs-mcp-claude-code.el ends here

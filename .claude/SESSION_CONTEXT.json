@@ -1,55 +1,41 @@
 {
   "date": "2025-12-23",
-  "focus_area": "emacs-mcp - Release, MELPA submission, and integration tools",
-  "branches_created": [],
+  "focus_area": "emacs-mcp addon system",
+  "branches_created": ["staging", "feat/addon-system"],
   "key_files": [
-    "src/emacs_mcp/server.clj",
-    "src/emacs_mcp/tools.clj",
-    "src/emacs_mcp/synergy.clj",
-    "elisp/emacs-mcp.el",
-    "elisp/emacs-mcp-api.el",
-    "elisp/emacs-mcp-memory.el",
-    "start-mcp.sh",
-    "recipes/emacs-mcp"
+    "elisp/emacs-mcp-addons.el",
+    "elisp/addons/emacs-mcp-claude-code.el",
+    "elisp/addons/emacs-mcp-cider.el",
+    "elisp/addons/emacs-mcp-addon-template.el"
   ],
-  "adrs_created": [],
+  "cloned_repos": [
+    "/home/lages/dotfiles/gitthings/cider-mcp-server",
+    "/home/lages/dotfiles/gitthings/org-ai"
+  ],
   "completed_tasks": [
-    "Fixed MCP server startup (string keys in inputSchema properties)",
-    "Added emacs-mcp to Claude Code globally (claude mcp add --scope user)",
-    "Updated all elisp headers for MELPA compliance",
-    "Added MIT LICENSE file",
-    "Created GitHub release v0.1.0",
-    "Created MELPA recipe and submitted PR #9747",
-    "Added CONTRIBUTING.md with development/submission guide",
-    "Implemented emacs-mcp.el integration tools (mcp_get_context, mcp_memory_add, etc.)",
-    "Added kanban tasks for future emacs-mcp.el integration work"
+    "Created lazy-loaded addon system (emacs-mcp-addons.el)",
+    "Moved claude-code-mcp.el to addons/emacs-mcp-claude-code.el",
+    "Created CIDER integration addon stub (emacs-mcp-cider.el)",
+    "Created addon template for user extensions",
+    "Cloned and analyzed cider-mcp-server (TypeScript/Deno nREPL bridge)",
+    "Cloned and analyzed org-ai (AI in org-mode package)"
   ],
-  "in_progress_tasks": [],
+  "in_progress_tasks": [
+    "org-ai-mcp addon stub - not yet created",
+    "README addon documentation - not yet updated"
+  ],
   "blocking_issues": [],
   "next_actions": [
-    "Monitor MELPA PR #9747 for review feedback",
-    "Test new MCP tools (mcp_get_context, mcp_memory_add, etc.) in Claude Code",
-    "Fix emacs-mcp-api-memory-add return serialization issue",
-    "Add more built-in workflows to emacs-mcp.el"
+    "Create org-ai-mcp addon stub (elisp/addons/emacs-mcp-org-ai.el)",
+    "Update README.md with addon system documentation",
+    "Merge feat/addon-system to staging",
+    "Test addon loading in Emacs",
+    "Consider adding emacs-mcp to vibe_kanban for task tracking"
   ],
   "decisions_made": [
-    "Use start-mcp.sh for Claude Code integration (runs clojure -X:mcp)",
-    "MELPA handles versioning automatically from git commits (no PRs needed for updates)",
-    "String keys required in inputSchema properties for MCP SDK compatibility",
-    "Added global MCP server registration with --scope user"
-  ],
-  "repository": {
-    "url": "https://github.com/BuddhiLW/emacs-mcp",
-    "branch": "main",
-    "latest_commit": "7c74868",
-    "release": "v0.1.0"
-  },
-  "external_prs": [
-    {
-      "repo": "melpa/melpa",
-      "pr": 9747,
-      "url": "https://github.com/melpa/melpa/pull/9747",
-      "status": "pending review"
-    }
+    "Addon architecture: Lazy-loaded via with-eval-after-load for performance",
+    "Naming convention: emacs-mcp-<package>.el in addons/ directory",
+    "Auto-discovery: Addons found automatically in addon directories",
+    "User extensibility: Template provided, custom directories supported"
   ]
 }
