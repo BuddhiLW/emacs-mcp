@@ -51,10 +51,10 @@
         ;; outermost (first in the middleware vector) so it intercepts before
         ;; nREPL's session middleware creates a new session per eval.
         cider-mw (try
-                    (require 'cider.nrepl)
-                    (let [mw-var (resolve 'cider.nrepl/cider-middleware)]
-                      (when mw-var @mw-var))
-                    (catch Exception _ nil))
+                   (require 'cider.nrepl)
+                   (let [mw-var (resolve 'cider.nrepl/cider-middleware)]
+                     (when mw-var @mw-var))
+                   (catch Exception _ nil))
         all-middleware (into [#'classloader-gc/wrap-shared-classloader]
                              (or cider-mw []))
         handler (apply nrepl-server/default-handler all-middleware)
@@ -133,7 +133,7 @@
               (async/go-loop []
                 (async/<! (async/timeout check-interval-ms))
                 (when-not (ws-channel/connected?)
-                  (log/info "WebSocket channel: no clients, server healthy"))
+                  (log/debug "WebSocket channel: no clients, server healthy"))
                   ;; Server running but no clients is fine
 
                 (when-not (:running? (ws-channel/status))

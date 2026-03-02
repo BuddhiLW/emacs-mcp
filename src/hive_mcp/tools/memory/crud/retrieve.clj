@@ -4,7 +4,7 @@
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.format :as fmt]
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.plan.plans :as plans]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [taoensso.timbre :as log]))
@@ -39,19 +39,20 @@
   [{:keys [id]}]
   (log/info "mcp-memory-get-full:" id)
   (with-chroma
-    (if-let [entry (or (chroma/get-entry-by-id id)
-                       (plans/get-plan id))]
-      (let [base-result (fmt/entry->json-alist entry)
-            {:keys [outgoing incoming]}
-            (try (get-kg-edges-for-entry id)
-                 (catch Exception e
-                   (log/warn "KG edge lookup failed for" id ":" (.getMessage e))
-                   {:outgoing [] :incoming []}))
-            result (cond-> base-result
-                     (seq outgoing) (assoc :kg_outgoing outgoing)
-                     (seq incoming) (assoc :kg_incoming incoming))]
-        (mcp-json result))
-      (mcp-json {:error "Entry not found" :id id}))))
+    (let [store (mem-proto/get-store)]
+      (if-let [entry (or (mem-proto/get-entry store id)
+                         (plans/get-plan id))]
+        (let [base-result (fmt/entry->json-alist entry)
+              {:keys [outgoing incoming]}
+              (try (get-kg-edges-for-entry id)
+                   (catch Exception e
+                     (log/warn "KG edge lookup failed for" id ":" (.getMessage e))
+                     {:outgoing [] :incoming []}))
+              result (cond-> base-result
+                       (seq outgoing) (assoc :kg_outgoing outgoing)
+                       (seq incoming) (assoc :kg_incoming incoming))]
+          (mcp-json result))
+        (mcp-json {:error "Entry not found" :id id})))))
 
 (defn handle-batch-get
   "Get multiple memory entries by IDs in a single call with KG edges."
@@ -59,8 +60,9 @@
   (if (or (nil? ids) (empty? ids))
     (mcp-error "ids is required (array of memory entry ID strings)")
     (with-chroma
-      (let [results (mapv (fn [id]
-                            (if-let [entry (or (chroma/get-entry-by-id id)
+      (let [store (mem-proto/get-store)
+            results (mapv (fn [id]
+                            (if-let [entry (or (mem-proto/get-entry store id)
                                                (plans/get-plan id))]
                               (let [base (fmt/entry->json-alist entry)
                                     {:keys [outgoing incoming]}
@@ -83,9 +85,10 @@
   [{:keys [type content directory]}]
   (log/info "mcp-memory-check-duplicate:" type "directory:" directory)
   (with-chroma
-    (let [project-id (scope/get-current-project-id directory)
-          hash (chroma/content-hash content)
-          existing (chroma/find-duplicate type hash :project-id project-id)]
+    (let [store (mem-proto/get-store)
+          project-id (scope/get-current-project-id directory)
+          hash (mem-proto/content-hash content)
+          existing (mem-proto/find-duplicate store type hash {:project-id project-id})]
       (mcp-json {:exists (some? existing)
                  :entry (when existing (fmt/entry->json-alist existing))
                  :content_hash hash}))))
@@ -95,8 +98,9 @@
   [{:keys [id tags]}]
   (log/info "mcp-memory-update-tags:" id "tags:" tags)
   (with-chroma
-    (if-let [_existing (chroma/get-entry-by-id id)]
-      (let [updated (chroma/update-entry! id {:tags (or tags [])})]
-        (log/info "Updated tags for entry:" id)
-        (mcp-json (fmt/entry->json-alist updated)))
-      (mcp-json {:error "Entry not found" :id id}))))
+    (let [store (mem-proto/get-store)]
+      (if-let [_existing (mem-proto/get-entry store id)]
+        (let [updated (mem-proto/update-entry! store id {:tags (or tags [])})]
+          (log/info "Updated tags for entry:" id)
+          (mcp-json (fmt/entry->json-alist updated)))
+        (mcp-json {:error "Entry not found" :id id})))))

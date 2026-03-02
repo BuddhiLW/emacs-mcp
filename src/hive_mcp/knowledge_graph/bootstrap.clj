@@ -10,7 +10,7 @@
 
    Bounded: max 200 entries, max 500 edges per run.
    Idempotent: skips if edge already exists between pair."
-  (:require [hive-mcp.chroma.core :as chroma]
+  (:require [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-dsl.result :as r]
             [clojure.string :as str]
@@ -176,12 +176,13 @@
             (when project-id (str " project:" project-id))
             (when dry-run? " (DRY RUN)"))
   (let [;; Fetch entries from Chroma — get high-value types
+        store (mem-proto/get-store)
         all-entries (concat
-                     (chroma/query-entries :type "axiom" :limit entry-limit)
-                     (chroma/query-entries :type "decision" :limit entry-limit)
-                     (chroma/query-entries :type "convention" :limit entry-limit)
-                     (chroma/query-entries :type "note" :limit entry-limit)
-                     (chroma/query-entries :type "snippet" :limit entry-limit))
+                     (mem-proto/query-entries store {:type "axiom" :limit entry-limit})
+                     (mem-proto/query-entries store {:type "decision" :limit entry-limit})
+                     (mem-proto/query-entries store {:type "convention" :limit entry-limit})
+                     (mem-proto/query-entries store {:type "note" :limit entry-limit})
+                     (mem-proto/query-entries store {:type "snippet" :limit entry-limit}))
         ;; Deduplicate by ID and apply project filter
         entries (->> all-entries
                      (reduce (fn [acc e] (if (contains? acc (:id e)) acc (assoc acc (:id e) e))) {})

@@ -1,6 +1,6 @@
 (ns hive-mcp.tools.memory.search
   "Semantic search handler for memory operations."
-  (:require [hive-mcp.chroma.core :as chroma]
+  (:require [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.plan.plans :as plans]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
@@ -86,11 +86,11 @@
                             all-ids (distinct (concat visible descendants))]
                         (vec (remove #(= "global" %) all-ids))))
         effective-excludes (into (vec default-exclude-tags) exclude-tags)
-        results (chroma/search-similar query
-                                       :limit (* limit-val 2)
-                                       :type type
-                                       :project-ids visible-ids
-                                       :exclude-tags effective-excludes)
+        results (mem-proto/search-similar (mem-proto/get-store) query
+                                          {:limit (* limit-val 2)
+                                           :type type
+                                           :project-ids visible-ids
+                                           :exclude-tags effective-excludes})
         scope-filter (when in-project?
                        (let [base-tags (kg-scope/visible-scope-tags project-id)
                              desc-tags (when include_descendants
@@ -117,13 +117,14 @@
   (let [directory (or directory (ctx/current-directory))
         openrouter? (plans/high-abstraction-type? type)
         limit-val (coerce-int! limit :limit 10)
-        status (chroma/status)]
+        store-ready? (and (mem-proto/store-set?)
+                          (mem-proto/supports-semantic-search? (mem-proto/get-store)))]
     (log/info "mcp-memory-search-semantic:" query "type:" type "directory:" directory
               "scope:" scope "exclude_tags:" exclude_tags)
-    (if-not (:configured? status)
-      (result/err :memory/chroma-not-configured
-                  {:message (str "Chroma semantic search not configured. "
-                                 "Configure Chroma with an embedding provider.")})
+    (if-not store-ready?
+      (result/err :memory/store-not-configured
+                  {:message (str "Semantic search not configured. "
+                                 "Configure a memory store with an embedding provider.")})
       (let [project-id (scope/get-current-project-id directory)
             sf (domain/parse-scope scope project-id)
             [effective-pid in-project?] (domain/scope->effective sf)]

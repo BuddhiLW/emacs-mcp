@@ -7,7 +7,7 @@
             [hive-mcp.tools.memory.classify :as classify]
             [hive-mcp.tools.memory.gaps :as gaps]
             [hive-mcp.tools.core :refer [mcp-json mcp-error coerce-vec!]]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.plan.plans :as plans]
             [hive-mcp.plan.gate :as plan-gate]
             [hive-mcp.knowledge-graph.connection :as kg-conn]
@@ -23,10 +23,11 @@
 (defn- update-target-incoming!
   "Append edge-id to target entry's kg-incoming field."
   [target-id edge-id]
-  (when-let [target-entry (chroma/get-entry-by-id target-id)]
-    (let [existing-incoming (or (:kg-incoming target-entry) [])
-          updated-incoming (conj existing-incoming edge-id)]
-      (chroma/update-entry! target-id {:kg-incoming updated-incoming}))))
+  (let [store (mem-proto/get-store)]
+    (when-let [target-entry (mem-proto/get-entry store target-id)]
+      (let [existing-incoming (or (:kg-incoming target-entry) [])
+            updated-incoming (conj existing-incoming edge-id)]
+        (mem-proto/update-entry! store target-id {:kg-incoming updated-incoming})))))
 
 (defn- create-kg-edges!
   "Create KG edges for the given relationships and update target entries.
@@ -101,21 +102,22 @@
       :expires (or expires "") :project-id project-id
       :abstraction-level abstraction-level
       :knowledge-gaps knowledge-gaps :agent-id agent-id})
-    (chroma/index-memory-entry!
-     {:type type :content content :tags tags-with-scope
-      :content-hash content-hash :duration duration-str
-      :expires (or expires "") :project-id project-id
-      :abstraction-level abstraction-level
-      :knowledge-gaps knowledge-gaps})))
+    (mem-proto/add-entry! (mem-proto/get-store)
+                          {:type type :content content :tags tags-with-scope
+                           :content-hash content-hash :duration duration-str
+                           :expires (or expires "") :project-id project-id
+                           :abstraction-level abstraction-level
+                           :knowledge-gaps knowledge-gaps})))
 
 (defn- finalize-entry!
   "Wire KG edges, fetch created entry, notify channel, and format response."
   [entry-id openrouter? kg-params project-id agent-id
    {:keys [tags-with-scope type knowledge-gaps]}]
-  (let [edge-ids (create-kg-edges! entry-id kg-params project-id agent-id)
+  (let [store (mem-proto/get-store)
+        edge-ids (create-kg-edges! entry-id kg-params project-id agent-id)
         _ (when (and (seq edge-ids) (not openrouter?))
-            (chroma/update-entry! entry-id {:kg-outgoing edge-ids}))
-        created (if openrouter? (plans/get-plan entry-id) (chroma/get-entry-by-id entry-id))]
+            (mem-proto/update-entry! store entry-id {:kg-outgoing edge-ids}))
+        created (if openrouter? (plans/get-plan entry-id) (mem-proto/get-entry store entry-id))]
     (log/info "Created memory entry:" entry-id
               (when (seq edge-ids) (str " with " (count edge-ids) " KG edges"))
               (when (seq knowledge-gaps) (str " gaps:" (count knowledge-gaps))))
@@ -149,13 +151,14 @@
                 agent-id (or agent_id (ctx/current-agent-id)
                              (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
                 tags-with-scope (build-entry-tags tags-vec agent-id kg-vecs project-id)
-                content-hash (chroma/content-hash content)
+                store (mem-proto/get-store)
+                content-hash (mem-proto/content-hash content)
                 duration-str (or duration "long")
                 expires (dur/calculate-expires duration-str)
-                existing (chroma/find-duplicate type content-hash :project-id project-id)]
+                existing (mem-proto/find-duplicate store type content-hash {:project-id project-id})]
             (if existing
               (let [merged-tags (distinct (concat (:tags existing) tags-with-scope))
-                    updated (chroma/update-entry! (:id existing) {:tags merged-tags})]
+                    updated (mem-proto/update-entry! store (:id existing) {:tags merged-tags})]
                 (log/info "Duplicate found, merged tags:" (:id existing))
                 (mcp-json (fmt/entry->json-alist updated)))
               (let [openrouter? (plans/high-abstraction-type? type)

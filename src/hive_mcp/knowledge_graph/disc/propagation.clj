@@ -1,7 +1,7 @@
 (ns hive-mcp.knowledge-graph.disc.propagation
   "Time decay and transitive staleness propagation for disc entities."
   (:require [hive-mcp.knowledge-graph.queries :as queries]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.knowledge-graph.disc.crud :as crud]
             [hive-mcp.knowledge-graph.disc.volatility :as vol]
             [hive-dsl.result :as r]
@@ -53,13 +53,14 @@
     (if (< beta-increment vol/staleness-min-threshold)
       {:status :skipped :entry-id entry-id :beta-increment 0}
       (let [result (r/try-effect* :disc/staleness-propagation
-                                  (let [current-entry (chroma/get-entry-by-id entry-id)
+                                  (let [store (mem-proto/get-store)
+                                        current-entry (mem-proto/get-entry store entry-id)
                                         current-beta (or (:staleness-beta current-entry) 1.0)
                                         new-beta (+ current-beta beta-increment)]
-                                    (chroma/update-entry! entry-id
-                                                          {:staleness-beta new-beta
-                                                           :staleness-depth depth
-                                                           :staleness-source (name staleness-source)})
+                                    (mem-proto/update-entry! store entry-id
+                                                             {:staleness-beta new-beta
+                                                              :staleness-depth depth
+                                                              :staleness-source (name staleness-source)})
                                     (log/debug "Applied transitive staleness"
                                                {:entry-id entry-id :depth depth :beta-increment beta-increment})
                                     {:status :updated :entry-id entry-id :beta-increment beta-increment}))]
@@ -102,7 +103,8 @@
   "Propagate staleness from a disc to dependent entries via KG edges."
   [disc-path base-staleness staleness-source]
   (let [outer (r/guard Exception {:propagated 0 :skipped 0 :errors 1 :grounded 0}
-                       (let [grounded-entries (chroma/query-grounded-from disc-path)
+                       (let [grounded-entries (mem-proto/query-entries (mem-proto/get-store)
+                                                                       {:grounded-from disc-path})
                              results (atom {:propagated 0 :skipped 0 :errors 0 :grounded 0})]
                          (doseq [entry grounded-entries]
                            (let [entry-id (:id entry)

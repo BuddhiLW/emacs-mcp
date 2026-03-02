@@ -1,6 +1,6 @@
 (ns hive-mcp.agent.hints
   "Structured memory hints for ling priming. Generates pointer-based context instead of full text injection."
-  (:require [hive-mcp.chroma.core :as chroma]
+  (:require [hive-mcp.protocols.memory :as mem-proto]
             [hive-dsl.result :as r]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
@@ -15,12 +15,13 @@
 (defn- query-scoped-entries
   "Query Chroma entries filtered by project scope."
   [entry-type tags project-id limit]
-  (when-let [_ (chroma/embedding-configured?)]
-    (let [limit-val (domain/or-val limit 20)
+  (when-let [_ (mem-proto/store-set?)]
+    (let [store (mem-proto/get-store)
+          limit-val (domain/or-val limit 20)
           in-project? (when-let [pid project-id]
                         (not= pid "global"))
-          entries (chroma/query-entries :type entry-type
-                                        :limit (min (* limit-val 8) 500))
+          entries (mem-proto/query-entries store {:type entry-type
+                                                  :limit (min (* limit-val 8) 500)})
           full-scope-tags (cond-> (kg-scope/full-hierarchy-scope-tags project-id)
                             in-project? (disj "scope:global"))
           all-visible-ids (cond-> (set (into (vec (kg-scope/visible-scopes project-id))
@@ -157,8 +158,8 @@
   [{:keys [task-id memory-id depth] :or {depth 2}}]
   (when-let [node-id (if-let [tid task-id] tid memory-id)]
     (r/rescue {:l1-ids [] :l2-queries [] :l3-seeds []}
-              (let [entry (when-let [_ (chroma/embedding-configured?)]
-                            (chroma/get-entry-by-id node-id))
+              (let [entry (when-let [_ (mem-proto/store-set?)]
+                            (mem-proto/get-entry (mem-proto/get-store) node-id))
                     traversal (r/rescue []
                                         (kg-queries/traverse node-id
                                                              {:direction :both
@@ -230,7 +231,7 @@
     (->> id-list
          (mapv (fn [id]
                  (r/rescue nil
-                           (when-let [entry (chroma/get-entry-by-id id)]
+                           (when-let [entry (mem-proto/get-entry (mem-proto/get-store) id)]
                              {:id id
                               :content (:content entry)
                               :type (name (domain/or-val (:type entry) "note"))
@@ -244,7 +245,7 @@
     (->> q-list
          (mapv (fn [q]
                  (let [result (r/guard Exception {:query q :results [] :error "unknown"}
-                                       (let [results (chroma/search-similar q :limit 5)]
+                                       (let [results (mem-proto/search-similar (mem-proto/get-store) q {:limit 5})]
                                          {:query q
                                           :results (mapv (fn [r]
                                                            (let [content (domain/or-val (:content r) "")]

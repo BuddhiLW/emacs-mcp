@@ -1,7 +1,7 @@
 (ns hive-mcp.agent.drone.kg-context
   "KG-first context building for drones, consulting the Knowledge Graph before file reads."
   (:require [hive-mcp.knowledge-graph.disc :as disc]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.agent.drone.sandbox :as sandbox]
             [hive-dsl.result :as r]
             [clojure.string :as str]
@@ -27,8 +27,8 @@
   "Query for knowledge entries related to a file path."
   [file-path]
   (let [result (r/guard Exception []
-                        (when (chroma/embedding-configured?)
-                          (->> (chroma/query-entries :limit 20)
+                        (when (mem-proto/store-set?)
+                          (->> (mem-proto/query-entries (mem-proto/get-store) {:limit 20})
                                (filter #(= file-path (get-in % [:metadata :source-file])))
                                (take 5)
                                vec)))]

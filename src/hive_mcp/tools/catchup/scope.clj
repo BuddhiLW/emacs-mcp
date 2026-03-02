@@ -1,6 +1,6 @@
 (ns hive-mcp.tools.catchup.scope
   "Scope resolution and query functions for catchup workflow."
-  (:require [hive-mcp.chroma.core :as chroma]
+  (:require [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.dns.result :refer [rescue]]
             [clojure.string :as str]
@@ -91,21 +91,22 @@
 (defn query-scoped-entries
   "Query Chroma entries filtered by project scope with hierarchy and scope-piercing."
   [entry-type tags project-id limit]
-  (when (chroma/embedding-configured?)
-    (let [limit-val (or limit 20)
+  (when (mem-proto/store-set?)
+    (let [store (mem-proto/get-store)
+          limit-val (or limit 20)
           in-project? (and project-id (not= project-id "global"))
           hierarchy-ids (compute-hierarchy-project-ids project-id)
           over-fetch-factor (if hierarchy-ids 3 4)
-          entries (chroma/query-entries :type entry-type
-                                        :project-ids hierarchy-ids
-                                        :limit (min (* limit-val over-fetch-factor) 500))
+          entries (mem-proto/query-entries store {:type entry-type
+                                                  :project-ids hierarchy-ids
+                                                  :limit (min (* limit-val over-fetch-factor) 500)})
           full-scope-tags (compute-full-scope-tags project-id)
           all-visible-ids (set (or hierarchy-ids ["global"]))
           scoped (scope-filter-entries entries full-scope-tags all-visible-ids)
           scope-piercing (when in-project?
-                           (let [global-entries (chroma/query-entries :type entry-type
-                                                                      :project-id "global"
-                                                                      :limit 100)]
+                           (let [global-entries (mem-proto/query-entries store {:type entry-type
+                                                                                :project-id "global"
+                                                                                :limit 100})]
                              (scope-pierce-entries global-entries project-id)))
           scoped (distinct-by :id (concat scoped scope-piercing))
           filtered (filter-by-tags scoped tags)]
@@ -127,15 +128,16 @@
   "Query entries expiring within 7 days, scoped to project with scope-piercing."
   [project-id limit]
   (let [in-project? (and project-id (not= project-id "global"))
+        store (mem-proto/get-store)
         hierarchy-ids (compute-hierarchy-project-ids project-id)
-        entries (chroma/query-entries :project-ids hierarchy-ids
-                                      :limit 200)
+        entries (mem-proto/query-entries store {:project-ids hierarchy-ids
+                                                :limit 200})
         full-scope-tags (compute-full-scope-tags project-id)
         all-visible-ids (set (or hierarchy-ids ["global"]))
         scoped (scope-filter-entries entries full-scope-tags all-visible-ids)
         scope-piercing (when in-project?
-                         (let [global-entries (chroma/query-entries :project-id "global"
-                                                                    :limit 100)]
+                         (let [global-entries (mem-proto/query-entries store {:project-id "global"
+                                                                              :limit 100})]
                            (scope-pierce-entries global-entries project-id)))
         scoped (distinct-by :id (concat scoped scope-piercing))]
     (->> scoped

@@ -2,7 +2,7 @@
   "Re-grounding workflow for knowledge entries.
    Verifies entries against source files and updates grounding timestamps."
 
-  (:require [hive-mcp.chroma.core :as chroma]
+  (:require [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.memory.temporal :as temporal]
             [hive-dsl.result :as r]
             [clojure.java.io :as io]
@@ -58,7 +58,7 @@
   "Pure implementation of re-grounding logic (no top-level try/catch)."
   [entry-id]
   (log/info "Regrounding entry" {:entry-id entry-id})
-  (let [entry (chroma/get-entry-by-id entry-id)]
+  (let [entry (mem-proto/get-entry (mem-proto/get-store) entry-id)]
     (if (nil? entry)
       {:status :not-found :entry-id entry-id}
       (let [metadata (:metadata entry)
@@ -79,7 +79,7 @@
                                   {:grounded-at (java.util.Date.)
                                    :source-hash hash})]
                 (when (and update-data (not= :source-missing status))
-                  (chroma/update-entry! entry-id update-data)
+                  (mem-proto/update-entry! (mem-proto/get-store) entry-id update-data)
                   ;; Temporal dual-write: record reground verification
                   (temporal/record-mutation-silent!
                    {:entry-id   entry-id
@@ -177,9 +177,10 @@
   (log/info "backfill-grounding! starting"
             {:project-id project-id :limit limit :force? force? :max-age-days max-age-days})
   (let [result (r/try-effect* :kg/backfill-grounding-failed
-                              (let [entries (chroma/query-entries :project-id project-id
-                                                                  :limit limit
-                                                                  :include-expired? true)
+                              (let [entries (mem-proto/query-entries (mem-proto/get-store)
+                                                                     {:project-id project-id
+                                                                      :limit limit
+                                                                      :include-expired? true})
                                     total-scanned (count entries)
                                     with-source (->> entries
                                                      (filter (fn [entry]

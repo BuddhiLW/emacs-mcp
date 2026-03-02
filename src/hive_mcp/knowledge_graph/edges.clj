@@ -157,6 +157,22 @@
                    (conn/query base-query from-node-id to-node-id))]
      (first results))))
 
+(defn find-edges-between
+  "Find all edges where both :from and :to are within the given node-id set.
+   Single Datahike query + post-filter instead of O(n²) individual queries.
+   Returns a vector of edge entity maps."
+  [node-id-set]
+  (if (< (count node-id-set) 2)
+    []
+    (let [query '[:find [(pull ?e [*]) ...]
+                  :in $ [?node ...]
+                  :where
+                  [?e :kg-edge/from ?node]]
+          ;; Query: all edges originating from any node in the set
+          ;; Post-filter: :to must also be in the set
+          candidates (conn/query query (vec node-id-set))]
+      (filterv #(contains? node-id-set (:kg-edge/to %)) candidates))))
+
 (defn update-edge-confidence!
   "Update the confidence score of an edge.
    Returns true on success, throws on validation failure."

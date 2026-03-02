@@ -6,7 +6,7 @@
             [hive-mcp.tools.core :refer [mcp-json mcp-error coerce-int!]]
             [hive-mcp.memory.domain :as domain]
             [hive-dsl.adt :refer [adt-case]]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.plan.plans :as plans]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
@@ -85,11 +85,12 @@
                          :type type
                          :limit (* limit-val over-fetch-factor)
                          :tags tags)
-      (chroma/query-entries :type type
-                            :project-ids project-ids-for-db
-                            :tags tags
-                            :exclude-tags exclude-tags
-                            :limit (* limit-val over-fetch-factor)))))
+      (mem-proto/query-entries (mem-proto/get-store)
+                               {:type type
+                                :project-ids project-ids-for-db
+                                :tags tags
+                                :exclude-tags exclude-tags
+                                :limit (* limit-val over-fetch-factor)}))))
 
 (defn- apply-scope-filter
   "Apply in-memory scope filter as safety net.

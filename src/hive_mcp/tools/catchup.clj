@@ -15,7 +15,7 @@
    - handle-native-catchup  — main catchup handler
    - handle-native-wrap     — wrap/crystallize handler
    - spawn-context          — re-export from catchup.spawn"
-  (:require [hive-mcp.chroma.core :as chroma]
+  (:require [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.catchup.scope :as catchup-scope]
             [hive-mcp.tools.catchup.format :as fmt]
@@ -80,7 +80,7 @@
   (let [directory (:directory args)]
     (log/info "native-catchup: querying Chroma with project scope" {:directory directory})
     ;; Guard: early return if Chroma not configured
-    (if-not (chroma/embedding-configured?)
+    (if-not (mem-proto/store-set?)
       (fmt/chroma-not-configured-error)
       (try
         (let [project-id (scope/get-current-project-id directory)
@@ -224,7 +224,7 @@
   (let [directory (:directory args)
         agent-id (:agent_id args)]
     (log/info "native-wrap: crystallizing to Chroma" {:directory directory :agent-id agent-id})
-    (if-not (chroma/embedding-configured?)
+    (if-not (mem-proto/store-set?)
       (fmt/chroma-not-configured-error)
       (if-let [wrap-fn (ext/get-extension :catchup/wrap)]
         (try

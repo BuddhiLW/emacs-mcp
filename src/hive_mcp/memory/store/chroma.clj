@@ -78,25 +78,25 @@
   "Probe Chroma availability and stats. Returns Result."
   []
   (result/try-effect* :chroma/probe-failed
-    (let [available? (chroma/chroma-available?)
-          stats      (when-let [_ available?] (chroma/collection-stats))]
-      {:available? available? :stats stats})))
+                      (let [available? (chroma/chroma-available?)
+                            stats      (when-let [_ available?] (chroma/collection-stats))]
+                        {:available? available? :stats stats})))
 
 (defn- safe-entry-count
   "Get collection entry count, nil on failure."
   []
   (:ok (result/try-effect* :chroma/stats-failed
-         (:count (chroma/collection-stats)))))
+                           (:count (chroma/collection-stats)))))
 
 (defn- propagate-to-dep!
   "Propagate staleness to a single dependency. Returns Result."
   [dep-id depth]
   (result/try-effect* :chroma/propagate-failed
-    (let [dep-beta (or (:staleness-beta (chroma/get-entry-by-id dep-id)) 1)]
-      (chroma/update-staleness! dep-id
-                                {:beta   (inc dep-beta)
-                                 :source :transitive
-                                 :depth  (inc depth)}))))
+                      (let [dep-beta (or (:staleness-beta (chroma/get-entry-by-id dep-id)) 1)]
+                        (chroma/update-staleness! dep-id
+                                                  {:beta   (inc dep-beta)
+                                                   :source :transitive
+                                                   :depth  (inc depth)}))))
 
 ;; =========================================================================
 ;; Protocol Implementation
@@ -112,13 +112,13 @@
 
   (connect! [_this config]
     (let [r (result/try-effect* :chroma/connect-failed
-              (do
-                (chroma/configure! (select-keys config [:host :port :collection-name]))
-                (when-let [_ (chroma/embedding-configured?)]
-                  (chroma/chroma-available?))
-                (swap! config-atom merge config)
-                {:backend  "chroma"
-                 :metadata (select-keys @config-atom [:host :port :collection-name])}))]
+                                (do
+                                  (chroma/configure! (select-keys config [:host :port :collection-name]))
+                                  (when-let [_ (chroma/embedding-configured?)]
+                                    (chroma/chroma-available?))
+                                  (swap! config-atom merge config)
+                                  {:backend  "chroma"
+                                   :metadata (select-keys @config-atom [:host :port :collection-name])}))]
       (if-let [data (:ok r)]
         (merge {:success? true :errors []} data)
         {:success? false
@@ -158,13 +158,18 @@
     true)
 
   (query-entries [_this opts]
-    (let [{:keys [type project-id project-ids limit include-expired?]
+    (let [{:keys [type project-id project-ids tags exclude-tags
+                  limit include-expired? grounded-from]
            :or {limit 100 include-expired? false}} opts]
-      (chroma/query-entries :type type
-                            :project-id project-id
-                            :project-ids project-ids
-                            :limit limit
-                            :include-expired? include-expired?)))
+      (if grounded-from
+        (chroma/query-grounded-from grounded-from)
+        (chroma/query-entries :type type
+                              :project-id project-id
+                              :project-ids project-ids
+                              :tags tags
+                              :exclude-tags exclude-tags
+                              :limit limit
+                              :include-expired? include-expired?))))
 
   ;; --- Semantic Search ---
 
@@ -255,7 +260,6 @@
                     cnt))
                 0
                 kg-outgoing)))))
-
 
 (defn create-store
   "Create a new Chroma-backed memory store.
