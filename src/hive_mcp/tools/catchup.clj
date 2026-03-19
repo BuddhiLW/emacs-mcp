@@ -143,9 +143,11 @@
               ;; incremental delivery via ---MEMORY--- blocks on subsequent calls.
               ;; Axioms first (highest priority), then priority conventions.
               ;;
-              ;; CURSOR ISOLATION: Uses ctx-id ADTs for canonical identity construction.
-              ;; Guarantees buffer key alignment with routes.clj piggyback wrappers.
-              caller (ctx-id/parse-caller-id (:_caller_id args))
+              ;; SESSION-SCOPED: memory piggyback uses raw caller-id (no project
+              ;; dimension) for buffer key alignment with routes.clj drain wrappers.
+              ;; Hivemind cursor still uses project-scoped piggyback-agent-id.
+              raw-caller-id (or (:_caller_id args) "coordinator")
+              caller (ctx-id/parse-caller-id raw-caller-id)
               scope (ctx-id/parse-project-scope project-id)
               piggyback-agent-id (ctx-id/make-piggyback-agent-id caller scope)
 
@@ -157,7 +159,7 @@
                         (do
                           (piggyback/adopt-cursor! piggyback-agent-id project-id)
                           (piggyback/evict-stale-cursors! 1800000) ;; 30 min
-                          (memory-piggyback/adopt-buffer! piggyback-agent-id project-id)))
+                          (memory-piggyback/adopt-buffer! raw-caller-id)))
 
               piggyback-entries (into (into (vec axioms) principles) priority-conventions)
 
@@ -198,7 +200,7 @@
                         refs))
 
               _ (when (seq piggyback-entries)
-                  (memory-piggyback/enqueue! piggyback-agent-id project-id piggyback-entries context-refs))]
+                  (memory-piggyback/enqueue! raw-caller-id piggyback-entries context-refs))]
 
           (fmt/build-catchup-response
            {:project-name project-name :project-id project-id

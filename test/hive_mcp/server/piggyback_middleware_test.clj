@@ -1,12 +1,12 @@
 (ns hive-mcp.server.piggyback-middleware-test
   "Tests for piggyback middleware cursor identity stability.
 
-   Pins down the bug where wrap-handler-piggyback and wrap-handler-memory-piggyback
-   used extract-agent-id from tool args, causing dispatch-type tools (which pass
-   target agent_id in args) to create spurious cursor keys per target.
+   Pins down the fix where wrap-handler-memory-piggyback uses _caller_id only
+   (session-scoped) for buffer keys, ensuring enqueue and drain always use the
+   same key regardless of project-id resolution differences.
 
-   The fix: middleware always uses a stable 'coordinator-{project-id}' identity
-   for the piggyback cursor, regardless of what agent_id appears in tool args."
+   The hivemind piggyback (wrap-handler-piggyback) STILL uses project-scoped
+   identity for cross-project shout filtering — different semantics."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.server.routes :as routes]
             [hive-mcp.channel.piggyback :as pb]
@@ -14,7 +14,7 @@
             [hive-mcp.agent.context :as ctx]))
 
 ;; The project-id that extract-project-id resolves for our test directory.
-;; All shouts and buffers must use this to match the middleware's resolution.
+;; Used for hivemind piggyback (still project-scoped).
 (def ^:private test-dir "/home/lages/PP/hive/hive-mcp")
 (def ^:private test-project "hive-mcp")
 
@@ -64,7 +64,7 @@
       (wrapped (assoc args :directory test-dir)))))
 
 ;; =============================================================================
-;; Hivemind Piggyback Middleware — Cursor Identity
+;; Hivemind Piggyback Middleware — Cursor Identity (STILL project-scoped)
 ;; =============================================================================
 
 (deftest hivemind-piggyback-stable-cursor-across-dispatch-targets-test
@@ -112,39 +112,49 @@
               "new shout delivered after cursor advance"))))))
 
 ;; =============================================================================
-;; Memory Piggyback Middleware — Cursor Identity
+;; Memory Piggyback Middleware — Session-Scoped (caller-id only)
 ;; =============================================================================
 
-(deftest memory-piggyback-stable-cursor-across-dispatch-targets-test
-  (testing "wrap-handler-memory-piggyback uses stable cursor regardless of agent_id in args"
-    (let [coordinator-id (str "coordinator-" test-project)]
-      ;; Enqueue for the coordinator identity (matches middleware's cursor key)
-      (mp/enqueue! coordinator-id test-project
-                   [{:id "ax-1" :type "axiom" :content "Rule 1" :tags ["axiom"]}
-                    {:id "cv-1" :type "convention" :content "Conv 1" :tags ["convention"]}])
+(deftest memory-piggyback-session-scoped-drain-test
+  (testing "wrap-handler-memory-piggyback drains by _caller_id, not project-id"
+    ;; Enqueue with raw caller-id "coordinator" (matches middleware's key)
+    (mp/enqueue! "coordinator"
+                 [{:id "ax-1" :type "axiom" :content "Rule 1" :tags ["axiom"]}
+                  {:id "cv-1" :type "convention" :content "Conv 1" :tags ["convention"]}])
 
-      (let [wrapped (routes/wrap-handler-memory-piggyback dummy-handler)]
-        ;; Call 1: with target agent_id in args
-        (let [r1 (call-wrapped wrapped {:agent_id "swarm-target-X"})]
-          (is (some? (extract-memory-block r1))
-              "first call: memory entries drained for coordinator key"))
+    (let [wrapped (routes/wrap-handler-memory-piggyback dummy-handler)]
+      ;; Call 1: with target agent_id in args — uses _caller_id (nil → "coordinator")
+      (let [r1 (call-wrapped wrapped {:agent_id "swarm-target-X"})]
+        (is (some? (extract-memory-block r1))
+            "first call: memory entries drained for coordinator key"))
 
-        ;; Call 2: different target — buffer already drained
-        (let [r2 (call-wrapped wrapped {:agent_id "swarm-target-Y"})]
-          (is (nil? (extract-memory-block r2))
-              "second call: buffer already drained, no re-delivery"))))))
+      ;; Call 2: different target — buffer already drained
+      (let [r2 (call-wrapped wrapped {:agent_id "swarm-target-Y"})]
+        (is (nil? (extract-memory-block r2))
+            "second call: buffer already drained, no re-delivery")))))
 
 (deftest memory-piggyback-no-args-agent-id-uses-coordinator-test
   (testing "Tools without agent_id in args still drain correctly (coordinator default)"
-    (let [coordinator-id (str "coordinator-" test-project)]
-      (mp/enqueue! coordinator-id test-project
-                   [{:id "n-1" :type "note" :content "A note" :tags []}])
+    (mp/enqueue! "coordinator"
+                 [{:id "n-1" :type "note" :content "A note" :tags []}])
+
+    (let [wrapped (routes/wrap-handler-memory-piggyback dummy-handler)]
+      ;; Call without agent_id in args (e.g., memory query)
+      (let [r1 (call-wrapped wrapped {})]
+        (is (some? (extract-memory-block r1))
+            "drains using coordinator default when no agent_id in args")))))
+
+(deftest memory-piggyback-with-caller-id-test
+  (testing "Explicit _caller_id is used for buffer key"
+    (let [caller "coordinator:abc123"]
+      (mp/enqueue! caller
+                   [{:id "ax-1" :type "axiom" :content "With caller" :tags []}])
 
       (let [wrapped (routes/wrap-handler-memory-piggyback dummy-handler)]
-        ;; Call without agent_id in args (e.g., memory query)
-        (let [r1 (call-wrapped wrapped {})]
+        ;; Pass _caller_id in args — middleware uses it directly
+        (let [r1 (call-wrapped wrapped {:_caller_id caller})]
           (is (some? (extract-memory-block r1))
-              "drains using coordinator default when no agent_id in args"))))))
+              "drains using explicit _caller_id"))))))
 
 ;; =============================================================================
 ;; Mixed Scenario — Full Middleware Simulation
@@ -184,38 +194,28 @@
               "dispatch target-B: only NEW shout delivered"))))))
 
 ;; =============================================================================
-;; Regression: Catchup Enqueue Key Must Match Middleware Drain Key
+;; REGRESSION: Catchup Enqueue Key Alignment
 ;; =============================================================================
 
-(deftest catchup-enqueue-key-matches-middleware-drain-key-test
-  (testing "REGRESSION: Buffer enqueued with plain 'coordinator' is NOT drained by middleware"
-    ;; This test pins down the bug where catchup.clj used (or (:agent_id args) ...)
-    ;; to compute the buffer key, which could diverge from the middleware's stable
-    ;; 'coordinator-{project-id}' formula. When a caller passed agent_id: "coordinator",
-    ;; the buffer was stored at ["coordinator" project-id] but middleware tried to
-    ;; drain from ["coordinator-{project-id}" project-id] — a mismatch.
-    (let [coordinator-id (str "coordinator-" test-project)]
-      ;; Simulate the BUG: enqueue with plain "coordinator" (wrong key)
-      (mp/enqueue! "coordinator" test-project
-                   [{:id "ax-bug" :type "axiom" :content "Orphaned axiom" :tags ["axiom"]}])
+(deftest catchup-enqueue-key-aligns-with-middleware-drain-test
+  (testing "FIX: Buffer enqueued with raw caller-id is drained by middleware"
+    ;; Enqueue with raw "coordinator" — matches middleware's _caller_id fallback
+    (mp/enqueue! "coordinator"
+                 [{:id "ax-fix" :type "axiom" :content "Delivered axiom" :tags ["axiom"]}])
+
+    (let [wrapped (routes/wrap-handler-memory-piggyback dummy-handler)]
+      ;; Middleware uses (or (:_caller_id args) "coordinator") → "coordinator"
+      (let [r1 (call-wrapped wrapped {})]
+        (is (some? (extract-memory-block r1))
+            "buffer key aligned: enqueue and drain both use raw caller-id"))))
+
+  (testing "FIX: Explicit _caller_id aligns enqueue and drain"
+    (let [caller-id "coordinator:instance-42"]
+      ;; Enqueue with the same _caller_id the middleware will see
+      (mp/enqueue! caller-id
+                   [{:id "ax-explicit" :type "axiom" :content "Explicit caller" :tags ["axiom"]}])
 
       (let [wrapped (routes/wrap-handler-memory-piggyback dummy-handler)]
-        ;; Middleware uses coordinator-{project}: can NOT drain the mismatched buffer
-        (let [r1 (call-wrapped wrapped {})]
-          (is (nil? (extract-memory-block r1))
-              "BUG: buffer at [\"coordinator\" project] is invisible to middleware"))
-
-        ;; Clean up the orphaned buffer
-        (mp/clear-buffer! "coordinator" test-project))))
-
-  (testing "FIX: Buffer enqueued with coordinator-{project-id} IS drained by middleware"
-    (let [coordinator-id (str "coordinator-" test-project)]
-      ;; Simulate the FIX: enqueue with coordinator-{project-id} (correct key)
-      (mp/enqueue! coordinator-id test-project
-                   [{:id "ax-fix" :type "axiom" :content "Delivered axiom" :tags ["axiom"]}])
-
-      (let [wrapped (routes/wrap-handler-memory-piggyback dummy-handler)]
-        ;; Middleware uses same key: successfully drains
-        (let [r1 (call-wrapped wrapped {})]
+        (let [r1 (call-wrapped wrapped {:_caller_id caller-id})]
           (is (some? (extract-memory-block r1))
-              "FIX: buffer at [\"coordinator-project\" project] is drained by middleware"))))))
+              "explicit _caller_id: enqueue and drain keys match"))))))

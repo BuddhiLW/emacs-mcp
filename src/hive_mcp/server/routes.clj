@@ -322,12 +322,12 @@
   ((resolve 'hive-mcp.channel.piggyback/get-messages) agent-id :project-id project-id))
 
 (defn- drain-memory-piggyback
-  "Drain next batch of memory entries for agent+project.
+  "Drain next batch of memory entries for a caller session.
    SRP: Single responsibility - memory piggyback retrieval.
    Returns drain result map or nil if nothing pending."
-  [agent-id project-id]
+  [caller-id]
   (require 'hive-mcp.channel.memory-piggyback)
-  ((resolve 'hive-mcp.channel.memory-piggyback/drain!) agent-id project-id))
+  ((resolve 'hive-mcp.channel.memory-piggyback/drain!) caller-id))
 
 (defn wrap-memory-piggyback-content
   "Append memory piggyback batch to content with MEMORY delimiters.
@@ -350,18 +350,14 @@
    Runs BEFORE hivemind piggyback in the middleware chain so both
    channels can append to content independently.
 
-   CURSOR ISOLATION: Uses _caller_id (injected by bb-mcp) for per-caller
-   cursor isolation. Each MCP session (coordinator, ling-1, ling-2) gets
-   its own cursor, preventing lings from consuming coordinator's messages.
-   Falls back to 'coordinator' for old bb-mcp versions."
+   SESSION-SCOPED: Uses _caller_id only (no project dimension) for buffer
+   key alignment with catchup enqueue. One bb-mcp instance = one session
+   = one project, so caller-id alone provides sufficient isolation."
   [handler]
   (fn [args]
     (let [content (handler args)
-          caller (extract-caller-identity args)
-          scope (extract-project-scope args)
-          agent-id (ctx-id/make-piggyback-agent-id caller scope)
-          project-id (ctx-id/project-scope-string scope)
-          drain-result (drain-memory-piggyback agent-id project-id)]
+          caller-id (or (:_caller_id args) "coordinator")
+          drain-result (drain-memory-piggyback caller-id)]
       (wrap-memory-piggyback-content content drain-result))))
 
 (defn wrap-handler-catchup-piggyback
@@ -369,16 +365,13 @@
    Results arrive via piggyback on subsequent calls.
    Zero-cost when no blocks pending or extension not registered.
 
-   CURSOR ISOLATION: Uses _caller_id for per-caller alignment with catchup enqueue."
+   SESSION-SCOPED: Uses _caller_id only for buffer key alignment with catchup enqueue."
   [handler]
   (fn [args]
     (let [content (handler args)]
       (if-let [drain-fn (ext/get-extension :cu/piggyback-drain)]
-        (let [caller (extract-caller-identity args)
-              scope (extract-project-scope args)
-              agent-id (ctx-id/make-piggyback-agent-id caller scope)
-              project-id (ctx-id/project-scope-string scope)
-              blocks (try (drain-fn agent-id project-id)
+        (let [caller-id (or (:_caller_id args) "coordinator")
+              blocks (try (drain-fn caller-id)
                           (catch Exception e
                             (log/debug "catchup-piggyback drain failed:" (.getMessage e))
                             nil))]
@@ -431,30 +424,26 @@
    Position in chain: AFTER normalize (so ack goes through piggyback chain)
    but BEFORE piggybacks (so ack still gets hivemind/memory blocks).
 
-   The :_tool-name key is injected by wrap-handler-context-with-toolname
-   (or extracted from args) for result attribution."
+   SESSION-SCOPED: Uses _caller_id only for async buffer key alignment."
   [handler tool-name]
   (fn [args]
     (if (:async args)
       (let [task-id (str "atask-" (random-uuid))
-            caller (extract-caller-identity args)
-            scope (extract-project-scope args)
-            agent-id (ctx-id/make-piggyback-agent-id caller scope)
-            project-id (ctx-id/project-scope-string scope)]
+            caller-id (or (:_caller_id args) "coordinator")]
         ;; Spawn background execution
         (future
           (try
             (let [;; Remove :async flag before passing to real handler
                   clean-args (dissoc args :async)
                   result (handler clean-args)]
-              (async-buf/enqueue-result! agent-id project-id
+              (async-buf/enqueue-result! caller-id
                                          {:task-id task-id
                                           :tool tool-name
                                           :status :completed
                                           :result result}))
             (catch Exception e
               (log/error e "async-result: background execution failed for task" task-id)
-              (async-buf/enqueue-result! agent-id project-id
+              (async-buf/enqueue-result! caller-id
                                          {:task-id task-id
                                           :tool tool-name
                                           :status :error
@@ -469,7 +458,7 @@
   "Wrap handler to drain async results as piggyback content.
    SRP: Single responsibility - async result delivery only.
 
-   Drains completed async results for the calling agent+project
+   Drains completed async results for the calling session
    and appends them as ---TOOLRESULT--- delimited blocks.
 
    Zero-cost when no async results pending.
@@ -477,8 +466,8 @@
    Runs alongside memory-piggyback and hivemind-piggyback in the
    middleware chain so all three channels can append independently.
 
-   CURSOR ISOLATION: Uses _caller_id for per-caller cursor alignment
-   with async enqueue. See extract-caller-id.
+   SESSION-SCOPED: Uses _caller_id only for buffer key alignment
+   with async enqueue.
 
    Format:
    ---TOOLRESULT---
@@ -487,11 +476,8 @@
   [handler]
   (fn [args]
     (let [content (handler args)
-          caller (extract-caller-identity args)
-          scope (extract-project-scope args)
-          agent-id (ctx-id/make-piggyback-agent-id caller scope)
-          project-id (ctx-id/project-scope-string scope)
-          drain-result (async-buf/drain! agent-id project-id)]
+          caller-id (or (:_caller_id args) "coordinator")
+          drain-result (async-buf/drain! caller-id)]
       (wrap-delimited-block content "TOOLRESULT"
                             (when drain-result (pr-str drain-result))))))
 

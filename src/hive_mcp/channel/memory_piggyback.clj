@@ -9,12 +9,13 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (def ^:const drain-char-budget
-  "Max chars per drain batch."
-  32000)
+  "Max chars per drain batch. Kept modest so each tool response
+   stays readable — full content absorbed over several calls."
+  12000)
 
 ;; gc-fix-3: buffers — LRU eviction, 200 entries, 30min TTL
 ;; Piggyback buffers are ephemeral per-agent state. Orphaned buffers waste memory.
-(defonce ^{:doc "Map of [agent-id project-id] -> buffer state."}
+(defonce ^{:doc "Map of caller-id-key -> buffer state (session-scoped)."}
   buffers
   (bounded-atom {:max-entries 200
                  :ttl-ms 1800000    ;; 30 minutes
@@ -32,13 +33,12 @@
 
 (defn enqueue!
   "Enqueue entries into the memory piggyback buffer.
-   Replaces any existing buffer for the same key (fresh catchup supersedes stale)."
-  ([agent-id project-id entries]
-   (enqueue! agent-id project-id entries nil))
-  ([agent-id project-id entries context-refs]
-   (let [buffer-key (ctx-id/make-buffer-key
-                     (ctx-id/parse-caller-id agent-id)
-                     (ctx-id/parse-project-scope project-id))
+   Replaces any existing buffer for the same key (fresh catchup supersedes stale).
+   Session-scoped: keyed by caller-id only (no project dimension)."
+  ([caller-id entries]
+   (enqueue! caller-id entries nil))
+  ([caller-id entries context-refs]
+   (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))
          existing (bget buffers buffer-key)
          formatted (mapv format-entry entries)]
      (when existing
@@ -55,11 +55,9 @@
                (when context-refs (str " with " (count context-refs) " context-refs"))))))
 
 (defn drain!
-  "Drain next batch of entries within char budget for an agent+project."
-  [agent-id project-id]
-  (let [buffer-key (ctx-id/make-buffer-key
-                    (ctx-id/parse-caller-id agent-id)
-                    (ctx-id/parse-project-scope project-id))
+  "Drain next batch of entries within char budget for a caller session."
+  [caller-id]
+  (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))
         buf (bget buffers buffer-key)]
     (when (and buf (not (:done buf)))
       (let [{:keys [entries cursor seq-num]} buf
@@ -100,20 +98,16 @@
           (assoc :context-refs (:context-refs buf)))))))
 
 (defn has-pending?
-  "Check if an agent+project has undrained memory entries."
-  [agent-id project-id]
-  (let [buffer-key (ctx-id/make-buffer-key
-                    (ctx-id/parse-caller-id agent-id)
-                    (ctx-id/parse-project-scope project-id))
+  "Check if a caller session has undrained memory entries."
+  [caller-id]
+  (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))
         buf (bget buffers buffer-key)]
     (and (some? buf) (not (:done buf)))))
 
 (defn clear-buffer!
-  "Clear buffer for a specific agent+project. For testing."
-  [agent-id project-id]
-  (let [buffer-key (ctx-id/make-buffer-key
-                    (ctx-id/parse-caller-id agent-id)
-                    (ctx-id/parse-project-scope project-id))]
+  "Clear buffer for a specific caller session. For testing."
+  [caller-id]
+  (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))]
     (bounded-swap! buffers dissoc buffer-key)))
 
 (defn reset-all!
@@ -124,21 +118,19 @@
 (defn adopt-buffer!
   "Adopt an orphaned buffer from a previous coordinator instance.
    When a coordinator restarts (new instance-id), the old buffer is orphaned.
-   This function finds a matching buffer for the same project from any
-   coordinator instance and re-keys it to the new caller.
+   This function finds a matching buffer from any coordinator instance
+   and re-keys it to the new caller.
+
+   Session-scoped: matches by caller prefix only, no project dimension.
 
    Returns true if a buffer was adopted, false otherwise."
-  [new-agent-id project-id]
-  (let [new-key (ctx-id/make-buffer-key
-                 (ctx-id/parse-caller-id new-agent-id)
-                 (ctx-id/parse-project-scope project-id))
-        proj-str (or project-id "global")
-        ;; Find orphaned coordinator buffer for same project
+  [new-caller-id]
+  (let [new-key (ctx-id/caller-id-key (ctx-id/parse-caller-id new-caller-id))
+        ;; Find orphaned coordinator buffer (any coordinator instance)
         donor (->> @(:atom buffers)
-                   (filter (fn [[[aid proj] entry]]
+                   (filter (fn [[aid entry]]
                              (let [buf (:data entry)]
-                               (and (= proj proj-str)
-                                    (not= aid new-agent-id)
+                               (and (not= aid new-key)
                                     (clojure.string/starts-with? (str aid) "coordinator:")
                                     (not (:done buf))))))
                    first)]
@@ -154,13 +146,13 @@
   "Evict coordinator buffers that have no matching active caller.
    Called during catchup to clean up buffers from dead bb-mcp processes.
 
-   Takes a set of active caller-ids (with instance suffix) and evicts
-   coordinator buffers whose agent-id prefix doesn't match any active caller.
+   Takes an active caller-id (with instance suffix) and evicts
+   coordinator buffers whose key doesn't match the active caller prefix.
 
    Returns count of evicted buffers."
   [active-caller-id]
   (let [orphaned (->> @(:atom buffers)
-                      (filter (fn [[[aid _proj] _entry]]
+                      (filter (fn [[aid _entry]]
                                 (and (clojure.string/starts-with? (str aid) "coordinator:")
                                      (not (clojure.string/starts-with? (str aid) (str active-caller-id "-"))))))
                       (map first)

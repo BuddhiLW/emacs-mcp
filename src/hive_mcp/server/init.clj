@@ -539,3 +539,52 @@
                    (registry-init!)
                    (set-engine! (create-engine))
                    (log/info "FSM workflow engine initialized and wired as active IWorkflowEngine"))))
+
+;; =============================================================================
+;; nREPL-mode initialization (for dev/bb-mcp without full -main)
+;; =============================================================================
+
+(defn- tool->registry-entry
+  "Convert a make-tool result to a registry entry [name {:tool spec, :handler fn}]."
+  [t]
+  [(:name t) {:tool (dissoc t :handler)
+              :handler (:handler t)}])
+
+(defn populate-server-context!
+  "Populate server-context-atom with middleware-wrapped tool handlers.
+
+   CRITICAL: Uses routes/make-tool to wrap handlers with the full middleware
+   chain (piggyback, context, normalize, etc.). Without make-tool, bb-mcp
+   gets raw handlers and no ---MEMORY---/---HIVEMIND--- blocks are attached."
+  []
+  (require 'hive-mcp.server.core)
+  (require 'hive-mcp.tools.registry)
+  (require 'hive-mcp.extensions.registry)
+  (let [consolidated ((resolve 'hive-mcp.tools.registry/get-consolidated-tools))
+        extensions   ((resolve 'hive-mcp.extensions.registry/get-registered-tools))
+        wrapped      (mapv routes/make-tool (concat consolidated extensions))
+        tools        (into {} (map tool->registry-entry wrapped))
+        ctx-atom     (deref (resolve 'hive-mcp.server.core/server-context-atom))]
+    (swap! ctx-atom (fn [_] {:tools (atom tools)}))
+    (log/info "server-context populated:" (count tools) "tools (middleware-wrapped)")))
+
+(defn nrepl-init!
+  "Initialize essential services for nREPL-mode operation (dev REPL, bb-mcp).
+   Runs the subset of -main phases needed for tools to work via nREPL:
+   - Phase 4: Embedding provider + memory store
+   - Phase 4.5: Extension/addon loading
+   - Server context: Populate server-context-atom for bb-mcp dynamic tools
+
+   Safe to call multiple times (idempotent via defonce atoms).
+   Called automatically by dev/user.clj on startup."
+  []
+  (log/info "nrepl-init! starting...")
+  ;; Phase 4: Embedding + memory
+  (init-embedding-provider!)
+  (wire-memory-store!)
+
+  ;; Phase 4.5: Extensions
+  (load-extensions!)
+
+  (populate-server-context!)
+  (log/info "nrepl-init! complete"))

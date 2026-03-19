@@ -9,7 +9,8 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defn entry->catchup-meta
-  "Convert a Chroma entry to catchup metadata format."
+  "Convert a Chroma entry to lean catchup metadata.
+   Minimal footprint: id + type + short preview. No tags (available via context-refs)."
   [entry preview-len]
   (let [content (:content entry)
         content-str (if (string? content)
@@ -17,9 +18,8 @@
                       (str content))
         preview (subs content-str 0 (min (count content-str) (or preview-len 80)))]
     {:id (:id entry)
-     :type (name (or (:type entry) "note"))
-     :preview preview
-     :tags (vec (or (:tags entry) []))}))
+     :T (name (or (:type entry) "note"))
+     :P preview}))
 
 (defn entry->axiom-meta
   "Convert entry to axiom metadata with full content."
@@ -108,11 +108,7 @@
            axioms-meta principles-meta priority-meta sessions-meta decisions-meta
            conventions-meta snippets-meta expiring-meta kg-insights
            project-tree-scan disc-decay context-refs]}]
-  (let [total-enqueued (+ (count axioms-meta) (count principles-meta) (count priority-meta)
-                          (count sessions-meta) (count decisions-meta) (count conventions-meta)
-                          (count snippets-meta) (count expiring-meta)
-                          (if (:situational-synthesis kg-insights) 1 0)
-                          (if (seq (dissoc kg-insights :situational-synthesis)) 1 0))]
+  (let [total-enqueued (+ (count axioms-meta) (count principles-meta) (count priority-meta))]
     [(make-block "header"
                  {:_block "header"
                   :success true
@@ -136,12 +132,9 @@
                            :ref-note "Context refs point to ephemeral context-store entries (10min TTL). Future :ref mode can send only refs instead of full content."))})
      (make-block "context"
                  {:_block "context"
-                  :context {:sessions sessions-meta
-                            :principles principles-meta
-                            :decisions decisions-meta
-                            :conventions conventions-meta
-                            :snippets snippets-meta
-                            :expiring expiring-meta}})
+                  :context {:sessions sessions-meta}
+                  :via-piggyback "Axioms, principles, priority conventions drain via ---MEMORY--- blocks on subsequent tool calls."
+                  :via-context-refs "Decisions, conventions, snippets, expiring available via context-refs in header. Use context_get to deep-dive by necessity."})
      (make-block "kg-insights"
                  {:_block "kg-insights"
                   :kg-insights (trim-kg-insights kg-insights)})
@@ -196,7 +189,7 @@
   "Format active decisions section for spawn context markdown."
   [decisions]
   (when (seq decisions)
-    (let [lines (map (fn [d] (format "- %s" (:preview d))) decisions)]
+    (let [lines (map (fn [d] (format "- %s" (or (:preview d) (:P d) ""))) decisions)]
       (str "### Active Decisions\n\n"
            (str/join "\n" lines)
            "\n\n"))))

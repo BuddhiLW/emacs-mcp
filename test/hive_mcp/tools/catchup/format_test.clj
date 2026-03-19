@@ -10,40 +10,35 @@
 ;; =============================================================================
 
 (deftest entry->catchup-meta-test
-  (testing "basic entry conversion with string content"
+  (testing "lean format: id + abbreviated type + preview, no tags"
     (let [entry {:id "test-1" :type "decision" :content "This is a test decision" :tags ["foo" "bar"]}
           result (fmt/entry->catchup-meta entry 80)]
       (is (= "test-1" (:id result)))
-      (is (= "decision" (:type result)))
-      (is (= "This is a test decision" (:preview result)))
-      (is (= ["foo" "bar"] (:tags result)))))
+      (is (= "decision" (:T result)))
+      (is (= "This is a test decision" (:P result)))
+      (is (nil? (:tags result)) "tags omitted for leanness")))
 
   (testing "truncation at preview-len"
     (let [long-content (apply str (repeat 200 "x"))
           entry {:id "test-2" :type "note" :content long-content :tags []}
           result (fmt/entry->catchup-meta entry 50)]
-      (is (= 50 (count (:preview result))))))
+      (is (= 50 (count (:P result))))))
 
   (testing "nil preview-len defaults to 80"
     (let [long-content (apply str (repeat 200 "x"))
           entry {:id "test-3" :type "note" :content long-content :tags []}
           result (fmt/entry->catchup-meta entry nil)]
-      (is (= 80 (count (:preview result))))))
+      (is (= 80 (count (:P result))))))
 
   (testing "non-string content is converted"
     (let [entry {:id "test-4" :type "note" :content 42 :tags []}
           result (fmt/entry->catchup-meta entry 80)]
-      (is (= "42" (:preview result)))))
+      (is (= "42" (:P result)))))
 
   (testing "nil type defaults to 'note'"
     (let [entry {:id "test-5" :content "test" :tags []}
           result (fmt/entry->catchup-meta entry 80)]
-      (is (= "note" (:type result)))))
-
-  (testing "nil tags defaults to empty vector"
-    (let [entry {:id "test-6" :type "note" :content "test"}
-          result (fmt/entry->catchup-meta entry 80)]
-      (is (= [] (:tags result))))))
+      (is (= "note" (:T result))))))
 
 (deftest entry->axiom-meta-test
   (testing "axiom metadata with full content"
@@ -163,10 +158,11 @@
         (is (= 2 (get-in header [:memory-piggyback :enqueued])))
         (is (string? (get-in header [:memory-piggyback :note]))))
 
-      ;; Block 1: context
+      ;; Block 1: context (sessions only, rest via piggyback/context-refs)
       (let [ctx-block (json/read-str (:text (nth resp 1)) :key-fn keyword)]
         (is (= "context" (:_block ctx-block)))
-        (is (= 2 (count (get-in ctx-block [:context :sessions])))))
+        (is (= 2 (count (get-in ctx-block [:context :sessions]))))
+        (is (nil? (get-in ctx-block [:context :decisions])) "decisions not inline — use context-refs"))
 
       ;; Block 2: kg-insights
       (let [kg-block (json/read-str (:text (nth resp 2)) :key-fn keyword)]
