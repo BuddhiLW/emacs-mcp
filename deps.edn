@@ -112,10 +112,11 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL, error taxonomy
         io.github.hive-agi/hive-dsl
-        {:git/tag "v0.3.5" :git/sha "224b3c257e6aaf48ffa78b1e3362aca04e3fbd1f"}
+        {:git/tag "v0.3.7" :git/sha "d5decedcc8caceb8e6a699c9aae5c40db4ae7057"}
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
-        io.github.hive-agi/hive-emacs {:git/tag "v0.2.0" :git/sha "05a3a07"}}
+        io.github.hive-agi/hive-emacs {:git/tag "v0.2.0" :git/sha "05a3a07"}
+}
 
  :aliases
  {:mcp
@@ -176,14 +177,19 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 ;; Generative testing for spec validation
-                org.clojure/test.check {:mvn/version "1.1.1"}}
+                org.clojure/test.check {:mvn/version "1.1.1"}
+                ;; hive-test: mutation, golden, property-based testing
+                io.github.hive-agi/hive-test
+                {:git/tag "v0.1.4" :git/sha "a529aa6"}}
    :main-opts ["-m" "cognitect.test-runner"]}
 
   ;; CI-friendly: Run only unit tests (excludes tests requiring Emacs)
   :test-unit
   {:extra-paths ["test"]
    :extra-deps {io.github.cognitect-labs/test-runner
-                {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                io.github.hive-agi/hive-test
+                {:git/tag "v0.1.4" :git/sha "a529aa6"}}
    :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:excludes [:integration]}}
@@ -192,7 +198,9 @@
   :test-integration
   {:extra-paths ["test"]
    :extra-deps {io.github.cognitect-labs/test-runner
-                {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                io.github.hive-agi/hive-test
+                {:git/tag "v0.1.4" :git/sha "a529aa6"}}
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:includes [:integration]}}
