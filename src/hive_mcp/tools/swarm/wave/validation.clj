@@ -56,12 +56,18 @@
      :invalid-count (count invalid)
      :invalid-paths invalid}))
 
+(def ^:const default-lint-timeout-ms
+  "Default per-file lint timeout (15 seconds)."
+  15000)
+
 (defn lint-file!
-  "Run clj-kondo lint on a single file."
-  [file-path & [{:keys [level] :or {level :error}}]]
+  "Run clj-kondo lint on a single file. Respects :timeout-ms (default 15s)."
+  [file-path & [{:keys [level timeout-ms] :or {level :error timeout-ms default-lint-timeout-ms}}]]
   (if-let [run-analysis (resolve/resolve-kondo-analysis)]
     (try
-      (let [result (run-analysis file-path)
+      (let [result (run-analysis file-path :timeout-ms timeout-ms)
+            _ (when (:timed-out result)
+                (log/warn "Lint timed out for file" {:file file-path :timeout-ms timeout-ms}))
             findings (:findings result)
             errors (filter #(= :error (:level %)) findings)
             warnings (filter #(= :warning (:level %)) findings)

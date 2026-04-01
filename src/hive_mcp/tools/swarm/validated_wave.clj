@@ -31,15 +31,22 @@
        (filter #(= :completed (:status %)))
        (mapv :file)))
 
+(def ^:const default-lint-timeout-ms
+  "Default per-file lint timeout for validated waves (15 seconds)."
+  15000)
+
 (defn- lint-files
-  "Run clj-kondo lint on files and filter by severity level."
-  [files lint-level]
+  "Run clj-kondo lint on files and filter by severity level.
+   Each file analysis is bounded by lint-timeout-ms (default 15s)."
+  [files lint-level & {:keys [lint-timeout-ms] :or {lint-timeout-ms default-lint-timeout-ms}}]
   (if-let [run-analysis (resolve/resolve-kondo-analysis)]
     (let [level-kw (keyword lint-level)
           all-findings (reduce
                         (fn [acc file]
                           (try
-                            (let [{:keys [findings]} (run-analysis file)
+                            (let [{:keys [findings timed-out]} (run-analysis file :timeout-ms lint-timeout-ms)
+                                  _ (when timed-out
+                                      (log/warn "Lint timed out for file, partial results" {:file file :timeout-ms lint-timeout-ms}))
                                   filtered (->> findings
                                                 (filter #(case level-kw
                                                            :error (= (:level %) :error)

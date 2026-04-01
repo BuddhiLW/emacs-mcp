@@ -3,25 +3,46 @@
    Pure functions that transform clj-kondo output into useful results."
   (:require [babashka.pods :as pods]))
 
+(defn- log-warn
+  "Log warning to stderr (works in both bb standalone and JVM classpath)."
+  [& args]
+  (binding [*out* *err*]
+    (println (str "[WARN] clj-kondo-mcp: " (apply str (interpose " " args))))
+    (flush)))
+
 ;; Load clj-kondo pod (version from bb.edn :pods)
 (pods/load-pod 'clj-kondo/clj-kondo "2026.01.12")
 (require '[pod.borkdude.clj-kondo :as clj-kondo])
 
+(def ^:const default-timeout-ms
+  "Default timeout for clj-kondo analysis (30 seconds)."
+  30000)
+
 (defn run-analysis
   "Run clj-kondo analysis on a path.
-   Returns {:findings [...] :analysis {...}}"
-  [path & {:keys [config] :or {config {}}}]
-  (clj-kondo/run!
-   {:lint [path]
-    :config (merge {:output {:format :edn}
-                    :analysis {:var-usages true
-                               :var-definitions true
-                               :namespace-definitions true
-                               :namespace-usages true
-                               :arglists true
-                               :keywords true
-                               :protocol-impls true}}
-                   config)}))
+   Returns {:findings [...] :analysis {...}}
+   Accepts :timeout-ms to bound execution time (default 30s).
+   Returns {:findings [] :timed-out true} when timeout is hit."
+  [path & {:keys [config timeout-ms] :or {config {} timeout-ms default-timeout-ms}}]
+  (let [f (future
+            (clj-kondo/run!
+             {:lint [path]
+              :config (merge {:output {:format :edn}
+                              :analysis {:var-usages true
+                                         :var-definitions true
+                                         :namespace-definitions true
+                                         :namespace-usages true
+                                         :arglists true
+                                         :keywords true
+                                         :protocol-impls true}}
+                             config)}))
+        result (deref f timeout-ms ::timeout)]
+    (if (= result ::timeout)
+      (do
+        (future-cancel f)
+        (log-warn "analysis timed out" {:path path :timeout-ms timeout-ms})
+        {:findings [] :analysis {} :timed-out true})
+      result)))
 
 (defn analyze
   "Analyze a path and return structured analysis data."
@@ -91,14 +112,21 @@
 
 (defn lint
   "Lint a path and return findings.
-   Level can be :error or :warning"
-  [path & {:keys [level] :or {level :warning}}]
-  (let [{:keys [findings]} (run-analysis path)]
-    (->> findings
-         (filter #(case level
-                    :error (= (:level %) :error)
-                    :warning true))
-         (map #(select-keys % [:filename :row :col :level :type :message])))))
+   Level can be :error or :warning.
+   Accepts :timeout-ms to bound analysis time (default 30s).
+   Returns partial results with :timed-out metadata when timeout is hit."
+  [path & {:keys [level timeout-ms] :or {level :warning timeout-ms default-timeout-ms}}]
+  (let [{:keys [findings timed-out]} (run-analysis path :timeout-ms timeout-ms)
+        filtered (->> findings
+                      (filter #(case level
+                                 :error (= (:level %) :error)
+                                 :warning true))
+                      (map #(select-keys % [:filename :row :col :level :type :message])))]
+    (if timed-out
+      {:findings filtered
+       :timed-out true
+       :warning (format "Analysis timed out after %dms — results may be incomplete" timeout-ms)}
+      filtered)))
 
 (defn unused-vars
   "Find unused private vars in a codebase."
