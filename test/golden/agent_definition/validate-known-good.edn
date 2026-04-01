@@ -1,0 +1,9 @@
+{:valid true,
+ :data
+ {:agent-type "reviewer",
+  :description "Code review specialist",
+  :system-prompt "You review code for correctness and style.",
+  :source :built-in,
+  :tools ["Read" "Grep" "Glob"],
+  :model :inherit,
+  :max-turns 15}}

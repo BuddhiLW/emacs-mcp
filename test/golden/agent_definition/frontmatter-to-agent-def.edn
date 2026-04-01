@@ -1,0 +1,10 @@
+{:agent-type "reviewer",
+ :description
+ "Code review specialist that checks for bugs and style issues.",
+ :system-prompt
+ "You are a code reviewer. Focus on correctness, clarity, and idiomatic style.",
+ :source :project,
+ :tools ["Read" "Grep" "Glob"],
+ :model :inherit,
+ :max-turns 15,
+ :skills ["simplify"]}
