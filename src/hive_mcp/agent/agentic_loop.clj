@@ -1,29 +1,23 @@
 (ns hive-mcp.agent.agentic-loop
-  "IAgenticLoop protocol — rich abstraction for headless agentic sessions.
+  "IAgenticLoop — protocol for in-process agentic loops.
 
-   Provides async lifecycle, collect-with-timeout, cost tracking, transcript
-   access, mid-session constraints, and control gradient (transparent vs opaque).
+   Vanilla version lives here in hive-mcp (AGPL). Enhanced implementations
+   with coordinator mode, fork, KG-compression etc. live in hive-agent (proprietary).
 
-   Architecture:
-     IAgenticLoop is the richer protocol beneath IHeadlessBackend.
-     An adapter (hive-agent.loop.headless-adapter) maps IAgenticLoop
-     to the 6-method IHeadlessBackend interface for registry compatibility.
+   Two control gradients:
+   - TRANSPARENT: tool calls brokered in-process, caller sees every execution
+   - OPAQUE: tool calls hidden behind API boundary (e.g. Claude Code SDK)
 
-     Transparent loops (e.g. TransparentAgenticLoop) broker tools in-process —
-     the caller sees every tool call and can inject results.
+   Lifecycle:
+     :idle → start! → :running → [abort!|complete] → :done/:aborted/:errored
 
-     Opaque loops (e.g. ClaudeSDKAgenticLoop) delegate iteration to an external
-     SDK — the caller hooks lifecycle events but doesn't broker tools.
-
-   Control gradient:
-     :cap/transparent — loop exposes tool calls, caller brokers results
-     :cap/opaque     — loop iterates internally, caller hooks events
+   Implementors:
+   - hive-agent.loop.agentic/TransparentAgenticLoop (in-process OpenRouter loop)
+   - hive-claude.sdk.agentic-loop/ClaudeSDKAgenticLoop (Claude Code SDK wrapper)
 
    See also:
-   - hive-mcp.addons.headless          — IHeadlessBackend (6-method interface)
-   - hive-agent.loop.agentic           — TransparentAgenticLoop (IP)
-   - hive-claude.sdk.agentic-loop      — ClaudeSDKAgenticLoop (AGPL)
-   - hive-agent.loop.headless-adapter  — IAgenticLoop -> IHeadlessBackend adapter")
+   - hive-mcp.addons.headless/IHeadlessBackend — headless backend protocol
+   - hive-agent.loop.headless-adapter — IAgenticLoop→IHeadlessBackend bridge")
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -34,95 +28,118 @@
 ;; =============================================================================
 
 (defprotocol IAgenticLoop
-  "Rich protocol for headless agentic sessions with lifecycle control,
-   cost tracking, transcript access, and mid-session constraints.
+  "Protocol for in-process agentic loops.
 
-   Implementors choose a control gradient:
-   - Transparent: tool calls exposed, caller brokers results (tool-results!)
-   - Opaque: iteration delegated to SDK, caller hooks events
+   Provides rich control over multi-turn LLM interactions with tool execution:
+   - Async start/abort lifecycle
+   - Collect result with timeout
+   - Real-time cost tracking
+   - Full transcript access
+   - Mid-session constraint injection (budget, max-turns)
+   - Message injection between turns"
 
-   Lifecycle: start! -> send-message! -> collect-response! -> abort!
-   State machine: :idle -> :running -> :done | :errored"
-
-  (start! [this config]
-    "Start the agentic session with the given configuration.
-     Config keys depend on implementation:
-       :task          — initial task string
-       :model         — model ID
-       :max-turns     — turn limit
-       :cwd           — working directory
-       :preset-content — system prompt
-     Returns: {:session-id str}")
+  (start! [this start-config]
+    "Start the agentic loop with the given configuration.
+     Merges start-config with base config from construction.
+     Returns: {:session-id str}
+     Side effects: transitions session-state from :idle to :running.")
 
   (abort! [this]
-    "Abort the running session. Idempotent — safe to call multiple times.
-     Returns: {:aborted? bool}")
+    "Abort the running loop gracefully.
+     Returns: {:aborted? boolean}
+     Side effects: transitions session-state to :aborted.")
 
   (session-state [this]
-    "Return the current session state keyword.
-     Returns: :idle | :running | :done | :errored")
+    "Return current session state keyword.
+     One of: :idle, :running, :done, :errored, :aborted")
 
   (send-message! [this message]
-    "Send a message/task to the running session.
-     For transparent loops: injects into the message queue between turns.
-     For opaque loops: dispatches via the SDK.
-     Returns: implementation-specific (task-id, channel, or promise)")
+    "Inject a message into the running loop between turns.
+     The message is queued and consumed at the next turn boundary.
+     Returns: {:sent? boolean}")
 
   (collect-response! [this opts]
-    "Blocking collect with timeout. Waits for the session to produce a result.
-     Opts:
-       :timeout-ms — max wait time in milliseconds (default: 60000)
-     Returns: {:result str :cost-usd double :turns int}
-              or {:timeout true} on timeout")
+    "Block until the loop completes or timeout.
+     opts: {:timeout-ms long}
+     Returns: result map on completion, {:timeout true} on timeout.
+     Result map: {:result str, :turns int, :tool-calls-made int, ...}")
 
   (cost [this]
-    "Return accumulated cost and turn information.
-     Returns: {:total-cost-usd double :turns int}")
+    "Return cost tracking information.
+     Returns: {:total-cost-usd double, :turns int}")
 
   (transcript [this]
-    "Return the full transcript of messages exchanged.
-     Returns: vector of message maps [{:role str :content str ...} ...]")
+    "Return the full message transcript as a vector of message maps.
+     Each entry is {:role str, :content str, ...}")
 
   (tool-results! [this results]
-    "Inject tool execution results (transparent loops only).
-     For opaque loops, throws or returns {:unsupported true}.
-     Results: vector of {:tool_call_id str :content str}
-     Returns: {:accepted? bool}")
+    "Inject external tool results into the loop.
+     For transparent loops: appended to transcript (tools already handled internally).
+     For opaque loops: forwarded to the underlying runtime.
+     Returns: {:accepted? boolean} or {:unsupported true}")
 
   (hooks [this]
-    "Return the set of capability/hook keywords this loop supports.
-     Always includes :cap/transparent or :cap/opaque.
-     May include: :pre-tool-use :post-tool-use :PreToolUse :PostToolUse
-                  :Notification :Stop :PreCompact
-     Returns: set of keywords")
+    "Return set of capability/hook keywords this loop supports.
+     Standard caps: :cap/transparent, :cap/opaque
+     Optional: :pre-tool-use, :post-tool-use, :cap/streaming,
+               :cap/multi-turn, :cap/cost-tracking, :cap/transcript,
+               :cap/constraints, :cap/coordinator")
 
-  (constrain! [this constraints]
-    "Apply mid-session constraints to the running loop.
-     Constraints map:
-       :max-turns    — turn limit (overrides initial config)
-       :max-cost-usd — cost budget in USD
-       :tools        — restrict available tools
-     Returns: {:applied? bool}"))
+  (constrain! [this new-constraints]
+    "Apply runtime constraints to the running loop.
+     new-constraints: {:max-turns int, :max-cost-usd double}
+     Returns: {:applied? boolean}"))
+
+;; =============================================================================
+;; ISidechainTranscript Protocol
+;; =============================================================================
+
+(defprotocol ISidechainTranscript
+  "Protocol for persistent sidechain transcript recording.
+   Each agent session gets its own JSONL transcript file,
+   enabling replay, debugging, and fork-from-transcript."
+
+  (transcript-path [this]
+    "Return the filesystem path to this agent's JSONL transcript file.
+     Returns: string path, or nil if not persisted.")
+
+  (flush-transcript! [this]
+    "Force-flush any buffered transcript entries to disk.
+     Returns: {:flushed? boolean, :entries int}")
+
+  (transcript-since [this cursor]
+    "Return transcript entries after the given cursor.
+     cursor: {:turn int} or {:timestamp long}
+     Returns: vector of message maps since cursor."))
 
 ;; =============================================================================
 ;; Predicates
 ;; =============================================================================
 
 (defn agentic-loop?
-  "Check if object implements IAgenticLoop."
+  "Check if x satisfies IAgenticLoop."
   [x]
   (satisfies? IAgenticLoop x))
 
 (defn transparent?
-  "Check if an agentic loop is transparent (brokers tools in-process).
-   Returns false for non-IAgenticLoop objects."
+  "Check if the loop operates in transparent mode (tool calls visible)."
   [x]
   (and (agentic-loop? x)
        (contains? (hooks x) :cap/transparent)))
 
 (defn opaque?
-  "Check if an agentic loop is opaque (delegates iteration to SDK).
-   Returns false for non-IAgenticLoop objects."
+  "Check if the loop operates in opaque mode (tool calls hidden behind API)."
   [x]
   (and (agentic-loop? x)
        (contains? (hooks x) :cap/opaque)))
+
+(defn coordinator?
+  "Check if the loop is running in coordinator mode."
+  [x]
+  (and (agentic-loop? x)
+       (contains? (hooks x) :cap/coordinator)))
+
+(defn has-transcript?
+  "Check if the loop supports sidechain transcript persistence."
+  [x]
+  (satisfies? ISidechainTranscript x))

@@ -47,3 +47,34 @@
      Returns {:type :text :content \"...\"} or {:type :tool_calls :calls [...]}
      where each call is {:id \"...\" :name \"tool_name\" :arguments {...}}")
   (model-name [this] "Return the model identifier string."))
+
+(defprotocol ICoordinatorAware
+  "Protocol for agents that can operate in coordinator mode.
+
+   Coordinator mode restricts available tools to delegation primitives
+   (agent spawn, send-message, task management) while workers get the
+   full tool pool. This enables the CC-parity coordinator→worker pattern
+   where coordinators design and delegate, workers implement.
+
+   Implementors:
+   - hive-agent coordinator loops (restricted tool set)
+   - hive-agent worker loops (full tool pool)
+
+   See also:
+   - hive-mcp.agent.agentic-loop/IAgenticLoop — loop lifecycle
+   - hive-mcp.agent.agent-definition — agent definition schema"
+
+  (coordinator-mode? [this]
+    "Returns true if this agent is currently operating as a coordinator.
+     Coordinators have a restricted tool set focused on delegation:
+     agent spawn, send-message, task-stop, and read-only tools.")
+
+  (allowed-tools [this]
+    "Return the set of tool name strings available to this agent in its
+     current mode. Coordinators get delegation primitives only; workers
+     get the full pool minus any disallowed-tools from their definition.")
+
+  (worker-tool-pool [this]
+    "Return the full tool pool that would be delegated to spawned workers.
+     Only meaningful when coordinator-mode? is true. Returns nil for workers.
+     Used by the coordinator to configure worker agent definitions."))

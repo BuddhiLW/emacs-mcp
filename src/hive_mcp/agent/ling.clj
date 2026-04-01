@@ -88,13 +88,63 @@
      :max-budget-usd (or (:max-budget-usd opts) (:max-budget-usd ling))
      :task (:task opts)}))
 
+(defn- dispatch-after-ready!
+  "Wait for terminal readiness, then dispatch task. Runs in a future so
+   spawn! returns immediately. Uses readiness polling (not fixed sleep)
+   and retries dispatch once on failure.
+
+   Fixes the spawn-then-dispatch workaround: task param on spawn now
+   works atomically without requiring a separate dispatch call."
+  [{:keys [slave-id mode cwd presets project-id effective-model enriched-task]}]
+  (future
+    (try
+      (let [wait-fn @(requiring-resolve
+                      'hive-mcp.tools.consolidated.workflow.readiness/wait-for-ling-ready)
+            ready   (wait-fn slave-id mode)
+            can-try? (or (:ready? ready) (:slave ready))]
+        (if can-try?
+          (let [task-ling (->ling slave-id {:cwd cwd
+                                            :presets presets
+                                            :project-id project-id
+                                            :spawn-mode mode
+                                            :model effective-model})
+                result (r/rescue {} (.dispatch! task-ling {:task enriched-task}))]
+            (if-let [err (::r/error (meta result))]
+              ;; First attempt failed — retry once after 2s
+              (do
+                (log/warn "Spawn-dispatch: first attempt failed, retrying in 2s"
+                          {:ling-id slave-id :error (:message err)})
+                (Thread/sleep 2000)
+                (let [retry (r/rescue {} (.dispatch! task-ling {:task enriched-task}))]
+                  (if-let [err2 (::r/error (meta retry))]
+                    (log/error "Spawn-dispatch: both attempts failed — task lost"
+                               {:ling-id slave-id :error (:message err2)})
+                    (log/info "Spawn-dispatch: succeeded on retry"
+                              {:ling-id slave-id}))))
+              (log/info "Spawn-dispatch: task dispatched after readiness wait"
+                        {:ling-id slave-id
+                         :elapsed-ms (:elapsed-ms ready)
+                         :best-effort? (not (:ready? ready))})))
+          (log/error "Spawn-dispatch: ling not ready, task will not be dispatched"
+                     {:ling-id slave-id
+                      :phase (:phase ready)
+                      :elapsed-ms (:elapsed-ms ready)})))
+      (catch Throwable t
+        (log/error t "Spawn-dispatch: unexpected error"
+                   {:ling-id slave-id})))))
+
 (defn- execute-spawn-plan!
-  "Execute spawn effects: catchup enrichment, strategy spawn, DS writes,
-   budget registration, and vterm dispatch."
+  "Execute spawn effects: catchup enrichment, DS pre-registration, strategy
+   spawn, DS reconciliation, budget registration, and readiness-based dispatch.
+
+   CRITICAL: For headless backends, strategy-spawn! triggers start! which fires
+   the agentic loop immediately. The ling MUST exist in DataScript before that
+   happens, otherwise completion handlers hit a deregistration race (H2 fix)."
   [plan opts]
   (let [{:keys [mode strat ctx cwd presets project-id ling-id
                 effective-model depth parent kanban-task-id
                 max-budget-usd task]} plan
+        headless? (contains? (headless-reg/registered-headless) mode)
         ling-context-str (when task
                            (r/rescue nil
                                      (catchup-ling/ling-catchup
@@ -107,53 +157,58 @@
                           task))
         spawn-opts (if enriched-task
                      (assoc opts :task enriched-task)
-                     opts)
-        slave-id (strategy/strategy-spawn! strat ctx spawn-opts)
-        headless? (contains? (headless-reg/registered-headless) mode)]
+                     opts)]
 
-    ;; Set initial status based on whether a task will be dispatched.
-    ;; When a task is provided, set :working immediately to prevent
-    ;; the Emacs sync :slave-ready event from resetting to :idle
-    ;; before the dispatch! call updates status (race condition fix).
-    (ds-lings/add-slave! slave-id {:status (if enriched-task :working :idle)
-                                   :depth depth
-                                   :parent parent
-                                   :presets presets
-                                   :cwd cwd
-                                   :project-id project-id
-                                   :kanban-task-id kanban-task-id
-                                   :requested-id (when (not= slave-id ling-id) ling-id)})
-    (ds-lings/update-slave! slave-id (cond-> {:ling/spawn-mode mode
-                                              :ling/model (or effective-model "claude")}
-                                       headless?
-                                       (assoc :ling/process-alive? true)))
+    ;; PRE-REGISTER in DataScript BEFORE strategy-spawn!.
+    ;; For headless backends, strategy-spawn! may trigger start! which fires
+    ;; the agentic loop immediately. The ling must exist in DataScript before
+    ;; that happens, or the completion/deregistration handler races against
+    ;; a ling entity that doesn't exist yet (H2 registration race fix).
+    ;; Set initial status: :working when task provided (prevents Emacs sync
+    ;; :slave-ready event from resetting to :idle before dispatch).
+    (ds-lings/add-slave! ling-id {:status (if enriched-task :working :idle)
+                                  :depth depth
+                                  :parent parent
+                                  :presets presets
+                                  :cwd cwd
+                                  :project-id project-id
+                                  :kanban-task-id kanban-task-id})
 
-    (when (and max-budget-usd (pos? max-budget-usd))
-      (r/rescue nil
-                (when-let [register-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/register-budget!)]
-                  (register-fn slave-id max-budget-usd {:model (or effective-model "claude")})
-                  (log/info "Budget guardrail registered for ling"
-                            {:ling-id slave-id :max-budget-usd max-budget-usd}))))
+    (let [slave-id (strategy/strategy-spawn! strat ctx spawn-opts)]
 
-    (when (and enriched-task (not headless?))
-      ;; Terminal processes (vterm, claude-code-ide) need time to initialize
-      ;; before accepting input. Dispatch immediately after spawn kills the
-      ;; process. Delay dispatch in a background thread to let the terminal
-      ;; become ready.
-      (future
-        (Thread/sleep 5000)
-        (let [result (r/guard Exception nil
-                              (let [task-ling (->ling slave-id {:cwd cwd
-                                                                :presets presets
-                                                                :project-id project-id
-                                                                :spawn-mode mode
-                                                                :model effective-model})]
-                                (.dispatch! task-ling {:task enriched-task})))]
-          (when-let [err (::r/error (meta result))]
-            (log/error "Delayed dispatch after spawn failed"
-                       {:ling-id slave-id :error (:message err)})))))
+      ;; Reconcile: if backend returned a different ID than pre-registered,
+      ;; remove the stale entry and re-register under the actual slave-id.
+      ;; Common case: slave-id == ling-id, so this is a no-op.
+      (when (not= slave-id ling-id)
+        (ds-lings/remove-slave! ling-id)
+        (ds-lings/add-slave! slave-id {:status (if enriched-task :working :idle)
+                                       :depth depth
+                                       :parent parent
+                                       :presets presets
+                                       :cwd cwd
+                                       :project-id project-id
+                                       :kanban-task-id kanban-task-id
+                                       :requested-id ling-id}))
 
-    slave-id))
+      (ds-lings/update-slave! slave-id (cond-> {:ling/spawn-mode mode
+                                                :ling/model (or effective-model "claude")}
+                                         headless?
+                                         (assoc :ling/process-alive? true)))
+
+      (when (and max-budget-usd (pos? max-budget-usd))
+        (r/rescue nil
+                  (when-let [register-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/register-budget!)]
+                    (register-fn slave-id max-budget-usd {:model (or effective-model "claude")})
+                    (log/info "Budget guardrail registered for ling"
+                              {:ling-id slave-id :max-budget-usd max-budget-usd}))))
+
+      (when (and enriched-task (not headless?))
+        (dispatch-after-ready! {:slave-id slave-id :mode mode :cwd cwd
+                                :presets presets :project-id project-id
+                                :effective-model effective-model
+                                :enriched-task enriched-task}))
+
+      slave-id)))
 
 (defrecord Ling [id cwd presets project-id spawn-mode model agents max-budget-usd]
   IAgent
