@@ -22,7 +22,7 @@
 (def all-known-caps
   "All known capability/hook keywords from IAgenticLoop."
   #{:cap/transparent :cap/opaque :cap/streaming :cap/multi-turn
-    :cap/cost-tracking :cap/transcript :cap/constraints :cap/coordinator
+    :cap/cost-tracking :cap/transcript :cap/constraints :cap/hivemind
     :pre-tool-use :post-tool-use})
 
 (def valid-session-states
@@ -121,13 +121,13 @@
     (set? (al/hooks loop))))
 
 ;; =============================================================================
-;; Property: coordinator? consistent with hooks
+;; Property: hivemind? consistent with hooks
 ;; =============================================================================
 
-(defspec coordinator-consistent-with-hooks 200
+(defspec hivemind-consistent-with-hooks 200
   (prop/for-all [loop gen-agentic-loop]
-    (= (al/coordinator? loop)
-       (contains? (al/hooks loop) :cap/coordinator))))
+    (= (al/hivemind? loop)
+       (contains? (al/hooks loop) :cap/hivemind))))
 
 ;; =============================================================================
 ;; Deterministic unit tests (edge cases)
@@ -148,8 +148,8 @@
     (is (false? (al/transparent? "hello")))
     (is (false? (al/opaque? "hello")))))
 
-(deftest coordinator-false-for-non-loops
-  (testing "coordinator? returns false for non-loop values"
-    (is (false? (al/coordinator? nil)))
-    (is (false? (al/coordinator? {})))
-    (is (false? (al/coordinator? 42)))))
+(deftest hivemind-false-for-non-loops
+  (testing "hivemind? returns false for non-loop values"
+    (is (false? (al/hivemind? nil)))
+    (is (false? (al/hivemind? {})))
+    (is (false? (al/hivemind? 42)))))

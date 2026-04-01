@@ -49,8 +49,8 @@
   (model-name [this] "Return the model identifier string."))
 
 ;; NOTE: ICoordinatorAware protocol removed in 0.16.0 (ISP fix).
-;; Coordinator role is now modeled as data via hive-mcp.agent.coordinator-role/CoordinatorRole ADT.
-;; See: (require '[hive-mcp.agent.coordinator-role :as cr])
-;;   (cr/coordinator-mode? role)     — replaces (coordinator-mode? agent)
-;;   (cr/coordinator-tools role def) — replaces (allowed-tools agent)
-;;   (cr/worker-tool-pool role tools) — replaces (worker-tool-pool agent)
+;; Hivemind role is now modeled as data via hive-mcp.agent.hivemind-role/HivemindRole ADT.
+;; See: (require '[hive-mcp.agent.hivemind-role :as hr])
+;;   (hr/hivemind-mode? role)        — replaces (coordinator-mode? agent)
+;;   (hr/hivemind-tools role def)    — replaces (allowed-tools agent)
+;;   (hr/worker-tool-pool role tools) — replaces (worker-tool-pool agent)

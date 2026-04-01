@@ -124,8 +124,8 @@
    - :filename         Original .md filename (without extension)
    - :base-dir         Directory the definition was loaded from
    - :spawn-mode       Preferred spawn mode keyword (links to spawn-mode-registry)
-   - :coordinator-role Coordinator role ADT keyword (default: :role/standalone)
-                       See hive-mcp.agent.coordinator-role for ADT dispatch"
+   - :hivemind-role    Hivemind role ADT keyword (default: :role/standalone)
+                       See hive-mcp.agent.hivemind-role for ADT dispatch"
   [:map {:closed false}
    [:agent-type :string]
    [:description :string]
@@ -141,8 +141,8 @@
    [:filename {:optional true} [:maybe :string]]
    [:base-dir {:optional true} [:maybe :string]]
    [:spawn-mode {:optional true} :keyword]
-   [:coordinator-role {:optional true :default :role/standalone}
-    [:enum :role/coordinator :role/worker :role/standalone]]])
+   [:hivemind-role {:optional true :default :role/standalone}
+    [:enum :role/hivemind :role/worker :role/standalone]]])
 
 ;; =============================================================================
 ;; Validation Functions
@@ -314,7 +314,7 @@
    - hooks:           → :hooks
    - mcp-servers: or mcpServers: → :mcp-servers
    - skills:          → :skills
-   - coordinator-role: or coordinatorRole: → :coordinator-role
+   - hivemind-role: or hivemindRole: → :hivemind-role
 
    Body content → :system-prompt
 
@@ -349,10 +349,10 @@
                                (get frontmatter "skills"))
         spawn-mode-raw     (or (get frontmatter :spawn-mode)
                                (get frontmatter "spawn-mode"))
-        coord-role-raw     (or (get frontmatter :coordinator-role)
-                               (get frontmatter "coordinator-role")
-                               (get frontmatter :coordinatorRole)
-                               (get frontmatter "coordinatorRole"))]
+        hm-role-raw        (or (get frontmatter :hivemind-role)
+                               (get frontmatter "hivemind-role")
+                               (get frontmatter :hivemindRole)
+                               (get frontmatter "hivemindRole"))]
     ;; Silently skip files without a name (likely co-located docs)
     (when (and agent-type (string? agent-type))
       (if-not (and description (string? description))
@@ -375,11 +375,11 @@
                               (if (keyword? spawn-mode-raw)
                                 spawn-mode-raw
                                 (keyword spawn-mode-raw)))
-              coord-role    (when coord-role-raw
-                              (let [valid-roles #{:role/coordinator :role/worker :role/standalone}
+              hm-role       (when hm-role-raw
+                              (let [valid-roles #{:role/hivemind :role/worker :role/standalone}
                                     kw (cond
-                                         (keyword? coord-role-raw) coord-role-raw
-                                         (string? coord-role-raw)  (keyword coord-role-raw)
+                                         (keyword? hm-role-raw) hm-role-raw
+                                         (string? hm-role-raw)  (keyword hm-role-raw)
                                          :else nil)]
                                 (when (valid-roles kw) kw)))
               filename      (when file-path
@@ -397,7 +397,7 @@
             mcp-servers  (assoc :mcp-servers mcp-servers)
             skills       (assoc :skills skills)
             spawn-mode   (assoc :spawn-mode spawn-mode)
-            coord-role   (assoc :coordinator-role coord-role)
+            hm-role      (assoc :hivemind-role hm-role)
             filename     (assoc :filename filename)
             base-dir     (assoc :base-dir base-dir)))))))
 

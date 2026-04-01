@@ -2,14 +2,15 @@
   "IAgenticLoop — protocol for in-process agentic loops.
 
    Vanilla version lives here in hive-mcp (AGPL). Enhanced implementations
-   with coordinator mode, fork, KG-compression etc. live in hive-agent (proprietary).
+   with hivemind mode, fork, KG-compression etc. live in hive-agent (proprietary).
 
    Two control gradients:
    - TRANSPARENT: tool calls brokered in-process, caller sees every execution
    - OPAQUE: tool calls hidden behind API boundary (e.g. Claude Code SDK)
 
-   Lifecycle:
-     :idle → start! → :running → [abort!|complete] → :done/:aborted/:errored
+   Lifecycle (see hive-mcp.agent.session-state/AgentSessionState ADT):
+     :session/idle → start! → :session/running → [abort!|complete]
+       → :session/done | :session/aborted | :session/errored
 
    Implementors:
    - hive-agent.loop.agentic/TransparentAgenticLoop (in-process OpenRouter loop)
@@ -42,16 +43,18 @@
     "Start the agentic loop with the given configuration.
      Merges start-config with base config from construction.
      Returns: {:session-id str}
-     Side effects: transitions session-state from :idle to :running.")
+     Side effects: transitions session-state from :session/idle to :session/running.")
 
   (abort! [this]
     "Abort the running loop gracefully.
      Returns: {:aborted? boolean}
-     Side effects: transitions session-state to :aborted.")
+     Side effects: transitions session-state to :session/aborted.")
 
   (session-state [this]
-    "Return current session state keyword.
-     One of: :idle, :running, :done, :errored, :aborted")
+    "Return current session state as an AgentSessionState ADT value.
+     See hive-mcp.agent.session-state for variants:
+       :session/idle, :session/running, :session/done, :session/errored, :session/aborted
+     Use adt-case for exhaustive dispatch on the returned value.")
 
   (send-message! [this message]
     "Inject a message into the running loop between turns.
@@ -83,7 +86,7 @@
      Standard caps: :cap/transparent, :cap/opaque
      Optional: :pre-tool-use, :post-tool-use, :cap/streaming,
                :cap/multi-turn, :cap/cost-tracking, :cap/transcript,
-               :cap/constraints, :cap/coordinator")
+               :cap/constraints, :cap/hivemind")
 
   (constrain! [this new-constraints]
     "Apply runtime constraints to the running loop.
@@ -133,11 +136,11 @@
   (and (agentic-loop? x)
        (contains? (hooks x) :cap/opaque)))
 
-(defn coordinator?
-  "Check if the loop is running in coordinator mode."
+(defn hivemind?
+  "Check if the loop is running in hivemind mode."
   [x]
   (and (agentic-loop? x)
-       (contains? (hooks x) :cap/coordinator)))
+       (contains? (hooks x) :cap/hivemind)))
 
 (defn has-transcript?
   "Check if the loop supports sidechain transcript persistence."
