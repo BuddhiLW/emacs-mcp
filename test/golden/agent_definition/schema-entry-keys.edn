@@ -11,4 +11,5 @@
  [:skills {}]
  [:filename {}]
  [:base-dir {}]
- [:spawn-mode {}]]
+ [:spawn-mode {}]
+ [:coordinator-role {}]]

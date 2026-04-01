@@ -123,7 +123,9 @@
    - :skills           Skill names to preload (e.g. [\"simplify\" \"review-pr\"])
    - :filename         Original .md filename (without extension)
    - :base-dir         Directory the definition was loaded from
-   - :spawn-mode       Preferred spawn mode keyword (links to spawn-mode-registry)"
+   - :spawn-mode       Preferred spawn mode keyword (links to spawn-mode-registry)
+   - :coordinator-role Coordinator role ADT keyword (default: :role/standalone)
+                       See hive-mcp.agent.coordinator-role for ADT dispatch"
   [:map {:closed false}
    [:agent-type :string]
    [:description :string]
@@ -138,7 +140,9 @@
    [:skills {:optional true} [:vector :string]]
    [:filename {:optional true} [:maybe :string]]
    [:base-dir {:optional true} [:maybe :string]]
-   [:spawn-mode {:optional true} :keyword]])
+   [:spawn-mode {:optional true} :keyword]
+   [:coordinator-role {:optional true :default :role/standalone}
+    [:enum :role/coordinator :role/worker :role/standalone]]])
 
 ;; =============================================================================
 ;; Validation Functions
@@ -310,6 +314,7 @@
    - hooks:           → :hooks
    - mcp-servers: or mcpServers: → :mcp-servers
    - skills:          → :skills
+   - coordinator-role: or coordinatorRole: → :coordinator-role
 
    Body content → :system-prompt
 
@@ -343,7 +348,11 @@
         skills-raw         (or (get frontmatter :skills)
                                (get frontmatter "skills"))
         spawn-mode-raw     (or (get frontmatter :spawn-mode)
-                               (get frontmatter "spawn-mode"))]
+                               (get frontmatter "spawn-mode"))
+        coord-role-raw     (or (get frontmatter :coordinator-role)
+                               (get frontmatter "coordinator-role")
+                               (get frontmatter :coordinatorRole)
+                               (get frontmatter "coordinatorRole"))]
     ;; Silently skip files without a name (likely co-located docs)
     (when (and agent-type (string? agent-type))
       (if-not (and description (string? description))
@@ -366,6 +375,13 @@
                               (if (keyword? spawn-mode-raw)
                                 spawn-mode-raw
                                 (keyword spawn-mode-raw)))
+              coord-role    (when coord-role-raw
+                              (let [valid-roles #{:role/coordinator :role/worker :role/standalone}
+                                    kw (cond
+                                         (keyword? coord-role-raw) coord-role-raw
+                                         (string? coord-role-raw)  (keyword coord-role-raw)
+                                         :else nil)]
+                                (when (valid-roles kw) kw)))
               filename      (when file-path
                               (let [fname (last (str/split (str file-path) #"/"))]
                                 (str/replace fname #"\.md$" "")))]
@@ -381,6 +397,7 @@
             mcp-servers  (assoc :mcp-servers mcp-servers)
             skills       (assoc :skills skills)
             spawn-mode   (assoc :spawn-mode spawn-mode)
+            coord-role   (assoc :coordinator-role coord-role)
             filename     (assoc :filename filename)
             base-dir     (assoc :base-dir base-dir)))))))
 
