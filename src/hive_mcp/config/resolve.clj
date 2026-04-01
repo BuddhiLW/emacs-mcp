@@ -1,7 +1,8 @@
 (ns hive-mcp.config.resolve
   "Pure config value resolution — mode-aware lookups, env fallback, secrets.
    Promote layer: takes a config map (or rules), returns resolved values."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.shell :as shell]
+            [clojure.string :as str]
             [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -38,7 +39,7 @@
   "Resolve a secret via `pass show <path>`. Returns trimmed stdout or nil."
   [pass-path]
   (rescue nil
-    (let [{:keys [exit out]} (clojure.java.shell/sh "pass" "show" pass-path)]
+    (let [{:keys [exit out]} (shell/sh "pass" "show" pass-path)]
       (when (zero? exit)
         (str/trim (first (str/split-lines (str out))))))))
 
