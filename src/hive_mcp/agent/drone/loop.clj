@@ -125,18 +125,29 @@
                    {:consecutive-failures-fn (constantly 0)
                     :reason-delta 1})))
 
+(defn- resolve-project-id
+  "Derive project-id from task-spec cwd. Cached per loop instance."
+  [task-spec]
+  (when-let [cwd (:cwd task-spec)]
+    (try
+      (require 'hive-mcp.tools.memory.scope)
+      ((resolve 'hive-mcp.tools.memory.scope/get-current-project-id) cwd)
+      (catch Exception _ nil))))
+
 (defn- handle-tool-calls-response
   "Process a tool_calls LLM response. Returns updated state."
   [state response updated-tokens session-store task-spec]
   (let [{:keys [drone-id agent-id turn obs-count permissions emit!]} state
         calls (:calls response)
-        tool-names (mapv :name calls)]
+        tool-names (mapv :name calls)
+        project-id (resolve-project-id task-spec)]
     (log/info "Agentic loop executing tools"
               {:drone-id drone-id :turn turn :tools tool-names})
     (emit! :agentic-loop-turn {:drone-id drone-id :turn turn
                                :phase :executing-tools :tools tool-names})
-    (let [tool-results (ctx/with-request-context {:agent-id agent-id}
-                         (executor/execute-tool-calls agent-id calls permissions))
+    (let [tool-results (ctx/with-request-context {:agent-id agent-id :project-id project-id}
+                         (executor/execute-tool-calls agent-id calls permissions
+                                                      {:project-id project-id}))
           new-obs      (lsess/record-tool-observations!
                         session-store turn calls tool-results obs-count task-spec)
           all-failed?  (every? (fn [r] (str/starts-with? (str (:content r)) "Error:"))

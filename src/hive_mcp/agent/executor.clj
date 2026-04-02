@@ -3,6 +3,7 @@
   (:require [hive-mcp.agent.registry :as registry]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.agent.drone.tool-allowlist :as allowlist]
+            [hive-mcp.channel.piggyback-tap :as tap]
             [hive-mcp.hivemind.core :as hivemind]
             [hive-mcp.server.permissions :as permissions]
             [hive-dsl.result :as r]
@@ -59,12 +60,28 @@
                 (if (string? (:text r)) (:text r) (json/write-str r)))
               (str "Error: " (:error result)))})
 
+(defn- append-piggyback-to-results
+  "Append piggyback drain text to the last tool result's content.
+   Mirrors how wrap-handler-piggybacks appends to the last text item
+   in MCP responses — ensures the LLM sees hivemind shouts, memory
+   blocks, etc. even on the non-MCP (agentic loop) execution path."
+  [results piggyback-text]
+  (if (and (seq results) piggyback-text)
+    (let [last-idx (dec (count results))
+          last-result (nth results last-idx)]
+      (assoc results last-idx
+             (update last-result :content str piggyback-text)))
+    results))
+
 (defn execute-tool-calls
-  "Execute a batch of tool calls, respecting allowlist and permissions."
+  "Execute a batch of tool calls, respecting allowlist and permissions.
+   After execution, drains all piggyback channels (hivemind, memory, async,
+   catchup) and appends to the last tool result — ensures headless/OpenRouter
+   lings receive hivemind shouts that would otherwise be lost."
   ([agent-id tool-calls permissions]
    (execute-tool-calls agent-id tool-calls permissions nil))
-  ([agent-id tool-calls permissions {:keys [tool-allowlist task-type] :as opts}]
-   (ctx/with-request-context {:agent-id agent-id}
+  ([agent-id tool-calls permissions {:keys [tool-allowlist task-type project-id] :as opts}]
+   (ctx/with-request-context {:agent-id agent-id :project-id project-id}
      (let [effective-allowlist (when (or tool-allowlist task-type)
                                  (allowlist/resolve-allowlist opts))
            {:keys [allowed rejected]}
@@ -79,5 +96,8 @@
                                   (format-tool-result id name result))
                                 (format-tool-result id name
                                                     {:success false :error "Rejected by human"}))))
-                          allowed)]
-       (into (vec rejected) executed)))))
+                          allowed)
+           all-results (into (vec rejected) executed)
+           ;; Drain piggyback channels — bridges hivemind shouts to agentic loop
+           piggyback-text (tap/drain-all! agent-id project-id)]
+       (append-piggyback-to-results all-results piggyback-text)))))
