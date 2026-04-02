@@ -81,16 +81,21 @@
 
 (defn load-system-config
   "Load base system.edn merged with profile overlay via meta-merge.
-   Profile nil keys are removed (Integrant convention for exclusion)."
+   Profile nil keys are removed (Integrant convention for exclusion).
+
+   Note: meta-merge ignores nil overlay values (keeps base), so we must
+   explicitly dissoc keys that the profile sets to nil BEFORE merging."
   ([] (load-system-config (resolve-profile)))
   ([profile]
-   (let [base    (read-base-config)
-         overlay (read-profile-config profile)
-         merged  (meta-merge base overlay)]
-     ;; Remove keys set to nil by profile (Integrant convention for exclusion)
-     (->> merged
-          (remove (fn [[_ v]] (nil? v)))
-          (into {})))))
+   (let [base       (read-base-config)
+         overlay    (read-profile-config profile)
+         ;; Identify keys the profile explicitly sets to nil (exclusion markers)
+         nil-keys   (into #{} (comp (filter (fn [[_ v]] (nil? v))) (map key)) overlay)
+         ;; Remove nil entries from overlay before meta-merge (meta-merge ignores nil)
+         overlay'   (into {} (remove (fn [[_ v]] (nil? v))) overlay)
+         ;; Merge remaining overlay into base, then remove excluded keys
+         merged     (meta-merge base overlay')]
+     (apply dissoc merged nil-keys))))
 
 ;; =============================================================================
 ;; Lifecycle — start! / stop! / reset!
