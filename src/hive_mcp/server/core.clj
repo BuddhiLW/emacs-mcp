@@ -1,53 +1,38 @@
 (ns hive-mcp.server.core
-  "MCP server entry point.
+  "MCP server entry point — Integrant lifecycle orchestrator.
 
-   Thin orchestrator delegating to sub-modules:
-   - lifecycle: hooks, shutdown, configuration
-   - transport: nREPL, WebSocket, channel servers
-   - init: service initialization (embedding, events, hot-reload)
-   - routes: tool dispatch, handler wrappers, server spec"
-  (:require [io.modelcontext.clojure-sdk.stdio-server :as io-server]
-            [io.modelcontext.clojure-sdk.server :as sdk-server]
-            [jsonrpc4clj.server :as jsonrpc-server]
-            [hive-mcp.server.routes :as routes]
-            [hive-mcp.server.lifecycle :as lifecycle]
-            [hive-mcp.server.transport :as transport]
-            [hive-mcp.server.init :as init]
-            [hive-mcp.server.guards :as guards]
+   Replaces the monolithic 7-phase start! with declarative Integrant system.
+   All initialization order is determined by #ig/ref dependency edges in
+   resources/hive/system.edn + profile overlays.
+
+   Public API:
+     start!  — Init Integrant system from config (non-blocking, returns system map)
+     stop!   — Halt running system (ig/halt! in reverse init order)
+     reset!  — stop! + clj-reload namespace refresh + start! (dev workflow)
+     -main   — Entry point: start! + block on keepalive"
+  (:refer-clojure :exclude [reset!])
+  (:require [clojure.java.io :as io]
             [clojure.core.async :as async]
-            [clojure.java.io :as io]
             [integrant.core :as ig]
             [meta-merge.core :refer [meta-merge]]
-            [taoensso.timbre :as log])
+            [taoensso.timbre :as log]
+            ;; ── System layer namespaces (load init-key/halt-key! multimethods) ──
+            [hive-mcp.system.layer1]
+            [hive-mcp.system.layer2]
+            [hive-mcp.system.layer3]
+            [hive-mcp.system.layer4]
+            [hive-mcp.system.layer5]
+            [hive-mcp.system.keepalive :as keepalive])
   (:gen-class))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
-;; Server State (defonce atoms for lifecycle management)
+;; Configure Timbre to write to stderr instead of stdout
+;; This is CRITICAL for MCP servers — stdout is the JSON-RPC channel
 ;; =============================================================================
 
-;; Store nREPL server reference for shutdown
-(defonce ^:private nrepl-server-atom (atom nil))
-
-;; Store MCP server context for hot-reload capability
-(defonce ^:private server-context-atom (atom nil))
-
-;; Global hooks registry for event-driven workflows
-(defonce ^:private hooks-registry-atom (atom nil))
-
-;; Track if shutdown hook is registered
-(defonce ^:private shutdown-hook-registered? (atom false))
-
-;; Store coordinator-id for graceful shutdown
-(defonce ^:private coordinator-id-atom (atom nil))
-
-;; WebSocket channel monitor for auto-healing
-(defonce ^:private ws-channel-monitor (atom nil))
-
-;; Configure Timbre to write to stderr instead of stdout
-;; This is CRITICAL for MCP servers - stdout is the JSON-RPC channel
 (log/merge-config!
  {:appenders
   {:println {:enabled? true
@@ -58,7 +43,13 @@
                        (println (force output_)))))}}})
 
 ;; =============================================================================
-;; Profile-Aware Config Loading (Integrant T11)
+;; System State — single defonce atom replaces 6 private atoms
+;; =============================================================================
+
+(defonce system (atom nil))
+
+;; =============================================================================
+;; Profile-Aware Config Loading
 ;; =============================================================================
 
 (defn resolve-profile
@@ -102,120 +93,89 @@
           (into {})))))
 
 ;; =============================================================================
-;; Server Lifecycle - Thin orchestrator
+;; Lifecycle — start! / stop! / reset!
 ;; =============================================================================
 
 (defn start!
-  "Start the MCP server.
+  "Initialize the Integrant system from system.edn + profile overlay.
 
-   Orchestrates startup by delegating to sub-modules in correct order:
-   1. Guards + Hooks (lifecycle)
-   2. Events + Coordinator (init)
-   3. Network servers (transport)
-   4. Services: embedding + memory (init)
-   5. Channels + Sync (transport + init)
-   6. Hot-reload + Registry sync (init)
-   7. MCP stdio server (must be last - blocks)
+   Non-blocking — returns the initialized system map. Caller is responsible
+   for blocking (see -main which uses keepalive/await-shutdown-or-stdio!).
+
+   Idempotent guard: throws if system already running.
 
    Accepts optional profile keyword (:desktop, :k8s-headless, :k8s-minimal).
-   When T8 lands, profile drives Integrant system init. Until then, logged."
+   Profile precedence: explicit :profile > HIVE_PROFILE env > :desktop."
   [& {:keys [profile] :or {profile nil}}]
-  (let [server-id (random-uuid)
-        profile   (resolve-profile profile)
-        _config   (load-system-config profile)]
-    (log/info "Starting hive-mcp server:" server-id "profile:" profile)
+  (let [profile (resolve-profile profile)]
+    (when @system
+      (throw (ex-info "System already running. Call (stop!) first or (reset!) to restart."
+                      {:profile profile})))
+    (log/info "Starting hive-mcp server with Integrant, profile:" profile)
     (when-let [sock (System/getenv "EMACS_SOCKET_NAME")]
       (log/info "Targeting Emacs daemon:" sock))
+    (let [config (load-system-config profile)
+          sys    (ig/init config)]
+      (clojure.core/reset! system sys)
+      (log/info "Integrant system initialized:" (count sys) "keys")
+      sys)))
 
-    ;; Phase 1: Guards + Hooks
-    (guards/mark-coordinator-running!)
-    (lifecycle/init-hooks! hooks-registry-atom shutdown-hook-registered? coordinator-id-atom)
+(defn stop!
+  "Halt the running Integrant system. Safe to call when no system running.
+   Keys are halted in reverse init order (Integrant default)."
+  []
+  (when-let [sys @system]
+    (log/info "Halting Integrant system...")
+    (ig/halt! sys)
+    (clojure.core/reset! system nil)
+    (log/info "Integrant system halted.")
+    :halted))
 
-    ;; Phase 2: Events + Coordinator registration
-    (init/init-events!)
-    (init/register-coordinator! coordinator-id-atom)
+(defn reset!
+  "Stop system, reload changed namespaces via clj-reload, re-init system.
+   The full REPL-driven development cycle.
 
-    ;; Phase 3: Transport (network servers)
-    (transport/start-embedded-nrepl! nrepl-server-atom)
-    (transport/start-websocket-server!)
-    (init/init-nats!)
+   clj-reload is dev-only (not in main deps), so we use requiring-resolve."
+  [& {:keys [profile] :or {profile nil}}]
+  (let [profile (or profile (resolve-profile))]
+    (stop!)
+    (log/info "Reloading changed namespaces...")
+    (if-let [reload-fn (requiring-resolve 'clj-reload.core/reload)]
+      (do (reload-fn)
+          (log/info "Namespaces reloaded. Restarting..."))
+      (log/warn "clj-reload not available (dev-only dep). Skipping reload."))
+    (start! :profile profile)))
 
-    ;; Phase 4: Services (embedding, memory store, tool delegation)
-    (init/init-embedding-provider!)
-    (init/warmup-embedding!)
-    (init/wire-memory-store!)
-    (routes/register-tools-for-delegation!)
+;; =============================================================================
+;; Blocking — keepalive integration for -main
+;; =============================================================================
 
-    ;; Phase 4.4: Forge belt defaults (extensions can override)
-    (init/register-forge-belt-defaults!)
+(defn- block-until-shutdown!
+  "Block the calling thread on the keepalive component until shutdown signal.
 
-    ;; Phase 4.45: Global config (must load BEFORE extensions — addons need API keys/config)
-    (try
-      (require 'hive-mcp.config.core)
-      (require 'hive-mcp.tools.hive-project)
-      (let [load-config! (resolve 'hive-mcp.config.core/load-global-config!)
-            scan! (resolve 'hive-mcp.tools.hive-project/scan-and-generate-missing!)]
-        (load-config!)
-        (let [result (scan!)]
-          (log/info "Phase 4.45: Global config loaded + auto-gen .hive-project.edn:" result)))
-      (catch Exception e
-        (log/warn "Phase 4.45: Config/auto-gen scan failed (non-fatal):" (.getMessage e))))
+   In :stdio mode (desktop): races MCP stdio join promise vs shutdown-ch.
+   In :promise mode (K8s headless): blocks on shutdown-ch (SIGTERM).
 
-    ;; Phase 4.5: Extension loading (classpath addon discovery)
-    ;; Must run AFTER embedding/memory (extensions may use Chroma).
-    ;; Must run AFTER config (extensions need API keys from config.edn).
-    ;; Must run BEFORE workflow engine (handlers may use extensions).
-    ;; hive-claude auto-discovered here via META-INF manifest (registers :claude terminal)
-    ;; NOTE: Addons self-register capabilities during initialize! lifecycle.
-    ;; E.g. hive-emacs registers EmacsVessel in IVessel registry here.
-    (init/load-extensions!)
-
-    ;; Phase 5: Channels + Sync
-    (transport/start-ws-channel-with-healing! ws-channel-monitor)
-    (transport/start-olympus-ws!)
-    (transport/start-a2a-gateway!)
-    (transport/start-legacy-channel!)
-    (init/init-channel-bridge!)
-    (init/start-swarm-sync!)
-
-    ;; Phase 5.7: FSM Workflow Engine (registry + IWorkflowEngine wiring)
-    ;; Must run after services (handlers use memory/kanban at runtime).
-    (init/init-workflow-engine!)
-
-    ;; Phase 6: Hot-reload + Registry sync
-    (init/init-hot-reload-watcher! server-context-atom (lifecycle/read-project-config))
-    (init/start-registry-sync!)
-
-    ;; Phase 6.5: Decay Scheduler (periodic memory/edge/disc decay)
-    ;; Must run after config loaded (Phase 5.5) and embedding provider (Phase 4).
-    ;; Daemon thread -- dies with JVM, no explicit shutdown needed.
-    (init/start-decay-scheduler!)
-
-    ;; Phase 6.6: Housekeeping Scheduler (gc-fix-5: periodic GC sweep + cleanup)
-    ;; Runs bounded atom GC sweep + stale resource cleanup every 5 minutes.
-    ;; Daemon thread -- dies with JVM. Also stoppable via init/stop-housekeeping-scheduler!
-    (init/start-housekeeping-scheduler!)
-
-    ;; Phase 7: Start MCP server (must be last - blocks on stdio)
-    ;; NOTE: routes/build-server-spec must be called AFTER init-embedding-provider!
-    ;; to get accurate Chroma availability for capability-based tool switching
-    (let [spec (assoc (routes/build-server-spec) :server-id server-id)
-          log-ch (async/chan (async/sliding-buffer 20))
-          server (io-server/stdio-server {:log-ch log-ch})
-          ;; Create context and store for hot-reload capability
-          context (assoc (sdk-server/create-context! spec) :server server)]
-      (reset! server-context-atom context)
-      (log/info "Server context stored for hot-reload capability")
-      ;; Start the JSON-RPC server and block on join promise.
-      ;; When stdin EOF occurs (Emacs parent exits), the ChanServer pipeline
-      ;; detects channel closure and delivers :done to the join promise.
-      ;; We deref to block the main thread, then trigger clean JVM shutdown
-      ;; which fires the registered shutdown hook (Olympus stop, coordinator
-      ;; marking, session-end/auto-wrap hooks).
-      (let [join (jsonrpc-server/start server context)]
-        @join
-        (log/info "MCP server stdin closed - initiating clean shutdown")
+   After unblocking, halts the system and exits."
+  [sys]
+  (let [keepalive-state (get sys :hive/keepalive)]
+    (if-let [mcp-stdio (get sys :hive/mcp-stdio)]
+      ;; Desktop: race stdio EOF vs shutdown signal
+      (let [[source _val] (keepalive/await-shutdown-or-stdio!
+                            keepalive-state (:join mcp-stdio))]
+        (log/info "hive-mcp unblocked via" source "— initiating clean shutdown")
+        (stop!)
+        (System/exit 0))
+      ;; Headless: block on shutdown-ch (SIGTERM or halt!)
+      (do
+        (keepalive/await-shutdown! keepalive-state)
+        (log/info "hive-mcp shutdown signal received — initiating clean shutdown")
+        (stop!)
         (System/exit 0)))))
+
+;; =============================================================================
+;; CLI Entry Point
+;; =============================================================================
 
 (defn- parse-cli-args
   "Parse CLI args for --profile flag. Returns map with :profile (or nil)."
@@ -239,10 +199,14 @@
 
    Profile precedence: --profile flag > HIVE_PROFILE env > desktop"
   [& args]
-  (let [{:keys [profile]} (parse-cli-args args)]
-    (start! :profile profile)))
+  (let [{:keys [profile]} (parse-cli-args args)
+        sys (start! :profile profile)]
+    (block-until-shutdown! sys)))
 
 (comment
-  ;; For REPL development
+  ;; For REPL development — use dev/user.clj (go)/(halt)/(reset) instead
   (start!)
-  (start! :profile :k8s-headless))
+  (start! :profile :k8s-headless)
+  (stop!)
+  (reset!)
+  @system)
