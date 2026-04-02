@@ -46,17 +46,22 @@ The env var fallback reads from MCP server process, NOT your ling process!"
                                "data" {:type "object"
                                        :description "Additional event data"}}
                   :required ["event_type"]}
-    :handler (fn [{:keys [agent_id event_type task message directory data]}]
+    :handler (fn [{:keys [agent_id event_type task message directory data _caller_id] :as _args}]
                (let [ctx-agent (ctx/current-agent-id)
                      env-agent (System/getenv "CLAUDE_SWARM_SLAVE_ID")
+                     ;; BUG FIX: _caller_id is injected by bb-mcp from the CHILD
+                     ;; process's CLAUDE_SWARM_SLAVE_ID. For headless lings this is
+                     ;; the correct ling identity. env-agent reads from the SERVER
+                     ;; process env, which is wrong for child lings.
                      effective-id (or agent_id
+                                      _caller_id
                                       ctx-agent
                                       env-agent
                                       "unknown-agent")
-                     _ (when (and (not agent_id) (not ctx-agent))
+                     _ (when (and (not agent_id) (not _caller_id) (not ctx-agent))
                          (log/warn "[hivemind_shout] No agent_id in args or context, using fallback:" (or env-agent "unknown-agent")))
 
-                     fallback-used? (and (not agent_id) (not ctx-agent))]
+                     fallback-used? (and (not agent_id) (not _caller_id) (not ctx-agent))]
                  ;; NOTE: Only pass directory if caller explicitly provided it.
                  ;; Do NOT fall back to ctx/current-directory — that resolves to the
                  ;; MCP server's cwd, not the ling's cwd. shout! has its own slave-cwd
@@ -98,8 +103,9 @@ The env var fallback reads from MCP server process, NOT your ling process!"
                                "directory" {:type "string"
                                             :description "Working directory for project-id derivation. Pass your cwd for proper scoping."}}
                   :required ["question"]}
-    :handler (fn [{:keys [agent_id question options timeout_ms directory]}]
+    :handler (fn [{:keys [agent_id _caller_id question options timeout_ms directory]}]
                (let [effective-id (or agent_id
+                                      _caller_id
                                       (ctx/current-agent-id)
                                       (System/getenv "CLAUDE_SWARM_SLAVE_ID")
                                       "unknown-agent")

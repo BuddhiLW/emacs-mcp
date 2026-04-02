@@ -238,11 +238,16 @@
 (defn- auto-shout-agent-event!
   "Auto-shout headless ling completion/failure to hivemind for visibility.
    Makes agent results appear in ---HIVEMIND--- piggyback blocks.
-   Mirrors auto-shout-drone-event! pattern."
+   Mirrors auto-shout-drone-event! pattern.
+
+   BUG FIX: Uses bare ling-id (not \"agent:\"-prefixed) so that shout!
+   can resolve the slave in DataScript. The slave is registered under
+   its plain ling-id by execute-spawn-plan!, so prefixing caused
+   get-slave-by-name-or-id to miss the match."
   [ling-id event-type summary-msg]
   (try
     (when-let [shout-fn (requiring-resolve 'hive-mcp.hivemind.core/shout!)]
-      (shout-fn (str "agent:" ling-id)
+      (shout-fn ling-id
                 event-type
                 {:message summary-msg
                  :task (str "headless-agent:" ling-id)}))

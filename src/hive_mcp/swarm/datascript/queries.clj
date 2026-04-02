@@ -126,7 +126,13 @@
    short IDs like 'ling-wave-fix') and DataScript (which stores full
    spawn IDs like 'swarm-fix-wave-race-condition-1770230187').
 
+   BUG FIX 2: Strips 'agent:' prefix from headless ling auto-shouts.
+   The NATS bridge's auto-shout-agent-event! may pass 'agent:ling-xyz'
+   but DataScript stores the bare 'ling-xyz'. Without stripping, the
+   lookup fails silently and status sync is lost.
+
    Resolution order:
+   0. Strip 'agent:' prefix if present (headless ling bridge IDs)
    1. Exact match on :slave/id
    2. Exact match on :slave/name (with prefix stripping)
    3. Fuzzy match: keyword overlap between shout ID and spawn IDs
@@ -138,24 +144,30 @@
    Returns:
      Map with slave attributes or nil if not found"
   [identifier]
-  (or
-   ;; 1. Try exact ID match first
-   (get-slave identifier)
-   ;; 2. Try exact name match (with prefix stripping)
-   (let [name (cond
-                (str/starts-with? identifier "ling-")
-                (subs identifier 5)
+  (let [;; Strip 'agent:' prefix used by NATS bridge auto-shouts
+        clean-id (if (str/starts-with? identifier "agent:")
+                   (subs identifier (count "agent:"))
+                   identifier)]
+    (or
+     ;; 1. Try exact ID match first
+     (get-slave clean-id)
+     ;; Also try original identifier if prefix was stripped
+     (when (not= clean-id identifier) (get-slave identifier))
+     ;; 2. Try exact name match (with prefix stripping)
+     (let [name (cond
+                  (str/starts-with? clean-id "ling-")
+                  (subs clean-id 5)
 
-                (str/starts-with? identifier "swarm-")
-                ;; For swarm-NAME-TIMESTAMP, extract NAME
-                (let [parts (str/split identifier #"-")]
-                  (when (>= (count parts) 2)
-                    (second parts)))
+                  (str/starts-with? clean-id "swarm-")
+                  ;; For swarm-NAME-TIMESTAMP, extract NAME
+                  (let [parts (str/split clean-id #"-")]
+                    (when (>= (count parts) 2)
+                      (second parts)))
 
-                :else identifier)]
-     (get-slave-by-name name))
-   ;; 3. Fuzzy match by keyword overlap
-   (find-best-keyword-match identifier)))
+                  :else clean-id)]
+       (get-slave-by-name name))
+     ;; 3. Fuzzy match by keyword overlap
+     (find-best-keyword-match clean-id))))
 
 (defn get-all-slaves
   "Get all slaves in the swarm.
