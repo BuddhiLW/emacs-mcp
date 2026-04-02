@@ -129,9 +129,9 @@
   [{:keys [type tags exclude_tags limit duration scope directory include_descendants verbosity]}]
   (let [directory (or directory (ctx/current-directory))
         include-descendants? (boolean include_descendants)
-        metadata-only? (= verbosity "metadata")]
+        metadata-only? (not= verbosity "full")]
     (log/info "mcp-memory-query:" type "scope:" scope "directory:" directory
-              "include_descendants:" include-descendants? "verbosity:" (or verbosity "full"))
+              "include_descendants:" include-descendants? "verbosity:" (or verbosity "metadata"))
     (try
       (let [limit-val (coerce-int! limit :limit 20)]
         (with-chroma

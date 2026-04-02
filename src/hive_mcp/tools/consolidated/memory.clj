@@ -105,7 +105,7 @@
                                        :description "[query/search] Scope filter: nil=auto, 'all', 'global', or specific"}
                               "verbosity" {:type "string"
                                            :enum ["full" "metadata"]
-                                           :description "[query] Output detail: 'full' (default) returns complete entries, 'metadata' returns only id/type/preview/tags/created (~10x fewer tokens)"}
+                                           :description "[query] Output detail: 'metadata' (default) returns only id/type/preview/tags/created (~10x fewer tokens), 'full' returns complete entries"}
                               "id" {:type "string"
                                     :description "[get/promote/demote/feedback/tags] Memory entry ID"}
                               "ids" {:type "array"
