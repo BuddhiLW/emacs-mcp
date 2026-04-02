@@ -5,6 +5,7 @@
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.memory.temporal :as temporal]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
+            [hive-mcp.knowledge-graph.connection :as kg-conn]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.emacs.client :as ec]
             [hive-mcp.protocols.memory :as mem-proto]
@@ -62,6 +63,125 @@
                    :kg-error (:error kg-result)
                    :old-project-id old-project-id
                    :new-project-id new-project-id})))))
+
+(defn handle-migrate-scoped
+  "Migrate specific memory entries by ID (or tag filter) from one project to another.
+   Updates project-id and scope tags per-entry. Preserves KG edges — only updates
+   edge scope for edges where BOTH endpoints are in the migrated set.
+
+   Arguments:
+     :entry-ids      - Vector of entry IDs to migrate (takes priority)
+     :tag-filter     - Tag string to match entries (e.g. 'payment-flow'); used when entry-ids is empty
+     :old-project-id - Source project-id (required for scope tag swap)
+     :new-project-id - Target project-id (required)
+     :dry-run        - Preview without modifying (default: false)
+
+   Returns:
+     {:migrated N :ids [...] :from old-project :to new-project
+      :kg-edges-migrated N :skipped-ids [...] :errors [...]}"
+  [{:keys [entry-ids tag-filter old-project-id new-project-id dry-run]}]
+  (cond
+    (str/blank? new-project-id)
+    (mcp-error "new-project-id is required")
+
+    (str/blank? old-project-id)
+    (mcp-error "old-project-id is required")
+
+    (= old-project-id new-project-id)
+    (mcp-error "old-project-id and new-project-id must be different")
+
+    (and (empty? entry-ids) (str/blank? tag-filter))
+    (mcp-error "Either entry-ids or tag-filter is required")
+
+    :else
+    (let [dry-run (boolean dry-run)]
+      (log/info "migrate-scoped:" (if (seq entry-ids)
+                                    (str (count entry-ids) " entry IDs")
+                                    (str "tag-filter=" tag-filter))
+                old-project-id "->" new-project-id
+                (when dry-run "(dry-run)"))
+      (with-chroma
+        (let [store          (mem-proto/get-store)
+              old-scope-tag  (scope/make-scope-tag old-project-id)
+              new-scope-tag  (scope/make-scope-tag new-project-id)
+              ;; Resolve target entries — by IDs or by tag filter
+              target-ids     (if (seq entry-ids)
+                               (vec entry-ids)
+                               (let [all-entries (mem-proto/query-entries
+                                                  store {:project-id old-project-id
+                                                         :limit 10000})]
+                                 (->> all-entries
+                                      (filter (fn [e]
+                                                (some #(= % tag-filter) (:tags e))))
+                                      (mapv :id))))
+              ;; Fetch each entry, partition into found/not-found
+              resolved       (reduce
+                              (fn [acc eid]
+                                (if-let [entry (mem-proto/get-entry store eid)]
+                                  (update acc :found conj entry)
+                                  (update acc :not-found conj eid)))
+                              {:found [] :not-found []}
+                              target-ids)
+              found-entries  (:found resolved)
+              skipped-ids    (:not-found resolved)
+              migrated-ids   (atom [])
+              errors         (atom [])]
+
+          (when-not dry-run
+            (doseq [entry found-entries]
+              (try
+                (let [new-tags (mapv (fn [tag]
+                                       (if (= tag old-scope-tag)
+                                         new-scope-tag
+                                         tag))
+                                     (:tags entry))]
+                  (mem-proto/update-entry! store (:id entry)
+                                           {:project-id new-project-id
+                                            :tags new-tags})
+                  ;; Temporal audit trail
+                  (temporal/record-mutation-silent!
+                   {:entry-id       (:id entry)
+                    :op             :migrate-scoped
+                    :data           {:old-project-id old-project-id
+                                     :new-project-id new-project-id}
+                    :previous-value {:project-id old-project-id}
+                    :project-id     new-project-id})
+                  (swap! migrated-ids conj (:id entry)))
+                (catch Exception e
+                  (log/warn "Failed to migrate entry" (:id entry) ":" (.getMessage e))
+                  (swap! errors conj {:id (:id entry) :error (.getMessage e)})))))
+
+          ;; Selectively migrate KG edge scopes for edges between migrated entries
+          (let [migrated-set    (set (if dry-run (mapv :id found-entries) @migrated-ids))
+                kg-edge-result  (if (or dry-run (< (count migrated-set) 2))
+                                  {:migrated 0}
+                                  (try
+                                    (let [edges    (kg-edges/find-edges-between migrated-set)
+                                          ;; Only migrate edges scoped to old-project-id
+                                          to-update (filter #(= old-project-id (:kg-edge/scope %))
+                                                            edges)
+                                          tx-data   (vec (for [edge to-update
+                                                               :let [eid (kg-conn/entid
+                                                                          [:kg-edge/id (:kg-edge/id edge)])]
+                                                               :when eid]
+                                                           [:db/add eid :kg-edge/scope new-project-id]))]
+                                      (when (seq tx-data)
+                                        (kg-conn/transact! tx-data))
+                                      {:migrated (count tx-data)})
+                                    (catch Exception e
+                                      (log/warn "KG edge scope migration failed (non-blocking):"
+                                                (.getMessage e))
+                                      {:migrated 0 :error (.getMessage e)})))]
+
+            (mcp-json {:migrated          (if dry-run (count found-entries) (count @migrated-ids))
+                       :ids               (if dry-run (mapv :id found-entries) @migrated-ids)
+                       :skipped-ids       skipped-ids
+                       :errors            @errors
+                       :kg-edges-migrated (:migrated kg-edge-result)
+                       :kg-error          (:error kg-edge-result)
+                       :dry-run           dry-run
+                       :from              old-project-id
+                       :to                new-project-id})))))))
 
 (defn- import-entry!
   "Import a single entry to memory store with content-hash deduplication."
@@ -427,4 +547,22 @@
                                          :description "Preview changes without modifying (default: true)"
                                          :default true}}
                   :required ["old_scope" "new_scope"]}
-    :handler handle-migrate-scope}])
+    :handler handle-migrate-scope}
+
+   {:name "mcp_memory_migrate_scoped"
+    :description "Migrate specific memory entries by ID or tag filter from one project to another. Updates project-id and scope tags per-entry. Preserves KG edges (only updates edge scope for edges where both endpoints are in the migrated set). Use dry-run to preview."
+    :inputSchema {:type "object"
+                  :properties {:entry-ids {:type "array"
+                                           :items {:type "string"}
+                                           :description "Specific entry IDs to migrate (takes priority over tag-filter)"}
+                               :tag-filter {:type "string"
+                                            :description "Tag to match entries for migration (e.g., 'payment-flow'). Used when entry-ids is empty."}
+                               :old-project-id {:type "string"
+                                                :description "Source project-id to migrate from"}
+                               :new-project-id {:type "string"
+                                                :description "Target project-id to migrate to"}
+                               :dry-run {:type "boolean"
+                                         :description "Preview changes without modifying (default: false)"
+                                         :default false}}
+                  :required ["old-project-id" "new-project-id"]}
+    :handler handle-migrate-scoped}])

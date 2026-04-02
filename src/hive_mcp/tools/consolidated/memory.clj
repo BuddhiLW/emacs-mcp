@@ -38,6 +38,7 @@
    :expiring    mem/handle-mcp-memory-expiring-soon
    :expire      mem/handle-mcp-memory-expire
    :migrate     mem/handle-mcp-memory-migrate-project
+   :migrate-scoped mem/handle-mcp-memory-migrate-scoped
    :import      mem/handle-mcp-memory-import-json
    :decay             mem/handle-mcp-memory-decay
    :xpoll             mem/handle-mcp-memory-xpoll-promote
@@ -63,10 +64,10 @@
 (def tool-def
   {:name "memory"
    :consolidated true
-   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, import, decay, xpoll, rename, batch-add, batch-feedback, batch-get. Use 'help' command to list all."
+   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, migrate-scoped, import, decay, xpoll, rename, batch-add, batch-feedback, batch-get. Use 'help' command to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["add" "query" "metadata" "get" "search" "duration" "promote" "demote" "log_access" "feedback" "helpfulness" "tags" "cleanup" "expiring" "expire" "migrate" "import" "decay" "xpoll" "rename" "batch-add" "batch-feedback" "batch-get" "help"]
+                                         :enum ["add" "query" "metadata" "get" "search" "duration" "promote" "demote" "log_access" "feedback" "helpfulness" "tags" "cleanup" "expiring" "expire" "migrate" "migrate-scoped" "import" "decay" "xpoll" "rename" "batch-add" "batch-feedback" "batch-get" "help"]
                                          :description "Command to execute"}
                               "type" {:type "string"
                                       :enum (type-registry/mcp-enum)
@@ -123,12 +124,17 @@
                                       :description "[expiring] Days to look ahead (default: 7). Use 1-2 for short-duration memories"}
                               "include_descendants" {:type "boolean"
                                                      :description "[query/search] Include child project memories in results (HCR Wave 4). Default false."}
+                              "entry-ids" {:type "array"
+                                           :items {:type "string"}
+                                           :description "[migrate-scoped] Specific entry IDs to migrate"}
+                              "tag-filter" {:type "string"
+                                            :description "[migrate-scoped] Tag to match entries for migration (e.g., 'payment-flow')"}
                               "old-project-id" {:type "string"
-                                                :description "[rename/migrate] Old project-id to rename from"}
+                                                :description "[rename/migrate/migrate-scoped] Old project-id to rename from"}
                               "new-project-id" {:type "string"
-                                                :description "[rename/migrate] New project-id to rename to"}
+                                                :description "[rename/migrate/migrate-scoped] New project-id to rename to"}
                               "dry-run" {:type "boolean"
-                                         :description "[rename] Preview what would happen without modifying (default: false)"}
+                                         :description "[rename/migrate-scoped] Preview what would happen without modifying (default: false)"}
                               "operations" {:type "array"
                                             :items {:type "object"}
                                             :description "[batch-add/batch-feedback] Array of operation objects. batch-add: [{type, content, tags, ...}]. batch-feedback: [{id, feedback}]."}
