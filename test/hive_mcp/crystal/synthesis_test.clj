@@ -1,0 +1,377 @@
+(ns hive-mcp.crystal.synthesis-test
+  "Golden + property tests for crystal/synthesis.clj (Wave 2, T2).
+
+   Golden tests: known inputs → expected output shapes
+   Property tests: any valid input → required structural invariants
+
+   All mocks follow the crystallize-session mock pattern from golden_test.clj."
+  (:require [clojure.test :refer [deftest testing is]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [hive-mcp.crystal.synthesis :as synthesis]
+            [hive-mcp.crystal.core :as crystal]
+            [hive-mcp.tools.memory.scope :as scope]
+            [hive-mcp.tools.memory.duration :as dur]
+            [hive-mcp.extensions.registry :as ext]
+            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.agent.context :as ctx]
+            [hive-mcp.dns.result :as result]))
+;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
+;;
+;; SPDX-License-Identifier: AGPL-3.0-or-later
+
+;; =============================================================================
+;; Pure function tests (no mocks needed)
+;; =============================================================================
+
+(deftest format-temporal-block-full
+  (testing "Temporal block with all fields populated"
+    (let [timing {:session-start "2026-01-15T10:00:00Z"
+                  :session-end "2026-01-15T12:00:00Z"
+                  :duration-minutes 120}
+          harvested {:memory-ids-created ["id-1" "id-2" "id-3"]
+                     :memory-ids-accessed ["id-4" "id-5"]}
+          result (synthesis/format-temporal-block timing harvested)]
+      (is (string? result))
+      (is (.contains result "### Temporal Metadata"))
+      (is (.contains result "2026-01-15T10:00:00Z"))
+      (is (.contains result "120 minutes"))
+      (is (.contains result "Memory entries created: 3"))
+      (is (.contains result "Memory entries accessed: 2")))))
+
+(deftest format-temporal-block-empty-ids
+  (testing "Temporal block omits memory lines when empty"
+    (let [result (synthesis/format-temporal-block
+                  {:session-start "2026-01-15T10:00:00Z"
+                   :session-end "2026-01-15T12:00:00Z"
+                   :duration-minutes 120}
+                  {})]
+      (is (string? result))
+      (is (not (.contains result "Memory entries created")))
+      (is (not (.contains result "Memory entries accessed"))))))
+
+(deftest format-temporal-block-nil-start
+  (testing "Temporal block handles nil session-start"
+    (let [result (synthesis/format-temporal-block
+                  {:session-start nil
+                   :session-end "2026-01-15T12:00:00Z"
+                   :duration-minutes 0}
+                  {:memory-ids-created []
+                   :memory-ids-accessed []})]
+      (is (.contains result "unknown"))
+      (is (.contains result "0 minutes")))))
+
+(deftest build-summary-content-test
+  (testing "build-summary-content concatenates summary + temporal block"
+    (let [summary {:content "## Session Summary\n\nDid some work."}
+          timing {:session-start "2026-01-15T10:00:00Z"
+                  :session-end "2026-01-15T12:00:00Z"
+                  :duration-minutes 120}
+          harvested {:memory-ids-created ["a"] :memory-ids-accessed ["b"]}
+          result (synthesis/build-summary-content summary timing harvested)]
+      (is (.startsWith result "## Session Summary"))
+      (is (.contains result "### Temporal Metadata"))
+      (is (.contains result "120 minutes")))))
+
+(deftest build-summary-tags-test
+  (testing "build-summary-tags includes auto-kg, session-wrap, temporal"
+    (with-redefs [scope/inject-project-scope (fn [tags _pid] tags)]
+      (let [result (synthesis/build-summary-tags {:tags ["wrap"]} "test-project")]
+        (is (some #{"auto-kg"} result))
+        (is (some #{"session-wrap"} result))
+        (is (some #{"temporal"} result))
+        (is (some #{"wrap"} result))))))
+
+;; =============================================================================
+;; Shared mock infrastructure
+;; =============================================================================
+
+(defmacro ^:private with-synthesis-mocks
+  "Bind all synthesize dependencies to deterministic fakes.
+   opts keys:
+     :summary     — return from summarize-session-progress (nil = no-content)
+     :entry-id    — return from chroma/index-memory-entry!"
+  [opts & body]
+  `(let [opts# ~opts]
+     (ext/register! :ch/a (fn [_#] {:promoted 0 :skipped 0 :below 0 :evaluated 0}))
+     (ext/register! :ch/b (fn [_#] {:decayed 0 :pruned 0 :fresh 0 :evaluated 0}))
+     (ext/register! :ch/c (fn [_#] {:promoted 0 :candidates 0 :total-scanned 0}))
+     (ext/register! :ch/d (fn [_#] {:decayed 0 :expired 0 :total-scanned 0}))
+     (ext/register! :ch/e (fn [_#] {:files-captured 0}))
+     (try
+       (with-redefs
+         [crystal/summarize-session-progress
+          (fn [& _#] (:summary opts#))
+
+          crystal/summarize-memory-activity
+          (fn [& _#] nil)
+
+          crystal/session-id
+          (fn [] "test-session-synth")
+
+          crystal/session-timing-metadata
+          (fn [_start# _end#]
+            {:session-start nil
+             :session-end "2026-01-15T12:00:00Z"
+             :duration-minutes 0})
+
+          scope/get-current-project-id
+          (fn [_#] "synth-project")
+
+          scope/inject-project-scope
+          (fn [tags# _pid#] tags#)
+
+          dur/calculate-expires
+          (fn [_#] "2026-03-15T00:00:00Z")
+
+          ctx/current-directory
+          (fn [] "/tmp/synth-test")
+
+          chroma/index-memory-entry!
+          (fn [_#] (get opts# :entry-id "entry-synth-001"))
+
+          chroma/content-hash
+          (fn [c#] (str (hash c#)))]
+
+         (let [result# (do ~@body)]
+           result#))
+       (finally
+         (ext/deregister! :ch/a)
+         (ext/deregister! :ch/b)
+         (ext/deregister! :ch/c)
+         (ext/deregister! :ch/d)
+         (ext/deregister! :ch/e)))))
+
+(def ^:private base-harvested
+  "Minimal harvested data for testing synthesize."
+  {:progress-notes []
+   :completed-tasks []
+   :git-commits []
+   :directory "/tmp/synth-test"
+   :recalls {}
+   :memory-ids-created []
+   :memory-ids-accessed []
+   :session-timing {:session-start "2026-01-15T10:00:00Z"
+                    :session-end "2026-01-15T12:00:00Z"
+                    :duration-minutes 120}
+   :summary {:progress-count 0
+             :task-count 0
+             :commit-count 0
+             :recall-count 0
+             :hivemind-shout-count 0
+             :kanban-completed 0
+             :created-count 0
+             :accessed-count 0}})
+
+;; =============================================================================
+;; Golden: synthesize — no-content path
+;; =============================================================================
+
+(deftest golden-synthesize-no-content
+  (testing "synthesize with no content returns skipped result with lifecycle stats"
+    (with-synthesis-mocks
+      {:summary nil}
+      (let [result (synthesis/synthesize base-harvested)]
+        ;; Structure
+        (is (true? (:skipped result)) "should be marked skipped")
+        (is (= "no-content" (:reason result)))
+        (is (= "test-session-synth" (:session result)))
+        (is (= "synth-project" (:project-id result)))
+        (is (map? (:session-timing result)))
+        (is (map? (:stats result)))
+        ;; Lifecycle stats present
+        (is (map? (:promotion-stats result)) "promotion-stats present")
+        (is (map? (:decay-stats result)) "decay-stats present")
+        (is (map? (:xpoll-stats result)) "xpoll-stats present")
+        (is (map? (:memory-decay-stats result)) "memory-decay-stats present")
+        (is (contains? result :file-provenance-stats) "file-provenance-stats present")
+        ;; Lifecycle stats shape
+        (is (= #{:promoted :skipped :below :evaluated}
+               (set (keys (:promotion-stats result)))))
+        (is (= #{:decayed :pruned :fresh :evaluated}
+               (set (keys (:decay-stats result)))))
+        (is (= #{:promoted :candidates :total-scanned}
+               (set (keys (:xpoll-stats result)))))
+        (is (= #{:decayed :expired :total-scanned}
+               (set (keys (:memory-decay-stats result)))))))))
+
+;; =============================================================================
+;; Golden: synthesize — content path
+;; =============================================================================
+
+(deftest golden-synthesize-content
+  (testing "synthesize with content stores to Chroma and returns summary-id"
+    (with-synthesis-mocks
+      {:summary {:content "## Session Summary\n\nDid work."
+                 :tags ["wrap"]}
+       :entry-id "entry-synth-001"}
+      (let [harvested (assoc base-harvested
+                             :progress-notes [{:content "Implemented feature X"}]
+                             :git-commits ["abc1234 feat: add feature X"]
+                             :memory-ids-created [{:id "c1"}]
+                             :memory-ids-accessed ["m1"]
+                             :summary {:progress-count 1 :task-count 0
+                                       :commit-count 1 :recall-count 0
+                                       :hivemind-shout-count 0 :kanban-completed 0
+                                       :created-count 1 :accessed-count 1})
+            result (synthesis/synthesize harvested)]
+        ;; Structure
+        (is (= "entry-synth-001" (:summary-id result)))
+        (is (= "test-session-synth" (:session result)))
+        (is (= "synth-project" (:project-id result)))
+        (is (map? (:session-timing result)))
+        (is (map? (:stats result)))
+        (is (not (contains? result :skipped)) "content path should not be skipped")
+        ;; Lifecycle stats present
+        (is (map? (:promotion-stats result)))
+        (is (map? (:decay-stats result)))
+        (is (map? (:xpoll-stats result)))
+        (is (map? (:memory-decay-stats result)))
+        (is (contains? result :file-provenance-stats))))))
+
+;; =============================================================================
+;; Golden: synthesize shape matches crystallize-session contract
+;; =============================================================================
+
+(deftest golden-synthesize-shape-contract
+  (testing "Both paths produce key sets compatible with crystallize-session golden"
+    ;; No-content path keys
+    (with-synthesis-mocks
+      {:summary nil}
+      (let [result (synthesis/synthesize base-harvested)
+            expected-keys #{:skipped :reason :session :project-id
+                            :session-timing :stats
+                            :promotion-stats :decay-stats :xpoll-stats
+                            :memory-decay-stats :file-provenance-stats}]
+        (is (= expected-keys (set (keys result)))
+            "No-content path key set must match contract")))
+
+    ;; Content path keys
+    (with-synthesis-mocks
+      {:summary {:content "Summary" :tags ["wrap"]}
+       :entry-id "entry-001"}
+      (let [result (synthesis/synthesize
+                    (assoc base-harvested
+                           :progress-notes [{:content "work"}]))
+            expected-keys #{:summary-id :session :project-id
+                            :session-timing :stats
+                            :promotion-stats :decay-stats :xpoll-stats
+                            :memory-decay-stats :file-provenance-stats}]
+        (is (= expected-keys (set (keys result)))
+            "Content path key set must match contract")))))
+
+;; =============================================================================
+;; Golden: run-lifecycle-ops! returns expected shape
+;; =============================================================================
+
+(deftest golden-lifecycle-ops-shape
+  (testing "run-lifecycle-ops! returns all 5 stat keys"
+    (ext/register! :ch/a (fn [_] {:promoted 1 :skipped 2 :below 3 :evaluated 6}))
+    (ext/register! :ch/b (fn [_] {:decayed 1 :pruned 0 :fresh 5 :evaluated 6}))
+    (ext/register! :ch/c (fn [_] {:promoted 2 :candidates 10 :total-scanned 50}))
+    (ext/register! :ch/d (fn [_] {:decayed 3 :expired 1 :total-scanned 20}))
+    (ext/register! :ch/e (fn [_] {:files-captured 5}))
+    (try
+      (let [result (synthesis/run-lifecycle-ops! "test-project" "/tmp/test")]
+        (is (= #{:promotion-stats :decay-stats :xpoll-stats
+                 :memory-decay-stats :file-provenance-stats}
+               (set (keys result))))
+        (is (= 1 (:promoted (:promotion-stats result))))
+        (is (= 1 (:decayed (:decay-stats result))))
+        (is (= 2 (:promoted (:xpoll-stats result))))
+        (is (= 3 (:decayed (:memory-decay-stats result))))
+        (is (= 5 (:files-captured (:file-provenance-stats result)))))
+      (finally
+        (ext/deregister! :ch/a)
+        (ext/deregister! :ch/b)
+        (ext/deregister! :ch/c)
+        (ext/deregister! :ch/d)
+        (ext/deregister! :ch/e)))))
+
+;; =============================================================================
+;; Property: any valid harvested input → synthesize returns required keys
+;; =============================================================================
+
+(def gen-harvested
+  "Generator for valid harvested maps."
+  (gen/let [n-notes    (gen/choose 0 5)
+            n-tasks    (gen/choose 0 3)
+            n-commits  (gen/choose 0 5)
+            n-created  (gen/choose 0 3)
+            n-accessed (gen/choose 0 4)
+            dir        (gen/elements ["/tmp/a" "/tmp/b" nil])]
+    {:progress-notes (vec (repeat n-notes {:content "work" :tags ["progress"]}))
+     :completed-tasks (vec (repeat n-tasks {:id "t1" :title "task"}))
+     :git-commits (vec (repeat n-commits "abc123 fix: something"))
+     :directory dir
+     :recalls {}
+     :memory-ids-created (vec (repeat n-created {:id "c1"}))
+     :memory-ids-accessed (vec (repeat n-accessed "m1"))
+     :session-timing {:session-start "2026-01-15T10:00:00Z"
+                      :session-end "2026-01-15T12:00:00Z"
+                      :duration-minutes 120}
+     :summary {:progress-count n-notes
+               :task-count n-tasks
+               :commit-count n-commits
+               :recall-count 0
+               :hivemind-shout-count 0
+               :kanban-completed 0
+               :created-count n-created
+               :accessed-count n-accessed}}))
+
+(defspec prop-synthesize-always-has-session 50
+  (prop/for-all [harvested gen-harvested]
+    (with-synthesis-mocks
+      {:summary (when (pos? (+ (count (:progress-notes harvested))
+                               (count (:git-commits harvested))))
+                  {:content "## Summary" :tags ["wrap"]})
+       :entry-id "prop-entry-001"}
+      (let [result (synthesis/synthesize harvested)]
+        (and (string? (:session result))
+             (string? (:project-id result)))))))
+
+(defspec prop-synthesize-always-has-lifecycle-stats 50
+  (prop/for-all [harvested gen-harvested]
+    (with-synthesis-mocks
+      {:summary (when (pos? (+ (count (:progress-notes harvested))
+                               (count (:git-commits harvested))))
+                  {:content "## Summary" :tags ["wrap"]})
+       :entry-id "prop-entry-001"}
+      (let [result (synthesis/synthesize harvested)]
+        ;; Either has lifecycle stats (both paths) or has :error (store failed)
+        (or (contains? result :error)
+            (and (map? (:promotion-stats result))
+                 (map? (:decay-stats result))
+                 (map? (:xpoll-stats result))
+                 (map? (:memory-decay-stats result))))))))
+
+(defspec prop-synthesize-content-vs-skipped 50
+  (prop/for-all [harvested gen-harvested]
+    (with-synthesis-mocks
+      {:summary (when (pos? (+ (count (:progress-notes harvested))
+                               (count (:git-commits harvested))))
+                  {:content "## Summary" :tags ["wrap"]})
+       :entry-id "prop-entry-001"}
+      (let [result (synthesis/synthesize harvested)]
+        ;; Either content path (has :summary-id) or no-content path (has :skipped)
+        (or (contains? result :summary-id)
+            (true? (:skipped result))
+            (contains? result :error))))))
+
+;; =============================================================================
+;; Property: format-temporal-block always returns string with header
+;; =============================================================================
+
+(defspec prop-temporal-block-always-string 100
+  (prop/for-all [start    (gen/one-of [(gen/return nil) (gen/return "2026-01-15T10:00:00Z")])
+                 end      (gen/one-of [(gen/return nil) (gen/return "2026-01-15T12:00:00Z")])
+                 minutes  (gen/one-of [(gen/return nil) (gen/choose 0 1000)])
+                 n-created (gen/choose 0 10)
+                 n-accessed (gen/choose 0 10)]
+    (let [result (synthesis/format-temporal-block
+                  {:session-start start :session-end end :duration-minutes minutes}
+                  {:memory-ids-created (vec (repeat n-created "id"))
+                   :memory-ids-accessed (vec (repeat n-accessed "id"))})]
+      (and (string? result)
+           (.contains result "### Temporal Metadata")))))

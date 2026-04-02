@@ -13,6 +13,7 @@
             [clojure.java.io :as io]
             [hive-test.golden :refer [deftest-golden]]
             [hive-mcp.crystal.hooks :as hooks]
+            [hive-mcp.crystal.synthesis :as synthesis]
             [hive-mcp.crystal.core :as crystal]
             [hive-mcp.crystal.recall :as recall]
             [hive-mcp.tools.memory.scope :as scope]
@@ -410,7 +411,7 @@
 
 (deftest-golden crystal-temporal-block-full
   "test/golden/crystal/crystal-temporal-block-full.edn"
-  (#'hooks/format-temporal-block
+  (synthesis/format-temporal-block
    {:session-start "2026-01-15T10:00:00Z"
     :session-end "2026-01-15T12:00:00Z"
     :duration-minutes 120}
@@ -419,7 +420,7 @@
 
 (deftest-golden crystal-temporal-block-no-ids
   "test/golden/crystal/crystal-temporal-block-no-ids.edn"
-  (#'hooks/format-temporal-block
+  (synthesis/format-temporal-block
    {:session-start "2026-01-15T10:00:00Z"
     :session-end "2026-01-15T12:00:00Z"
     :duration-minutes 120}
@@ -427,7 +428,7 @@
 
 (deftest-golden crystal-temporal-block-nil-start
   "test/golden/crystal/crystal-temporal-block-nil-start.edn"
-  (#'hooks/format-temporal-block
+  (synthesis/format-temporal-block
    {:session-start nil
     :session-end "2026-01-15T12:00:00Z"
     :duration-minutes 0}
