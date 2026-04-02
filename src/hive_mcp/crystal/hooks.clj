@@ -20,6 +20,7 @@
             [hive-mcp.chroma.core :as chroma]
             [hive-mcp.dns.result :as result]
             [hive-mcp.concurrency.pool :as pool]
+            [hive-mcp.channel.piggyback :as piggyback]
             [clojure.data.json :as json]
             [clojure.java.shell :refer [sh]]
             [clojure.string :as str]
@@ -215,9 +216,11 @@
   ([{:keys [directory agent-id]}]
    (result/rescue {:commits [] :count 0}
                   (let [dir (or directory (ctx/current-directory))
-                        since (if-let [start (crystal/get-session-start (or agent-id (ctx/current-agent-id)))]
-                                (.toString start)
-                                "midnight")
+                        effective-agent (or agent-id (ctx/current-agent-id))
+                        start (or (crystal/get-session-start effective-agent)
+                                  (crystal/get-session-start "_global")
+                                  (crystal/get-session-start nil))
+                        since (if start (.toString start) "midnight")
                         elisp (if dir
                                 (format "(let ((default-directory %s)) (shell-command-to-string \"git log --since='%s' --oneline 2>/dev/null\"))"
                                         (pr-str dir) since)
@@ -310,9 +313,11 @@
   [{:keys [directory agent-id]}]
   (result/rescue {:commits [] :count 0}
                  (let [dir (or directory (ctx/current-directory))
-                       since (if-let [start (crystal/get-session-start (or agent-id (ctx/current-agent-id)))]
-                               (.toString start)
-                               "midnight")
+                       effective-agent (or agent-id (ctx/current-agent-id))
+                       start (or (crystal/get-session-start effective-agent)
+                                 (crystal/get-session-start "_global")
+                                 (crystal/get-session-start nil))
+                       since (if start (.toString start) "midnight")
                        t0 (System/currentTimeMillis)
                        {:keys [exit out err]} (sh "git" "log"
                                                   (str "--since=" since)
@@ -332,10 +337,60 @@
                         :count 0
                         :error {:type :git-failed :exit exit :err err}})))))
 
+(defn- harvest-hivemind-messages
+  "Harvest hivemind shouts since session start (no Emacs roundtrip).
+   Uses piggyback/fetch-history for untracked access to message buffer."
+  [{:keys [directory agent-id]}]
+  (result/rescue {:messages [] :count 0}
+                 (let [dir (or directory (ctx/current-directory))
+                       project-id (when dir (scope/get-current-project-id dir))
+                       effective-agent (or agent-id (ctx/current-agent-id))
+                       start (or (crystal/get-session-start effective-agent)
+                                 (crystal/get-session-start "_global")
+                                 (crystal/get-session-start nil))
+                       since-ms (if start (.toEpochMilli start) 0)
+                       t0 (System/currentTimeMillis)
+                       messages (piggyback/fetch-history :since since-ms
+                                                        :limit 100
+                                                        :project-id project-id)
+                       ms (- (System/currentTimeMillis) t0)]
+                   (log/info "harvest-hivemind-messages:" (count messages) "shouts in" ms "ms"
+                             "since" (or (some-> start .toString) "epoch"))
+                   {:messages (vec messages)
+                    :count (count messages)
+                    :project-id project-id})))
+
+(defn- harvest-kanban-activity
+  "Harvest kanban task activity for the session window.
+   Combines DataScript completed-task registry with broader task queries."
+  [{:keys [directory]}]
+  (result/rescue {:tasks-completed [] :completed-count 0}
+                 (let [dir (or directory (ctx/current-directory))
+                       project-id (when dir (scope/get-current-project-id dir))
+                       t0 (System/currentTimeMillis)
+                       ;; Session-scoped completed tasks from DataScript registry
+                       completed (result/rescue []
+                                   (let [raw (ds/get-completed-tasks-this-session
+                                              :project-id project-id)]
+                                     (->> raw
+                                          (mapv (fn [t]
+                                                  {:id (or (:completed-task/id t) (:id t))
+                                                   :title (or (:completed-task/title t) (:title t))
+                                                   :completed-at (or (:completed-task/completed-at t)
+                                                                     (:completed-at t))
+                                                   :agent-id (or (:completed-task/agent-id t)
+                                                                  (:agent-id t))})))))
+                       ms (- (System/currentTimeMillis) t0)]
+                   (log/info "harvest-kanban-activity:" (count completed)
+                             "completed tasks in" ms "ms")
+                   {:tasks-completed completed
+                    :completed-count (count completed)
+                    :project-id project-id})))
+
 (defn harvest-all
   "Harvest all session data for wrap crystallization.
-   Returns map with :progress-notes, :completed-tasks, :git-commits, :recalls,
-   :session-timing, :session-temporal (alias), :memory-ids-created (flushed),
+   Returns map with :progress-notes, :completed-tasks, :git-commits, :recalls, :hivemind-messages,
+   :kanban-activity, :session-timing, :session-temporal (alias), :memory-ids-created (flushed),
    :memory-ids-accessed (recall buffer keys), :session, :directory, :agent-id, :summary, :errors.
 
    Opts:
@@ -347,6 +402,8 @@
                    :completed-tasks []
                    :git-commits []
                    :recalls {}
+                   :hivemind-messages []
+                   :kanban-activity {:tasks-completed [] :completed-count 0}
                    :session-temporal {:session-start nil :session-end nil :duration-minutes 0}
                    :memory-ids-created []
                    :memory-ids-accessed []
@@ -355,6 +412,8 @@
                              :task-count 0
                              :commit-count 0
                              :recall-count 0
+                             :hivemind-shout-count 0
+                             :kanban-completed 0
                              :created-count 0
                              :accessed-count 0}
                    :errors [{:type :harvest-failed :fn "harvest-all"}]}
@@ -369,19 +428,28 @@
                         f-tasks    (pool/with-io (harvest-tasks-direct {:directory dir}))
                         f-commits  (pool/with-io (harvest-commits-direct {:directory dir :agent-id effective-agent}))
                         f-recalls  (pool/with-io (result/rescue {} (recall/get-buffered-recalls)))
+                        f-hivemind (pool/with-io (harvest-hivemind-messages {:directory dir :agent-id effective-agent}))
+                        f-kanban   (pool/with-io (harvest-kanban-activity {:directory dir}))
                         ;; Collect with 10s timeout (direct calls: Chroma ~200ms, git ~100ms)
                         harvest-timeout 10000
                         progress (deref f-progress harvest-timeout {:notes [] :count 0 :error {:type :harvest-timeout :fn "harvest-session-progress"}})
                         tasks    (deref f-tasks harvest-timeout {:tasks [] :count 0 :error {:type :harvest-timeout :fn "harvest-completed-tasks"}})
                         commits  (deref f-commits harvest-timeout {:commits [] :count 0 :error {:type :harvest-timeout :fn "harvest-git-commits"}})
                         recalls  (deref f-recalls harvest-timeout {})
+                        hivemind (deref f-hivemind harvest-timeout {:messages [] :count 0 :error {:type :harvest-timeout :fn "harvest-hivemind-messages"}})
+                        kanban   (deref f-kanban harvest-timeout {:tasks-completed [] :completed-count 0 :error {:type :harvest-timeout :fn "harvest-kanban-activity"}})
                         _ (log/info "harvest-all: parallel collection" (- (System/currentTimeMillis) t0) "ms"
                                     "progress:" (:count progress) "tasks:" (:count tasks)
-                                    "commits:" (:count commits) "recalls:" (count recalls))
+                                    "commits:" (:count commits) "recalls:" (count recalls)
+                                    "hivemind:" (:count hivemind)
+                                    "kanban:" (:completed-count kanban))
+                        session-start (or (crystal/get-session-start effective-agent)
+                                          (crystal/get-session-start "_global")
+                                          (crystal/get-session-start nil))
                         session-timing (result/rescue
                                         {:session-start nil :session-end nil :duration-minutes 0}
                                         (crystal/session-timing-metadata
-                                         (crystal/get-session-start effective-agent)
+                                         session-start
                                          (java.time.Instant/now)))
            ;; Flush created IDs (project-scoped, destructive read)
                         memory-ids-created (result/rescue [] (recall/flush-created-ids! project-id))
@@ -393,11 +461,15 @@
            ;; Aggregate errors from sub-harvests
                         errors (filterv some? [(:error progress)
                                                (:error tasks)
-                                               (:error commits)])]
+                                               (:error commits)
+                                               (:error hivemind)
+                                               (:error kanban)])]
                     {:progress-notes (:notes progress)
                      :completed-tasks (:tasks tasks)
                      :git-commits (:commits commits)
                      :recalls recalls
+                     :hivemind-messages (:messages hivemind)
+                     :kanban-activity kanban
                      :session-timing session-timing
                      :session-temporal session-timing
                      :memory-ids-created memory-ids-created
@@ -409,6 +481,8 @@
                                :task-count (:count tasks)
                                :commit-count (:count commits)
                                :recall-count (count recalls)
+                               :hivemind-shout-count (:count hivemind)
+                               :kanban-completed (:completed-count kanban)
                                :created-count (count memory-ids-created)
                                :accessed-count (count memory-ids-accessed)}
                      :errors (when (seq errors) errors)}))))

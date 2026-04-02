@@ -145,49 +145,118 @@
     [:enum :role/hivemind :role/worker :role/standalone]]])
 
 ;; =============================================================================
+;; Record: AgentDef (internal domain representation)
+;; =============================================================================
+
+(defrecord AgentDef
+  [^String agent-type
+   ^String description
+   system-prompt   ;; String or 0-arity fn
+   source          ;; :built-in | :project | :user | :plugin
+   tools           ;; vec of strings, or nil (= all tools)
+   disallowed-tools ;; vec of strings, or nil
+   model           ;; string, :inherit, or nil
+   max-turns       ;; pos-int or nil
+   hooks           ;; map or nil
+   mcp-servers     ;; vec or nil
+   skills          ;; vec of strings or nil
+   filename        ;; string or nil
+   base-dir        ;; string or nil
+   spawn-mode      ;; keyword or nil
+   hivemind-role]) ;; :role/hivemind | :role/worker | :role/standalone | nil
+
+(defn agent-def?
+  "Is x an AgentDef record?"
+  [x]
+  (instance? AgentDef x))
+
+(defn ->map
+  "Convert an AgentDef record to a plain map (for boundary output).
+   Strips nil-valued optional fields for clean serialization.
+   No-op if already a plain map."
+  [agent-def]
+  (if (agent-def? agent-def)
+    (into {} (remove (comp nil? val)) agent-def)
+    agent-def))
+
+;; =============================================================================
 ;; Validation Functions
 ;; =============================================================================
 
 (defn validate
-  "Validate an agent definition map against the AgentDefinition schema.
+  "Validate an agent definition (map or record) against the AgentDefinition schema.
+
+   Accepts both plain maps and AgentDef records (records are coerced to maps
+   for schema validation — malli validates maps, not records).
 
    Returns:
-   - {:valid true :data agent-def} on success
+   - {:valid true :data agent-def} on success (returns the input map form)
    - {:valid false :errors {...}} on failure with humanized errors
 
    Example:
    (validate {:agent-type \"explore\" :description \"Fast searcher\" :system-prompt \"You search.\"})
    ;=> {:valid true :data {...}}"
   [agent-def]
-  (if (m/validate AgentDefinition agent-def)
-    {:valid true :data agent-def}
-    {:valid false
-     :errors (me/humanize (m/explain AgentDefinition agent-def))}))
+  (let [m (->map agent-def)]
+    (if (m/validate AgentDefinition m)
+      {:valid true :data m}
+      {:valid false
+       :errors (me/humanize (m/explain AgentDefinition m))})))
 
 (defn valid?
-  "Predicate: is this a valid agent definition?"
+  "Predicate: is this a valid agent definition (map or record)?"
   [agent-def]
-  (m/validate AgentDefinition agent-def))
+  (m/validate AgentDefinition (->map agent-def)))
 
 (defn explain
   "Human-readable explanation of why an agent definition is invalid.
-   Returns nil if valid."
+   Accepts maps or records. Returns nil if valid."
   [agent-def]
-  (when-not (m/validate AgentDefinition agent-def)
-    (me/humanize (m/explain AgentDefinition agent-def))))
+  (let [m (->map agent-def)]
+    (when-not (m/validate AgentDefinition m)
+      (me/humanize (m/explain AgentDefinition m)))))
 
 (defn validate-or-throw!
   "Validate and return agent-def, or throw ex-info with humanized errors.
    Use at definition registration boundaries."
   [agent-def]
-  (let [result (validate agent-def)]
+  (let [m      (->map agent-def)
+        result (validate m)]
     (if (:valid result)
       (:data result)
       (throw (ex-info (str "Invalid agent definition for "
-                           (or (:agent-type agent-def) "<unknown>")
+                           (or (:agent-type m) "<unknown>")
                            ": " (pr-str (:errors result)))
-                      {:agent-type (:agent-type agent-def)
+                      {:agent-type (:agent-type m)
                        :errors (:errors result)})))))
+
+;; =============================================================================
+;; Boundary Constructor: map → AgentDef record
+;; =============================================================================
+
+(defn make-agent-def
+  "Validate a plain map and convert to an AgentDef record.
+   This is the boundary crossing point: maps external → record internal.
+
+   - Validates against the AgentDefinition malli schema
+   - Applies defaults (:source → :built-in, :hivemind-role → :role/standalone)
+   - Returns an AgentDef record for internal domain use
+   - Throws ex-info on validation failure
+
+   Use at registration boundaries where external data enters the domain.
+   Keyword access on the returned record works identically to maps:
+     (:agent-type (make-agent-def {...})) => \"explore\"
+
+   Example:
+   (make-agent-def {:agent-type \"explore\" :description \"Fast\" :system-prompt \"You search.\"})
+   ;=> #hive_mcp.agent.agent_definition.AgentDef{:agent-type \"explore\" ...}"
+  [m]
+  {:pre [(map? m)]}
+  (let [validated (validate-or-throw! m)
+        with-defaults (merge {:source        :built-in
+                              :hivemind-role :role/standalone}
+                             validated)]
+    (map->AgentDef with-defaults)))
 
 ;; =============================================================================
 ;; Frontmatter Parsing
@@ -614,3 +683,15 @@
   "Create a summary of all agent definitions for display."
   [definitions]
   (str/join "\n" (map summarize definitions)))
+
+;; =============================================================================
+;; Print Method (clean REPL output)
+;; =============================================================================
+
+(defmethod print-method AgentDef
+  [^AgentDef agent-def ^java.io.Writer w]
+  (.write w (str "#AgentDef{:agent-type "
+                 (pr-str (:agent-type agent-def))
+                 " :source "
+                 (pr-str (:source agent-def))
+                 "}")))

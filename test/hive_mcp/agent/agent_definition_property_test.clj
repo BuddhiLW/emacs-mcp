@@ -167,3 +167,105 @@
   (testing "Merging empty groups returns empty"
     (is (= [] (ad/merge-definitions [] [])))
     (is (= [] (ad/merge-definitions)))))
+
+;; =============================================================================
+;; Record: AgentDef (defrecord boundary tests)
+;; =============================================================================
+
+(deftest make-agent-def-creates-record
+  (testing "make-agent-def returns an AgentDef record"
+    (let [m {:agent-type "test" :description "A test" :system-prompt "You test."}
+          r (ad/make-agent-def m)]
+      (is (ad/agent-def? r))
+      (is (instance? hive_mcp.agent.agent_definition.AgentDef r)))))
+
+(deftest make-agent-def-applies-defaults
+  (testing "make-agent-def applies :source and :hivemind-role defaults"
+    (let [r (ad/make-agent-def {:agent-type "x" :description "d" :system-prompt "p"})]
+      (is (= :built-in (:source r)))
+      (is (= :role/standalone (:hivemind-role r))))))
+
+(deftest make-agent-def-preserves-explicit-values
+  (testing "make-agent-def preserves explicitly provided values"
+    (let [r (ad/make-agent-def {:agent-type    "explorer"
+                                :description   "Fast search"
+                                :system-prompt "You explore."
+                                :source        :project
+                                :tools         ["Read" "Grep"]
+                                :model         :inherit
+                                :max-turns     10
+                                :hivemind-role :role/worker})]
+      (is (= "explorer" (:agent-type r)))
+      (is (= :project (:source r)))
+      (is (= ["Read" "Grep"] (:tools r)))
+      (is (= :inherit (:model r)))
+      (is (= 10 (:max-turns r)))
+      (is (= :role/worker (:hivemind-role r))))))
+
+(deftest make-agent-def-rejects-invalid
+  (testing "make-agent-def throws on invalid map"
+    (is (thrown? clojure.lang.ExceptionInfo
+                (ad/make-agent-def {:agent-type 42})))))
+
+(deftest record-keyword-access-matches-map
+  (testing "Keyword access on record matches original map"
+    (let [m {:agent-type "test" :description "d" :system-prompt "p" :source :user}
+          r (ad/make-agent-def m)]
+      (is (= (:agent-type m) (:agent-type r)))
+      (is (= (:description m) (:description r)))
+      (is (= (:system-prompt m) (:system-prompt r)))
+      (is (= (:source m) (:source r))))))
+
+(deftest roundtrip-map-record-map
+  (testing "map → record → map roundtrip preserves data"
+    (let [m {:agent-type    "test"
+             :description   "A test"
+             :system-prompt "You test."
+             :source        :project
+             :tools         ["Read"]
+             :max-turns     5}
+          r (ad/make-agent-def m)
+          m' (ad/->map r)]
+      ;; m' has defaults applied that m didn't have
+      (is (= (:agent-type m) (:agent-type m')))
+      (is (= (:description m) (:description m')))
+      (is (= (:tools m) (:tools m')))
+      (is (= (:source m) (:source m')))
+      ;; Validate m' is still valid
+      (is (:valid (ad/validate m'))))))
+
+(deftest validate-accepts-records
+  (testing "validate works on AgentDef records"
+    (let [r (ad/make-agent-def {:agent-type "x" :description "d" :system-prompt "p"})]
+      (is (:valid (ad/validate r)))
+      (is (ad/valid? r))
+      (is (nil? (ad/explain r))))))
+
+(deftest to-map-strips-nils
+  (testing "->map strips nil optional fields"
+    (let [r (ad/make-agent-def {:agent-type "x" :description "d" :system-prompt "p"})
+          m (ad/->map r)]
+      (is (not (contains? m :tools)))
+      (is (not (contains? m :hooks)))
+      (is (not (contains? m :mcp-servers)))
+      (is (contains? m :agent-type))
+      (is (contains? m :source)))))
+
+(deftest to-map-noop-on-plain-map
+  (testing "->map is no-op on plain maps"
+    (let [m {:agent-type "x" :description "d" :system-prompt "p"}]
+      (is (identical? m (ad/->map m))))))
+
+;; =============================================================================
+;; Property: make-agent-def roundtrip
+;; =============================================================================
+
+(defspec make-agent-def-roundtrip 200
+  (prop/for-all [d gen-agent-def]
+    (let [r  (ad/make-agent-def d)
+          m' (ad/->map r)]
+      (and (ad/agent-def? r)
+           (:valid (ad/validate m'))
+           (= (:agent-type d) (:agent-type m'))
+           (= (:description d) (:description m'))
+           (= (:system-prompt d) (:system-prompt m'))))))
