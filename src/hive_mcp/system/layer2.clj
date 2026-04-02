@@ -1,0 +1,108 @@
+(ns hive-mcp.system.layer2
+  "Integrant key implementations — Layer 2: transport (network servers).
+
+   These keys manage external network services:
+     - :hive/nrepl          — embedded nREPL for bb-mcp tool forwarding
+     - :hive/websocket-mcp  — WebSocket MCP server (Claude Code IDE integration)
+     - :hive/nats           — NATS client + backbone + bridge (event backbone)
+
+   Each init-key wraps existing start functions from:
+     - server/transport.clj  → start-embedded-nrepl!, start-websocket-server!
+     - server/init.clj       → init-nats!
+     - nats/client.clj       → stop!
+
+   halt-key! stops each server/connection and logs shutdown."
+  (:require [integrant.core :as ig]
+            [hive-mcp.server.transport :as transport]
+            [hive-mcp.server.init :as init]
+            [hive-mcp.dns.result :as result]
+            [taoensso.timbre :as log]))
+;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
+;;
+;; SPDX-License-Identifier: AGPL-3.0-or-later
+
+;; =============================================================================
+;; :hive/nrepl — Embedded nREPL server for bb-mcp tool forwarding
+;; =============================================================================
+
+(defmethod ig/init-key :hive/nrepl
+  [_ config]
+  (log/info ":hive/nrepl init — starting embedded nREPL server")
+  (let [nrepl-server-atom (atom nil)
+        server (transport/start-embedded-nrepl! nrepl-server-atom)]
+    {:nrepl-server-atom nrepl-server-atom
+     :server            server
+     :port              (:port config)
+     :status            (if server :running :failed)}))
+
+(defmethod ig/halt-key! :hive/nrepl
+  [_ state]
+  (log/info ":hive/nrepl halt — stopping embedded nREPL server")
+  (when-let [server-atom (:nrepl-server-atom state)]
+    (when-let [server @server-atom]
+      (result/rescue nil
+        (require 'nrepl.server)
+        (let [stop-server (resolve 'nrepl.server/stop-server)]
+          (stop-server server)
+          (reset! server-atom nil)
+          (log/info ":hive/nrepl stopped"))))))
+
+;; =============================================================================
+;; :hive/websocket-mcp — WebSocket MCP server (Claude Code IDE integration)
+;; =============================================================================
+
+(defmethod ig/init-key :hive/websocket-mcp
+  [_ config]
+  (log/info ":hive/websocket-mcp init — starting WebSocket MCP server" config)
+  (let [result (result/rescue nil
+                 (transport/start-websocket-server!))]
+    {:port    (:port config)
+     :enabled (:enabled config)
+     :result  result
+     :status  (if result :running :disabled)}))
+
+(defmethod ig/halt-key! :hive/websocket-mcp
+  [_ state]
+  (when (= :running (:status state))
+    (log/info ":hive/websocket-mcp halt — stopping WebSocket MCP server")
+    (result/rescue nil
+      (require 'hive-mcp.transport.websocket)
+      (let [stop! (resolve 'hive-mcp.transport.websocket/stop-server!)]
+        (stop!)
+        (log/info ":hive/websocket-mcp stopped")))))
+
+;; =============================================================================
+;; :hive/nats — NATS client + backbone + bridge (event backbone)
+;; =============================================================================
+
+(defmethod ig/init-key :hive/nats
+  [_ config]
+  (log/info ":hive/nats init — initializing NATS backbone" config)
+  (let [enabled? (:enabled config)]
+    (when enabled?
+      (init/init-nats!))
+    {:enabled enabled?
+     :status  (if enabled? :running :disabled)}))
+
+(defmethod ig/halt-key! :hive/nats
+  [_ state]
+  (when (= :running (:status state))
+    (log/info ":hive/nats halt — disconnecting NATS client + backbone")
+    ;; Stop callback listener first (subscriber)
+    (result/rescue nil
+      (when-let [stop-listener! (requiring-resolve 'hive-mcp.swarm.callback/stop-listener!)]
+        (stop-listener!)))
+    ;; Stop bridge subscriptions
+    (result/rescue nil
+      (when-let [stop-subs! (requiring-resolve 'hive-mcp.nats.bridge/stop-subscriptions!)]
+        (stop-subs!)))
+    ;; Clear backbone (reverts to NoopBackbone)
+    (result/rescue nil
+      (when-let [clear-bb! (requiring-resolve 'hive-mcp.protocols.event-backbone/clear-backbone!)]
+        (clear-bb!)))
+    ;; Disconnect NATS client (innermost — last to close)
+    (result/rescue nil
+      (require 'hive-mcp.nats.client)
+      (let [stop! (resolve 'hive-mcp.nats.client/stop!)]
+        (stop!)
+        (log/info ":hive/nats disconnected")))))
