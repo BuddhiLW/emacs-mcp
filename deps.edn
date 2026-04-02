@@ -81,7 +81,7 @@
         ;; hive-events - re-frame inspired event system for JVM
         ;; v0.4.0 adds sub-FSM composition + multi-dispatch
         io.github.hive-agi/hive-events
-        {:git/tag "v0.4.0" :git/sha "e3d9f7c"}
+        {:git/tag "v0.5.0" :git/sha "3d6b8de"}
 
         ;; hive-hot - unified hot-reload with events integration
         io.github.hive-agi/hive-hot
@@ -221,6 +221,6 @@
 ;; Local dev overrides for sibling :local/root projects.
   ;; start-mcp.sh auto-merges deps.local.edn via -Sdeps when present.
   ;; Create deps.local.edn (gitignored) with :deps key, e.g.:
-  ;;   {:deps {io.github.hive-agi/hive-events {:git/tag "v0.4.0" :git/sha "e3d9f7c"}}}
+  ;;   {:deps {io.github.hive-agi/hive-events {:git/tag "v0.5.0" :git/sha "3d6b8de"}}}
   ;; NOTE: Use :deps (top-level key), NOT :override-deps (alias-level only).
   }}
