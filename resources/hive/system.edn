@@ -46,4 +46,5 @@
  :hive/decay-scheduler {:embedding (ig/ref :hive/embedding)}
  :hive/housekeeping    {}
  :hive/mcp-stdio       {:tool-delegation (ig/ref :hive/tool-delegation)
-                        :hot-reload      (ig/ref :hive/hot-reload)}}
+                        :hot-reload      (ig/ref :hive/hot-reload)}
+ :hive/keepalive       {:mode :stdio}}
