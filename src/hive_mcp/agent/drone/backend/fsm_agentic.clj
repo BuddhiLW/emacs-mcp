@@ -18,20 +18,25 @@
   []
   (resolve-drone-loop-fn 'hive-mcp.workflows.drone-loop/run-drone-loop))
 
+(defn- default-llm-backend-factory
+  "Create an LLMBackend via auto-backend (best available OpenAI-compat provider)."
+  [model]
+  (when-let [factory-fn (rescue nil (requiring-resolve 'hive-mcp.agent.openrouter/auto-backend))]
+    (factory-fn {:model model})))
+
 (defn- build-fsm-resources
   "Build the FSM resources map from task-context."
   [task-context opts]
   (let [{:keys [model tools preset sandbox cwd drone-id]} task-context
-        {:keys [llm-backend-factory tool-executor-fn]} opts]
+        {:keys [tool-executor-fn]} opts
+        llm-factory (or (:llm-backend-factory opts) default-llm-backend-factory)]
     (cond-> {:model       model
              :tools       (or tools [])
              :preset      preset
              :sandbox     sandbox
              :cwd         (or cwd ".")
-             :drone-id    drone-id}
-      llm-backend-factory
-      (assoc :llm-backend (llm-backend-factory model))
-
+             :drone-id    drone-id
+             :llm-backend (llm-factory model)}
       tool-executor-fn
       (assoc :tool-executor tool-executor-fn))))
 
