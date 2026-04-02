@@ -1,0 +1,70 @@
+;; Hive MCP — K8s Headless Profile
+;; No Emacs vessel, no stdio MCP, no legacy TCP channel.
+;; A2A gateway + WebSocket transport + NATS push notifications.
+;; Blocks on :hive/keepalive (promise released by SIGTERM).
+;;
+;; Load: (ig/init (ig/read-string (slurp (io/resource "system/k8s-headless.edn"))))
+
+{;; ── Layer 1: Guards, Hooks, Events, Coordinator ──────────────────────
+ :hive/guards          {}
+
+ :hive/hooks           {:coordinator-id #ig/ref :hive/coordinator}
+
+ :hive/events          {}
+
+ :hive/coordinator     {}
+
+ ;; ── Layer 2: Transport (A2A + WebSocket + NATS, no stdio) ────────────
+ :hive/nrepl           {:port 7910}
+
+ :hive/websocket-mcp   {:enabled true
+                        :port    7920}
+
+ :hive/nats            {:enabled true}
+
+ ;; ── Layer 3: Services ────────────────────────────────────────────────
+ :hive/embedding       {}
+
+ :hive/memory-store    {:embedding #ig/ref :hive/embedding}
+
+ :hive/tool-delegation {:memory #ig/ref :hive/memory-store}
+
+ :hive/forge-belt      {}
+
+ :hive/config          {}
+
+ :hive/extensions      {:config    #ig/ref :hive/config
+                        :embedding #ig/ref :hive/embedding}
+
+ ;; ── Layer 4: Channels + Sync (no legacy TCP) ─────────────────────────
+ :hive/ws-channel      {:port 9999}
+
+ :hive/olympus         {}
+
+ :hive/a2a-gateway     {:enabled true
+                        :port    7912}
+
+ ;; :hive/legacy-channel — REMOVED (no TCP channel in headless)
+
+ :hive/channel-bridge  {:events     #ig/ref :hive/events
+                        :ws-channel #ig/ref :hive/ws-channel}
+
+ :hive/swarm-sync      {:channel-bridge #ig/ref :hive/channel-bridge}
+
+ :hive/workflow-engine {:extensions #ig/ref :hive/extensions
+                        :memory     #ig/ref :hive/memory-store}
+
+ ;; ── Layer 5: Hot-reload, Schedulers, Keepalive ───────────────────────
+ :hive/hot-reload      {:extensions #ig/ref :hive/extensions}
+
+ :hive/registry-sync   {:swarm-sync #ig/ref :hive/swarm-sync}
+
+ :hive/decay-scheduler {:embedding #ig/ref :hive/embedding}
+
+ :hive/housekeeping     {}
+
+ ;; :hive/mcp-stdio — REMOVED (no stdin in container)
+
+ ;; Headless keepalive: blocks on promise, released by SIGTERM handler.
+ ;; Replaces :hive/mcp-stdio @join for container lifecycle.
+ :hive/keepalive       {:signal :sigterm}}

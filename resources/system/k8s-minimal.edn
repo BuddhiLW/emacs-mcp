@@ -1,0 +1,61 @@
+;; Hive MCP — K8s Minimal Profile
+;; Bare minimum: guards, nREPL, memory, A2A gateway only.
+;; No Emacs, no stdio, no channels, no hot-reload, no Olympus.
+;; Smallest footprint for resource-constrained pods.
+;;
+;; Load: (ig/init (ig/read-string (slurp (io/resource "system/k8s-minimal.edn"))))
+
+{;; ── Layer 1: Guards, Hooks, Events, Coordinator ──────────────────────
+ :hive/guards          {}
+
+ :hive/hooks           {:coordinator-id #ig/ref :hive/coordinator}
+
+ :hive/events          {}
+
+ :hive/coordinator     {}
+
+ ;; ── Layer 2: Transport (nREPL + NATS only) ───────────────────────────
+ :hive/nrepl           {:port 7910}
+
+ ;; :hive/websocket-mcp — REMOVED (no WebSocket MCP in minimal)
+
+ :hive/nats            {:enabled true}
+
+ ;; ── Layer 3: Services (memory core only) ─────────────────────────────
+ :hive/embedding       {}
+
+ :hive/memory-store    {:embedding #ig/ref :hive/embedding}
+
+ :hive/tool-delegation {:memory #ig/ref :hive/memory-store}
+
+ :hive/forge-belt      {}
+
+ :hive/config          {}
+
+ :hive/extensions      {:config    #ig/ref :hive/config
+                        :embedding #ig/ref :hive/embedding}
+
+ ;; ── Layer 4: A2A only (no channels, no Olympus) ──────────────────────
+ ;; :hive/ws-channel     — REMOVED
+ ;; :hive/olympus        — REMOVED
+ ;; :hive/legacy-channel — REMOVED
+ ;; :hive/channel-bridge — REMOVED
+ ;; :hive/swarm-sync     — REMOVED
+
+ :hive/a2a-gateway     {:enabled true
+                        :port    7912}
+
+ :hive/workflow-engine {:extensions #ig/ref :hive/extensions
+                        :memory     #ig/ref :hive/memory-store}
+
+ ;; ── Layer 5: Schedulers + Keepalive (no hot-reload) ──────────────────
+ ;; :hive/hot-reload    — REMOVED
+ ;; :hive/registry-sync — REMOVED
+
+ :hive/decay-scheduler {:embedding #ig/ref :hive/embedding}
+
+ :hive/housekeeping     {}
+
+ ;; :hive/mcp-stdio — REMOVED
+
+ :hive/keepalive       {:signal :sigterm}}
