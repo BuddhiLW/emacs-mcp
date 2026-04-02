@@ -144,12 +144,17 @@
 (println "  (run-tests 'ns)      - Run tests for namespace")
 (println "================================\n")
 
-;; Auto-init hint (non-blocking)
+;; Auto-init: start Integrant system after nREPL is ready.
+;; bb-mcp connects via nREPL and needs server-context-atom populated,
+;; which happens inside start! after ig/init completes.
 (future
   (try
     (Thread/sleep 2000)
     (if (io/resource "hive/system.edn")
-      (println "System.edn found — run (go) to start Integrant lifecycle.")
+      (do
+        (println "Auto-starting Integrant system...")
+        (go)
+        (println "Integrant system started."))
       (println "WARN: system.edn not found on classpath."))
     (catch Exception e
-      (println "Auto-init check failed (non-fatal):" (.getMessage e)))))
+      (println "Auto-init failed (non-fatal):" (.getMessage e)))))

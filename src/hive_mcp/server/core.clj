@@ -48,6 +48,11 @@
 
 (defonce system (atom nil))
 
+;; Backward-compat bridge for bb-mcp forwarding handlers.
+;; bb-mcp resolves this atom to get middleware-wrapped tool handlers.
+;; Populated by populate-server-context! (init.clj) after Integrant (go).
+(defonce server-context-atom (atom nil))
+
 ;; =============================================================================
 ;; Profile-Aware Config Loading
 ;; =============================================================================
@@ -122,6 +127,14 @@
     (let [config (load-system-config profile)
           sys    (ig/init config)]
       (clojure.core/reset! system sys)
+      ;; Populate server-context-atom for bb-mcp forwarding handlers.
+      ;; Must run AFTER extensions are loaded (tools registered).
+      (try
+        (require 'hive-mcp.server.init)
+        (when-let [populate! (resolve 'hive-mcp.server.init/populate-server-context!)]
+          (populate!))
+        (catch Exception e
+          (log/warn "populate-server-context! failed (non-fatal):" (ex-message e))))
       (log/info "Integrant system initialized:" (count sys) "keys")
       sys)))
 
