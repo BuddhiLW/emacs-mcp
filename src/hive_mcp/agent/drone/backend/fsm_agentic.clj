@@ -16,7 +16,7 @@
 (defn- get-run-drone-loop
   "Get the run-drone-loop convenience function, or nil if not available."
   []
-  (resolve-drone-loop-fn 'hive-mcp.workflows.drone-loop/run-drone-loop))
+  (resolve-drone-loop-fn 'hive-mcp.workflows.sub-fsms.drone-loop/run-drone-loop))
 
 (defn- default-llm-backend-factory
   "Create an LLMBackend via auto-backend (best available OpenAI-compat provider)."
@@ -36,7 +36,7 @@
              :sandbox     sandbox
              :cwd         (or cwd ".")
              :drone-id    drone-id
-             :llm-backend (llm-factory model)}
+             :backend (llm-factory model)}
       tool-executor-fn
       (assoc :tool-executor tool-executor-fn))))
 
