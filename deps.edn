@@ -116,6 +116,12 @@
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
         io.github.hive-agi/hive-emacs {:git/tag "v0.2.1" :git/sha "b0dba87"}
+
+        ;; Integrant — lifecycle framework for component-based systems
+        ;; Replaces monolithic start! with declarative system map + profile merging
+        integrant/integrant {:mvn/version "0.13.1"}
+        ;; meta-merge for deep-merging profile EDN over base system.edn
+        meta-merge/meta-merge {:mvn/version "1.0.0"}
 }
 
  :aliases
@@ -204,6 +210,13 @@
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:includes [:integration]}}
+
+  ;; Uberjar build via tools.build (see build.clj)
+  ;; Usage: clj -T:build uber
+  ;;        clj -T:build uber :profile k8s-headless
+  :build
+  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.7"}}
+   :ns-default build}
 
 ;; Local dev overrides for sibling :local/root projects.
   ;; start-mcp.sh auto-merges deps.local.edn via -Sdeps when present.
