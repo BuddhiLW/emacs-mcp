@@ -1,5 +1,8 @@
 (ns hive-mcp.agent.drone.backend.hive-agent
-  "HiveAgentBackend -- IDroneExecutionBackend wrapping hive-agent bridge."
+  "DEPRECATED: HiveAgentBackend -- superseded by sdk-drone (hive-claude Agent SDK).
+   Removed from ext_router priority in 0.16.0.
+   Kept for explicit :hive-agent backend selection only."
+  {:deprecated "0.16.0"}
   (:require [hive-mcp.agent.drone.backend :as backend]
             [hive-mcp.agent.hive-agent-bridge :as bridge]
             [hive-mcp.config.core :as config]
