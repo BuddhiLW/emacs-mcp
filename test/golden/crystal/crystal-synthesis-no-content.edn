@@ -1,0 +1,22 @@
+{:memory-decay-stats {:decayed 0, :expired 0, :total-scanned 0},
+ :promotion-stats {:promoted 0, :skipped 0, :below 0, :evaluated 0},
+ :decay-stats {:decayed 0, :pruned 0, :fresh 0, :evaluated 0},
+ :file-provenance-stats {:files-captured 0},
+ :session-timing
+ {:session-start "2026-01-15T10:00:00Z",
+  :session-end "2026-01-15T12:00:00Z",
+  :duration-minutes 120},
+ :xpoll-stats {:promoted 0, :candidates 0, :total-scanned 0},
+ :skipped true,
+ :reason "no-content",
+ :project-id "golden-project",
+ :stats
+ {:progress-count 0,
+  :task-count 0,
+  :commit-count 0,
+  :recall-count 0,
+  :hivemind-shout-count 0,
+  :kanban-completed 0,
+  :created-count 0,
+  :accessed-count 0},
+ :session "test-session-golden"}

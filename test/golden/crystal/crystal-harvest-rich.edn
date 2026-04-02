@@ -1,0 +1,42 @@
+{:progress-notes
+ [{:content "Implemented feature X", :tags ["progress"]}
+  {:content "Fixed bug in module Y", :tags ["progress"]}],
+ :completed-tasks
+ [{:content "DONE: Deploy service", :tags ["kanban"]}],
+ :git-commits
+ ["abc1234 feat: add feature X"
+  "def5678 fix: resolve bug Y"],
+ :recalls {"mem-001" {:id "mem-001" :content "API design notes" :access-count 3}
+           "mem-002" {:id "mem-002" :content "Architecture doc" :access-count 1}},
+ :hivemind-messages
+ [{:from "agent-a" :content "Starting deploy" :timestamp "2026-01-15T11:00:00Z"}
+  {:from "agent-b" :content "Tests passing" :timestamp "2026-01-15T11:30:00Z"}
+  {:from "golden-agent" :content "Feature complete" :timestamp "2026-01-15T11:45:00Z"}],
+ :kanban-activity
+ {:tasks-completed [{:title "Deploy service" :completed-at "2026-01-15T11:20:00Z"}]
+  :completed-count 1},
+ :session-timing
+ {:session-start "2026-01-15T10:00:00Z",
+  :session-end "2026-01-15T12:00:00Z",
+  :duration-minutes 120},
+ :session-temporal
+ {:session-start "2026-01-15T10:00:00Z",
+  :session-end "2026-01-15T12:00:00Z",
+  :duration-minutes 120},
+ :memory-ids-created
+ [{:id "created-001"} {:id "created-002"}],
+ :memory-ids-accessed
+ ["mem-001" "mem-002"],
+ :session "test-session-golden",
+ :directory "/tmp/golden-test",
+ :agent-id "golden-agent",
+ :summary
+ {:progress-count 2,
+  :task-count 1,
+  :commit-count 2,
+  :recall-count 2,
+  :hivemind-shout-count 3,
+  :kanban-completed 1,
+  :created-count 2,
+  :accessed-count 2},
+ :errors nil}

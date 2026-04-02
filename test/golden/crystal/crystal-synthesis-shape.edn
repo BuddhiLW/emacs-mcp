@@ -1,0 +1,35 @@
+{:no-content-path
+ {:keys
+  #{:skipped :reason :session :project-id :session-timing :stats
+    :promotion-stats :decay-stats :xpoll-stats :memory-decay-stats
+    :file-provenance-stats},
+  :skipped true,
+  :reason "no-content",
+  :session "test-session-golden",
+  :project-id "golden-project",
+  :session-timing
+  {:session-start "2026-01-15T10:00:00Z",
+   :session-end "2026-01-15T12:00:00Z",
+   :duration-minutes 120},
+  :promotion-stats {:promoted 0, :skipped 0, :below 0, :evaluated 0},
+  :decay-stats {:decayed 0, :pruned 0, :fresh 0, :evaluated 0},
+  :xpoll-stats {:promoted 0, :candidates 0, :total-scanned 0},
+  :memory-decay-stats {:decayed 0, :expired 0, :total-scanned 0},
+  :file-provenance-stats {:files-captured 0}},
+ :content-path
+ {:keys
+  #{:summary-id :session :project-id :session-timing :stats
+    :promotion-stats :decay-stats :xpoll-stats :memory-decay-stats
+    :file-provenance-stats},
+  :summary-id "entry-golden-001",
+  :session "test-session-golden",
+  :project-id "golden-project",
+  :session-timing
+  {:session-start "2026-01-15T10:00:00Z",
+   :session-end "2026-01-15T12:00:00Z",
+   :duration-minutes 120},
+  :promotion-stats {:promoted 0, :skipped 0, :below 0, :evaluated 0},
+  :decay-stats {:decayed 0, :pruned 0, :fresh 0, :evaluated 0},
+  :xpoll-stats {:promoted 0, :candidates 0, :total-scanned 0},
+  :memory-decay-stats {:decayed 0, :expired 0, :total-scanned 0},
+  :file-provenance-stats {:files-captured 0}}}
