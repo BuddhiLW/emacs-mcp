@@ -1,0 +1,18 @@
+;; K8s Minimal profile — bare minimum: A2A gateway only.
+;; For lightweight Kubernetes pods (sidecar, worker, single-purpose agent).
+;;
+;; Merges over system.edn via meta-merge.
+;; Keys set to nil are removed (Integrant exclusion convention).
+;;
+;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
+;; SPDX-License-Identifier: AGPL-3.0-or-later
+
+{:hive/mcp-stdio       nil
+ :hive/legacy-channel   nil
+ :hive/ws-channel       nil
+ :hive/olympus          nil
+ :hive/hot-reload       nil
+ :hive/registry-sync    nil
+ :hive/a2a-gateway      {:enabled true :port 7912}
+ :hive/nats             {:enabled true}
+ :hive/keepalive        {:signal :sigterm}}

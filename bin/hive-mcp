@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# hive-mcp startup script
+#
+# Usage:
+#   bin/hive-mcp                     # desktop profile (default)
+#   bin/hive-mcp --profile k8s-headless
+#   HIVE_PROFILE=k8s-minimal bin/hive-mcp
+#
+# Profile precedence: --profile flag > HIVE_PROFILE env > "desktop"
+#
+# Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ── Profile resolution ──────────────────────────────────────────────
+# Parse --profile flag from args (consume it, pass rest to clj)
+PROFILE="${HIVE_PROFILE:-desktop}"
+PASSTHROUGH_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --profile)
+      PROFILE="${2:?'--profile requires a value (desktop, k8s-headless, k8s-minimal)'}"
+      shift 2
+      ;;
+    --profile=*)
+      PROFILE="${1#*=}"
+      shift
+      ;;
+    *)
+      PASSTHROUGH_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+export HIVE_PROFILE="$PROFILE"
+
+echo "hive-mcp: profile=$HIVE_PROFILE"
+
+# ── Local deps overlay ──────────────────────────────────────────────
+# If deps.local.edn exists, merge it via -Sdeps for sibling :local/root overrides
+SDEPS_ARG=""
+if [[ -f "$PROJECT_DIR/deps.local.edn" ]]; then
+  SDEPS_ARG="-Sdeps $(cat "$PROJECT_DIR/deps.local.edn")"
+  echo "hive-mcp: merging deps.local.edn"
+fi
+
+# ── Launch ──────────────────────────────────────────────────────────
+cd "$PROJECT_DIR"
+
+# shellcheck disable=SC2086
+exec clj $SDEPS_ARG -M:mcp "${PASSTHROUGH_ARGS[@]}"

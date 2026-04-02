@@ -15,6 +15,9 @@
             [hive-mcp.server.init :as init]
             [hive-mcp.server.guards :as guards]
             [clojure.core.async :as async]
+            [clojure.java.io :as io]
+            [integrant.core :as ig]
+            [meta-merge.core :refer [meta-merge]]
             [taoensso.timbre :as log])
   (:gen-class))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -55,6 +58,50 @@
                        (println (force output_)))))}}})
 
 ;; =============================================================================
+;; Profile-Aware Config Loading (Integrant T11)
+;; =============================================================================
+
+(defn resolve-profile
+  "Resolve profile keyword from CLI --profile arg, HIVE_PROFILE env, or :desktop.
+   Precedence: explicit arg > env > default."
+  ([] (resolve-profile nil))
+  ([cli-profile]
+   (keyword (or cli-profile
+                (System/getenv "HIVE_PROFILE")
+                "desktop"))))
+
+(defn read-base-config
+  "Read and parse the base system.edn config with Integrant readers."
+  []
+  (if-let [r (io/resource "hive/system.edn")]
+    (ig/read-string (slurp r))
+    (throw (ex-info "Base system.edn not found on classpath"
+                    {:resource "hive/system.edn"
+                     :hint "Ensure resources/ is on :paths"}))))
+
+(defn read-profile-config
+  "Read profile overlay EDN. Returns {} if profile file not found."
+  [profile]
+  (let [path (str "hive/profiles/" (name profile) ".edn")]
+    (if-let [r (io/resource path)]
+      (ig/read-string (slurp r))
+      (do (log/warn "Profile" path "not found, using base config only")
+          {}))))
+
+(defn load-system-config
+  "Load base system.edn merged with profile overlay via meta-merge.
+   Profile nil keys are removed (Integrant convention for exclusion)."
+  ([] (load-system-config (resolve-profile)))
+  ([profile]
+   (let [base    (read-base-config)
+         overlay (read-profile-config profile)
+         merged  (meta-merge base overlay)]
+     ;; Remove keys set to nil by profile (Integrant convention for exclusion)
+     (->> merged
+          (remove (fn [[_ v]] (nil? v)))
+          (into {})))))
+
+;; =============================================================================
 ;; Server Lifecycle - Thin orchestrator
 ;; =============================================================================
 
@@ -68,10 +115,15 @@
    4. Services: embedding + memory (init)
    5. Channels + Sync (transport + init)
    6. Hot-reload + Registry sync (init)
-   7. MCP stdio server (must be last - blocks)"
-  [& _args]
-  (let [server-id (random-uuid)]
-    (log/info "Starting hive-mcp server:" server-id)
+   7. MCP stdio server (must be last - blocks)
+
+   Accepts optional profile keyword (:desktop, :k8s-headless, :k8s-minimal).
+   When T8 lands, profile drives Integrant system init. Until then, logged."
+  [& {:keys [profile] :or {profile nil}}]
+  (let [server-id (random-uuid)
+        profile   (resolve-profile profile)
+        _config   (load-system-config profile)]
+    (log/info "Starting hive-mcp server:" server-id "profile:" profile)
     (when-let [sock (System/getenv "EMACS_SOCKET_NAME")]
       (log/info "Targeting Emacs daemon:" sock))
 
@@ -97,8 +149,21 @@
     ;; Phase 4.4: Forge belt defaults (extensions can override)
     (init/register-forge-belt-defaults!)
 
+    ;; Phase 4.45: Global config (must load BEFORE extensions — addons need API keys/config)
+    (try
+      (require 'hive-mcp.config.core)
+      (require 'hive-mcp.tools.hive-project)
+      (let [load-config! (resolve 'hive-mcp.config.core/load-global-config!)
+            scan! (resolve 'hive-mcp.tools.hive-project/scan-and-generate-missing!)]
+        (load-config!)
+        (let [result (scan!)]
+          (log/info "Phase 4.45: Global config loaded + auto-gen .hive-project.edn:" result)))
+      (catch Exception e
+        (log/warn "Phase 4.45: Config/auto-gen scan failed (non-fatal):" (.getMessage e))))
+
     ;; Phase 4.5: Extension loading (classpath addon discovery)
     ;; Must run AFTER embedding/memory (extensions may use Chroma).
+    ;; Must run AFTER config (extensions need API keys from config.edn).
     ;; Must run BEFORE workflow engine (handlers may use extensions).
     ;; hive-claude auto-discovered here via META-INF manifest (registers :claude terminal)
     ;; NOTE: Addons self-register capabilities during initialize! lifecycle.
@@ -112,19 +177,6 @@
     (transport/start-legacy-channel!)
     (init/init-channel-bridge!)
     (init/start-swarm-sync!)
-
-    ;; Phase 5.5: Global config + auto-generate missing .hive-project.edn
-    ;; Must run after services (Chroma) and before hot-reload (needs project configs)
-    (try
-      (require 'hive-mcp.config.core)
-      (require 'hive-mcp.tools.hive-project)
-      (let [load-config! (resolve 'hive-mcp.config.core/load-global-config!)
-            scan! (resolve 'hive-mcp.tools.hive-project/scan-and-generate-missing!)]
-        (load-config!)
-        (let [result (scan!)]
-          (log/info "Phase 5.5: Auto-gen .hive-project.edn:" result)))
-      (catch Exception e
-        (log/warn "Phase 5.5: Auto-gen scan failed (non-fatal):" (.getMessage e))))
 
     ;; Phase 5.7: FSM Workflow Engine (registry + IWorkflowEngine wiring)
     ;; Must run after services (handlers use memory/kanban at runtime).
@@ -165,11 +217,32 @@
         (log/info "MCP server stdin closed - initiating clean shutdown")
         (System/exit 0)))))
 
+(defn- parse-cli-args
+  "Parse CLI args for --profile flag. Returns map with :profile (or nil)."
+  [args]
+  (loop [args args
+         opts {}]
+    (if (empty? args)
+      opts
+      (let [[flag val & rest] args]
+        (if (= flag "--profile")
+          (recur rest (assoc opts :profile val))
+          (recur (next args) opts))))))
+
 (defn -main
-  "Entry point for the MCP server."
+  "Entry point for the MCP server.
+
+   Usage:
+     java -jar hive-mcp.jar                          ; desktop (default)
+     java -jar hive-mcp.jar --profile k8s-headless   ; headless K8s
+     HIVE_PROFILE=k8s-minimal java -jar hive-mcp.jar ; env-based
+
+   Profile precedence: --profile flag > HIVE_PROFILE env > desktop"
   [& args]
-  (apply start! args))
+  (let [{:keys [profile]} (parse-cli-args args)]
+    (start! :profile profile)))
 
 (comment
   ;; For REPL development
-  (start!))
+  (start!)
+  (start! :profile :k8s-headless))
