@@ -78,7 +78,14 @@
 (defmethod ig/init-key :hive/nats
   [_ config]
   (log/info ":hive/nats init — initializing NATS backbone" config)
-  (let [enabled? (:enabled config)]
+  ;; Check both Integrant config (system.edn) and runtime config (config.edn).
+  ;; Runtime config takes precedence — user can enable NATS via config tool
+  ;; without editing system.edn.
+  (let [runtime-enabled? (result/rescue nil
+                           (require 'hive-mcp.config.core)
+                           (let [get-svc (resolve 'hive-mcp.config.core/get-service-value)]
+                             (get-svc :nats :enabled :default false)))
+        enabled? (or (:enabled config) runtime-enabled?)]
     (when enabled?
       (init/init-nats!))
     {:enabled enabled?
