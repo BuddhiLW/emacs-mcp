@@ -20,8 +20,9 @@
 (def bind     hive-dsl.result/bind)
 (def map-ok   hive-dsl.result/map-ok)
 (def map-err  hive-dsl.result/map-err)
-(def rescue-fn hive-dsl.result/rescue-fn)
-(def guard-fn  hive-dsl.result/guard-fn)
+(def rescue-fn     hive-dsl.result/rescue-fn)
+(def guard-fn      hive-dsl.result/guard-fn)
+(def ensure-result hive-dsl.result/ensure-result)
 
 ;; Macros — must re-define (def doesn't preserve macro metadata)
 (defmacro let-ok
@@ -48,3 +49,13 @@
   "Re-export of hive-dsl.result/guard. See canonical docstring."
   [catch-class fallback & body]
   `(hive-dsl.result/guard ~catch-class ~fallback ~@body))
+
+(defmacro ok->
+  "Re-export of hive-dsl.result/ok->. Thread-first through Results with smart-wrap."
+  [expr & forms]
+  `(hive-dsl.result/ok-> ~expr ~@forms))
+
+(defmacro ok->>
+  "Re-export of hive-dsl.result/ok->>. Thread-last through Results with smart-wrap."
+  [expr & forms]
+  `(hive-dsl.result/ok->> ~expr ~@forms))
