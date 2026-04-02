@@ -239,7 +239,7 @@
                                              ttl))
                     refs)))
               {} context-categories)
-      (catch Exception _e nil))))
+      (catch Exception e (log/warn "[catchup] context-store failed:" (.getMessage e))))))
 
 ;; =============================================================================
 ;; Handlers (pure functions: resources x data -> data')

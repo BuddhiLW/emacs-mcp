@@ -169,7 +169,7 @@
                (require 'hive-mcp.protocols.vessel)
                (when-let [resolve-fn (resolve 'hive-mcp.protocols.vessel/resolve-agent-context)]
                  (:project-id (resolve-fn agent-id)))
-               (catch Exception _ nil))))))
+               (catch Exception e (log/trace "routes: vessel resolution failed for" agent-id (.getMessage e)) nil))))))
       ;; Derive from directory if present, with caller-cwd, ctx and user.dir fallbacks
       (when-let [dir (or (:directory args)
                          (:_caller_cwd args)
@@ -503,6 +503,65 @@
         (compress/compress-content content mode)
         content))))
 
+(defn wrap-handler-piggybacks
+  "Unified piggyback wrapper — drains all 4 channels in a single pass.
+   Replaces individual async/memory/catchup/hivemind piggyback wrappers
+   in the make-tool chain, reducing middleware from 10 to 7 layers.
+
+   Extracts caller-id ONCE (was extracted 3x independently), drains all
+   channels, appends all delimited blocks to content.
+
+   Channel drain order (append order):
+   1. TOOLRESULT — async completion results
+   2. MEMORY — axioms, conventions, enrichment batches
+   3. Catchup enrichment blocks — dynamic tags (synthesis, kg-insights, context)
+   4. HIVEMIND — agent shouts
+
+   SESSION-SCOPED: Uses _caller_id for buffer key alignment (channels 1-3).
+   PROJECT-SCOPED: Hivemind uses ADT identity extraction for cursor isolation."
+  [handler]
+  (fn [args]
+    (let [content (handler args)
+          caller-id (or (:_caller_id args) "coordinator")
+
+          ;; 1. Async results
+          async-drain (async-buf/drain! caller-id)
+
+          ;; 2. Memory entries
+          memory-drain (drain-memory-piggyback caller-id)
+
+          ;; 3. Catchup enrichment (extension-based, may not be registered)
+          catchup-blocks (when-let [drain-fn (ext/get-extension :cu/piggyback-drain)]
+                           (try (drain-fn caller-id)
+                                (catch Exception e
+                                  (log/debug "catchup-piggyback drain failed:" (.getMessage e))
+                                  nil)))
+
+          ;; 4. Hivemind (ADT identity for cursor isolation)
+          caller (extract-caller-identity args)
+          scope (extract-project-scope args)
+          hm-agent-id (ctx-id/make-piggyback-agent-id caller scope)
+          hm-project-id (ctx-id/project-scope-string scope)
+          hivemind-msgs (get-piggyback-messages hm-agent-id hm-project-id)]
+
+      (cond-> content
+        async-drain
+        (wrap-delimited-block "TOOLRESULT" (pr-str async-drain))
+
+        memory-drain
+        (wrap-memory-piggyback-content memory-drain)
+
+        (seq catchup-blocks)
+        (as-> c (reduce-kv
+                  (fn [acc tag body]
+                    (wrap-delimited-block acc
+                      (clojure.string/upper-case (name tag))
+                      (if (string? body) body (pr-str body))))
+                  c catchup-blocks))
+
+        true
+        (wrap-piggyback hivemind-msgs)))))
+
 (defn wrap-handler-response
   "Wrap handler to build SDK response format.
    SRP: Single responsibility - response building only.
@@ -529,29 +588,26 @@
    - wrap-handler-async: intercept async:true calls, return ack, spawn future
    - wrap-handler-normalize: converts result to content array
    - wrap-handler-compress: compact:true → compress JSON text (strip verbose fields)
-   - wrap-handler-async-piggyback: drains async results (completed futures)
-   - wrap-handler-memory-piggyback: drains memory entries (axioms, conventions)
-   - wrap-handler-catchup-piggyback: drains catchup enrichment blocks (synthesis, kg-insights, context)
-   - wrap-handler-piggyback: embeds hivemind messages with agent-id extraction
+   - wrap-handler-piggybacks: unified drain of all 4 channels (async, memory, catchup, hivemind)
    - wrap-handler-context: binds request context for tool execution
    - wrap-handler-response: builds {:content ...} response
 
-   Composition via -> threading enables clear data flow:
-   handler -> retry -> async-intercept -> normalize -> compress -> async-piggyback -> memory-piggyback -> catchup-piggyback -> hivemind-piggyback -> context -> response
+   Composition via -> threading (7-layer chain):
+   handler -> retry -> async-intercept -> normalize -> compress -> piggybacks -> context -> response
 
    The async interceptor sits AFTER retry (so it can retry on hot-reload errors)
    but BEFORE normalize (so the ack [{:type text}] passes through the piggyback chain).
 
-   Memory/async/catchup/hivemind piggybacks all run in parallel, each appending
-   their own delimited blocks to content independently.
+   The unified piggybacks wrapper drains all 4 channels (async, memory, catchup,
+   hivemind) in a single pass, extracting caller-id once instead of 3x.
 
    REQUEST-LEVEL MEMOIZATION: context wrapper binds *request-cache* (atom {})
    before any work. extract-project-id uses ctx/request-memoize to cache its
-   expensive scope lookup — called 5x per request (context + 4 piggyback
-   wrappers) but computed only once. Handlers can also use request-memoize
-   for their own per-request caching needs.
+   expensive scope lookup — called 2x per request (context + piggybacks wrapper)
+   but computed only once. Handlers can also use request-memoize for their own
+   per-request caching needs.
 
-   CRITICAL: context must wrap all piggybacks so ctx/current-directory is bound
+   CRITICAL: context must wrap piggybacks so ctx/current-directory is bound
    when extract-project-id runs."
   [{:keys [name description inputSchema handler deprecated]}]
   (let [schema-ext (ext/get-schema-extensions name)
@@ -566,11 +622,8 @@
                           (wrap-handler-async name)       ; async:true → ack + future
                           wrap-handler-normalize
                           wrap-handler-compress           ; compact: true → compress JSON text
-                          wrap-handler-async-piggyback    ; async results channel
-                          wrap-handler-memory-piggyback   ; memory channel (needs ctx bound)
-                          wrap-handler-catchup-piggyback  ; catchup enrichment channel
-                          wrap-handler-piggyback          ; hivemind channel (needs ctx bound)
-                          wrap-handler-context            ; binds ctx for all piggybacks
+                          wrap-handler-piggybacks         ; unified: 4 channels in 1 pass
+                          wrap-handler-context            ; binds ctx for piggybacks
                           wrap-handler-response)}
       deprecated (assoc :deprecated true))))
 

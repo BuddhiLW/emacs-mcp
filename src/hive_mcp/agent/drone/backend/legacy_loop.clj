@@ -11,10 +11,10 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defn- create-llm-backend
-  "Create an OpenRouter LLM backend for the given model and preset."
-  [model preset]
-  (let [factory-fn (requiring-resolve 'hive-mcp.agent.openrouter/openrouter-backend)]
-    (factory-fn {:model model :preset preset})))
+  "Create an LLM backend using the best available OpenAI-compatible provider."
+  [model _preset]
+  (let [factory-fn (requiring-resolve 'hive-mcp.agent.openrouter/auto-backend)]
+    (factory-fn {:model model})))
 
 (defn- resolve-effective-tools
   "Resolve the tool set for drone execution."

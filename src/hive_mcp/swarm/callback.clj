@@ -245,7 +245,7 @@
         ;; Extract task-id from dispatch result
         result-text (some-> result :text)
         parsed (try (json/read-str (or result-text "{}") :key-fn keyword)
-                    (catch Exception _ nil))
+                    (catch Exception e (log/debug "[callback] JSON parse of dispatch result failed:" (.getMessage e)) nil))
         task-id (:task-id parsed)]
     (if task-id
       (do

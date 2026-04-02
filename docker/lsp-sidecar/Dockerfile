@@ -5,6 +5,7 @@ LABEL org.opencontainers.image.description="Periodic clojure-lsp analysis dumper
 LABEL org.opencontainers.image.source="https://github.com/hive-agi/hive-mcp"
 
 # Install Clojure CLI
+ARG CLOJURE_VERSION=1.12.4.1618
 RUN apt-get update && apt-get install -y curl make git rlwrap \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSLO https://download.clojure.org/install/linux-install-$CLOJURE_VERSION.sh \
@@ -30,7 +31,7 @@ ENV ANALYSIS_INTERVAL_SECONDS=300
 ENV JAVA_OPTS="-Xmx1g -Xms256m"
 ENV LSP_PROJECTS=""
 
-VOLUME [/cache]
-VOLUME [/workspace]
+VOLUME ["/cache"]
+VOLUME ["/workspace"]
 
 ENTRYPOINT ["/usr/local/bin/analyze.sh"]

@@ -224,22 +224,41 @@
 ;; Helper Functions
 ;; =============================================================================
 
+(def ^:private priority-aliases
+  "Common priority aliases mapped to canonical values."
+  {:normal :medium :default :medium :med :medium
+   :critical :high :urgent :high :blocker :high
+   :trivial :low :minor :low :none :low})
+
 (defn normalize-priority
-  "Convert priority string or keyword to canonical keyword form."
+  "Convert priority string or keyword to canonical keyword form.
+
+   Case-insensitive. Aliases :normal → :medium, :critical → :high, etc.
+   Unknown values clamp to :medium (safe default)."
   [priority]
   (cond
     (nil? priority) :medium
-    (keyword? priority) priority
-    (string? priority) (keyword (str/lower-case priority))
+    (keyword? priority)
+    (let [k (keyword (str/lower-case (name priority)))]
+      (or (#{:high :medium :low} k)
+          (get priority-aliases k)
+          :medium))
+    (string? priority)
+    (normalize-priority (keyword (str/lower-case priority)))
     :else :medium))
 
 (defn normalize-estimate
-  "Convert estimate string or keyword to canonical keyword form."
+  "Convert estimate string or keyword to canonical keyword form.
+
+   Case-insensitive. Unknown values clamp to :medium (safe default)."
   [estimate]
   (cond
     (nil? estimate) :medium
-    (keyword? estimate) estimate
-    (string? estimate) (keyword (str/lower-case estimate))
+    (keyword? estimate)
+    (let [k (keyword (str/lower-case (name estimate)))]
+      (or (#{:small :medium :large} k) :medium))
+    (string? estimate)
+    (normalize-estimate (keyword (str/lower-case estimate)))
     :else :medium))
 
 (defn normalize-step

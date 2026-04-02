@@ -43,7 +43,7 @@
   ;; Uses hive-mcp.agent.context (no circular dep) for thread-local agent-id
   (let [get-ctx-agent-id (try
                            (requiring-resolve 'hive-mcp.agent.context/current-agent-id)
-                           (catch Exception _ nil))
+                           (catch Exception e (log/trace "[notification] agent-context resolution failed:" (.getMessage e)) nil))
         effective-id (or agent-id
                          (when get-ctx-agent-id (get-ctx-agent-id))
                          (System/getenv "CLAUDE_SWARM_SLAVE_ID")

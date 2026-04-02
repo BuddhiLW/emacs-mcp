@@ -167,7 +167,7 @@
   (when directory
     (try
       ((requiring-resolve 'hive-mcp.tools.memory.scope/get-current-project-id) directory)
-      (catch Exception _ nil))))
+      (catch Exception e (log/trace "[session-complete] project-id resolution failed:" (.getMessage e)) nil))))
 
 (defn- find-plan-memory
   "Find the most recent plan memory created by this agent.

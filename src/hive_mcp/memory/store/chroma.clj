@@ -174,11 +174,12 @@
   ;; --- Semantic Search ---
 
   (search-similar [_this query-text opts]
-    (let [{:keys [limit type project-ids]} opts]
+    (let [{:keys [limit type project-ids exclude-tags]} opts]
       (chroma/search-similar query-text
                              :limit (or limit 10)
                              :type type
-                             :project-ids project-ids)))
+                             :project-ids project-ids
+                             :exclude-tags exclude-tags)))
 
   (supports-semantic-search? [_this]
     (chroma/embedding-configured?))

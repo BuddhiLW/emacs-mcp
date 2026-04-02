@@ -175,7 +175,7 @@
                                                (let [scope-fn (requiring-resolve
                                                                'hive-mcp.swarm.scope/get-current-project-id)]
                                                  (scope-fn dir))
-                                               (catch Exception _ "unknown")))
+                                               (catch Exception e (log/trace "[saa-fx] scope-fn resolution failed:" (.getMessage e)) "unknown")))
                                  :shout-fn (fn [aid phase msg]
                                              (try
                                                (when-let [shout! (requiring-resolve
@@ -184,7 +184,7 @@
                                                          {:workflow :saa
                                                           :phase phase
                                                           :message msg}))
-                                               (catch Exception _ nil)))
+                                               (catch Exception e (log/trace "[saa-fx] shout-fn resolution failed:" (.getMessage e)) nil)))
                                  :clock-fn #(java.time.Instant/now)}
               effective-resources (merge default-resources resources)
               opts {:task task
@@ -207,7 +207,7 @@
                                          :task task
                                          :phase :unknown
                                          :error (.getMessage e)}]))
-            (catch Exception _ nil)))))))
+            (catch Exception e2 (log/warn "[saa-fx] Failed to dispatch :saa/failed event:" (.getMessage e2)))))))))
 
 ;; =============================================================================
 ;; Registration

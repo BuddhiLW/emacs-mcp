@@ -125,7 +125,7 @@
       (when-let [publish-fn (requiring-resolve 'hive-mcp.channel.core/publish!)]
         (publish-fn {:type :memory-added :id entry-id :memory-type type
                      :tags tags-with-scope :project-id project-id}))
-      (catch Exception _ nil))
+      (catch Exception e (log/debug "[memory] Channel publish failed for entry" entry-id (.getMessage e))))
     (mcp-json (cond-> (fmt/entry->json-alist created)
                 (seq edge-ids) (assoc :kg_edges_created edge-ids)))))
 

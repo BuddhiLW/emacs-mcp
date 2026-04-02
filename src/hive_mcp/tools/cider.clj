@@ -89,8 +89,9 @@
    Optionally accepts project-dir to ensure session connects to correct nREPL."
   ([session-name] (spawn-session-internal session-name nil))
   ([session-name project-dir]
-   (let [elisp (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-spawn-session
-                                         session-name project-dir nil)
+   (let [elisp (el/require-and-call-plist-json
+                 'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                 {:name session-name :project-dir project-dir})
          {:keys [success]} (ec/eval-elisp elisp)]
      success)))
 
@@ -232,12 +233,17 @@
 
 (defn handle-cider-spawn-session
   "Spawn a new named CIDER session with its own nREPL server.
-   Useful for parallel agent work where each agent needs isolated REPL."
-  [{:keys [name project_dir agent_id]}]
-  (log/info "cider-spawn-session" {:name name :agent_id agent_id})
+   Useful for parallel agent work where each agent needs isolated REPL.
+   Uses plist-based boundary crossing (ADT) to prevent positional arg bugs."
+  [{:keys [name project_dir agent_id repl_type]}]
+  (log/info "cider-spawn-session" {:name name :repl_type repl_type :agent_id agent_id})
   (handle-elisp :cider/spawn-failed
-                (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-spawn-session
-                                          name project_dir agent_id)))
+                (el/require-and-call-plist-json
+                  'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                  {:name      name
+                   :repl-type (when repl_type (symbol repl_type))
+                   :project-dir project_dir
+                   :agent-id  agent_id})))
 
 (defn handle-cider-connect-session
   "Connect to an existing nREPL server as a named session.

@@ -204,14 +204,17 @@
            :hint (build-hint phase all-errors)
            :raw-error (pr-str validation)})))
 
-    ;; Parse failure — content couldn't be parsed at all
+    ;; Parse/validation failure — content couldn't be parsed or validated
     (catch clojure.lang.ExceptionInfo e
-      (let [msg (.getMessage e)]
-        (log/warn "[plan-gate] Plan parse/validation failed" {:error msg :data (ex-data e)})
+      (let [msg (.getMessage e)
+            data (ex-data e)
+            phase (or (:phase data) :parse)]
+        (log/warn "[plan-gate] Plan parse/validation failed"
+                  {:error msg :phase phase :data data})
         {:valid? false
-         :errors [(str "Parse failed: " msg)]
-         :phase :parse
-         :hint (build-hint :parse [(str msg)])
+         :errors [(str (name phase) " failed: " msg)]
+         :phase phase
+         :hint (build-hint phase [(str msg)])
          :raw-error msg}))
 
     (catch Exception e

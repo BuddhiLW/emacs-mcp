@@ -56,7 +56,7 @@
   "Check if a vterm ling's CLI is ready for input."
   [agent-id]
   (result/rescue false
-                 (let [elisp (format "(if (hive-mcp-swarm--slave-ready-p \"%s\") \"t\" \"nil\")" agent-id)
+                 (let [elisp (format "(if (hive-mcp-swarm-tasks--slave-ready-p \"%s\") \"t\" \"nil\")" agent-id)
                        result (ec/eval-elisp-with-timeout elisp 2000)]
                    (and (:success result)
                         (= "t" (:result result))))))

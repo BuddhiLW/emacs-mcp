@@ -1,0 +1,8 @@
+(:addon
+ :chroma?
+ :embedders
+ :formats
+ :strategies
+ :synthesis-strategies
+ :tika?
+ :version)

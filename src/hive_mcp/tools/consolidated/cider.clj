@@ -23,6 +23,7 @@
    :apropos       cider-handlers/handle-cider-apropos
    :status        cider-handlers/handle-cider-status
    :spawn         cider-handlers/handle-cider-spawn-session
+   :connect       cider-handlers/handle-cider-connect-session
    :sessions      cider-handlers/handle-cider-list-sessions
    :kill-session  cider-handlers/handle-cider-kill-session
    :kill-all      cider-handlers/handle-cider-kill-all-sessions})
@@ -41,10 +42,10 @@
 (def tool-def
   {:name "cider"
    :consolidated true
-   :description "CIDER REPL operations: eval (silent|explicit, optional session routing), doc (docstring), info (full metadata), complete (completions), apropos (search symbols), status (connection), spawn/sessions/kill-session/kill-all (multi-REPL). Use command='help' to list all."
+   :description "CIDER REPL operations: eval (silent|explicit, optional session routing), doc (docstring), info (full metadata), complete (completions), apropos (search symbols), status (connection), spawn/connect/sessions/kill-session/kill-all (multi-REPL). connect joins an existing nREPL (e.g. shadow-cljs, lein). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["eval" "eval-explicit" "doc" "info" "complete" "apropos" "status" "spawn" "sessions" "eval-session" "kill-session" "kill-all" "help"]
+                                         :enum ["eval" "eval-explicit" "doc" "info" "complete" "apropos" "status" "spawn" "connect" "sessions" "eval-session" "kill-session" "kill-all" "help"]
                                          :description "CIDER operation to perform"}
                               "code" {:type "string"
                                       :description "Clojure code to evaluate"}
@@ -59,14 +60,23 @@
                                          :description "Regex pattern for apropos search"}
                               "search_docs" {:type "boolean"
                                              :description "Also search docstrings"}
+                              "host" {:type "string"
+                                      :description "nREPL host for connect (default: localhost)"}
+                              "port" {:type "integer"
+                                      :description "nREPL port for connect"}
                               "name" {:type "string"
-                                      :description "Session name for spawn"}
+                                      :description "Session name for spawn/connect"}
                               "session_name" {:type "string"
                                               :description "Session name for eval-session/kill-session. When provided with eval command, routes to session eval."}
                               "project_dir" {:type "string"
                                              :description "Project directory for spawn"}
                               "agent_id" {:type "string"
-                                          :description "Agent ID to link session"}}
+                                          :description "Agent ID to link session"}
+                              "repl_type" {:type "string"
+                                           :enum ["clj" "cljs" "cljel"]
+                                           :description "REPL type for connect/spawn: clj (default), cljs (shadow-cljs), or cljel (ClojureElisp)"}
+                              "timeout" {:type "integer"
+                                         :description "Eval timeout in seconds (default: 60)"}}
                  :required ["command"]}
    :handler handle-cider})
 

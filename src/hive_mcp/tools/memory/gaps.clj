@@ -1,6 +1,7 @@
 (ns hive-mcp.tools.memory.gaps
   "Knowledge gap auto-detection via regex/keyword analysis of memory content."
   (:require [hive-mcp.extensions.registry :as ext]
+            [hive-dsl.result :refer [rescue]]
             [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -121,7 +122,5 @@
                         (take max-gaps)
                         (vec))
           enhanced-gaps (when-let [analyze-fn (ext/get-extension :gs/detect-gaps)]
-                          (try
-                            (analyze-fn content-str all-gaps)
-                            (catch Exception _ nil)))]
+                          (rescue nil (analyze-fn content-str all-gaps)))]
       (or enhanced-gaps all-gaps))))

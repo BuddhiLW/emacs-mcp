@@ -116,10 +116,10 @@
                     hive-mcp.agent.registry/ensure-registered!
                     (fn [] nil)
 
-                    ;; Mock requiring-resolve for openrouter-backend
+                    ;; Mock requiring-resolve for auto-backend
                     requiring-resolve
                     (fn [sym]
-                      (if (= sym 'hive-mcp.agent.config/openrouter-backend)
+                      (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
                         (fn [_opts] :mock-backend)
                         (clojure.core/requiring-resolve sym)))]
 
@@ -153,7 +153,7 @@
 
                     requiring-resolve
                     (fn [sym]
-                      (if (= sym 'hive-mcp.agent.config/openrouter-backend)
+                      (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
                         (fn [_] :mock) (clojure.core/requiring-resolve sym)))]
 
         (let [result (backend/execute-drone b {:task "test" :model "m"})]
@@ -172,7 +172,7 @@
 
                     requiring-resolve
                     (fn [sym]
-                      (if (= sym 'hive-mcp.agent.config/openrouter-backend)
+                      (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
                         (fn [_] :mock) (clojure.core/requiring-resolve sym)))]
 
         (let [result (backend/execute-drone b {:task "test" :model "m"})]
@@ -188,7 +188,7 @@
     (let [b (legacy/->legacy-loop-backend {:model "bad-model"})]
       (with-redefs [requiring-resolve
                     (fn [sym]
-                      (if (= sym 'hive-mcp.agent.config/openrouter-backend)
+                      (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
                         (fn [_] (throw (ex-info "API key required" {})))
                         (clojure.core/requiring-resolve sym)))]
 
@@ -211,7 +211,7 @@
 
                     requiring-resolve
                     (fn [sym]
-                      (if (= sym 'hive-mcp.agent.config/openrouter-backend)
+                      (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
                         (fn [_] :mock) (clojure.core/requiring-resolve sym)))]
 
         (let [result (backend/execute-drone b {:task "test" :model "m"})]

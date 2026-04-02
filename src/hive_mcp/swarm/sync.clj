@@ -194,7 +194,7 @@
                       :project-id project-id
                       :daemon-id daemon-id
                       :cwd cwd}))
-          (catch Exception _ nil))
+          (catch Exception e (log/warn "Sync: Olympus emit failed for" slave-id (.getMessage e))))
         (log/debug "Sync: registered slave" slave-id "depth:" depth
                    "status:" effective-status "bound to daemon:" daemon-id
                    "(selection:" reason ")")))))
@@ -239,24 +239,24 @@
   (try
     (when-let [f (requiring-resolve 'hive-mcp.hivemind.state/remove-ling-result!)]
       (f slave-id))
-    (catch Exception _ nil))
+    (catch Exception e (log/warn "Sync: failed to remove ling result for" slave-id (.getMessage e))))
   (try
     (when-let [f (requiring-resolve 'hive-mcp.hivemind.state/clear-agent-messages!)]
       (f slave-id))
-    (catch Exception _ nil))
+    (catch Exception e (log/warn "Sync: failed to clear agent messages for" slave-id (.getMessage e))))
   (try
     (when-let [f (requiring-resolve 'hive-mcp.hivemind.state/remove-swarm-prompt!)]
       (f slave-id))
-    (catch Exception _ nil))
+    (catch Exception e (log/warn "Sync: failed to remove swarm prompt for" slave-id (.getMessage e))))
   ;; stdout buffers (headless lings)
   (try
     (lings/cleanup-stdout-buffer! slave-id)
-    (catch Exception _ nil))
+    (catch Exception e (log/warn "Sync: failed to cleanup stdout buffer for" slave-id (.getMessage e))))
   ;; callbacks registered by this ling
   (try
     (when-let [f (requiring-resolve 'hive-mcp.swarm.callback/cleanup-for-agent!)]
       (f slave-id))
-    (catch Exception _ nil))
+    (catch Exception e (log/warn "Sync: failed to cleanup callbacks for" slave-id (.getMessage e))))
   (log/debug "Sync: released JVM resources for dead ling" slave-id))
 
 (defn- handle-slave-killed
@@ -281,7 +281,7 @@
       (try
         (when-let [emit-fn (requiring-resolve 'hive-mcp.transport.olympus/emit-agent-event!)]
           (emit-fn :agent-killed {:id slave-id}))
-        (catch Exception _ nil))
+        (catch Exception e (log/warn "Sync: Olympus agent-killed emit failed for" slave-id (.getMessage e))))
       (proto/remove-slave! reg slave-id)
       (log/debug "Sync: removed slave" slave-id "unbound from daemon:" daemon-id))))
 

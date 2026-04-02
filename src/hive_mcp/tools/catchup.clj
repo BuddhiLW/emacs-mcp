@@ -133,7 +133,9 @@
                               :project-id project-id
                               :caller-id (:_caller_id args)
                               :decisions decisions-base
+                              :decisions-raw decisions
                               :conventions conventions-base
+                              :conventions-raw conventions
                               :sessions sessions-meta
                               :axioms axioms
                               :principles principles

@@ -139,7 +139,8 @@ def _summarize_input(tool_name: str, tool_input: dict[str, Any]) -> str:
     try:
         s = json.dumps(tool_input, default=str)
         return s[:200] if len(s) > 200 else s
-    except (TypeError, ValueError):
+    except (TypeError, ValueError) as exc:
+        logger.debug("[auto-obs] _summarize_input JSON fallback: %s", exc)
         return str(tool_input)[:200]
 
 
@@ -259,6 +260,7 @@ def _send_nrepl_eval(code: str, host: str, port: int, timeout: float = 5.0) -> s
                     if b"donee" in response_data:  # bencode: 4:done in status list
                         break
                 except socket.timeout:
+                    logger.debug("[auto-obs] nREPL recv timed out, using partial response")
                     break
 
             # Extract value from bencode response
@@ -268,7 +270,7 @@ def _send_nrepl_eval(code: str, host: str, port: int, timeout: float = 5.0) -> s
             sock.close()
 
     except (ConnectionRefusedError, socket.timeout, OSError) as e:
-        logger.debug(f"[auto-obs] nREPL connection failed ({host}:{port}): {e}")
+        logger.warning("[auto-obs] nREPL connection failed (%s:%s): %s", host, port, e)
         return None
 
 
@@ -306,10 +308,12 @@ def _extract_nrepl_value(data: bytes) -> str | None:
         try:
             length = int(rest[:colon_idx])
         except ValueError:
+            logger.debug("[auto-obs] _extract_nrepl_value: non-integer length prefix")
             return None
         value = rest[colon_idx + 1 : colon_idx + 1 + length]
         return value if value else None
     except Exception:
+        logger.warning("[auto-obs] _extract_nrepl_value failed", exc_info=True)
         return None
 
 

@@ -23,10 +23,13 @@ Architecture:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import socket
 import struct
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +199,9 @@ def _nrepl_eval(code: str, host: str = _NREPL_HOST, port: int = _NREPL_PORT,
                             return value or ""
                     pos = new_pos
                 buf = buf[pos:]
-            except (IndexError, ValueError):
+            except (IndexError, ValueError) as exc:
                 # Incomplete message, keep reading
+                logger.debug("nREPL bencode decode incomplete, reading more: %s", exc)
                 continue
 
         sock.close()
@@ -339,7 +343,7 @@ def is_bridge_available() -> dict[str, Any]:
                 "details": f"Connected to nREPL on {_NREPL_HOST}:{_NREPL_PORT}",
             }
     except (ConnectionError, RuntimeError) as e:
-        pass
+        logger.debug("nREPL bridge probe failed: %s", e)
 
     return {
         "available": False,

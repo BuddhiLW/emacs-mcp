@@ -61,7 +61,7 @@
   (or @memory-write-handler
       (try
         (requiring-resolve 'hive-mcp.tools.memory.crud.write/handle-add)
-        (catch Exception _ nil))))
+        (catch Exception e (log/trace "[effects/memory] memory-write handler not resolvable:" (.getMessage e)) nil))))
 
 (defn- handle-memory-write
   "Execute a :memory-write effect - add entry to Chroma memory.
@@ -121,7 +121,7 @@
   (or @wrap-crystallize-handler
       (try
         (requiring-resolve 'hive-mcp.tools.crystal/handle-wrap-crystallize)
-        (catch Exception _ nil))))
+        (catch Exception e (log/trace "[effects/memory] wrap-crystallize handler not resolvable:" (.getMessage e)) nil))))
 
 (defn- handle-wrap-crystallize
   "Execute a :wrap-crystallize effect - run wrap crystallization.

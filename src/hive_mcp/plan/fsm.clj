@@ -200,12 +200,24 @@
 
 (defn draft->validated
   "Advance plan from draft to validated state only.
-   Useful for dry-run validation without execution."
+   Useful for dry-run validation without execution.
+
+   Uses a custom ::error handler that propagates the actual parser/validation
+   error message instead of the generic 'FSM execution error'."
   [data]
-  (let [spec {:fsm {::fsm/start {:handler    handle-draft
-                                 :dispatches [[:validated (fn [d] (and (not (:parse-failed d)) (:plan d)))]
-                                              [::fsm/error (constantly true)]]}
-                    :validated  {:handler    handle-validate
-                                 :dispatches [[::fsm/end (constantly true)]]}}
+  (let [spec {:fsm {::fsm/start  {:handler    handle-draft
+                                  :dispatches [[:validated (fn [d] (and (not (:parse-failed d)) (:plan d)))]
+                                               [::fsm/error (constantly true)]]}
+                    :validated   {:handler    handle-validate
+                                  :dispatches [[::fsm/end (constantly true)]]}
+                    ::fsm/error  {:handler
+                                  (fn [_resources fsm]
+                                    (let [d (:data fsm)
+                                          error-msg (or (:error d) "Unknown plan validation error")]
+                                      (throw (ex-info (str "Plan validation failed: " error-msg)
+                                                      {:phase    (if (:parse-failed d) :parse :validation)
+                                                       :error    error-msg
+                                                       :status   (:status d)
+                                                       :plan-id  (:plan-id d)}))))}}
               :opts {:max-trace 5}}]
     (fsm/run (fsm/compile spec) {} {:data data})))

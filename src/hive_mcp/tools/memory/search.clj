@@ -4,6 +4,7 @@
             [hive-mcp.plan.plans :as plans]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
+            [hive-mcp.chroma.search :as chroma-search]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.memory.domain :as domain]
             [hive-mcp.tools.core :refer [coerce-int!]]
@@ -17,17 +18,38 @@
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
+(defn- extract-title
+  "Extract a one-line title from content or document text.
+   Skips the 'Type:/Tags:/Content:' metadata prefix in document text."
+  [document metadata]
+  (let [content (get metadata :content)
+        text    (or content document "")]
+    (when (seq text)
+      (let [;; Skip metadata prefix if present
+            clean (if (str/starts-with? text "Type:")
+                    (let [idx (str/index-of text "Content:")]
+                      (if idx (subs text (+ idx 9)) text))
+                    text)
+            first-line (first (str/split-lines (str/trim clean)))]
+        (when (seq first-line)
+          (subs first-line 0 (min 120 (count first-line))))))))
+
 (defn- format-search-result
-  "Format a single search result for user-friendly output."
+  "Format a single search result — compact by default.
+   Returns id, type, top 5 tags (excluding scope/agent), distance, one-line title."
   [{:keys [id document metadata distance]}]
-  {:id id
-   :type (get metadata :type)
-   :tags (when-let [t (get metadata :tags)]
-           (when (not= t "")
-             (str/split t #",")))
-   :distance distance
-   :preview (when document
-              (subs document 0 (min 200 (count document))))})
+  (let [raw-tags (when-let [t (get metadata :tags)]
+                   (when (not= t "")
+                     (str/split t #",")))
+        clean-tags (filterv #(not (or (str/starts-with? % "agent:")
+                                      (str/starts-with? % "scope:")
+                                      (= % "carto")))
+                            (or raw-tags []))]
+    {:id       id
+     :type     (get metadata :type)
+     :tags     (vec (take 5 clean-tags))
+     :distance distance
+     :title    (extract-title document metadata)}))
 
 (defn- matches-scope-filter?
   "Check if a search result matches the scope filter."
@@ -86,11 +108,11 @@
                             all-ids (distinct (concat visible descendants))]
                         (vec (remove #(= "global" %) all-ids))))
         effective-excludes (into (vec default-exclude-tags) exclude-tags)
-        results (mem-proto/search-similar (mem-proto/get-store) query
-                                          {:limit (* limit-val 2)
-                                           :type type
-                                           :project-ids visible-ids
-                                           :exclude-tags effective-excludes})
+        results (chroma-search/search-federated query
+                                                :limit (* limit-val 2)
+                                                :type type
+                                                :project-ids visible-ids
+                                                :exclude-tags effective-excludes)
         scope-filter (when in-project?
                        (let [base-tags (kg-scope/visible-scope-tags project-id)
                              desc-tags (when include_descendants
@@ -131,7 +153,9 @@
         (if openrouter?
           (search-plans* query limit-val type effective-pid in-project?)
           (search-chroma* query limit-val type effective-pid in-project?
-                          include_descendants (or exclude_tags [])))))))
+                          include_descendants (if (some? exclude_tags)
+                                               exclude_tags
+                                               default-exclude-tags)))))))
 
 (defn handle-search-semantic
   "Search project memory using semantic similarity (vector search).

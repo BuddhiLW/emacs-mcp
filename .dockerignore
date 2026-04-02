@@ -1,0 +1,57 @@
+# hive-mcp Docker build context exclusions
+# Keep context small for fast builds
+
+# Build artifacts
+target/
+.cpcache/
+.clj-kondo/.cache/
+
+# Development
+dev/
+test/
+.nrepl-port
+.nrepl-history
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# IDE / Editor
+.idea/
+.vscode/
+*.iml
+
+# Docker (avoid recursive context)
+docker/
+docker-compose.yml
+Dockerfile
+
+# Documentation
+*.md
+docs/
+LICENSE
+
+# Config files (secrets should come from K8s ConfigMap/Secrets)
+config/
+.mcp.json
+.claude/
+.hive-project.edn
+deps.local.edn
+
+# Python tooling (not needed in JVM container)
+python/
+requirements*.txt
+*.py
+
+# Elisp (desktop-only)
+elisp/
+
+# Test fixtures
+test/
+test/golden/
+
+# CI
+.github/

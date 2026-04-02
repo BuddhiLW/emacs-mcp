@@ -194,7 +194,8 @@
     (cond-> [(or claude-cmd "claude")]
       claude-like? (conj "-p")
       (and task claude-like?) (conj task)
-      claude-like? (conj "--output-format" "stream-json" "--verbose")
+      claude-like? (conj "--output-format" "stream-json" "--verbose"
+                        "--permission-mode" "acceptEdits")
       openrouter-model? (conj "--model" model)
       (and system-prompt claude-like?) (conj "--append-system-prompt" system-prompt)
       (and task (not claude-like?)) (conj task))))

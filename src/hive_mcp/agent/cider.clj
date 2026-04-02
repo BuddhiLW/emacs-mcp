@@ -145,4 +145,7 @@
               (or (:model opts) "devstral-small:24b"))
      :cider (cider-backend opts)
      :openrouter (openrouter/openrouter-backend opts)
-     (throw (ex-info "Unknown backend type" {:type type :available [:ollama :cider :openrouter]})))))
+     :openai-compat (openrouter/openai-compat-backend opts)
+     :auto (openrouter/auto-backend opts)
+     (throw (ex-info "Unknown backend type"
+                     {:type type :available [:ollama :cider :openrouter :openai-compat :auto]})))))

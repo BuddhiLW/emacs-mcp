@@ -67,6 +67,28 @@
     (json-encode (list :error \"%s not loaded\"))))"
           feature fn-sym fn-sym (format-args args) feature))
 
+(defn require-and-call-plist-json
+  "Generate elisp: require feature, call function with a single plist arg, JSON-encode result.
+
+   Eliminates positional arg ordering bugs at the CLJ↔Elisp boundary.
+   params-map is a Clojure map converted to an elisp plist. Nil values are omitted.
+
+   Examples:
+     (require-and-call-plist-json 'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                                  {:name \"foo\" :repl-type 'clj :project-dir \"/path\"})
+     ;; => (progn ... (hive-mcp-cider-spawn-session-from-plist (list :name \"foo\" :repl-type 'clj :project-dir \"/path\")))"
+  [feature fn-sym params-map]
+  (let [plist-str (->> params-map
+                       (remove (comp nil? val))
+                       (mapcat (fn [[k v]] [(str ":" (name k)) (elisp-quote v)]))
+                       (str/join " "))]
+    (format "(progn
+  (require '%s nil t)
+  (if (fboundp '%s)
+      (json-encode (%s (list %s)))
+    (json-encode (list :error \"%s not loaded\"))))"
+            feature fn-sym fn-sym plist-str feature)))
+
 (defn require-and-call-text
   "Generate elisp: require feature, call function, return as text.
 
