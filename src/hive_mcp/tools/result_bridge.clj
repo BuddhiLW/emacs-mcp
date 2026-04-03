@@ -20,7 +20,8 @@
        (catch clojure.lang.ExceptionInfo e
          (result/err category {:message (ex-message e) :data (ex-data e)}))
        (catch Exception e
-         (result/err category {:message (ex-message e) :class (str (class e))}))))
+         (result/err category {:message (or (ex-message e) (str (class e)))
+                               :class   (str (class e))}))))
 
 ;; ── Result -> MCP Conversions ─────────────────────────────────────────────────
 
@@ -29,14 +30,18 @@
   [r]
   (if (result/ok? r)
     (mcp-json (:ok r))
-    (mcp-error (or (:message r) (str (:error r))))))
+    (mcp-error (or (:message r)
+                   (str (:error r)
+                        (when-let [c (:class r)] (str " (" c ")")))))))
 
 (defn result->mcp-text
   "Convert a Result to MCP text response: ok -> mcp-success, err -> mcp-error."
   [r]
   (if (result/ok? r)
     (mcp-success (:ok r))
-    (mcp-error (or (:message r) (str (:error r))))))
+    (mcp-error (or (:message r)
+                   (str (:error r)
+                        (when-let [c (:class r)] (str " (" c ")")))))))
 
 ;; ── Map Normalization ─────────────────────────────────────────────────────────
 
