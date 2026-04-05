@@ -11,14 +11,19 @@
      - :hive/workflow-engine — FSM workflow registry + IWorkflowEngine wiring
 
    Each init-key wraps existing start functions from:
-     - server/transport.clj  → start-ws-channel-with-healing!, start-olympus-ws!,
-                                start-a2a-gateway!, start-legacy-channel!
-     - server/init.clj       → init-channel-bridge!, start-swarm-sync!,
-                                init-workflow-engine!
+     - server/transport/ws_channel    → start-ws-channel-with-healing!
+     - server/transport/olympus_ws    → start-olympus-ws!
+     - server/transport/a2a_gateway   → start-a2a-gateway!
+     - server/transport/legacy        → start-legacy-channel!
+     - server/init.clj                → init-channel-bridge!, start-swarm-sync!,
+                                         init-workflow-engine!
 
    halt-key! stops each component and logs shutdown."
   (:require [integrant.core :as ig]
-            [hive-mcp.server.transport :as transport]
+            [hive-mcp.server.transport.ws-channel :as ws-ch]
+            [hive-mcp.server.transport.olympus-ws :as oly-ws]
+            [hive-mcp.server.transport.a2a-gateway :as a2a-gw]
+            [hive-mcp.server.transport.legacy :as legacy-ch]
             [hive-mcp.server.init :as init]
             [hive-mcp.dns.result :as result]
             [taoensso.timbre :as log]))
@@ -35,7 +40,7 @@
   (log/info ":hive/ws-channel init — starting WebSocket channel with auto-heal" config)
   (let [monitor (atom nil)]
     (result/rescue nil
-      (transport/start-ws-channel-with-healing! monitor))
+      (ws-ch/start-ws-channel-with-healing! monitor))
     {:monitor monitor
      :port    (:port config 9999)
      :status  :running}))
@@ -64,7 +69,7 @@
   [_ config]
   (log/info ":hive/olympus init — starting Olympus WebSocket server")
   (let [result (result/rescue nil
-                 (transport/start-olympus-ws!))]
+                 (oly-ws/start-olympus-ws!))]
     {:status (if result :running :failed)}))
 
 (defmethod ig/halt-key! :hive/olympus
@@ -85,7 +90,7 @@
   (log/info ":hive/a2a-gateway init — starting A2A gateway" config)
   (let [enabled? (:enabled config)]
     (when enabled?
-      (transport/start-a2a-gateway!))
+      (a2a-gw/start-a2a-gateway!))
     {:enabled enabled?
      :status  (if enabled? :running :disabled)}))
 
@@ -106,7 +111,7 @@
   [_ config]
   (log/info ":hive/legacy-channel init — starting legacy TCP channel" config)
   (result/rescue nil
-    (transport/start-legacy-channel!))
+    (legacy-ch/start-legacy-channel!))
   {:port   (:port config 9998)
    :status :running})
 
