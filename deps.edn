@@ -117,7 +117,7 @@
         ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
         ;; Overrides default Chroma store when Milvus is reachable.
-        io.github.hive-agi/hive-milvus {:local/root "../hive-milvus"}
+        io.github.hive-agi/hive-milvus {:git/tag "v0.1.1" :git/sha "e05cb0a"}
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
         io.github.hive-agi/hive-emacs {:git/tag "v0.3.1" :git/sha "07cc22a"}
