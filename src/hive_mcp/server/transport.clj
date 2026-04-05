@@ -9,8 +9,7 @@
    - WebSocket channel with auto-healing (hivemind events)
    - Olympus WebSocket server (Olympus Web UI)
    - Legacy TCP channel (deprecated, backward compat)"
-  (:require [nrepl.server :as nrepl-server]
-            [hive-mcp.nrepl.classloader-gc :as classloader-gc]
+  (:require [hive-mcp.server.transport.nrepl :as transport-nrepl]
             [hive-mcp.config.core :as config]
             [hive-mcp.dns.result :as result]
             [hive-mcp.transport.websocket :as ws]
@@ -24,67 +23,14 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
-;; nREPL Server
+;; nREPL Server (delegated to hive-mcp.server.transport.nrepl)
 ;; =============================================================================
 
 (defn start-embedded-nrepl!
   "Start an embedded nREPL server for bb-mcp tool forwarding.
-
-   CRITICAL: This runs in the SAME JVM as the MCP server and channel,
-   allowing bb-mcp to forward tool calls that access the live channel.
-
-   Without this, bb-mcp connects to a separate nREPL JVM that has no
-   channel server running, so hivemind broadcasts go nowhere.
-
-   Retries up to 5 times with 2s backoff to handle TIME_WAIT from kill -9.
-
-   Parameters:
-     nrepl-server-atom - atom to store nREPL server reference for shutdown"
+   Delegates to hive-mcp.server.transport.nrepl."
   [nrepl-server-atom]
-  (let [nrepl-port (config/get-service-value :nrepl :port
-                                             :env "HIVE_MCP_NREPL_PORT"
-                                             :parse parse-long
-                                             :default 7910)
-        ;; GC-fix-6: Collect CIDER middleware, then prepend classloader-gc middleware.
-        ;; wrap-shared-classloader pins session-less evals (bb-mcp pattern) to a
-        ;; shared session, preventing DynamicClassLoader proliferation. It must be
-        ;; outermost (first in the middleware vector) so it intercepts before
-        ;; nREPL's session middleware creates a new session per eval.
-        cider-mw (try
-                   (require 'cider.nrepl)
-                   (let [mw-var (resolve 'cider.nrepl/cider-middleware)]
-                     (when mw-var @mw-var))
-                   (catch Exception _ nil))
-        all-middleware (into [#'classloader-gc/wrap-shared-classloader]
-                             (or cider-mw []))
-        handler (apply nrepl-server/default-handler all-middleware)
-        server-opts {:port nrepl-port :bind "127.0.0.1" :handler handler}
-        max-retries 5
-        retry-delay-ms 2000]
-    (loop [attempt 1]
-      (let [result (try
-                     (let [server (nrepl-server/start-server server-opts)]
-                       (reset! nrepl-server-atom server)
-                       (log/info "Embedded nREPL started on port" nrepl-port
-                                 (if (seq cider-mw) "(with CIDER + classloader-gc middleware)" "(with classloader-gc middleware)")
-                                 (when (> attempt 1) (str "(attempt " attempt ")")))
-                       server)
-                     (catch java.net.BindException e
-                       (if (< attempt max-retries)
-                         (do
-                           (log/warn "nREPL port" nrepl-port "busy (attempt" (str attempt "/" max-retries "),")
-                                     "retrying in" (str retry-delay-ms "ms..."))
-                           ::retry)
-                         (do
-                           (log/error "nREPL failed to bind port" nrepl-port "after" max-retries "attempts:" (.getMessage e))
-                           nil)))
-                     (catch Exception e
-                       (log/warn "Embedded nREPL failed to start (non-fatal):" (.getMessage e))
-                       nil))]
-        (if (= result ::retry)
-          (do (Thread/sleep retry-delay-ms)
-              (recur (inc attempt)))
-          result)))))
+  (transport-nrepl/start-embedded-nrepl! nrepl-server-atom))
 
 ;; =============================================================================
 ;; WebSocket MCP Server

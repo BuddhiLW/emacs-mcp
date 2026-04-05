@@ -7,13 +7,15 @@
      - :hive/nats           — NATS client + backbone + bridge (event backbone)
 
    Each init-key wraps existing start functions from:
-     - server/transport.clj  → start-embedded-nrepl!, start-websocket-server!
+     - server/transport/nrepl.clj → start-embedded-nrepl!
+     - server/transport.clj  → start-websocket-server!
      - server/init.clj       → init-nats!
      - nats/client.clj       → stop!
 
    halt-key! stops each server/connection and logs shutdown."
   (:require [integrant.core :as ig]
             [hive-mcp.server.transport :as transport]
+            [hive-mcp.server.transport.nrepl :as transport-nrepl]
             [hive-mcp.server.init :as init]
             [hive-mcp.dns.result :as result]
             [taoensso.timbre :as log]))
@@ -29,7 +31,7 @@
   [_ config]
   (log/info ":hive/nrepl init — starting embedded nREPL server")
   (let [nrepl-server-atom (atom nil)
-        server (transport/start-embedded-nrepl! nrepl-server-atom)]
+        server (transport-nrepl/start-embedded-nrepl! nrepl-server-atom)]
     {:nrepl-server-atom nrepl-server-atom
      :server            server
      :port              (:port config)
