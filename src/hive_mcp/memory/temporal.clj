@@ -153,7 +153,7 @@
       {:ok false :error (.getMessage e)})))
 
 ;; =============================================================================
-;; Query Helpers (for consumers — hive-knowledge IAddon)
+;; Query Helpers (for addon consumers)
 ;; =============================================================================
 
 (defn query-mutations

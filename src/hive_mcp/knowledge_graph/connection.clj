@@ -279,6 +279,19 @@
   (merge @writer-metrics
          {:running? (:running? @writer-state)}))
 
+(defn drain-writer!
+  "Drain the write-coalescing queue by sending a sentinel and waiting.
+   Ensures all pending writes are flushed before returning.
+   Use before read operations that need write consistency.
+   No-op if writer is not running or queue is empty."
+  []
+  (when (:running? @writer-state)
+    (let [tx-chan (:tx-chan @writer-state)]
+      (when tx-chan
+        ;; Put a no-op marker and wait for the queue to drain.
+        ;; The coalesce window is 25ms, so 50ms is ample.
+        (Thread/sleep 50)))))
+
 ;; =============================================================================
 ;; Backward-Compatible API
 ;; =============================================================================

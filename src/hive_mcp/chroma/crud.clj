@@ -3,6 +3,7 @@
   (:require [clojure-chroma-client.api :as chroma]
             [hive-mcp.chroma.connection :as conn]
             [hive-mcp.chroma.embeddings :as emb]
+            [hive-mcp.chroma.gate :as gate]
             [hive-mcp.chroma.helpers :as h]
             [taoensso.timbre :as log]))
 
@@ -17,7 +18,7 @@
     (future
       (try
         (let [coll (conn/get-or-create-collection)]
-          @(chroma/delete coll :ids (vec expired-ids))
+          (gate/deref-write (chroma/delete coll :ids (vec expired-ids)))
           (log/info "Lazy eviction: deleted" (count expired-ids) "expired entries"))
         (catch Exception e
           (log/warn "Lazy eviction failed (non-blocking):" (.getMessage e)))))))
@@ -35,7 +36,8 @@
         entry-id (or id (h/generate-id))
         now (h/iso-timestamp)
         doc-text (h/memory-to-document entry)
-        embedding (emb/embed-text (emb/get-embedding-provider) doc-text)
+        embedding (gate/with-embedding-gate
+                    (emb/embed-text (emb/get-embedding-provider) doc-text))
         provided {:type type :tags (h/join-tags tags) :content (h/serialize-content content)
                   :content-hash content-hash :created (or created now) :updated (or updated now)
                   :duration duration :expires expires :access-count access-count
@@ -54,8 +56,8 @@
                   :staleness-source (when staleness-source (name staleness-source))
                   :staleness-depth staleness-depth}
         meta (merge h/metadata-defaults (into {} (remove (comp nil? val) provided)))]
-    @(chroma/add coll [{:id entry-id :embedding embedding :document doc-text :metadata meta}]
-                 :upsert? true)
+    (gate/deref-write (chroma/add coll [{:id entry-id :embedding embedding :document doc-text :metadata meta}]
+                                      :upsert? true))
     (log/debug "Indexed memory entry:" entry-id)
     entry-id))
 
@@ -67,7 +69,8 @@
   (let [coll (conn/get-or-create-collection)
         now  (h/iso-timestamp)
         docs (mapv h/memory-to-document entries)
-        embeddings (emb/embed-batch (emb/get-embedding-provider) docs)
+        embeddings (gate/with-embedding-gate
+                     (emb/embed-batch (emb/get-embedding-provider) docs))
         records (mapv (fn [entry doc emb-vec]
                         (let [provided {:type          (:type entry)
                                         :tags          (h/join-tags (:tags entry))
@@ -86,7 +89,7 @@
                            :document  doc
                            :metadata  meta}))
                       entries docs embeddings)]
-    @(chroma/add coll records :upsert? true)
+    (gate/deref-write (chroma/add coll records :upsert? true))
     (log/info "Indexed" (count entries) "memory entries in batch")
     (mapv :id entries)))
 
@@ -95,7 +98,7 @@
   [id]
   (emb/require-embedding!)
   (let [coll (conn/get-or-create-collection)
-        results @(chroma/get coll :ids [id] :include #{:documents :metadatas})]
+        results (gate/deref-read (chroma/get coll :ids [id] :include #{:documents :metadatas}))]
     (some-> (first results) h/metadata->entry)))
 
 (defn query-entries
@@ -121,10 +124,10 @@
                 (seq base-clause) base-clause
                 :else nil)
         fetch-limit (if include-expired? limit (+ limit 50))
-        results @(chroma/get coll
-                             :where where
-                             :include #{:documents :metadatas}
-                             :limit fetch-limit)
+        results (gate/deref-read (chroma/get coll
+                                            :where where
+                                            :include #{:documents :metadatas}
+                                            :limit fetch-limit))
         entries (map h/metadata->entry results)
         {expired true live false} (group-by #(boolean (h/expired? %)) entries)]
     (when-not include-expired?
@@ -139,9 +142,9 @@
   [disc-path]
   (emb/require-embedding!)
   (let [coll (conn/get-or-create-collection)
-        results @(chroma/get coll
-                             :where {:grounded-from disc-path}
-                             :include #{:documents :metadatas})]
+        results (gate/deref-read (chroma/get coll
+                                            :where {:grounded-from disc-path}
+                                            :include #{:documents :metadatas}))]
     (map h/metadata->entry results)))
 
 (defn update-entry!
@@ -168,7 +171,7 @@
   "Delete a memory entry from the Chroma index."
   [id]
   (let [coll (conn/get-or-create-collection)]
-    @(chroma/delete coll :ids [id])
+    (gate/deref-write (chroma/delete coll :ids [id]))
     (log/debug "Deleted entry from Chroma:" id)
     id))
 
@@ -184,7 +187,7 @@
   []
   (try
     (let [coll (conn/get-or-create-collection)
-          all-entries @(chroma/get coll :include [:metadatas])]
+          all-entries (gate/deref-read (chroma/get coll :include [:metadatas]))]
       {:count (count all-entries)
        :types (frequencies (map #(get-in % [:metadata :type]) all-entries))})
     (catch Exception e

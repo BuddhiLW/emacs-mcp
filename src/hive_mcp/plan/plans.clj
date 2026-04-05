@@ -44,6 +44,7 @@
      (query-plans :project-id \"hive-mcp\" :limit 10)"
   (:require [hive-mcp.chroma.core :as chroma]
             [hive-mcp.dns.result :as result]
+            [hive-weave.safe :as ws]
             [clojure-chroma-client.api :as chroma-api]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
@@ -75,14 +76,14 @@
   "Try to get existing collection. Returns nil on failure."
   []
   (result/rescue nil
-                 @(chroma-api/get-collection collection-name)))
+                 (ws/deref-safe! (chroma-api/get-collection collection-name) 15000)))
 
 (defn- delete-collection!
   "Delete the plans collection. Returns true on success."
   []
   (result/rescue false
                  (when-let [coll (try-get-existing-collection)]
-                   @(chroma-api/delete-collection coll)
+                   (ws/deref-safe! (chroma-api/delete-collection coll) 30000)
                    (Thread/sleep 50))
                  true))
 
@@ -95,11 +96,12 @@
     (log/warn "Stale plans collection found after delete, forcing re-delete")
     (delete-collection!))
   ;; Create the collection
-  @(chroma-api/create-collection
-    collection-name
-    {:metadata {:dimension dim
-                :created-by "hive-mcp"
-                :purpose "plan-memory-entries"}})
+  (ws/deref-safe! (chroma-api/create-collection
+                    collection-name
+                    {:metadata {:dimension dim
+                                :created-by "hive-mcp"
+                                :purpose "plan-memory-entries"}})
+                  30000)
   ;; Get fresh reference
   (Thread/sleep 50)
   (or (try-get-existing-collection)
@@ -235,11 +237,12 @@
                             doc-text (entry-to-document entry)
                             embedding (chroma/embed-text provider doc-text)
                             metadata (extract-entry-metadata entry)]
-                        @(chroma-api/add coll [{:id entry-id
-                                                :embedding embedding
-                                                :document doc-text
-                                                :metadata metadata}]
-                                         :upsert? true)
+                        (ws/deref-safe! (chroma-api/add coll [{:id entry-id
+                                                              :embedding embedding
+                                                              :document doc-text
+                                                              :metadata metadata}]
+                                                           :upsert? true)
+                                       30000)
                         (log/info "Indexed" (or type "plan") "in plans collection:" entry-id
                                   (when (:plan-status metadata) (str "status:" (:plan-status metadata)))
                                   (when (:steps-count metadata) (str "steps:" (:steps-count metadata))))
@@ -265,10 +268,11 @@
                        type (assoc :type type)
                        project-id (assoc :project-id project-id)
                        plan-status (assoc :plan-status plan-status))
-        results @(chroma-api/query coll query-embedding
-                                   :num-results limit
-                                   :where where-clause
-                                   :include #{:documents :metadatas :distances})]
+        results (ws/deref-safe! (chroma-api/query coll query-embedding
+                                                  :num-results limit
+                                                  :where where-clause
+                                                  :include #{:documents :metadatas :distances})
+                               15000)]
     (log/debug "Plan search for:" (subs query-text 0 (min 50 (count query-text)))
                "found:" (count results))
     (mapv (fn [{:keys [id document metadata distance]}]
@@ -293,7 +297,8 @@
   [plan-id]
   (result/rescue nil
                  (let [coll (get-or-create-collection)
-                       results @(chroma-api/get coll :ids [plan-id] :include #{:documents :metadatas})]
+                       results (ws/deref-safe! (chroma-api/get coll :ids [plan-id] :include #{:documents :metadatas})
+                                               15000)]
                    (when-let [{:keys [id document metadata]} (first results)]
                      {:id id
                       :type (get metadata :type "plan")
@@ -332,10 +337,11 @@
                                       type (assoc :type type)
                                       project-id (assoc :project-id project-id)
                                       plan-status (assoc :plan-status plan-status))
-                       results @(chroma-api/get coll
-                                                :where where-clause
-                                                :include #{:metadatas :documents}
-                                                :limit limit)]
+                       results (ws/deref-safe! (chroma-api/get coll
+                                                              :where where-clause
+                                                              :include #{:metadatas :documents}
+                                                              :limit limit)
+                                             15000)]
                    (->> results
                         (map (fn [{:keys [id metadata document]}]
                                {:id id
@@ -371,8 +377,9 @@
                      :status new-status})))
   (result/rescue nil
                  (let [coll (get-or-create-collection)]
-                   @(chroma-api/update coll [{:id plan-id
-                                              :metadata {:plan-status new-status}}])
+                   (ws/deref-safe! (chroma-api/update coll [{:id plan-id
+                                                              :metadata {:plan-status new-status}}])
+                                   30000)
                    (log/info "Updated plan status:" plan-id "->" new-status)
                    plan-id)))
 
@@ -380,7 +387,7 @@
   "Delete a plan from the plans collection."
   [plan-id]
   (let [coll (get-or-create-collection)]
-    @(chroma-api/delete coll :ids [plan-id])
+    (ws/deref-safe! (chroma-api/delete coll :ids [plan-id]) 30000)
     (log/debug "Deleted plan from Chroma:" plan-id)
     plan-id))
 

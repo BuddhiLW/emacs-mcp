@@ -358,7 +358,19 @@
     "Get completed tasks. opts: {:agent-id :project-id}")
 
   (-clear-completed-tasks! [this]
-    "Clear all completed tasks. Returns count cleared."))
+    "Clear all completed tasks. Returns count cleared.")
+
+  ;;; --- Kanban Movements (session-scoped status transitions) ---
+
+  (-register-kanban-movement! [this opts]
+    "Register a kanban status transition. opts: {:task-id :title :from :to :agent-id :project-id}")
+
+  (-get-kanban-movements-this-session [this]
+    [this opts]
+    "Get kanban movements. opts: {:agent-id :project-id}")
+
+  (-clear-kanban-movements! [this]
+    "Clear all kanban movements. Returns count cleared."))
 
 ;;; =============================================================================
 ;;; ISwarmDb — Low-level DB access boundary

@@ -1,10 +1,7 @@
 (ns hive-mcp.crystal.core
   "Progressive crystallization of ephemeral knowledge.
 
-   FOSS thin delegate — real logic lives in hive-knowledge.crystal.core.
-   Each public fn delegates to extension registry (:cc/*) with inline fallback.
-   When hive-knowledge addon is loaded, the addon implementations are used.
-   When not loaded, the inline fallbacks provide basic FOSS behavior."
+   Public fns delegate to extension registry (:cc/*) with inline fallbacks."
   (:require [clojure.string :as str]
             [hive-mcp.dns.result :refer [rescue]]
             [hive-mcp.extensions.registry :as ext]))
@@ -442,7 +439,7 @@
     (map? content) (or (:title content) (:task-type content) (str (keys content)))
     :else (str content)))
 
-(defn- summarize-session-progress-fallback [notes git-commits]
+(defn- summarize-session-progress-fallback [notes git-commits & [harvested]]
   (let [notes (->> (or notes []) (filter map?))
         git-commits (or git-commits [])
         notes-with-content (->> notes
@@ -457,21 +454,32 @@
                             (map #(str "- " %))
                             (str/join "\n"))
         commit-summaries (->> git-commits (map #(str "- " %)) (str/join "\n"))
-        has-content? (or (seq notes-with-content) (seq git-commits))]
+        ;; New: KG edge and kanban movement counts from harvested data
+        kg-edge-count (get-in harvested [:summary :kg-edge-count] 0)
+        kanban-mvs-count (get-in harvested [:summary :kanban-movement-count] 0)
+        has-content? (or (seq notes-with-content) (seq git-commits)
+                         (pos? kg-edge-count) (pos? kanban-mvs-count))]
     (when has-content?
       {:type :note
        :content (str "## Session Summary: " session "\n\n"
                      "### Completed Tasks: " task-count "\n" note-summaries
-                     "\n\n### Commits: " (count git-commits) "\n" commit-summaries)
+                     "\n\n### Commits: " (count git-commits) "\n" commit-summaries
+                     (when (pos? kg-edge-count)
+                       (str "\n\n### KG Connections: " kg-edge-count))
+                     (when (pos? kanban-mvs-count)
+                       (str "\n\n### Kanban Movements: " kanban-mvs-count)))
        :tags [(session-tag) "session-summary" "wrap-generated"]
        :duration :short})))
 
 (defn summarize-session-progress
-  "Summarize multiple progress notes into a session summary."
-  [notes git-commits]
-  (delegate :cc/summarize-progress summarize-session-progress-fallback [notes git-commits]))
+  "Summarize multiple progress notes into a session summary.
+   Optional harvested map threads full harvest context (incl. :hivemind-messages)
+   to extensions registered under :cc/summarize-progress."
+  ([notes git-commits] (summarize-session-progress notes git-commits nil))
+  ([notes git-commits harvested]
+   (delegate :cc/summarize-progress summarize-session-progress-fallback [notes git-commits harvested])))
 
-(defn- summarize-memory-activity-fallback [{:keys [created accessed]}]
+(defn- summarize-memory-activity-fallback [{:keys [created accessed]} & [_harvested]]
   (when (pos? (+ (or created 0) (or accessed 0)))
     {:type :note
      :content (str "## Session Summary: " (session-id) "\n\n"
@@ -482,9 +490,12 @@
      :duration :short}))
 
 (defn summarize-memory-activity
-  "Produce a session summary from memory activity alone."
-  [activity]
-  (delegate :cc/summarize-memory summarize-memory-activity-fallback [activity]))
+  "Produce a session summary from memory activity alone.
+   Optional harvested map threads full harvest context (incl. :hivemind-messages)
+   to extensions registered under :cc/summarize-memory."
+  ([activity] (summarize-memory-activity activity nil))
+  ([activity harvested]
+   (delegate :cc/summarize-memory summarize-memory-activity-fallback [activity harvested])))
 
 (comment
   (calculate-promotion-score

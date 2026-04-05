@@ -274,45 +274,19 @@
 ;; Memory Store Wiring
 ;; =============================================================================
 
-(defn- create-proximum-store!
-  "Create ProximumMemoryStore via requiring-resolve (lives in hive-knowledge).
-   Same lazy-load pattern as IAddon extensions."
-  []
-  (let [create-fn (requiring-resolve 'hive-knowledge.memory.proximum/create-store)
-        store     (create-fn)
-        dim       (or (some-> (global-config/get-service-value :ollama :model
-                                                               :default "nomic-embed-text")
-                              ({"nomic-embed-text" 768} 768))
-                      768)]
-    (mem-proto/connect! store {:vector-path  "data/vector/proximum/"
-                               :metadata-path "data/vector/metadata"
-                               :dim           dim
-                               :capacity      200000})
-    store))
-
 (defn wire-memory-store!
-  "Wire IMemoryStore backend based on config (Phase 2 vectordb abstraction).
-   Supports 'chroma' (default) and 'proximum' backends.
+  "Wire default IMemoryStore backend (Chroma, bundled).
 
-   Config resolution (highest priority first):
-   1. HIVE_MCP_MEMORY_BACKEND env var
-   2. config.edn :services :memory :backend
-   3. Default: 'chroma'
+   This sets up the fallback store. Addon backends (Milvus, Proximum, etc.)
+   override this via set-store! during Phase 4.5 load-extensions!.
+   hive-mcp has zero knowledge of addon store implementations.
 
    Must run AFTER init-embedding-provider! since Chroma config is set there."
   []
   (result/rescue nil
-                 (let [backend (global-config/get-service-value :memory :backend
-                                                                :env "HIVE_MCP_MEMORY_BACKEND"
-                                                                :default "chroma")
-                       store (case backend
-                               "proximum" (create-proximum-store!)
-                               "chroma"   (chroma-store/create-store)
-                               (chroma-store/create-store))]
+                 (let [store (chroma-store/create-store)]
                    (mem-proto/set-store! store)
-                   (log/info (str (if (= backend "proximum") "ProximumMemoryStore" "ChromaMemoryStore")
-                                  " wired as active IMemoryStore backend"
-                                  " (backend=" backend ")")))))
+                   (log/info "ChromaMemoryStore wired as default IMemoryStore (addons may override)"))))
 
 ;; =============================================================================
 ;; Channel Bridge + Sync

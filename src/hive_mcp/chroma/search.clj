@@ -3,6 +3,7 @@
   (:require [clojure-chroma-client.api :as chroma]
             [hive-mcp.chroma.connection :as conn]
             [hive-mcp.chroma.embeddings :as emb]
+            [hive-mcp.chroma.gate :as gate]
             [hive-dsl.result :as r]
             [taoensso.timbre :as log]))
 
@@ -35,14 +36,15 @@
   [query-text & {:keys [limit type project-ids exclude-tags] :or {limit 10}}]
   (emb/require-embedding!)
   (let [coll (conn/get-or-create-collection)
-        query-embedding (emb/embed-text (emb/get-embedding-provider) query-text)
+        query-embedding (gate/with-embedding-gate
+                          (emb/embed-text (emb/get-embedding-provider) query-text))
         where-clause (build-where-clause {:type type :project-ids project-ids})
         where-doc-clause (build-where-document-clause exclude-tags)
-        results @(chroma/query coll query-embedding
-                               :num-results limit
-                               :where where-clause
-                               :where-document where-doc-clause
-                               :include #{:documents :metadatas :distances})]
+        results (gate/deref-read (chroma/query coll query-embedding
+                                               :num-results limit
+                                               :where where-clause
+                                               :where-document where-doc-clause
+                                               :include #{:documents :metadatas :distances}))]
     (log/debug "Semantic search for:" (subs query-text 0 (min 50 (count query-text))) "..."
                "found:" (count results))
     results))
@@ -51,7 +53,7 @@
   "Get a specific entry by ID from Chroma."
   [id]
   (let [coll (conn/get-or-create-collection)
-        results @(chroma/get coll :ids [id] :include #{:documents :metadatas})]
+        results (gate/deref-read (chroma/get coll :ids [id] :include #{:documents :metadatas}))]
     (first results)))
 
 ;; --- Federated Search (default + ingest collections) ---

@@ -33,13 +33,17 @@
 (defn- try-get-collection
   "Try to get existing collection, returns nil on failure."
   [coll-name]
-  (try @(chroma/get-collection coll-name)
+  (try (deref (chroma/get-collection coll-name) 10000 nil)
        (catch Exception _ nil)))
 
 (defn- create-new-collection
   "Create a new Chroma collection with dimension metadata."
   [coll-name dim]
-  @(chroma/create-collection coll-name {:metadata {:dimension dim :created-by "hive-mcp"}}))
+  (let [result (deref (chroma/create-collection coll-name {:metadata {:dimension dim :created-by "hive-mcp"}})
+                      15000 ::timeout)]
+    (when (= result ::timeout)
+      (throw (ex-info "Chroma create-collection timed out" {:collection coll-name})))
+    result))
 
 (defn- cache-collection!
   "Cache and return collection, logging action."

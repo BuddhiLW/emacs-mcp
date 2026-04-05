@@ -27,6 +27,7 @@
      (get-preset \"tdd\")"
   (:require [hive-mcp.chroma.core :as chroma]
             [hive-mcp.dns.result :as result]
+            [hive-weave.safe :as ws]
             [clojure-chroma-client.api :as chroma-api]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -58,14 +59,14 @@
 (defn- try-get-existing-collection
   "Try to get existing collection. Returns nil on failure."
   []
-  (result/rescue nil @(chroma-api/get-collection collection-name)))
+  (result/rescue nil (ws/deref-safe! (chroma-api/get-collection collection-name) 15000)))
 
 (defn- delete-collection!
   "Delete the presets collection. Returns true on success."
   []
   (result/rescue false
                  (when-let [coll (try-get-existing-collection)]
-                   @(chroma-api/delete-collection coll)
+                   (ws/deref-safe! (chroma-api/delete-collection coll) 30000)
       ;; Give Chroma time to process the deletion
                    (Thread/sleep 50))
                  true))
@@ -79,11 +80,12 @@
     (log/warn "Stale collection found after delete, forcing re-delete")
     (delete-collection!))
   ;; Create the collection
-  @(chroma-api/create-collection
-    collection-name
-    {:metadata {:dimension dim
-                :created-by "hive-mcp"
-                :purpose "swarm-presets"}})
+  (ws/deref-safe! (chroma-api/create-collection
+                   collection-name
+                   {:metadata {:dimension dim
+                               :created-by "hive-mcp"
+                               :purpose "swarm-presets"}})
+                  30000)
   ;; IMPORTANT: Get fresh reference - chroma client may cache stale references
   ;; The create-collection return value may reference the old collection ID
   (Thread/sleep 50) ;; Allow Chroma to settle
@@ -228,16 +230,17 @@
         provider (chroma/get-provider-for collection-name)
         doc-text (preset-to-document preset)
         embedding (chroma/embed-text provider doc-text)]
-    @(chroma-api/add coll [{:id id
-                            :embedding embedding
-                            :document doc-text
-                            :metadata {:name name
-                                       :title (or title name)
-                                       :category category
-                                       :tags (or tags "")
-                                       :source source
-                                       :file-path (or file-path "")}}]
-                     :upsert? true)
+    (ws/deref-safe! (chroma-api/add coll [{:id id
+                                          :embedding embedding
+                                          :document doc-text
+                                          :metadata {:name name
+                                                     :title (or title name)
+                                                     :category category
+                                                     :tags (or tags "")
+                                                     :source source
+                                                     :file-path (or file-path "")}}]
+                                        :upsert? true)
+                    30000)
     (log/debug "Indexed preset:" id)
     id))
 
@@ -261,7 +264,7 @@
                                     :source (:source preset)
                                     :file-path (or (:file-path preset) "")}})
                       presets docs embeddings)]
-    @(chroma-api/add coll records :upsert? true)
+    (ws/deref-safe! (chroma-api/add coll records :upsert? true) 30000)
     (log/info "Indexed" (count presets) "presets")
     (mapv :id presets)))
 
@@ -308,10 +311,11 @@
         provider (chroma/get-provider-for collection-name)
         query-embedding (chroma/embed-text provider query-text)
         where-clause (when category {:category category})
-        results @(chroma-api/query coll query-embedding
-                                   :num-results limit
-                                   :where where-clause
-                                   :include #{:documents :metadatas :distances})]
+        results (ws/deref-safe! (chroma-api/query coll query-embedding
+                                                  :num-results limit
+                                                  :where where-clause
+                                                  :include #{:documents :metadatas :distances})
+                               15000)]
     (log/debug "Preset search for:" (subs query-text 0 (min 50 (count query-text)))
                "found:" (count results))
     (mapv (fn [{:keys [id document metadata distance]}]
@@ -338,7 +342,7 @@
   [preset-id]
   (result/rescue nil
                  (let [coll (get-or-create-collection)
-                       results @(chroma-api/get coll :ids [preset-id] :include #{:documents :metadatas})]
+                       results (ws/deref-safe! (chroma-api/get coll :ids [preset-id] :include #{:documents :metadatas}) 15000)]
                    (when-let [{:keys [id document metadata]} (first results)]
                      {:id id
                       :name (get metadata :name)
@@ -356,7 +360,7 @@
   []
   (result/rescue []
                  (let [coll (get-or-create-collection)
-                       results @(chroma-api/get coll :include [:metadatas])]
+                       results (ws/deref-safe! (chroma-api/get coll :include [:metadatas]) 15000)]
                    (mapv (fn [{:keys [id metadata]}]
                            {:id id
                             :name (get metadata :name)
@@ -401,7 +405,7 @@
   "Delete a preset from the Chroma index."
   [preset-id]
   (let [coll (get-or-create-collection)]
-    @(chroma-api/delete coll :ids [preset-id])
+    (ws/deref-safe! (chroma-api/delete coll :ids [preset-id]) 30000)
     (log/debug "Deleted preset from Chroma:" preset-id)
     preset-id))
 

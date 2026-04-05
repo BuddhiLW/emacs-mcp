@@ -206,7 +206,19 @@
     (apply coordination/get-completed-tasks-this-session (mapcat identity opts)))
 
   (-clear-completed-tasks! [_]
-    (coordination/clear-completed-tasks!)))
+    (coordination/clear-completed-tasks!))
+
+  (-register-kanban-movement! [_ opts]
+    (coordination/register-kanban-movement! opts))
+
+  (-get-kanban-movements-this-session [_]
+    (coordination/get-kanban-movements-this-session))
+
+  (-get-kanban-movements-this-session [_ opts]
+    (apply coordination/get-kanban-movements-this-session (mapcat identity opts)))
+
+  (-clear-kanban-movements! [_]
+    (coordination/clear-kanban-movements!)))
 
 (defrecord DataScriptDb []
   proto/ISwarmDb

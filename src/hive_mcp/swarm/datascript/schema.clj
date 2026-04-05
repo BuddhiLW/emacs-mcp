@@ -526,6 +526,35 @@
    {:db/doc "Timestamp when task was completed"}
 
    ;;; =========================================================================
+   ;;; Kanban Movement Entity (Session-scoped status transitions for wrap)
+   ;;; =========================================================================
+
+   :kanban-movement/id
+   {:db/doc "Auto-generated movement ID (timestamp-based)"
+    :db/unique :db.unique/identity}
+
+   :kanban-movement/task-id
+   {:db/doc "Kanban task ID that moved"}
+
+   :kanban-movement/title
+   {:db/doc "Task title at time of move"}
+
+   :kanban-movement/from
+   {:db/doc "Previous status (nil for creation)"}
+
+   :kanban-movement/to
+   {:db/doc "New status"}
+
+   :kanban-movement/at
+   {:db/doc "Timestamp of transition"}
+
+   :kanban-movement/agent-id
+   {:db/doc "Agent that triggered the move"}
+
+   :kanban-movement/project-id
+   {:db/doc "Project scope"}
+
+   ;;; =========================================================================
    ;;; Wait-Queue Entity (File-Claim Event Cascade)
    ;;; =========================================================================
 

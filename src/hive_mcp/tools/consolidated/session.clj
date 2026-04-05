@@ -141,30 +141,35 @@
                :project-id project-id
                :cwd        effective-dir})))
 
+(defn- wrap-async!
+  "Execute wrap crystallization + eviction in background thread.
+   Logs completion/failure. Notifies via hivemind shout (already in crystallize path)."
+  [agent_id directory]
+  (let [t0 (System/currentTimeMillis)
+        effective-agent (or agent_id
+                            (ctx/current-agent-id)
+                            (System/getenv "CLAUDE_SWARM_SLAVE_ID"))]
+    (future
+      (try
+        (trigger-gc-sweep!)
+        (crystal/handle-wrap-crystallize {:directory directory :agent_id agent_id})
+        (evict-agent-context! effective-agent)
+        (log/info "session-wrap: DONE" (- (System/currentTimeMillis) t0) "ms")
+        (catch Throwable t
+          (log/error t "session-wrap: background crystallization failed"
+                     {:agent agent_id :elapsed-ms (- (System/currentTimeMillis) t0)}))))))
+
 (defn handle-wrap
-  "Wrap session -- crystallize learnings without commit.
-   Runs GC sweep before crystallization to free memory (gc-fix-5).
-   Delegates to crystal/handle-wrap-crystallize which already returns MCP response."
+  "Wrap session -- fire-and-forget crystallization.
+   Returns immediately after kicking off harvest+crystallize in background.
+   Completion notified via hivemind shout (:crystal/wrap-notify)."
   [{:keys [agent_id directory]}]
-  (let [t0 (System/currentTimeMillis)]
-    (log/info "session-wrap: START" {:agent agent_id :directory directory})
-    ;; gc-fix-5: Run bounded atom GC sweep before crystallization
-    (let [gc-result (trigger-gc-sweep!)]
-      (log/debug "session-wrap: GC sweep result" gc-result))
-    (let [r (rb/try-result :session/wrap-failed
-                           #(let [mcp-resp (crystal/handle-wrap-crystallize {:directory directory
-                                                                             :agent_id agent_id})
-                                  effective-agent (or agent_id
-                                                      (ctx/current-agent-id)
-                                                      (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
-                                  eviction (evict-agent-context! effective-agent)]
-                              (when eviction
-                                (log/info "session-wrap: context eviction" eviction))
-                              (result/ok mcp-resp)))]
-      (log/info "session-wrap: DONE" (- (System/currentTimeMillis) t0) "ms")
-      (if (result/ok? r)
-        (:ok r)
-        (mcp-error (str "Wrap failed: " (or (:message r) (str (:error r)))))))))
+  (log/info "session-wrap: START (async)" {:agent agent_id :directory directory})
+  (wrap-async! agent_id directory)
+  (mcp-json {:status "wrap-started"
+             :agent-id (or agent_id (ctx/current-agent-id) "coordinator")
+             :directory directory
+             :message "Crystallization running in background. Completion notified via hivemind."}))
 
 (defn handle-catchup
   "Restore session context from Chroma memory.

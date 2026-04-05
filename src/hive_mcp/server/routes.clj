@@ -248,6 +248,46 @@
             (recur (inc attempt)))
           (:ok result))))))
 
+;; =============================================================================
+;; NATS Tool Notification (mutating operations only)
+;; =============================================================================
+
+(def ^:private mutating-tool-commands
+  "Consolidated tool + command combos that mutate state.
+   Only these fire NATS notifications on hive.v1.tool.{tool-name} subjects.
+   Read-only operations (query, search, status, list) are excluded."
+  {"memory"  #{"add" "feedback"}
+   "kanban"  #{"move" "create"}
+   "session" #{"start" "stop"}
+   "agent"   #{"spawn" "kill"}})
+
+(defn- mutating-call?
+  "Check if this tool+command combination is a mutating operation."
+  [tool-name args]
+  (when-let [commands (get mutating-tool-commands tool-name)]
+    (contains? commands (some-> (:command args) name))))
+
+(defn wrap-handler-nats-notify
+  "Post-execution hook: publishes tool notification to NATS backbone for mutating operations.
+   Non-fatal — failures logged at debug level, never propagated to caller.
+   Uses requiring-resolve to avoid circular deps on hive-mcp.nats.bridge.
+
+   Placement: innermost wrapper (between handler and retry) so notifications
+   fire inside async futures too, not just for the ack."
+  [handler tool-name]
+  (fn [args]
+    (let [result (handler args)]
+      (when (mutating-call? tool-name args)
+        (try
+          (when-let [publish! (requiring-resolve 'hive-mcp.nats.bridge/publish-tool-notification!)]
+            (publish! {:tool-name  (keyword (str tool-name "-" (name (:command args))))
+                       :event-type :tool-executed
+                       :timestamp  (System/currentTimeMillis)
+                       :data       {:args-summary (select-keys args [:command :name :task-id :id :type])}}))
+          (catch Exception e
+            (log/debug "[NATS] Tool notification failed for" tool-name (.getMessage e)))))
+      result)))
+
 (defn wrap-handler-context
   "Wrap handler to bind request context for tool execution.
    SRP: Single responsibility - context binding + args normalization + request cache.
@@ -584,6 +624,7 @@
    Wraps handler to attach pending hivemind messages via content embedding.
 
    Uses composable handler wrappers (SRP: each wrapper single responsibility):
+   - wrap-handler-nats-notify: publishes NATS notification for mutating ops (non-fatal)
    - wrap-handler-retry: auto-retry on hot-reload transient errors
    - wrap-handler-async: intercept async:true calls, return ack, spawn future
    - wrap-handler-normalize: converts result to content array
@@ -592,8 +633,13 @@
    - wrap-handler-context: binds request context for tool execution
    - wrap-handler-response: builds {:content ...} response
 
-   Composition via -> threading (7-layer chain):
-   handler -> retry -> async-intercept -> normalize -> compress -> piggybacks -> context -> response
+   Composition via -> threading (8-layer chain):
+   handler -> nats-notify -> retry -> async-intercept -> normalize -> compress -> piggybacks -> context -> response
+
+   The NATS notifier is innermost (between handler and retry) so it fires
+   inside async futures too, not just for the ack. Only mutating operations
+   (memory add/feedback, kanban move/create, session start/stop, agent spawn/kill)
+   publish notifications. Non-fatal: failures logged at debug, never propagated.
 
    The async interceptor sits AFTER retry (so it can retry on hot-reload errors)
    but BEFORE normalize (so the ack [{:type text}] passes through the piggyback chain).
@@ -618,6 +664,7 @@
              :description description
              :inputSchema merged-schema
              :handler (-> handler
+                          (wrap-handler-nats-notify name) ; NATS notification for mutating ops
                           wrap-handler-retry              ; Hot-reload resilience
                           (wrap-handler-async name)       ; async:true → ack + future
                           wrap-handler-normalize

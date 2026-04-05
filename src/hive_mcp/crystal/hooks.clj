@@ -17,7 +17,6 @@
             [hive-mcp.swarm.datascript :as ds]    ;; on-kanban-done
             [hive-mcp.agent.context :as ctx]      ;; on-session-end
             [hive-mcp.dns.result :as result]
-            [clojure.data.json :as json]          ;; parse-json-safe
             [clojure.string :as str]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -39,11 +38,6 @@
           (log/warn "eval-elisp-safe: timed out"))
         v)
       {:success false :error (:message r)})))
-
-(defn- parse-json-safe
-  "Parse JSON string, returning nil on failure."
-  [s]
-  (result/rescue nil (json/read-str s :key-fn keyword)))
 
 ;; =============================================================================
 ;; Kanban DONE Hook
@@ -124,30 +118,28 @@
 ;; Harvest + Synthesis Delegates (backward compatibility)
 ;; =============================================================================
 
-(defn harvest-all
-  "Harvest all session data for wrap crystallization.
-   Delegates to crystal.harvest.collect/harvest-all."
+(defn ^:deprecated harvest-all
+  "DEPRECATED: Use crystal.harvest.collect/harvest-all directly."
   ([] (collect/harvest-all))
   ([opts] (collect/harvest-all opts)))
 
-(defn harvest-session-progress
-  "Harvest session progress notes. Delegates to collect."
+(defn ^:deprecated harvest-session-progress
+  "DEPRECATED: Use crystal.harvest.collect/harvest-session-progress directly."
   ([] (collect/harvest-session-progress))
   ([opts] (collect/harvest-session-progress opts)))
 
-(defn harvest-completed-tasks
-  "Harvest completed tasks. Delegates to collect."
+(defn ^:deprecated harvest-completed-tasks
+  "DEPRECATED: Use crystal.harvest.collect/harvest-completed-tasks directly."
   ([] (collect/harvest-completed-tasks))
   ([opts] (collect/harvest-completed-tasks opts)))
 
-(defn harvest-git-commits
-  "Harvest git commits. Delegates to collect."
+(defn ^:deprecated harvest-git-commits
+  "DEPRECATED: Use crystal.harvest.collect/harvest-git-commits directly."
   ([] (collect/harvest-git-commits))
   ([opts] (collect/harvest-git-commits opts)))
 
-(defn crystallize-session
-  "Crystallize session data into long-term memory.
-   Delegates to crystal.synthesis/synthesize."
+(defn ^:deprecated crystallize-session
+  "DEPRECATED: Use crystal.synthesis/synthesize directly."
   [harvested]
   (synthesis/synthesize harvested))
 

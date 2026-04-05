@@ -195,6 +195,19 @@
                                          headless?
                                          (assoc :ling/process-alive? true)))
 
+      ;; Publish agent-spawn event via NATS backbone (non-fatal).
+      ;; Uses requiring-resolve to avoid circular dep on nats.bridge.
+      (r/rescue nil
+        (when-let [publish! (requiring-resolve 'hive-mcp.nats.bridge/publish-event!)]
+          (publish! {:type       :agent-spawn
+                     :agent-id   slave-id
+                     :timestamp  (System/currentTimeMillis)
+                     :data       {:cwd cwd
+                                  :mode mode
+                                  :project-id project-id
+                                  :headless? headless?
+                                  :model (or effective-model "claude")}})))
+
       (when (and max-budget-usd (pos? max-budget-usd))
         (r/rescue nil
                   (when-let [register-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/register-budget!)]
@@ -278,7 +291,13 @@
           (let [strat (resolve-strategy mode)
                 result (strategy/strategy-kill! strat (ling-ctx this))]
             (when (:killed? result)
-              (ds-lings/remove-slave! id))
+              (ds-lings/remove-slave! id)
+              ;; Publish agent-kill event via NATS backbone (non-fatal).
+              (r/rescue nil
+                (when-let [publish! (requiring-resolve 'hive-mcp.nats.bridge/publish-event!)]
+                  (publish! {:type       :agent-kill
+                             :agent-id   id
+                             :timestamp  (System/currentTimeMillis)}))))
             result))
         (do
           (log/warn "Cannot kill ling - critical ops in progress"

@@ -28,6 +28,7 @@
    - CoreAsyncChannel         (delivery/channels.clj)
    - ChannelBroadcastChannel  (delivery/channels.clj)
    - OlympusChannel           (delivery/channels.clj)
+   - PiggybackChannel         (delivery/channels.clj)
    - NoopChannel              (this file, fallback)
    - [future: SlackChannel, DiscordChannel, ...]"
 

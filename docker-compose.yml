@@ -34,12 +34,14 @@ services:
       context: ./docker/lsp-sidecar
     container_name: hive-mcp-lsp-sidecar
     volumes:
-      - lsp-cache:/cache
-      - .:/workspace:ro
+      - ${HOME}/.cache/hive-lsp:/cache
+      - .:/workspace:rw
     environment:
       - ANALYSIS_INTERVAL_SECONDS=300
       - JAVA_OPTS=-Xmx1g -Xms256m
-      - LSP_PROJECTS=/workspace
+      # LSP_PROJECTS unset → auto-discovers deps.edn via find
+      # Set to comma-separated RELATIVE paths for explicit projects (e.g. "subproj-a,subproj-b")
+      # NEVER use absolute paths here — discover_projects prepends /workspace/
     restart: unless-stopped
 
   # =============================================================================
@@ -200,8 +202,7 @@ volumes:
   # Core (always created)
   chroma-data:
     driver: local
-  lsp-cache:
-    driver: local
+  # lsp-cache: replaced with bind mount to ~/.cache/hive-lsp for host ↔ container sharing
 
   # Milvus (uncomment when profile enabled)
   # milvus-etcd:

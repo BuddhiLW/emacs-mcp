@@ -134,6 +134,47 @@
                 [?e :kg-edge/scope ?scope]]]
     (conn/query query scope)))
 
+(defn get-edges-since
+  "Query edges created since a given instant. For session-scoped wrap harvest.
+
+   Args:
+     since-instant - java.time.Instant (session start time)
+
+   Options:
+     :scope - Filter by project scope
+     :limit - Max edges to return (default 200)
+     :exclude-relations - Set of relation keywords to skip (e.g. #{:co-accessed})
+
+   Returns:
+     Seq of edge maps sorted by created-at (chronological)"
+  [since-instant & {:keys [scope limit exclude-relations]
+                    :or {limit 200 exclude-relations #{:co-accessed}}}]
+  (let [since-date (java.util.Date/from since-instant)
+        base-query '[:find [(pull ?e [*]) ...]
+                     :in $ ?since
+                     :where
+                     [?e :kg-edge/id]
+                     [?e :kg-edge/created-at ?t]
+                     [(<= ?since ?t)]]
+        scoped-query '[:find [(pull ?e [*]) ...]
+                       :in $ ?since ?scope
+                       :where
+                       [?e :kg-edge/id]
+                       [?e :kg-edge/created-at ?t]
+                       [(<= ?since ?t)]
+                       [?e :kg-edge/scope ?scope]]
+        raw (if scope
+              (conn/query scoped-query since-date scope)
+              (conn/query base-query since-date))
+        filtered (cond->> raw
+                   (seq exclude-relations)
+                   (remove #(contains? exclude-relations
+                                       (keyword (:kg-edge/relation %)))))]
+    (->> filtered
+         (sort-by :kg-edge/created-at)
+         (take limit)
+         (map #(dissoc % :db/id)))))
+
 (defn find-edge
   "Find an edge between two nodes.
    Optional relation filter only returns edge if it matches.

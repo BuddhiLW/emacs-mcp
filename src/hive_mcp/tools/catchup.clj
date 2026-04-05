@@ -222,7 +222,7 @@
 
 (defn handle-native-wrap
   "Native Clojure wrap implementation that persists to Chroma directly.
-   Delegates to :catchup/wrap extension (provided by hive-knowledge)
+   Delegates to :catchup/wrap extension (provided by addon)
    for harvesting and crystallization."
   [args]
   (let [directory (:directory args)
@@ -246,5 +246,5 @@
              :text (json/write-str {:error (.getMessage e)})
              :isError true}))
         {:type "text"
-         :text (json/write-str {:error "Wrap extension not registered. Load hive-knowledge addon."})
+         :text (json/write-str {:error "Wrap extension not registered. Load the crystal addon."})
          :isError true}))))

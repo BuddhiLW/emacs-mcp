@@ -15,6 +15,7 @@
             [hive-mcp.config.core :as config]
             [hive-mcp.agent.budget-router :as budget-router]
             [hive-mcp.scheduler.vulcan :as vulcan]
+            [hive-mcp.extensions.registry :as ext]
             [hive-mcp.dns.result :as result]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]
@@ -109,8 +110,7 @@
   [prioritized]
   (if (config/get-service-value :forge :milestone-boundary :default false)
     (result/rescue prioritized
-                   (when-let [filter-fn (requiring-resolve
-                                         'hive-knowledge.kanban.milestone/milestone-boundary-filter)]
+                   (when-let [filter-fn (ext/get-extension :fb/milestone-boundary-filter)]
                      (let [{:keys [tasks excluded-count reason]} (filter-fn (:tasks prioritized))]
                        (when (pos? (or excluded-count 0))
                          (log/info "SURVEY: milestone-boundary excluded" excluded-count "tasks:" reason))

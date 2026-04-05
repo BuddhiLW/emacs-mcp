@@ -25,6 +25,27 @@
     (string? relations) #{(keyword relations)}
     :else nil))
 
+(defn- traverse-empty-hint
+  "Diagnostic hint when traverse returns 0 results.
+   Checks whether the node has any edges at all vs filters excluding them."
+  [start_node {:keys [direction relations scope]}]
+  (let [all-from (edges/get-edges-from start_node)
+        all-to   (edges/get-edges-to start_node)
+        total    (+ (count all-from) (count all-to))]
+    (cond
+      (zero? total)
+      "Node has no edges in KG. It may not have been enriched yet."
+
+      (and relations (not= direction :both))
+      (str "Node has " total " edges total, but none match the direction/relation filter.")
+
+      :else
+      (str "Node has " total " edges total, but none match the current filters "
+           "(direction=" (name (or direction :outgoing))
+           (when relations (str ", relations=" relations))
+           (when scope (str ", scope=" scope))
+           ")."))))
+
 (defn handle-kg-traverse
   "Walk graph from a starting node via BFS."
   [{:keys [start_node direction relations max_depth scope]}]
@@ -40,17 +61,20 @@
                      rel-set (assoc :relations rel-set)
                      max_depth (assoc :max-depth max_depth)
                      scope (assoc :scope scope))
-              results (queries/traverse start_node opts)]
-          (mcp-json {:success true
-                     :start-node start_node
-                     :result-count (count results)
-                     :results (mapv (fn [{:keys [node-id edge depth path]}]
-                                      {:node-id node-id
-                                       :relation (:kg-edge/relation edge)
-                                       :confidence (:kg-edge/confidence edge)
-                                       :depth depth
-                                       :path path})
-                                    results)})))
+              results (queries/traverse start_node opts)
+              response (cond-> {:success true
+                                :start-node start_node
+                                :result-count (count results)
+                                :results (mapv (fn [{:keys [node-id edge depth path]}]
+                                                 {:node-id node-id
+                                                  :relation (:kg-edge/relation edge)
+                                                  :confidence (:kg-edge/confidence edge)
+                                                  :depth depth
+                                                  :path path})
+                                               results)}
+                         (empty? results)
+                         (assoc :hint (traverse-empty-hint start_node opts)))]
+          (mcp-json response)))
     (catch Exception e
       (log/error e "kg_traverse failed")
       (mcp-error (str "Traversal failed: " (.getMessage e))))))

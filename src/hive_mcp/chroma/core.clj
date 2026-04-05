@@ -13,6 +13,7 @@
    Require as: [hive-mcp.chroma.core :as chroma]."
   (:require [hive-mcp.chroma.embeddings :as emb]
             [hive-mcp.chroma.connection :as conn]
+            [hive-mcp.chroma.gate :as gate]
             [hive-mcp.chroma.helpers :as h]
             [hive-mcp.chroma.crud :as crud]
             [hive-mcp.chroma.search :as search]
@@ -69,3 +70,6 @@
 ;;; --- Maintenance ---
 (def cleanup-expired! maint/cleanup-expired!)
 (def entries-expiring-soon maint/entries-expiring-soon)
+
+;;; --- Concurrency Gate ---
+(def gate-stats gate/gate-stats)
