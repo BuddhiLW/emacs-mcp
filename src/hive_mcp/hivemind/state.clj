@@ -116,25 +116,3 @@
   "Remove a specific agent's message history (on ling death)."
   [agent-id]
   (bounded-swap! agent-registry dissoc agent-id))
-
-;; =============================================================================
-;; Conversation State (inter-agent messaging)
-;; =============================================================================
-
-;; conversation-inboxes — LRU eviction, 200 entries, 5min TTL
-;; Per-agent inbox for tell/ask messages. High volume, short-lived.
-(defonce ^{:doc "Map of agent-id -> [{:from ... :body ... :timestamp ...}]. Inbound message queues."}
-  conversation-inboxes
-  (bounded-atom {:max-entries 200
-                 :ttl-ms 300000       ;; 5 minutes
-                 :eviction-policy :lru}))
-(register-sweepable! conversation-inboxes :conversation-inboxes)
-
-;; pending-conversation-asks — LRU eviction, 100 entries, 10min TTL
-;; Tracks ask/respond pairs; longer TTL since lings may take time to answer.
-(defonce ^{:doc "Map of ask-id -> {:from ... :to ... :question ... :response-chan ... :timestamp ...}. Pending ask/respond pairs."}
-  pending-conversation-asks
-  (bounded-atom {:max-entries 100
-                 :ttl-ms 600000       ;; 10 minutes
-                 :eviction-policy :lru}))
-(register-sweepable! pending-conversation-asks :pending-conversation-asks)
