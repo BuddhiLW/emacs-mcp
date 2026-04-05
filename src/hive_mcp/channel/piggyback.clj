@@ -56,6 +56,67 @@
   [source-fn]
   (reset! message-source-fn source-fn))
 
+;; Backbone Buffer (events received via IDeliveryChannel from NATS backbone)
+;; Dual-path: supplements atom-based message-source-fn with backbone-mediated events.
+
+(def ^:private max-backbone-buffer-size
+  "Maximum number of backbone-buffered messages before oldest are evicted."
+  500)
+
+(defonce ^{:doc "Vector of backbone-mediated messages for piggyback delivery.
+  Dual-path: local shouts come via message-source-fn (atom), remote
+  shouts arrive here via PiggybackChannel (IDeliveryChannel)."}
+  backbone-buffer
+  (atom []))
+
+(defn buffer-backbone-event!
+  "Buffer an event received from the NATS backbone for piggyback delivery.
+   Normalizes to the same shape as message-source-fn output.
+   Events with nil agent-id (e.g. coordinator tool-executed) are silently dropped."
+  [{:keys [agent-id event-type message task timestamp project-id]}]
+  (when agent-id
+    (let [normalized {:agent-id    agent-id
+                      :event-type  event-type
+                      :message     (or message task "")
+                      :task        task
+                      :timestamp   (or timestamp (System/currentTimeMillis))
+                      :project-id  (or project-id "global")}]
+      (swap! backbone-buffer
+             (fn [buf]
+               (let [updated (conj buf normalized)]
+                 (if (> (count updated) max-backbone-buffer-size)
+                   (subvec updated (- (count updated) max-backbone-buffer-size))
+                   updated))))
+      (log/debug "piggyback: buffered backbone event from" agent-id
+                 (name (or event-type :unknown))))))
+
+(defn clear-backbone-buffer!
+  "Clear backbone buffer. For testing."
+  []
+  (reset! backbone-buffer []))
+
+(defn- dedupe-messages
+  "Remove duplicate messages by [agent-id timestamp event-type] key.
+   Preserves insertion order (source-fn messages take precedence)."
+  [msgs]
+  (let [seen (volatile! #{})]
+    (filterv (fn [msg]
+               (let [k [(:agent-id msg)
+                        (:timestamp msg)
+                        (:event-type msg)]]
+                 (if (@seen k)
+                   false
+                   (do (vswap! seen conj k) true))))
+             msgs)))
+
+(defn- merged-messages
+  "Merge messages from message-source-fn and backbone-buffer with dedup.
+   Source-fn messages take precedence (appear first in concat)."
+  []
+  (let [source-msgs  (when-let [sfn @message-source-fn] (sfn))
+        backbone-msgs @backbone-buffer]
+    (dedupe-messages (concat source-msgs backbone-msgs))))
+
 ;; Message Cursors (per-agent-per-project read tracking)
 
 (defonce ^{:doc "Map of [agent-id project-id] -> last-read-timestamp for cursor isolation."}
@@ -79,62 +140,62 @@
   :ret ::messages)
 
 (defn get-messages
-  "Get new hivemind messages since last call for this agent+project."
+  "Get new hivemind messages since last call for this agent+project.
+   Dual-path: merges messages from atom-based source and backbone buffer."
   [agent-id & {:keys [project-id]}]
   (when (and (nil? project-id) (not= agent-id "coordinator"))
     (log/warn "Agent" agent-id "reading hivemind without project-id - using global cursor"))
-  (when-let [source-fn @message-source-fn]
-    (let [effective-project (or project-id "global")
-          cursor-key [agent-id effective-project]
-          last-cursor (get @agent-read-cursors cursor-key 0)
-          all-msgs (source-fn)
-          new-msgs (->> all-msgs
-                        (filter (fn [msg]
-                                  (and (> (:timestamp msg) last-cursor)
-                                       (if project-id
-                                         (or (= (:project-id msg) project-id)
-                                             (= (:project-id msg) "global"))
-                                         (= (:project-id msg) "global")))))
-                        (sort-by :timestamp)
-                        vec)
-          max-ts (when (seq new-msgs)
-                   (apply max (map :timestamp new-msgs)))
-          formatted-msgs (mapv (fn [{:keys [agent-id event-type message task]}]
-                                 (cond-> {:a agent-id
-                                          :e (if (keyword? event-type)
-                                               (name event-type)
-                                               event-type)
-                                          :m message}
-                                   task (assoc :t task)))
-                               new-msgs)]
-      (when max-ts
-        (swap! agent-read-cursors assoc cursor-key max-ts))
-      (when (seq formatted-msgs)
-        formatted-msgs))))
+  (let [all-msgs (merged-messages)]
+    (when (seq all-msgs)
+      (let [effective-project (or project-id "global")
+            cursor-key [agent-id effective-project]
+            last-cursor (get @agent-read-cursors cursor-key 0)
+            new-msgs (->> all-msgs
+                          (filter (fn [msg]
+                                    (and (> (:timestamp msg) last-cursor)
+                                         (if project-id
+                                           (or (= (:project-id msg) project-id)
+                                               (= (:project-id msg) "global"))
+                                           (= (:project-id msg) "global")))))
+                          (sort-by :timestamp)
+                          vec)
+            max-ts (when (seq new-msgs)
+                     (apply max (map :timestamp new-msgs)))
+            formatted-msgs (mapv (fn [{:keys [agent-id event-type message task]}]
+                                   (cond-> {:a agent-id
+                                            :e (if (keyword? event-type)
+                                                 (name event-type)
+                                                 event-type)
+                                            :m message}
+                                     task (assoc :t task)))
+                                 new-msgs)]
+        (when max-ts
+          (swap! agent-read-cursors assoc cursor-key max-ts))
+        (when (seq formatted-msgs)
+          formatted-msgs)))))
 
 (defn fetch-history
-  "Get hivemind messages without marking as read."
+  "Get hivemind messages without marking as read.
+   Dual-path: merges messages from atom-based source and backbone buffer."
   [& {:keys [since limit project-id] :or {since 0 limit 100}}]
-  (if-let [source-fn @message-source-fn]
-    (->> (source-fn)
-         (filter (fn [msg]
-                   (and (> (:timestamp msg) since)
-                        (or (nil? project-id)
-                            (= (:project-id msg) project-id)
-                            (= (:project-id msg) "global")))))
-         ;; Sort by timestamp BEFORE map for consistent FIFO order
-         (sort-by :timestamp)
-         (take limit)
-         (mapv (fn [{:keys [agent-id event-type message task timestamp project-id]}]
-                 (cond-> {:a agent-id
-                          :e (if (keyword? event-type)
-                               (name event-type)
-                               event-type)
-                          :m message
-                          :ts timestamp
-                          :p project-id}
-                   task (assoc :t task)))))
-    []))
+  (->> (merged-messages)
+       (filter (fn [msg]
+                 (and (> (:timestamp msg) since)
+                      (or (nil? project-id)
+                          (= (:project-id msg) project-id)
+                          (= (:project-id msg) "global")))))
+       ;; Sort by timestamp BEFORE map for consistent FIFO order
+       (sort-by :timestamp)
+       (take limit)
+       (mapv (fn [{:keys [agent-id event-type message task timestamp project-id]}]
+               (cond-> {:a agent-id
+                        :e (if (keyword? event-type)
+                             (name event-type)
+                             event-type)
+                        :m message
+                        :ts timestamp
+                        :p project-id}
+                 task (assoc :t task))))))
 
 (defn reset-cursor!
   "Reset read cursor for an agent+project. Next get-messages returns all messages.
