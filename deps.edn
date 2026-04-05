@@ -81,7 +81,7 @@
         ;; hive-events - re-frame inspired event system for JVM
         ;; v0.4.0 adds sub-FSM composition + multi-dispatch
         io.github.hive-agi/hive-events
-        {:git/tag "v0.5.0" :git/sha "3d6b8de"}
+        {:git/tag "v0.5.1" :git/sha "ac48b40"}
 
         ;; hive-hot - unified hot-reload with events integration
         io.github.hive-agi/hive-hot
@@ -112,7 +112,7 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL, error taxonomy
         io.github.hive-agi/hive-dsl
-        {:git/tag "v0.3.7" :git/sha "d5decedcc8caceb8e6a699c9aae5c40db4ae7057"}
+        {:git/tag "v0.3.8" :git/sha "6f44e1bf82251b688d211f479a11a9a5ae93c1ad"}
 
         ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
@@ -120,7 +120,7 @@
         io.github.hive-agi/hive-milvus {:local/root "../hive-milvus"}
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
-        io.github.hive-agi/hive-emacs {:git/tag "v0.3.0" :git/sha "f016efe"}
+        io.github.hive-agi/hive-emacs {:git/tag "v0.3.1" :git/sha "07cc22a"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
@@ -191,7 +191,7 @@
                 org.clojure/test.check {:mvn/version "1.1.1"}
                 ;; hive-test: mutation, golden, property-based testing
                 io.github.hive-agi/hive-test
-                {:git/tag "v0.1.4" :git/sha "a529aa6"}}
+                {:git/tag "v0.1.5" :git/sha "db72654"}}
    :main-opts ["-m" "cognitect.test-runner"]}
 
   ;; CI-friendly: Run only unit tests (excludes tests requiring Emacs)
@@ -200,7 +200,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 io.github.hive-agi/hive-test
-                {:git/tag "v0.1.4" :git/sha "a529aa6"}}
+                {:git/tag "v0.1.5" :git/sha "db72654"}}
    :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:excludes [:integration]}}
@@ -211,7 +211,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 io.github.hive-agi/hive-test
-                {:git/tag "v0.1.4" :git/sha "a529aa6"}}
+                {:git/tag "v0.1.5" :git/sha "db72654"}}
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:includes [:integration]}}
@@ -226,6 +226,6 @@
 ;; Local dev overrides for sibling :local/root projects.
   ;; start-mcp.sh auto-merges deps.local.edn via -Sdeps when present.
   ;; Create deps.local.edn (gitignored) with :deps key, e.g.:
-  ;;   {:deps {io.github.hive-agi/hive-events {:git/tag "v0.5.0" :git/sha "3d6b8de"}}}
+  ;;   {:deps {io.github.hive-agi/hive-events {:git/tag "v0.5.1" :git/sha "ac48b40"}}}
   ;; NOTE: Use :deps (top-level key), NOT :override-deps (alias-level only).
   }}
