@@ -53,7 +53,9 @@
                c-preset/tools
                c-olympus/tools
                c-agora/tools
-               ;; analysis tool built dynamically via composite/build-composite-tool
+               ;; Dynamically registered extension/composite tools (analysis, etc.)
+               ;; Included here so refresh-tools! picks them up after hot-reload
+               (ext/get-registered-tools)
                c-project/tools
                c-session/tools
                c-emacs/tools
@@ -180,7 +182,9 @@
                c-preset/tools
                c-olympus/tools
                c-agora/tools
-               ;; analysis tool built dynamically via composite/build-composite-tool
+               ;; Dynamically registered extension/composite tools (analysis, etc.)
+               ;; Included here so refresh-tools! picks them up after hot-reload
+               (ext/get-registered-tools)
                c-project/tools
                c-session/tools
                c-emacs/tools
