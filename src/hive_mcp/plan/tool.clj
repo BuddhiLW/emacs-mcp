@@ -11,7 +11,7 @@
   (:require [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.tools.memory-kanban :as mem-kanban]
             [hive-mcp.plan.fsm :as plan-fsm]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.plan.plans :as plans]
             [hive-mcp.knowledge-graph.connection :as kg-conn]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
@@ -263,7 +263,7 @@
                  (ctx/current-project-id)
                  (str "file:" plan-path)])
             (when-let [entry (or (plans/get-plan plan-memory-id)
-                                 (chroma/get-entry-by-id plan-memory-id))]
+                                 (facade/get-entry-by-id plan-memory-id))]
               [(:content entry)
                (:project-id entry)
                plan-memory-id]))]

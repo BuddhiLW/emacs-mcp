@@ -66,6 +66,20 @@
                          :exclude-tags exclude-tags}))
 
 ;;; ============================================================================
+;;; Mutation Operations
+;;; ============================================================================
+
+(defn update-entry!
+  "Update an existing entry's attributes via the active backend."
+  [id updates]
+  (proto/update-entry! (proto/get-store) id updates))
+
+(defn delete-entry!
+  "Delete an entry from the active backend."
+  [id]
+  (proto/delete-entry! (proto/get-store) id))
+
+;;; ============================================================================
 ;;; Utilities
 ;;; ============================================================================
 

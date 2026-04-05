@@ -29,7 +29,7 @@
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.duration :as dur]
             [hive-mcp.extensions.registry :as ext]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.dns.result :as result]
             [hive-mcp.concurrency.pool :as pool]
             [clojure.string :as str]
@@ -168,10 +168,12 @@
                            (crystal/session-timing-metadata nil (java.time.Instant/now)))
         summary (or (crystal/summarize-session-progress
                      (concat progress-notes completed-tasks)
-                     git-commits)
+                     git-commits
+                     harvested)
                     (crystal/summarize-memory-activity
                      {:created  (count (or (:memory-ids-created harvested) []))
-                      :accessed (count (or (:memory-ids-accessed harvested) []))}))]
+                      :accessed (count (or (:memory-ids-accessed harvested) []))}
+                     harvested))]
     (if (nil? summary)
       ;; No content — still run lifecycle ops for maintenance
       (let [lifecycle (run-lifecycle-ops! project-id directory :harvested harvested)]
@@ -193,14 +195,14 @@
             lifecycle-fut (pool/with-solo (run-lifecycle-ops! project-id directory :harvested harvested))
             t0 (System/currentTimeMillis)
             store-r (result/try-effect* :crystal/store-failed
-                                        (chroma/index-memory-entry!
+                                        (facade/index-memory-entry!
                                          {:type "note"
                                           :content content
                                           :tags tags
                                           :duration "short"
                                           :expires (or expires "")
                                           :project-id project-id
-                                          :content-hash (chroma/content-hash content)}))
+                                          :content-hash (facade/content-hash content)}))
             chroma-ms (- (System/currentTimeMillis) t0)
             ;; Collect lifecycle results (likely already done — they ran during embedding)
             lifecycle (deref lifecycle-fut op-timeout

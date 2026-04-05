@@ -18,7 +18,8 @@
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.core :refer [with-chroma]]
             [hive-mcp.memory.temporal :as temporal]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.swarm.datascript :as ds]
+            [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.project.tree :as tree]
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
@@ -135,8 +136,8 @@
                           (resolve-project-ids-with-descendants project-id))
         multi-project? (boolean all-project-ids)
         entries (if-let [pids all-project-ids]
-                  (chroma/query-entries :type "note" :project-ids pids :limit (max limit 500))
-                  (chroma/query-entries :type "note" :project-id project-id :limit limit))]
+                  (facade/query-entries :type "note" :project-ids pids :limit (max limit 500))
+                  (facade/query-entries :type "note" :project-id project-id :limit limit))]
     {:entries entries :multi-project? multi-project?}))
 
 (defn- filter-kanban-by-tags [entries required-tags]
@@ -145,6 +146,20 @@
                  (let [entry-tags (set (:tags entry))]
                    (every? #(contains? entry-tags %) required-tags))))
        (filter kanban-entry?)))
+
+;; ============================================================
+;; Movement Tracking (session-scoped for wrap harvest)
+;; ============================================================
+
+(defn- track-movement!
+  "Record a kanban status transition in DataScript for wrap harvest.
+   Non-fatal — movement tracking failure should never block kanban ops."
+  [{:keys [task-id title from to project-id]}]
+  (try
+    (ds/register-kanban-movement!
+     {:task-id task-id :title title :from from :to to :project-id project-id})
+    (catch Exception e
+      (log/debug "track-movement! failed (non-fatal):" (.getMessage e)))))
 
 ;; ============================================================
 ;; Pure Logic (return MCP response maps directly)
@@ -168,6 +183,10 @@
                                           :tags tags :directory eff-dir
                                           :agent_id eff-agent :duration "short"})]
     (log/info "kanban-create result:" crud-result)
+    (when-not (:isError crud-result)
+      (track-movement! {:task-id (or (:text crud-result) "unknown")
+                        :title title :from nil :to "todo"
+                        :project-id project-id}))
     (if-let [_ (:isError crud-result)]
       crud-result
       {:type "text" :text (:text crud-result)})))
@@ -215,6 +234,17 @@
       (log/debug "Done-archive extension not available (non-fatal):" (.getMessage e)))))
 
 (defn- move-to-done! [entry task-id]
+  (let [content (:content entry)
+        old-status (content-val content :status "doing")
+        title (content-val content :title nil)
+        project-id (some-> entry :tags
+                           (->> (filter #(clojure.string/starts-with? % "scope:project:"))
+                                first
+                                (clojure.string/replace "scope:project:" "")))]
+    ;; Track movement for wrap harvest
+    (track-movement! {:task-id task-id :title title
+                      :from old-status :to "done"
+                      :project-id project-id}))
   (when-let [task-data (crystal-hooks/extract-task-from-kanban-entry entry)]
     (log/info "Calling crystal hook for completed kanban task:" task-id
               "project-id:" (:project-id task-data))
@@ -232,26 +262,31 @@
                             (->> (filter #(clojure.string/starts-with? % "scope:project:"))
                                  first
                                  (clojure.string/replace "scope:project:" "")))})
-  (chroma/delete-entry! task-id)
+  (facade/delete-entry! task-id)
   (mcp-json {:deleted true :status "done" :id task-id}))
 
 (defn- move-to-status! [entry task-id new-status directory]
   (let [content (:content entry)
         old-status (content-val content :status "todo")
         priority (content-val content :priority "medium")
+        title (content-val content :title nil)
         new-content (cond-> (assoc content :status new-status)
                       (= new-status "doing") (assoc :started (kanban-timestamp)))
         eff-dir (effective-dir directory)
         project-id (scope/get-current-project-id eff-dir)
         new-tags (build-kanban-tags new-status priority project-id)
-        _ (chroma/update-entry! task-id {:content new-content :tags new-tags})
-        updated (chroma/get-entry-by-id task-id)]
+        _ (facade/update-entry! task-id {:content new-content :tags new-tags})
+        updated (facade/get-entry-by-id task-id)]
     ;; Temporal dual-write: record status transition
     (temporal/record-mutation-silent!
      {:entry-id   task-id
       :op         :kanban-move
       :data       {:old-status old-status :new-status new-status}
       :project-id project-id})
+    ;; Track movement for wrap harvest
+    (track-movement! {:task-id task-id :title title
+                      :from old-status :to new-status
+                      :project-id project-id})
     (mcp-json (task->slim updated))))
 
 (defn- move* [{:keys [task_id new_status status id directory]}]
@@ -262,7 +297,7 @@
         new_status (get status-enum->tag raw-status raw-status)
         task_id    (or task_id id)]
     (if-let [_ (valid-statuses new_status)]
-      (if-let [entry (chroma/get-entry-by-id task_id)]
+      (if-let [entry (facade/get-entry-by-id task_id)]
         (if-let [_ (kanban-task-type? (:content entry))]
           (case new_status
             "done" (move-to-done! entry task_id)

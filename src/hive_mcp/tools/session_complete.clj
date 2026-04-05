@@ -33,7 +33,7 @@
             [hive-mcp.events.interceptors :as interceptors]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.swarm.datascript :as ds]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.vectordb.facade :as facade]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -174,7 +174,7 @@
    Returns memory entry map or nil."
   [agent-id project-id]
   (let [agent-tag (str "agent:" agent-id)
-        entries (chroma/query-entries :type "decision"
+        entries (facade/query-entries :type "decision"
                                       :project-id project-id
                                       :limit 50)]
     (->> entries

@@ -1,8 +1,9 @@
 (ns hive-mcp.crystal.harvest.collect
   "Harvest collection — gathers session data from all sources in parallel.
 
-   Provides harvest-all which orchestrates 6 sources (progress, tasks, commits,
-   recalls, hivemind, kanban) and returns a unified harvested map.
+   Provides harvest-all which orchestrates 8 sources (progress, tasks, commits,
+   recalls, hivemind, kanban, kg-edges, kanban-movements) and returns a unified
+   harvested map.
 
    Uses JVM-native direct access (Chroma, git subprocess, DataScript) to bypass
    Emacs single-threaded serialization. Legacy Emacs-based fallbacks kept for
@@ -17,7 +18,8 @@
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.tools.memory.scope :as scope]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.vectordb.facade :as facade]
+            [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.dns.result :as result]
             [hive-mcp.concurrency.pool :as pool]
             [hive-mcp.channel.piggyback :as piggyback]
@@ -55,8 +57,8 @@
 ;; =============================================================================
 ;; Kept for fallback and compatibility. Prefer direct-* versions.
 
-(defn harvest-session-progress
-  "Harvest session progress notes via Emacs roundtrip."
+(defn ^:deprecated harvest-session-progress
+  "DEPRECATED: Use harvest-all (direct Chroma access). Legacy Emacs roundtrip version."
   ([] (harvest-session-progress nil))
   ([{:keys [directory]}]
    (result/rescue {:notes [] :count 0}
@@ -83,8 +85,8 @@
                                  :fn "harvest-session-progress"
                                  :msg error}}))))))
 
-(defn harvest-completed-tasks
-  "Harvest completed task progress notes via Emacs roundtrip."
+(defn ^:deprecated harvest-completed-tasks
+  "DEPRECATED: Use harvest-all (direct DataScript+Chroma access). Legacy Emacs roundtrip version."
   ([] (harvest-completed-tasks nil))
   ([{:keys [directory]}]
    (result/rescue {:tasks [] :count 0 :ds-count 0 :emacs-count 0}
@@ -122,8 +124,8 @@
                      :emacs-count (count emacs-tasks)
                      :project-id project-id}))))
 
-(defn harvest-git-commits
-  "Harvest git commits via Emacs roundtrip."
+(defn ^:deprecated harvest-git-commits
+  "DEPRECATED: Use harvest-all (direct JVM subprocess). Legacy Emacs roundtrip version."
   ([] (harvest-git-commits nil))
   ([{:keys [directory agent-id]}]
    (result/rescue {:commits [] :count 0}
@@ -163,7 +165,7 @@
                  (let [dir (or directory (ctx/current-directory))
                        project-id (when dir (scope/get-current-project-id dir))
                        t0 (System/currentTimeMillis)
-                       raw (chroma/query-entries :type "note"
+                       raw (facade/query-entries :type "note"
                                                  :project-id (or project-id "global")
                                                  :limit 100)
                        notes (->> raw
@@ -194,7 +196,7 @@
                                                              :agent-id (:completed-task/agent-id t)
                                                              :source :datascript}))))
                        chroma-tasks (result/rescue []
-                                                   (let [entries (chroma/query-entries :type "note"
+                                                   (let [entries (facade/query-entries :type "note"
                                                                                        :tags ["kanban"]
                                                                                        :project-id (or project-id "global")
                                                                                        :limit 50)]
@@ -287,18 +289,115 @@
                     :completed-count (count completed)
                     :project-id project-id})))
 
+(defn- harvest-kg-edges-direct
+  "Harvest KG edges created since session start (no Emacs roundtrip)."
+  [{:keys [directory agent-id]}]
+  (result/rescue {:edges [] :count 0 :by-relation {}}
+                 (let [dir (or directory (ctx/current-directory))
+                       project-id (when dir (scope/get-current-project-id dir))
+                       effective-agent (or agent-id (ctx/current-agent-id))
+                       start (or (crystal/get-session-start effective-agent)
+                                 (crystal/get-session-start "_global")
+                                 (crystal/get-session-start nil))
+                       t0 (System/currentTimeMillis)]
+                   (if start
+                     (let [edges (kg-edges/get-edges-since start
+                                                           :scope project-id
+                                                           :limit 200
+                                                           :exclude-relations #{:co-accessed})
+                           by-relation (reduce (fn [acc e]
+                                                 (let [rel (keyword (or (:kg-edge/relation e) "unknown"))]
+                                                   (update acc rel (fnil inc 0))))
+                                               {}
+                                               edges)
+                           ms (- (System/currentTimeMillis) t0)]
+                       (log/info "harvest-kg-edges-direct:" (count edges) "edges in" ms "ms"
+                                 "by-relation:" by-relation)
+                       {:edges (vec edges)
+                        :count (count edges)
+                        :by-relation by-relation
+                        :project-id project-id})
+                     (do
+                       (log/debug "harvest-kg-edges-direct: no session start, skipping")
+                       {:edges [] :count 0 :by-relation {}})))))
+
+(defn- harvest-kanban-movements-direct
+  "Harvest kanban status transitions from DataScript (session-scoped)."
+  [{:keys [directory]}]
+  (result/rescue {:movements [] :count 0 :transitions {}}
+                 (let [dir (or directory (ctx/current-directory))
+                       project-id (when dir (scope/get-current-project-id dir))
+                       t0 (System/currentTimeMillis)
+                       movements (result/rescue []
+                                   (ds/get-kanban-movements-this-session
+                                    :project-id project-id))
+                       transitions (reduce (fn [acc mv]
+                                             (let [k (str (or (:kanban-movement/from mv) "nil")
+                                                          "->"
+                                                          (:kanban-movement/to mv))]
+                                               (update acc k (fnil inc 0))))
+                                           {}
+                                           movements)
+                       ms (- (System/currentTimeMillis) t0)]
+                   (log/info "harvest-kanban-movements:" (count movements)
+                             "movements in" ms "ms" "transitions:" transitions)
+                   {:movements (vec movements)
+                    :count (count movements)
+                    :transitions transitions
+                    :project-id project-id})))
+
+;; =============================================================================
+;; Harvest Result Assembly (pure)
+;; =============================================================================
+
+(defn assemble-harvest-result
+  "Pure fn: assembles the final harvest result map from deref'd harvest data.
+   No IO — only data transformation.
+
+   Takes a single map of all harvested components and returns the unified
+   result map with :progress-notes, :completed-tasks, :git-commits, etc."
+  [{:keys [progress tasks commits recalls hivemind kanban kg-edges kanban-mvs
+           session-timing memory-ids-created memory-ids-accessed
+           dir effective-agent errors session]}]
+  {:progress-notes      (:notes progress)
+   :completed-tasks     (:tasks tasks)
+   :git-commits         (:commits commits)
+   :recalls             recalls
+   :hivemind-messages   (:messages hivemind)
+   :kanban-activity     kanban
+   :kg-edges-created    kg-edges
+   :kanban-movements    kanban-mvs
+   :session-timing      session-timing
+   :session-temporal    session-timing
+   :memory-ids-created  memory-ids-created
+   :memory-ids-accessed memory-ids-accessed
+   :session             session
+   :directory           dir
+   :agent-id            effective-agent
+   :summary {:progress-count       (:count progress)
+             :task-count           (:count tasks)
+             :commit-count         (:count commits)
+             :recall-count         (count recalls)
+             :hivemind-shout-count (:count hivemind)
+             :kanban-completed     (:completed-count kanban)
+             :kg-edge-count        (:count kg-edges)
+             :kanban-movement-count (:count kanban-mvs)
+             :created-count        (count memory-ids-created)
+             :accessed-count       (count memory-ids-accessed)}
+   :errors (when (seq errors) errors)})
+
 ;; =============================================================================
 ;; Harvest Orchestrator
 ;; =============================================================================
 
 (defn harvest-all
   "Harvest all session data for wrap crystallization.
-   Orchestrates 6 sources in parallel with 10s timeout.
+   Orchestrates 8 sources in parallel with 10s timeout.
 
    Returns map with :progress-notes, :completed-tasks, :git-commits, :recalls,
-   :hivemind-messages, :kanban-activity, :session-timing, :session-temporal,
-   :memory-ids-created, :memory-ids-accessed, :session, :directory, :agent-id,
-   :summary, :errors.
+   :hivemind-messages, :kanban-activity, :kg-edges-created, :kanban-movements,
+   :session-timing, :session-temporal, :memory-ids-created, :memory-ids-accessed,
+   :session, :directory, :agent-id, :summary, :errors.
 
    Opts:
      :directory  -- working directory for project scoping
@@ -311,6 +410,8 @@
                    :recalls {}
                    :hivemind-messages []
                    :kanban-activity {:tasks-completed [] :completed-count 0}
+                   :kg-edges-created {:edges [] :count 0 :by-relation {}}
+                   :kanban-movements {:movements [] :count 0 :transitions {}}
                    :session-temporal {:session-start nil :session-end nil :duration-minutes 0}
                    :memory-ids-created []
                    :memory-ids-accessed []
@@ -321,6 +422,8 @@
                              :recall-count 0
                              :hivemind-shout-count 0
                              :kanban-completed 0
+                             :kg-edge-count 0
+                             :kanban-movement-count 0
                              :created-count 0
                              :accessed-count 0}
                    :errors [{:type :harvest-failed :fn "harvest-all"}]}
@@ -328,24 +431,30 @@
                         effective-agent (or agent-id (ctx/current-agent-id))
                         project-id (when dir (scope/get-current-project-id dir))
                         t0 (System/currentTimeMillis)
-                        f-progress (pool/with-io (harvest-progress-direct {:directory dir}))
-                        f-tasks    (pool/with-io (harvest-tasks-direct {:directory dir}))
-                        f-commits  (pool/with-io (harvest-commits-direct {:directory dir :agent-id effective-agent}))
-                        f-recalls  (pool/with-io (result/rescue {} (recall/get-buffered-recalls)))
-                        f-hivemind (pool/with-io (harvest-hivemind-messages {:directory dir :agent-id effective-agent}))
-                        f-kanban   (pool/with-io (harvest-kanban-activity {:directory dir}))
+                        f-progress   (pool/with-io (harvest-progress-direct {:directory dir}))
+                        f-tasks      (pool/with-io (harvest-tasks-direct {:directory dir}))
+                        f-commits    (pool/with-io (harvest-commits-direct {:directory dir :agent-id effective-agent}))
+                        f-recalls    (pool/with-io (result/rescue {} (recall/get-buffered-recalls)))
+                        f-hivemind   (pool/with-io (harvest-hivemind-messages {:directory dir :agent-id effective-agent}))
+                        f-kanban     (pool/with-io (harvest-kanban-activity {:directory dir}))
+                        f-kg-edges   (pool/with-io (harvest-kg-edges-direct {:directory dir :agent-id effective-agent}))
+                        f-kanban-mvs (pool/with-io (harvest-kanban-movements-direct {:directory dir}))
                         harvest-timeout 10000
-                        progress (deref f-progress harvest-timeout {:notes [] :count 0 :error {:type :harvest-timeout :fn "harvest-session-progress"}})
-                        tasks    (deref f-tasks harvest-timeout {:tasks [] :count 0 :error {:type :harvest-timeout :fn "harvest-completed-tasks"}})
-                        commits  (deref f-commits harvest-timeout {:commits [] :count 0 :error {:type :harvest-timeout :fn "harvest-git-commits"}})
-                        recalls  (deref f-recalls harvest-timeout {})
-                        hivemind (deref f-hivemind harvest-timeout {:messages [] :count 0 :error {:type :harvest-timeout :fn "harvest-hivemind-messages"}})
-                        kanban   (deref f-kanban harvest-timeout {:tasks-completed [] :completed-count 0 :error {:type :harvest-timeout :fn "harvest-kanban-activity"}})
+                        progress   (deref f-progress harvest-timeout {:notes [] :count 0 :error {:type :harvest-timeout :fn "harvest-session-progress"}})
+                        tasks      (deref f-tasks harvest-timeout {:tasks [] :count 0 :error {:type :harvest-timeout :fn "harvest-completed-tasks"}})
+                        commits    (deref f-commits harvest-timeout {:commits [] :count 0 :error {:type :harvest-timeout :fn "harvest-git-commits"}})
+                        recalls    (deref f-recalls harvest-timeout {})
+                        hivemind   (deref f-hivemind harvest-timeout {:messages [] :count 0 :error {:type :harvest-timeout :fn "harvest-hivemind-messages"}})
+                        kanban     (deref f-kanban harvest-timeout {:tasks-completed [] :completed-count 0 :error {:type :harvest-timeout :fn "harvest-kanban-activity"}})
+                        kg-edges   (deref f-kg-edges harvest-timeout {:edges [] :count 0 :by-relation {} :error {:type :harvest-timeout :fn "harvest-kg-edges"}})
+                        kanban-mvs (deref f-kanban-mvs harvest-timeout {:movements [] :count 0 :transitions {} :error {:type :harvest-timeout :fn "harvest-kanban-movements"}})
                         _ (log/info "harvest-all: parallel collection" (- (System/currentTimeMillis) t0) "ms"
                                     "progress:" (:count progress) "tasks:" (:count tasks)
                                     "commits:" (:count commits) "recalls:" (count recalls)
                                     "hivemind:" (:count hivemind)
-                                    "kanban:" (:completed-count kanban))
+                                    "kanban:" (:completed-count kanban)
+                                    "kg-edges:" (:count kg-edges)
+                                    "kanban-mvs:" (:count kanban-mvs))
                         session-start (or (crystal/get-session-start effective-agent)
                                           (crystal/get-session-start "_global")
                                           (crystal/get-session-start nil))
@@ -363,26 +472,23 @@
                                                (:error tasks)
                                                (:error commits)
                                                (:error hivemind)
-                                               (:error kanban)])]
-                    {:progress-notes (:notes progress)
-                     :completed-tasks (:tasks tasks)
-                     :git-commits (:commits commits)
-                     :recalls recalls
-                     :hivemind-messages (:messages hivemind)
-                     :kanban-activity kanban
-                     :session-timing session-timing
-                     :session-temporal session-timing
-                     :memory-ids-created memory-ids-created
-                     :memory-ids-accessed memory-ids-accessed
-                     :session (crystal/session-id)
-                     :directory dir
-                     :agent-id effective-agent
-                     :summary {:progress-count (:count progress)
-                               :task-count (:count tasks)
-                               :commit-count (:count commits)
-                               :recall-count (count recalls)
-                               :hivemind-shout-count (:count hivemind)
-                               :kanban-completed (:completed-count kanban)
-                               :created-count (count memory-ids-created)
-                               :accessed-count (count memory-ids-accessed)}
-                     :errors (when (seq errors) errors)}))))
+                                               (:error kanban)
+                                               (:error kg-edges)
+                                               (:error kanban-mvs)])
+                        session (crystal/session-id)]
+                    (assemble-harvest-result
+                     {:progress            progress
+                      :tasks               tasks
+                      :commits             commits
+                      :recalls             recalls
+                      :hivemind            hivemind
+                      :kanban              kanban
+                      :kg-edges            kg-edges
+                      :kanban-mvs          kanban-mvs
+                      :session-timing      session-timing
+                      :memory-ids-created  memory-ids-created
+                      :memory-ids-accessed memory-ids-accessed
+                      :dir                 dir
+                      :effective-agent     effective-agent
+                      :errors              errors
+                      :session             session})))))
