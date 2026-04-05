@@ -184,6 +184,64 @@
    [:context {:optional true} :map]])
 
 ;; =============================================================================
+;; Conversation Event Schemas (inter-agent messaging)
+;; =============================================================================
+
+(def ConversationTellData
+  "Data shape for :conversation/tell event.
+
+   Fire-and-forget message from one agent to another.
+
+   Example:
+   {:from \"coordinator\"
+    :to \"ling-abc123\"
+    :body \"Please prioritize task X\"
+    :timestamp 1705000000000}"
+  [:map
+   [:from :string]
+   [:to :string]
+   [:body :string]
+   [:timestamp :int]])
+
+(def ConversationAskLingData
+  "Data shape for :conversation/ask-ling event.
+
+   Question from coordinator to a ling, expecting a response.
+
+   Example:
+   {:ask-id \"ask-001\"
+    :from \"coordinator\"
+    :to \"ling-abc123\"
+    :question \"What is the status of task X?\"
+    :timeout-ms 30000
+    :timestamp 1705000000000}"
+  [:map
+   [:ask-id :string]
+   [:from :string]
+   [:to :string]
+   [:question :string]
+   [:timeout-ms {:optional true} :int]
+   [:timestamp :int]])
+
+(def ConversationRespondLingData
+  "Data shape for :conversation/respond-ling event.
+
+   Response from a ling to a prior ask.
+
+   Example:
+   {:ask-id \"ask-001\"
+    :from \"ling-abc123\"
+    :to \"coordinator\"
+    :answer \"Task X is 80% complete\"
+    :timestamp 1705000000000}"
+  [:map
+   [:ask-id :string]
+   [:from :string]
+   [:to :string]
+   [:answer :string]
+   [:timestamp :int]])
+
+;; =============================================================================
 ;; Validation Functions
 ;; =============================================================================
 
