@@ -112,15 +112,15 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL, error taxonomy
         io.github.hive-agi/hive-dsl
-        {:git/tag "v0.3.8" :git/sha "6f44e1bf82251b688d211f479a11a9a5ae93c1ad"}
+        {:git/tag "v0.3.9" :git/sha "494af2c0ef889380649e1578942ffdfc205f446d"}
 
         ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
         ;; Overrides default Chroma store when Milvus is reachable.
-        io.github.hive-agi/hive-milvus {:git/tag "v0.1.1" :git/sha "e05cb0a"}
+        io.github.hive-agi/hive-milvus {:git/tag "v0.1.2" :git/sha "2ce45dc"}
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
-        io.github.hive-agi/hive-emacs {:git/tag "v0.3.1" :git/sha "07cc22a"}
+        io.github.hive-agi/hive-emacs {:git/tag "v0.3.2" :git/sha "c1a6473"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
@@ -191,7 +191,7 @@
                 org.clojure/test.check {:mvn/version "1.1.1"}
                 ;; hive-test: mutation, golden, property-based testing
                 io.github.hive-agi/hive-test
-                {:git/tag "v0.1.5" :git/sha "db72654"}}
+                {:git/tag "v0.1.6" :git/sha "a53e9f8"}}
    :main-opts ["-m" "cognitect.test-runner"]}
 
   ;; CI-friendly: Run only unit tests (excludes tests requiring Emacs)
@@ -200,7 +200,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 io.github.hive-agi/hive-test
-                {:git/tag "v0.1.5" :git/sha "db72654"}}
+                {:git/tag "v0.1.6" :git/sha "a53e9f8"}}
    :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:excludes [:integration]}}
@@ -211,7 +211,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 io.github.hive-agi/hive-test
-                {:git/tag "v0.1.5" :git/sha "db72654"}}
+                {:git/tag "v0.1.6" :git/sha "a53e9f8"}}
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:includes [:integration]}}
