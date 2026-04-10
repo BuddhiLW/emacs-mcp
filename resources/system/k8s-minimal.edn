@@ -42,6 +42,11 @@
  ;; :hive/channel-bridge — REMOVED
  ;; :hive/swarm-sync     — REMOVED
 
+ ;; NOTE: this standalone profile excludes swarm-sync entirely
+ ;; (its :channel-bridge dep is also absent). The datahike/nats
+ ;; defaults needed for headless deploys live in the real overlay
+ ;; at resources/hive/profiles/k8s-minimal.edn.
+
  :hive/a2a-gateway     {:enabled true
                         :port    7912}
 

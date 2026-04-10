@@ -9,6 +9,7 @@
             [hive-mcp.swarm.datascript.queries :as ds-queries]
             [hive-mcp.swarm.datascript.schema :as schema]
             [hive-mcp.protocols.dispatch :as dispatch-ctx]
+            [clojure.string :as str]
             [hive-dsl.result :as r]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -88,6 +89,32 @@
      :max-budget-usd (or (:max-budget-usd opts) (:max-budget-usd ling))
      :task (:task opts)}))
 
+(defn- load-presets-content
+  "Load preset content from preset .md files for headless backends.
+   Claude CLI lings load presets from .claude/agents/ automatically;
+   headless backends (OpenRouter, hive-agent) need explicit injection.
+   Returns concatenated preset markdown string, or nil."
+  [preset-names]
+  (r/rescue nil
+    (when (seq preset-names)
+      (when-let [get-from-file (requiring-resolve 'hive-mcp.presets.core/get-preset-from-file)]
+        (let [preset-dir (or (r/rescue nil
+                               (when-let [cfg-fn (requiring-resolve 'hive-mcp.config.core/get-service-value)]
+                                 (cfg-fn :presets :dir :env "HIVE_MCP_PRESETS_DIR")))
+                             (str (System/getProperty "user.dir") "/presets"))
+              contents (->> preset-names
+                            (keep (fn [pname]
+                                    (when-let [p (get-from-file preset-dir (name pname))]
+                                      (:content p))))
+                            vec)]
+          (when (seq contents)
+            (let [joined (str/join "\n\n---\n\n" contents)]
+              (log/info "Loaded preset content for headless ling"
+                        {:presets (vec preset-names)
+                         :loaded-count (count contents)
+                         :total-chars (count joined)})
+              joined)))))))
+
 (defn- dispatch-after-ready!
   "Wait for terminal readiness, then dispatch task. Runs in a future so
    spawn! returns immediately. Uses readiness polling (not fixed sleep)
@@ -155,9 +182,17 @@
                         (if ling-context-str
                           (str ling-context-str "\n\n---\n\n" task)
                           task))
-        spawn-opts (if enriched-task
-                     (assoc opts :task enriched-task)
-                     opts)]
+        ;; Load preset content for headless backends — Claude CLI loads these
+        ;; from .claude/agents/ automatically, but headless backends (OpenRouter,
+        ;; hive-agent TransparentAgenticLoop) need explicit injection into the
+        ;; system prompt via :preset-content.
+        preset-content (when (and headless? (seq presets))
+                         (load-presets-content presets))
+        spawn-opts (cond-> (if enriched-task
+                             (assoc opts :task enriched-task)
+                             opts)
+                     (seq preset-content)
+                     (assoc :preset-content preset-content))]
 
     ;; PRE-REGISTER in DataScript BEFORE strategy-spawn!.
     ;; For headless backends, strategy-spawn! may trigger start! which fires
@@ -208,6 +243,23 @@
                                   :headless? headless?
                                   :model (or effective-model "claude")}})))
 
+      ;; Publish :slave-spawned to the in-process channel.core bus + NATS
+      ;; backbone via swarm.event-bridge. This is what actually fires the
+      ;; swarm/sync handlers (Datahike write-through, Olympus emit, etc.)
+      ;; for non-Emacs spawn modes. Required to make headless / agent-sdk /
+      ;; tmux modes show up in swarm tracking. (requiring-resolve to avoid
+      ;; agent → swarm dependency cycle.)
+      (r/rescue nil
+        (when-let [publish-slave! (requiring-resolve 'hive-mcp.swarm.event-bridge/publish-slave-event!)]
+          (publish-slave! {:type       :slave-spawned
+                           :slave-id   slave-id
+                           :name       slave-id
+                           :depth      depth
+                           :parent-id  parent
+                           :cwd        cwd
+                           :project-id project-id
+                           :timestamp  (System/currentTimeMillis)})))
+
       (when (and max-budget-usd (pos? max-budget-usd))
         (r/rescue nil
                   (when-let [register-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/register-budget!)]
@@ -250,6 +302,14 @@
       (when (seq files)
         (.claim-files! this files task-id))
 
+      ;; NOTE: We deliberately do NOT publish :task-dispatched to channel.core
+      ;; here. The JVM-side calls above already perform every action that
+      ;; handle-task-dispatched would perform (add-task!, status→:working,
+      ;; file claims). Republishing would cause duplicate writes against the
+      ;; in-memory registry. The :task-failed and :slave-killed publishes
+      ;; below ARE needed because their handlers do queue processing and
+      ;; resource cleanup beyond what the JVM path does.
+
       (let [resolved-opts (cond-> (assoc task-opts :task resolved-task :task-id task-id)
                             ctx (assoc :dispatch-context ctx))]
         (try
@@ -264,6 +324,15 @@
                        {:ling-id id :task-id task-id :mode mode :error (ex-message e)})
             (ds-lings/update-task! task-id {:status :failed
                                             :error (ex-message e)})
+            ;; Publish :task-failed for swarm/sync to release claims and
+            ;; process the queue (mirrors handle-task-failed semantics).
+            (r/rescue nil
+              (when-let [publish-slave! (requiring-resolve 'hive-mcp.swarm.event-bridge/publish-slave-event!)]
+                (publish-slave! {:type      :task-failed
+                                 :slave-id  id
+                                 :task-id   task-id
+                                 :error     (ex-message e)
+                                 :timestamp (System/currentTimeMillis)})))
             (throw (ex-info "Failed to dispatch to ling"
                             {:ling-id id :task-id task-id :error (ex-message e)}
                             e)))))))
@@ -297,7 +366,15 @@
                 (when-let [publish! (requiring-resolve 'hive-mcp.nats.bridge/publish-event!)]
                   (publish! {:type       :agent-kill
                              :agent-id   id
-                             :timestamp  (System/currentTimeMillis)}))))
+                             :timestamp  (System/currentTimeMillis)})))
+              ;; Publish :slave-killed to channel.core (+NATS) so swarm/sync
+              ;; handlers run cleanup (resource release, daemon unbind,
+              ;; Olympus emit, Datahike forget).
+              (r/rescue nil
+                (when-let [publish-slave! (requiring-resolve 'hive-mcp.swarm.event-bridge/publish-slave-event!)]
+                  (publish-slave! {:type      :slave-killed
+                                   :slave-id  id
+                                   :timestamp (System/currentTimeMillis)}))))
             result))
         (do
           (log/warn "Cannot kill ling - critical ops in progress"

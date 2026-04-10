@@ -1,6 +1,15 @@
 (ns hive-mcp.channel.piggyback
-  "Piggyback communication — instruction queue and message cursor for hivemind↔ling messaging."
+  "Piggyback communication — instruction queue and message cursor for hivemind↔ling messaging.
+
+   The instruction queue side of this namespace is now a thin facade over
+   `hive-mcp.channel.instruction-store`, which owns the cross-process
+   (NATS-backed) delivery logic. The public functions here keep their old
+   signatures and single-process behavior unchanged; when a NATS-backed
+   store has been installed (via server/init), they transparently route
+   pushes through the backbone and pick up remote pushes via a wildcard
+   subscription."
   (:require [clojure.spec.alpha :as s]
+            [hive-mcp.channel.instruction-store :as istore]
             [hive-mcp.server.guards :as guards]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -15,35 +24,56 @@
 (s/def ::hivemind-message (s/keys :req-un [::a ::e ::m]))
 (s/def ::messages (s/nilable (s/coll-of ::hivemind-message :kind vector?)))
 
-;; Instruction Queue (hivemind → ling)
+;; Instruction Queue (hivemind → ling) ------------------------------------------
+;;
+;; The queues atom is the shared backing store for every IInstructionStore
+;; implementation. Keeping it defonce'd here preserves compatibility for
+;; any legacy callers that used to reach in directly; the store records
+;; swap on this same atom.
 
-(defonce ^{:doc "Map of agent-id -> [instructions...]. Drained when piggybacked."}
+(defonce ^{:doc "Map of agent-id -> [envelopes...]. Shared with instruction-store."}
   instruction-queues
   (atom {}))
+
+(defonce ^:private default-local-store
+  (istore/local-store instruction-queues))
+
+(defn- current-store
+  "Return the installed instruction store, or a default local one bound to
+   `instruction-queues`. Side-effect-free."
+  []
+  (or (istore/get-store) default-local-store))
 
 (defn clear-instruction-queues!
   "Clear instruction queues. Guarded — no-op if coordinator running."
   []
   (guards/when-not-coordinator
    "clear-instruction-queues! called"
+   (istore/clear! (current-store))
+   ;; Ensure the shared atom is empty even if a caller swapped stores
+   ;; out from under us.
    (reset! instruction-queues {})))
 
 (defn push-instruction!
-  "Push an instruction to an agent's queue for piggyback delivery."
+  "Push an instruction to an agent's queue for piggyback delivery.
+   Delegates to the active IInstructionStore — NATS-backed when running
+   distributed, atom-only otherwise."
   [agent-id instruction]
-  (swap! instruction-queues update agent-id (fnil conj []) instruction))
+  (istore/push! (current-store) agent-id instruction)
+  ;; Preserve historical return shape (the atom's new value) for any
+  ;; caller that relied on it.
+  @instruction-queues)
 
 (defn drain-instructions!
-  "Drain all pending instructions for an agent."
+  "Drain all pending instructions for an agent, returning payloads in
+   insertion order. Returns a vector (possibly empty)."
   [agent-id]
-  (let [instructions (get @instruction-queues agent-id [])]
-    (swap! instruction-queues dissoc agent-id)
-    instructions))
+  (istore/drain! (current-store) agent-id))
 
 (defn peek-instructions
   "Peek at pending instructions without draining. For debugging."
   [agent-id]
-  (get @instruction-queues agent-id []))
+  (istore/peek* (current-store) agent-id))
 
 ;; Message Source (injectable for DIP)
 

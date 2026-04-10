@@ -151,13 +151,21 @@
   [_ config]
   (log/info ":hive/swarm-sync init — bridging channel events to logic database" config)
   (result/rescue nil
-    (init/start-swarm-sync!))
+    ;; Pass through bootstrap- and backbone-related opts. The factory and
+    ;; init layer fall back to services.swarm-sync.* in config.edn for any
+    ;; key that's nil here.
+    (init/start-swarm-sync! (select-keys config [:source :db-path :timeout-ms
+                                                 :event-backbone])))
   {:status :running})
 
 (defmethod ig/halt-key! :hive/swarm-sync
   [_ state]
   (when (= :running (:status state))
     (log/info ":hive/swarm-sync halt — stopping swarm sync")
+    ;; Stop the NATS event bridge first (reverse init order)
+    (result/rescue nil
+      (when-let [stop-bridge! (requiring-resolve 'hive-mcp.swarm.event-bridge/stop-nats-bridge!)]
+        (stop-bridge!)))
     (result/rescue nil
       (when-let [stop! (requiring-resolve 'hive-mcp.swarm.sync/stop-sync!)]
         (stop!)

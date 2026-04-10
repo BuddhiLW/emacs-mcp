@@ -12,4 +12,6 @@
  :hive/a2a-gateway    {:enabled true :port 7912}
  :hive/websocket-mcp  {:enabled true :port 7920}
  :hive/nats           {:enabled true}
+ :hive/swarm-sync     {:source         :datahike
+                       :event-backbone :nats}
  :hive/keepalive      {:signal :sigterm}}

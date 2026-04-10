@@ -1,0 +1,6 @@
+[{:slave-id "ling-X",
+  :name "x",
+  :status :working,
+  :depth 1,
+  :cwd "/tmp/x",
+  :project-id "p-x"}]

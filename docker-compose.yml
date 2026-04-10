@@ -125,11 +125,11 @@ services:
       - "4222:4222"
       - "8222:8222"
     command: ["--jetstream", "--http_port", "8222"]
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+    # No healthcheck: nats:latest is distroless (no /bin/sh, wget, or curl),
+    # so in-container probes are impossible. TCP reachability on 4222/8222
+    # and the HTTP monitor at http://localhost:8222/healthz are the source
+    # of truth. Previously: ["CMD","wget","--spider","-q","http://localhost:8222/healthz"]
+    # which failed with "wget: executable file not found" on every probe.
     restart: unless-stopped
 
   # =============================================================================

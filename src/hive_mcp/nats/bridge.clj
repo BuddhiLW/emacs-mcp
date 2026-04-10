@@ -17,6 +17,7 @@
   (:require [hive-mcp.protocols.event-backbone :as eb]
             [hive-mcp.protocols.delivery-channel :as dc]
             [hive-mcp.tools.swarm.channel :as channel]
+            [hive-mcp.channel.core :as channel-core]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -258,23 +259,61 @@
 ;; Subscriber Side — Agent (Headless Ling) Events
 ;; =============================================================================
 
+(defn- republish-lifecycle-locally!
+  "Re-emit a slave-lifecycle event into the in-process channel.core bus
+   so swarm/sync handlers fire (Datascript update, Datahike write-through,
+   Olympus emit, queue processing).
+
+   Tagged `:via :nats-bridge` so swarm.event-bridge.publish-slave-event! does
+   not bounce it back out to NATS — this message is INBOUND from NATS already."
+  [event]
+  (try
+    (channel-core/publish! (assoc event :via :nats-bridge))
+    (catch Exception e
+      (log/warn "[Bridge] failed to republish lifecycle event:" (.getMessage e)))))
+
 (defn- handle-agent-completed
-  "Handle headless agent completion — auto-shout to hivemind piggyback.
+  "Handle headless agent completion — auto-shout to hivemind piggyback AND
+   re-emit slave-lifecycle events into channel.core so swarm/sync handlers
+   fire (release claims, mark slave killed, write-through to Datahike).
+
    Journal write is already done by headless_adapter; no duplicate write here."
-  [{:keys [ling-id result] :as _msg}]
+  [{:keys [ling-id task-id result] :as _msg}]
   (log/info "[Bridge] agent completed:" ling-id)
   (auto-shout-agent-event!
    ling-id :completed
    (str "Agent " ling-id " completed"
-        (when-let [r (:result result)] (str ": " (subs (str r) 0 (min 120 (count (str r)))))))))
+        (when-let [r (:result result)] (str ": " (subs (str r) 0 (min 120 (count (str r))))))))
+  ;; Lifecycle: a headless agent completion is BOTH a task-completed and a
+  ;; slave-killed (one-shot agent-sdk semantics). Emit both so the swarm/sync
+  ;; handlers update task state and remove the slave entity.
+  (when task-id
+    (republish-lifecycle-locally! {:type :task-completed
+                                   :slave-id ling-id
+                                   :task-id task-id
+                                   :timestamp (System/currentTimeMillis)}))
+  (republish-lifecycle-locally! {:type :slave-killed
+                                 :slave-id ling-id
+                                 :timestamp (System/currentTimeMillis)}))
 
 (defn- handle-agent-failed
-  "Handle headless agent failure — auto-shout to hivemind piggyback."
-  [{:keys [ling-id error] :as _msg}]
+  "Handle headless agent failure — auto-shout to hivemind piggyback AND
+   re-emit slave-lifecycle events into channel.core so swarm/sync handlers
+   fire (release claims, fail task, remove slave)."
+  [{:keys [ling-id task-id error] :as _msg}]
   (log/info "[Bridge] agent failed:" ling-id)
   (auto-shout-agent-event!
    ling-id :error
-   (str "Agent " ling-id " failed: " (or error "unknown error"))))
+   (str "Agent " ling-id " failed: " (or error "unknown error")))
+  (when task-id
+    (republish-lifecycle-locally! {:type :task-failed
+                                   :slave-id ling-id
+                                   :task-id task-id
+                                   :error error
+                                   :timestamp (System/currentTimeMillis)}))
+  (republish-lifecycle-locally! {:type :slave-killed
+                                 :slave-id ling-id
+                                 :timestamp (System/currentTimeMillis)}))
 
 ;; =============================================================================
 ;; Subscriber Side — Drone Events (existing)

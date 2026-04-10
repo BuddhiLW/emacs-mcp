@@ -49,7 +49,9 @@
  :hive/channel-bridge  {:events     #ig/ref :hive/events
                         :ws-channel #ig/ref :hive/ws-channel}
 
- :hive/swarm-sync      {:channel-bridge #ig/ref :hive/channel-bridge}
+ :hive/swarm-sync      {:channel-bridge #ig/ref :hive/channel-bridge
+                        :source         :datahike
+                        :event-backbone :nats}
 
  :hive/workflow-engine {:extensions #ig/ref :hive/extensions
                         :memory     #ig/ref :hive/memory-store}

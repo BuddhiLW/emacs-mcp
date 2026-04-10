@@ -28,6 +28,11 @@
             [hive-mcp.memory.store.chroma :as chroma-store]
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.swarm.sync :as sync]
+            [hive-mcp.swarm.bootstrap.factory :as bootstrap-factory]
+            [hive-mcp.swarm.event-bridge :as swarm-event-bridge]
+            [hive-mcp.channel.piggyback :as piggyback]
+            [hive-mcp.channel.instruction-store :as instruction-store]
+            [hive-mcp.protocols.event-backbone :as eb]
             [hive-mcp.swarm.logic :as logic]
             [hive-hot.core :as hot]
             [hive-hot.events :as hot-events]
@@ -274,19 +279,35 @@
 ;; Memory Store Wiring
 ;; =============================================================================
 
+(defn- addon-memory-backend-configured?
+  "Check if config.edn declares an addon-provided memory backend.
+   Returns truthy if :services :memory-store :backend is set to anything
+   other than :chroma (the built-in default).
+   OCP: hive-mcp has no knowledge of specific addon implementations."
+  []
+  (let [mem-cfg (global-config/get-service-config :memory-store)]
+    (when-let [backend (:backend mem-cfg)]
+      (not= backend :chroma))))
+
 (defn wire-memory-store!
   "Wire default IMemoryStore backend (Chroma, bundled).
 
-   This sets up the fallback store. Addon backends (Milvus, Proximum, etc.)
-   override this via set-store! during Phase 4.5 load-extensions!.
-   hive-mcp has zero knowledge of addon store implementations.
+   If config.edn declares :services :memory-store {:backend :some-addon},
+   skips Chroma wiring and defers to the addon (which will call set-store!
+   during Phase 4.5 load-extensions!). This is OCP-compliant: hive-mcp
+   core never needs to know about specific addon backends.
 
    Must run AFTER init-embedding-provider! since Chroma config is set there."
   []
-  (result/rescue nil
-                 (let [store (chroma-store/create-store)]
-                   (mem-proto/set-store! store)
-                   (log/info "ChromaMemoryStore wired as default IMemoryStore (addons may override)"))))
+  (if (addon-memory-backend-configured?)
+    (log/info "Addon memory backend configured — deferring store wiring to Phase 4.5")
+    (result/rescue nil
+                   (let [chroma-host (global-config/get-service-value :chroma :host :env "CHROMA_HOST" :default "localhost")
+                         chroma-port (global-config/get-service-value :chroma :port :env "CHROMA_PORT" :parse parse-long :default 8000)
+                         store (chroma-store/create-store)]
+                     (mem-proto/set-store! store)
+                     (mem-proto/connect! store {:host chroma-host :port chroma-port :collection-name "hive-mcp-memory"})
+                     (log/info "ChromaMemoryStore wired as default IMemoryStore (addons may override)")))))
 
 ;; =============================================================================
 ;; Channel Bridge + Sync
@@ -300,13 +321,69 @@
                  (channel-bridge/init!)
                  (log/info "Channel bridge initialized - channel events will dispatch to hive-events")))
 
+(defn- build-swarm-bootstrap
+  "Construct the configured ISwarmBootstrap.
+   Honors explicit opts, falling back to `services.swarm-sync.source` in
+   config.edn (default :emacs for backwards compatibility)."
+  [opts]
+  (bootstrap-factory/make-bootstrap
+   opts
+   (fn [section key & {:as get-opts}]
+     (apply global-config/get-service-value section key (mapcat identity get-opts)))))
+
+(defn- resolve-event-backbone
+  "Pick the event backbone for swarm-sync: explicit opts > config.edn > :local.
+   :local means in-process channel.core only (legacy default).
+   :nats means also bridge slave events from the IEventBackbone."
+  [opts]
+  (or (:event-backbone opts)
+      (try
+        (some-> (global-config/get-service-value :swarm-sync :event-backbone
+                                                 :parse keyword))
+        (catch Exception _ nil))
+      :local))
+
 (defn start-swarm-sync!
-  "Start swarm sync - bridges channel events to logic database.
-   This enables: task-completed -> release claims -> process queue."
-  []
-  (result/rescue nil
-                 (sync/start-sync!)
-                 (log/info "Swarm sync started - logic database will track swarm state")))
+  "Start swarm sync — bridges channel events to logic database, rehydrates
+   the in-memory registry from the configured ISwarmBootstrap source, and
+   (optionally) bridges the IEventBackbone (NATS) into the in-process event
+   bus so distributed slave events reach the same handlers.
+
+   Args:
+     opts — {:source         :emacs|:datahike|:none
+             :event-backbone :local|:nats
+             :db-path        string
+             :timeout-ms     int}
+            (all optional; defaults resolved from config.edn)
+
+   Order matters:
+     1. Build + inject bootstrap (durable slave projection)
+     2. start-sync! (subscribes to channel.core; runs bootstrap reload)
+     3. Start NATS event bridge if requested (NATS → channel.core)"
+  ([] (start-swarm-sync! {}))
+  ([opts]
+   (result/rescue nil
+                  (let [bs (build-swarm-bootstrap opts)]
+                    (sync/set-swarm-bootstrap! bs))
+                  (sync/start-sync!)
+                  (let [eb (resolve-event-backbone opts)]
+                    (when (= :nats eb)
+                      (let [started? (swarm-event-bridge/start-nats-bridge!)]
+                        (if started?
+                          (log/info "Swarm sync: NATS event bridge started")
+                          (log/warn "Swarm sync: NATS event bridge requested but not started"
+                                    " (backbone may be disconnected — check :hive/nats init)")))
+                      ;; Rewire the piggyback instruction queue through NATS so
+                      ;; coordinators and lings in separate JVMs share a queue.
+                      (let [bb (eb/get-backbone)]
+                        (if (eb/connected? bb)
+                          (do (instruction-store/rewire!
+                               piggyback/instruction-queues
+                               bb)
+                              (log/info "Swarm sync: piggyback instruction store bound to NATS"))
+                          (log/warn "Swarm sync: piggyback instruction store staying local"
+                                    " (NATS backbone not connected)")))))
+                  (log/info "Swarm sync started - logic database will track swarm state"))))
 
 ;; =============================================================================
 ;; Hot-Reload Watcher

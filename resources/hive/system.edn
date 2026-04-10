@@ -36,7 +36,18 @@
  :hive/legacy-channel  {:port 9998}
  :hive/channel-bridge  {:events     (ig/ref :hive/events)
                         :ws-channel (ig/ref :hive/ws-channel)}
- :hive/swarm-sync      {:channel-bridge (ig/ref :hive/channel-bridge)}
+ :hive/swarm-sync      {:channel-bridge (ig/ref :hive/channel-bridge)
+                        ;; :nats ref is a dependency edge only — ensures the
+                        ;; backbone is up before the event bridge subscribes.
+                        :nats           (ig/ref :hive/nats)
+                        ;; :source resolves from services.swarm-sync.source
+                        ;; in config.edn when omitted. Valid: :emacs (legacy)
+                        ;; | :datahike (persistent KV) | :none.
+                        :source nil
+                        ;; :event-backbone resolves from
+                        ;; services.swarm-sync.event-backbone in config.edn
+                        ;; when nil. Valid: :local (default) | :nats.
+                        :event-backbone nil}
  :hive/workflow-engine {:extensions (ig/ref :hive/extensions)
                         :memory     (ig/ref :hive/memory-store)}
 

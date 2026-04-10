@@ -15,4 +15,6 @@
  :hive/registry-sync    nil
  :hive/a2a-gateway      {:enabled true :port 7912}
  :hive/nats             {:enabled true}
+ :hive/swarm-sync       {:source         :datahike
+                         :event-backbone :nats}
  :hive/keepalive        {:signal :sigterm}}
