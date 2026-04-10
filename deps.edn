@@ -119,6 +119,9 @@
         ;; Overrides default Chroma store when Milvus is reachable.
         io.github.hive-agi/hive-milvus {:git/tag "v0.1.2" :git/sha "2ce45dc"}
 
+        ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj
+        io.github.hive-agi/hive-weave {:git/tag "v0.1.0" :git/sha "63dae4a"}
+
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
         io.github.hive-agi/hive-emacs {:git/tag "v0.3.2" :git/sha "c1a6473"}
 
