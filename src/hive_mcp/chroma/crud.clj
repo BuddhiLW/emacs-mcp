@@ -124,9 +124,15 @@
                 (seq base-clause) base-clause
                 :else nil)
         fetch-limit (if include-expired? limit (+ limit 50))
+        ;; PERF: include only :metadatas — content is already stored inside
+        ;; metadata.content by index-memory-entry!, so fetching :documents
+        ;; doubles payload size for no gain. query-entries callers read
+        ;; (:content entry), never (:document entry). Dropping :documents
+        ;; roughly halves HTTP transfer + JSON-parse time for large result
+        ;; sets (see docs/carto-tag-query-perf.md).
         results (gate/deref-read (chroma/get coll
                                             :where where
-                                            :include #{:documents :metadatas}
+                                            :include #{:metadatas}
                                             :limit fetch-limit))
         entries (map h/metadata->entry results)
         {expired true live false} (group-by #(boolean (h/expired? %)) entries)]
