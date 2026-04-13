@@ -58,13 +58,27 @@
          :batch-add      (make-single-command-batch :add (:add handlers))
          :batch-feedback (make-single-command-batch :feedback (:feedback handlers))))
 
+(def write-commands
+  "Memory commands that default to :async true (queued ack, background
+   execution, result delivered via ---TOOLRESULT--- piggyback on the
+   caller's next tool call). Callers needing sync semantics pass
+   :async false. Reads (query/metadata/get/search/expiring/batch-get)
+   stay synchronous by default."
+  #{:add :batch-add
+    :duration :promote :demote
+    :log_access :feedback :helpfulness :tags
+    :cleanup :expire :decay :xpoll
+    :migrate :migrate-scoped :import :rename
+    :batch-feedback})
+
 (def handle-memory
   (make-cli-handler canonical-handlers))
 
 (def tool-def
   {:name "memory"
    :consolidated true
-   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, migrate-scoped, import, decay, xpoll, rename, batch-add, batch-feedback, batch-get. Use 'help' command to list all."
+   :default-async-commands write-commands
+   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, migrate-scoped, import, decay, xpoll, rename, batch-add, batch-feedback, batch-get. Use 'help' command to list all.\n\nWrites default to async: they return {:queued true :task-id ...} immediately and deliver the real result via ---TOOLRESULT--- on the caller's next tool call. Pass async:false to force sync. Reads (query/metadata/get/search/expiring/batch-get) stay synchronous by default; pass async:true to queue them."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :enum ["add" "query" "metadata" "get" "search" "duration" "promote" "demote" "log_access" "feedback" "helpfulness" "tags" "cleanup" "expiring" "expire" "migrate" "migrate-scoped" "import" "decay" "xpoll" "rename" "batch-add" "batch-feedback" "batch-get" "help"]

@@ -451,6 +451,23 @@
           piggyback (get-piggyback-messages agent-id project-id)]
       (wrap-piggyback content piggyback))))
 
+(defn wrap-handler-default-async-for-commands
+  "Inject :async true into args when command is in `commands` set and
+   the caller did not set :async explicitly. Used by tools that want
+   certain operations (typically writes) to default to queued execution
+   while keeping reads synchronous.
+
+   Sits OUTER than wrap-handler-async in the middleware chain so the
+   downstream interceptor sees the injected flag. Opt-out: caller passes
+   :async false. Opt-in for reads: caller passes :async true."
+  [handler commands]
+  (fn [{:keys [command] :as args}]
+    (let [cmd-kw (when command (keyword command))
+          should-default? (and (contains? commands cmd-kw)
+                               (not (contains? args :async)))]
+      (handler (cond-> args
+                 should-default? (assoc :async true))))))
+
 (defn wrap-handler-async
   "Wrap handler to intercept async tool calls.
    SRP: Single responsibility - async interception only.
@@ -655,7 +672,7 @@
 
    CRITICAL: context must wrap piggybacks so ctx/current-directory is bound
    when extract-project-id runs."
-  [{:keys [name description inputSchema handler deprecated]}]
+  [{:keys [name description inputSchema handler deprecated default-async-commands]}]
   (let [schema-ext (ext/get-schema-extensions name)
         merged-schema (if schema-ext
                         (update inputSchema :properties merge schema-ext)
@@ -667,6 +684,8 @@
                           (wrap-handler-nats-notify name) ; NATS notification for mutating ops
                           wrap-handler-retry              ; Hot-reload resilience
                           (wrap-handler-async name)       ; async:true → ack + future
+                          (cond-> (seq default-async-commands)
+                            (wrap-handler-default-async-for-commands default-async-commands))
                           wrap-handler-normalize
                           wrap-handler-compress           ; compact: true → compress JSON text
                           wrap-handler-piggybacks         ; unified: 4 channels in 1 pass

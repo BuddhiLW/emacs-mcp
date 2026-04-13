@@ -10,10 +10,16 @@
             [hive-mcp.tools.core :refer [coerce-int!]]
             [hive-mcp.tools.result-bridge :as rb]
             [hive-mcp.dns.result :as result :refer [rescue]]
+            [hive-mcp.concurrency.pool :as pool]
+            [hive-weave.pool :as wpool]
             [hive-mcp.agent.context :as ctx]
             [clojure.set]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
+
+(def ^:const ^:private memory-search-timeout-ms
+  "Timeout budget for a memory search (Chroma federated query + KG filter)."
+  15000)
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -159,6 +165,29 @@
 
 (defn handle-search-semantic
   "Search project memory using semantic similarity (vector search).
-   HCR Wave 4: Pass include_descendants=true to include child project memories."
+   HCR Wave 4: Pass include_descendants=true to include child project memories.
+
+   Runs on the dedicated memory-pool so concurrent search traffic is
+   isolated from the shared io-pool."
   [params]
-  (rb/result->mcp (rb/try-result :memory/search #(search-semantic* params))))
+  (let [timeout-sentinel ::timeout
+        raw (wpool/await!
+             (pool/memory-pool)
+             #(try (search-semantic* params)
+                   (catch Throwable t {::caught t}))
+             {:timeout-ms memory-search-timeout-ms
+              :fallback   timeout-sentinel
+              :name       "memory-search"})]
+    (cond
+      (= raw timeout-sentinel)
+      (rb/result->mcp
+       (result/err :memory/search-timeout
+                   {:message (str "memory search timed out after "
+                                  memory-search-timeout-ms "ms")}))
+
+      (and (map? raw) (contains? raw ::caught))
+      (rb/result->mcp
+       (rb/try-result :memory/search (fn [] (throw (::caught raw)))))
+
+      :else
+      (rb/result->mcp raw))))
