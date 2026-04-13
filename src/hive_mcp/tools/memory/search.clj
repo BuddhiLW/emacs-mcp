@@ -13,7 +13,6 @@
             [hive-mcp.concurrency.pool :as pool]
             [hive-weave.pool :as wpool]
             [hive-mcp.agent.context :as ctx]
-            [clojure.set]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
 
@@ -57,17 +56,28 @@
      :distance distance
      :title    (extract-title document metadata)}))
 
-(defn- matches-scope-filter?
-  "Check if a search result matches the scope filter."
-  [result scope-filter]
-  (if (nil? scope-filter)
-    true
-    (let [tags-str (get-in result [:metadata :tags] "")
-          tags (when (and tags-str (not= tags-str ""))
-                 (set (str/split tags-str #",")))
-          scope-set (if (set? scope-filter) scope-filter #{scope-filter})]
-      (or (some tags scope-set)
-          (contains? tags "scope:global")))))
+(defn- store-entry->normalized
+  "Map a store-protocol search entry (Milvus flat shape) into the
+   common {:id :document :metadata :distance} shape consumed by
+   format-search-result and merge-and-rerank.
+
+   Milvus entries are flat maps with :id, :type, :tags (vector),
+   :content, :distance, :project-id at the top level; Chroma ingest
+   entries already arrive in the normalized shape."
+  [entry]
+  (let [tags-vec  (cond
+                    (sequential? (:tags entry)) (vec (:tags entry))
+                    (string? (:tags entry))    (vec (str/split (:tags entry) #","))
+                    :else                      [])
+        tags-str  (str/join "," tags-vec)
+        tp        (:type entry)]
+    {:id       (:id entry)
+     :document (or (:content entry) "")
+     :distance (:distance entry)
+     :metadata {:tags       tags-str
+                :type       (cond-> tp (keyword? tp) name)
+                :content    (:content entry)
+                :project-id (:project-id entry)}}))
 
 (defn- record-co-access!
   "Fire-and-forget co-access recording for search results."
@@ -104,39 +114,42 @@
    Carto (L1/L2 codebase-mapping snippets) drowns out high-level knowledge."
   ["carto"])
 
-(defn- search-chroma*
-  "Search Chroma vector store with scope and tag filtering. Returns Result."
+(defn- search-store*
+  "Search the configured memory store (e.g. MilvusMemoryStore) via the
+   IMemoryStore protocol, merge with ingest cross-collection results
+   (carto snippets served by hive-ingestor), re-rank by distance, and
+   format for response. Returns Result.
+
+   Project scoping: `visible-scopes` already includes \"global\", so
+   we hand the full list to the store and skip a client-side post-
+   filter (the backend handles the project-id predicate)."
   [query limit-val type project-id in-project? include_descendants exclude-tags]
-  (let [visible-ids (when in-project?
-                      (let [visible (kg-scope/visible-scopes project-id)
-                            descendants (when include_descendants
-                                          (kg-scope/descendant-scopes project-id))
-                            all-ids (distinct (concat visible descendants))]
-                        (vec (remove #(= "global" %) all-ids))))
+  (let [store (mem-proto/get-store)
+        visible-project-ids (when in-project?
+                              (let [visible (kg-scope/visible-scopes project-id)
+                                    descendants (when include_descendants
+                                                  (kg-scope/descendant-scopes project-id))]
+                                (vec (distinct (concat visible descendants)))))
         effective-excludes (into (vec default-exclude-tags) exclude-tags)
-        results (chroma-search/search-federated query
-                                                :limit (* limit-val 2)
-                                                :type type
-                                                :project-ids visible-ids
-                                                :exclude-tags effective-excludes)
-        scope-filter (when in-project?
-                       (let [base-tags (kg-scope/visible-scope-tags project-id)
-                             desc-tags (when include_descendants
-                                         (kg-scope/descendant-scope-tags project-id))
-                             all-tags (if desc-tags
-                                        (clojure.set/union base-tags desc-tags)
-                                        base-tags)]
-                         (disj all-tags "scope:global")))
-        filtered (if scope-filter
-                   (filter #(matches-scope-filter? % scope-filter) results)
-                   results)
-        limited (take limit-val filtered)
-        formatted (mapv format-search-result limited)]
+        store-results (mem-proto/search-similar
+                       store query
+                       {:limit        (* limit-val 2)
+                        :type         type
+                        :project-ids  visible-project-ids
+                        :exclude-tags effective-excludes})
+        normalized-store (mapv store-entry->normalized store-results)
+        ingest-results  (when-let [search-fn (chroma-search/resolve-ingest-search)]
+                          (rescue nil
+                                  (let [raw (search-fn query {:limit limit-val})]
+                                    (when (and (map? raw) (:ok raw))
+                                      (chroma-search/normalize-ingest-results (:ok raw))))))
+        merged (chroma-search/merge-and-rerank normalized-store (or ingest-results []) limit-val)
+        formatted (mapv format-search-result merged)]
     (record-co-access! formatted project-id "system:semantic-search")
     (result/ok {:results formatted
-                :count (count formatted)
-                :query query
-                :scope project-id})))
+                :count   (count formatted)
+                :query   query
+                :scope   project-id})))
 
 (defn- search-semantic*
   "Pure search logic returning Result. Validates inputs and dispatches to appropriate search backend.
@@ -158,8 +171,8 @@
             [effective-pid in-project?] (domain/scope->effective sf)]
         (if openrouter?
           (search-plans* query limit-val type effective-pid in-project?)
-          (search-chroma* query limit-val type effective-pid in-project?
-                          include_descendants (if (some? exclude_tags)
+          (search-store* query limit-val type effective-pid in-project?
+                         include_descendants (if (some? exclude_tags)
                                                exclude_tags
                                                default-exclude-tags)))))))
 

@@ -58,13 +58,13 @@
 
 ;; --- Federated Search (default + ingest collections) ---
 
-(defn- resolve-ingest-search
+(defn resolve-ingest-search
   "Runtime-resolve ingest cross-collection search. Zero compile-time coupling."
   []
   (r/guard Exception nil
     (requiring-resolve 'hive-ingestor.storage.chroma/search-across-collections!)))
 
-(defn- normalize-ingest-results
+(defn normalize-ingest-results
   "Normalize ingest search results to match search-similar output shape."
   [raw-results]
   (when (sequential? raw-results)
