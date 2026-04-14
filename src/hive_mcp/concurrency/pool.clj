@@ -48,6 +48,9 @@
 (def ^:private memory-pool-size
   (max 4 available-processors))
 
+(def ^:private catchup-pool-size
+  4)
+
 ;; =============================================================================
 ;; Pool Instances (lazy init via delay)
 ;; =============================================================================
@@ -64,10 +67,14 @@
 (defonce ^:private memory-pool-delay
   (delay (wpool/make-pool {:name "hive-memory" :size memory-pool-size})))
 
+(defonce ^:private catchup-pool-delay
+  (delay (wpool/make-pool {:name "hive-catchup" :size catchup-pool-size})))
+
 (defn io-pool       [] @io-pool-delay)
 (defn compute-pool  [] @compute-pool-delay)
 (defn event-pool    [] @event-pool-delay)
 (defn memory-pool   [] @memory-pool-delay)
+(defn catchup-pool  [] @catchup-pool-delay)
 
 ;; =============================================================================
 ;; Submit API (thin delegation; prefer hive-weave.pool directly)
@@ -120,7 +127,8 @@
   {:io      (wpool/pool-stats (io-pool))
    :compute (wpool/pool-stats (compute-pool))
    :event   (wpool/pool-stats (event-pool))
-   :memory  (wpool/pool-stats (memory-pool))})
+   :memory  (wpool/pool-stats (memory-pool))
+   :catchup (wpool/pool-stats (catchup-pool))})
 
 ;; =============================================================================
 ;; Lifecycle
@@ -131,6 +139,7 @@
    pool, then force-shuts. Call during JVM shutdown or REPL teardown."
   []
   (doseq [pool-delay [io-pool-delay compute-pool-delay
-                      event-pool-delay memory-pool-delay]]
+                      event-pool-delay memory-pool-delay
+                      catchup-pool-delay]]
     (when (realized? pool-delay)
       (wpool/shutdown! @pool-delay {:await-ms 5000}))))

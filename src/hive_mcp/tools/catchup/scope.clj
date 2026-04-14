@@ -2,9 +2,13 @@
   "Scope resolution and query functions for catchup workflow."
   (:require [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
+            [hive-mcp.concurrency.pool :as pool]
             [hive-mcp.dns.result :refer [rescue]]
+            [hive-weave.pool :as wpool]
+            [clojure.tools.logging :as log]
             [clojure.string :as str]
-            [clojure.set :as set]))
+            [clojure.set :as set])
+  (:import [java.util.concurrent Future TimeUnit TimeoutException]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -89,7 +93,10 @@
               entries))))
 
 (defn query-scoped-entries
-  "Query Chroma entries filtered by project scope with hierarchy and scope-piercing."
+  "Query memory store entries filtered by project scope with hierarchy and
+   scope-piercing. The two Milvus calls (hierarchy fetch + global-piercing
+   fetch) are fanned out in parallel on the dedicated :catchup pool so the
+   effective wall-clock is `max(hierarchy, piercing)` instead of `sum`."
   [entry-type tags project-id limit]
   (when (mem-proto/store-set?)
     (let [store (mem-proto/get-store)
@@ -97,17 +104,40 @@
           in-project? (and project-id (not= project-id "global"))
           hierarchy-ids (compute-hierarchy-project-ids project-id)
           over-fetch-factor (if hierarchy-ids 3 4)
-          entries (mem-proto/query-entries store {:type entry-type
-                                                  :project-ids hierarchy-ids
-                                                  :limit (min (* limit-val over-fetch-factor) 500)})
+          pool (pool/catchup-pool)
+          f-hierarchy (wpool/submit!
+                       pool
+                       #(try (mem-proto/query-entries
+                              store
+                              {:type entry-type
+                               :project-ids hierarchy-ids
+                               :limit (min (* limit-val over-fetch-factor) 500)})
+                             (catch Throwable t
+                               (log/warnf t "query-scoped-entries hierarchy branch threw [%s]" entry-type)
+                               [])))
+          f-global (when in-project?
+                     (wpool/submit!
+                      pool
+                      #(try (mem-proto/query-entries
+                             store
+                             {:type entry-type
+                              :project-id "global"
+                              :limit 100})
+                            (catch Throwable t
+                              (log/warnf t "query-scoped-entries global-piercing branch threw [%s]" entry-type)
+                              []))))
+          ;; Unbounded .get here is acceptable because callers that need
+          ;; latency bounds (query-axioms) wrap query-scoped-entries in
+          ;; deref-with-deadline via their own submitted future, and
+          ;; query-scoped-entries is itself always invoked from a
+          ;; bounded outer context (catchup.clj query-timeout-ms).
+          entries (.get ^Future f-hierarchy)
+          global-entries (when f-global (.get ^Future f-global))
           full-scope-tags (compute-full-scope-tags project-id)
           all-visible-ids (set (or hierarchy-ids ["global"]))
           scoped (scope-filter-entries entries full-scope-tags all-visible-ids)
           scope-piercing (when in-project?
-                           (let [global-entries (mem-proto/query-entries store {:type entry-type
-                                                                                :project-id "global"
-                                                                                :limit 100})]
-                             (scope-pierce-entries global-entries project-id)))
+                           (scope-pierce-entries global-entries project-id))
           scoped (distinct-by :id (concat scoped scope-piercing))
           filtered (filter-by-tags scoped tags)]
       (->> filtered
@@ -145,11 +175,74 @@
          newest-first
          (take (or limit 20)))))
 
+(def ^:private axioms-formal-budget-ms
+  "Wall-clock budget for the formal `type=axiom` branch. query-scoped-entries
+   issues TWO sequential Milvus calls (hierarchy + global-piercing), each
+   ~5-6s on the type-filter cold path, so we budget 9.5s to stay under the
+   10s catchup acceptance gate while still letting the formal branch land."
+  9500)
+
+(def ^:private axioms-legacy-budget-ms
+  "Wall-clock budget for the legacy `type=convention` + tag=axiom branch.
+   Kept tight because the tag predicate lives in-memory after the type
+   query: if the type query itself stalls past this budget, we accept
+   partial results from the formal branch rather than block the whole
+   catchup."
+  1500)
+
+(defn- deref-with-deadline
+  "Block on `fut` up to `deadline-ms` wall-clock. On timeout, cancel(true)
+   and log under `label`; on exception, log and return []. Never throws."
+  [^Future fut deadline-ms label budget-ms]
+  (let [remaining (max 0 (- deadline-ms (System/currentTimeMillis)))]
+    (try
+      (.get fut remaining TimeUnit/MILLISECONDS)
+      (catch TimeoutException _
+        (.cancel fut true)
+        (log/warnf "catchup/query-axioms %s branch exceeded budget (%sms) — cancelled, partial results"
+                   label budget-ms)
+        [])
+      (catch Throwable t
+        (log/warnf t "catchup/query-axioms %s branch failed — partial results" label)
+        []))))
+
 (defn query-axioms
-  "Query axiom entries (both formal type and legacy tagged conventions)."
+  "Query axiom entries (both formal type and legacy tagged conventions).
+   Sub-queries run in parallel on the dedicated :catchup pool (hive-weave
+   bounded ThreadPoolExecutor via `hive-mcp.concurrency.pool/catchup-pool`)
+   and are deref'd with a bounded deadline (`query-axioms-budget-ms`).
+
+   Partial-tolerance: if the legacy `convention[axiom]` branch stalls on a
+   Milvus cold path, it is cancelled at the deadline and the formal-type
+   branch still delivers results. This replaces the prior pattern of
+   `@f-legacy` (unbounded deref) which could block the outer catchup
+   timeout indefinitely and drop all axioms including the ones f-formal
+   already produced.
+
+   The hive-ttracking EPIC (kanban 20260414104332-192b2da4) will later
+   wrap this pattern behind `tt/track` + `deftest-tt`."
   [project-id]
-  (let [formal (query-scoped-entries "axiom" nil project-id 100)
-        legacy (query-scoped-entries "convention" ["axiom"] project-id 100)]
+  (let [pool (pool/catchup-pool)
+        now (System/currentTimeMillis)
+        formal-deadline (+ now axioms-formal-budget-ms)
+        legacy-deadline (+ now axioms-legacy-budget-ms)
+        f-formal (wpool/submit!
+                  pool
+                  #(try (query-scoped-entries "axiom" nil project-id 100)
+                        (catch Throwable t
+                          (log/warn t "catchup/query-axioms formal branch threw")
+                          [])))
+        f-legacy (wpool/submit!
+                  pool
+                  #(try (query-scoped-entries "convention" ["axiom"] project-id 100)
+                        (catch Throwable t
+                          (log/warn t "catchup/query-axioms legacy branch threw")
+                          [])))
+        ;; Deref legacy (tighter budget) first so we fail-fast on slow-tag
+        ;; path, then formal with its generous budget. Order is irrelevant
+        ;; for correctness — both futures already run in parallel on pool.
+        legacy (deref-with-deadline f-legacy legacy-deadline "legacy" axioms-legacy-budget-ms)
+        formal (deref-with-deadline f-formal formal-deadline "formal" axioms-formal-budget-ms)]
     (distinct-by :id (concat formal legacy))))
 
 (defn query-regular-conventions
