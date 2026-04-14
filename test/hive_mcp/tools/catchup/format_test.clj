@@ -176,13 +176,13 @@
         (is (string? (:hint meta-block)))
         (is (.contains (:hint meta-block) "MEMORY"))))))
 
-(deftest chroma-not-configured-error-test
+(deftest store-not-configured-error-test
   (testing "returns error with isError flag"
-    (let [resp (fmt/chroma-not-configured-error)
+    (let [resp (fmt/store-not-configured-error)
           parsed (json/read-str (:text resp) :key-fn keyword)]
       (is (true? (:isError resp)))
       (is (false? (:success parsed)))
-      (is (= "Chroma not configured" (:error parsed))))))
+      (is (= "Memory store not configured" (:error parsed))))))
 
 (deftest catchup-error-test
   (testing "returns error from exception"

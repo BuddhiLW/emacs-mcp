@@ -5,7 +5,7 @@
    - handle-decay: MCP handler for scheduled decay
    - run-decay-cycle!: Hook handler for crystallize-session
    - Pure helpers: query-scoped-entries, build-decay-plan"
-  (:require [hive-mcp.tools.memory.core :refer [with-chroma]]
+  (:require [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.crystal.core :as crystal]
@@ -87,7 +87,7 @@
   "Run scheduled staleness decay on memory entries."
   [{:keys [directory access_threshold recency_days limit dry_run]}]
   (log/info "mcp-memory-decay: starting scheduled decay cycle")
-  (with-chroma
+  (with-store
     (let [directory     (resolve-directory directory)
           limit-val     (coerce-limit limit 200)
           opts          {:access-threshold (coerce-limit access_threshold 3)

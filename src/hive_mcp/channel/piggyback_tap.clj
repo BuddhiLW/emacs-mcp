@@ -45,10 +45,23 @@
            (log/debug "piggyback-tap: catchup drain failed:" (.getMessage e))
            nil))))
 
+(defn- resolve-child-project-ids
+  "Resolve project-ids of cross-project descendants for piggyback inclusion."
+  [project-id]
+  (when project-id
+    (try
+      (when-let [query-fn (requiring-resolve 'hive-mcp.swarm.datascript.queries/get-child-project-ids)]
+        (let [child-pids (query-fn project-id)]
+          (when (seq child-pids) child-pids)))
+      (catch Exception _e nil))))
+
 (defn- drain-hivemind-piggyback
-  "Drain hivemind messages for an agent+project. Returns formatted messages or nil."
+  "Drain hivemind messages for an agent+project. Returns formatted messages or nil.
+   Includes shouts from cross-project descendants via child project-id resolution."
   [agent-id project-id]
-  (piggyback/get-messages agent-id :project-id project-id))
+  (piggyback/get-messages agent-id
+                          :project-id project-id
+                          :additional-project-ids (resolve-child-project-ids project-id)))
 
 (defn- format-block
   "Format a single piggyback block as delimited text."

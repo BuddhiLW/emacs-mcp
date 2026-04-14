@@ -20,7 +20,7 @@
   {:openrouter-api-key  ["OPENROUTER_API_KEY"  "openrouter/hive-mcp"]
    :openai-api-key      ["OPENAI_API_KEY"      "openai/hive-mcp"]
    :anthropic-api-key   ["ANTHROPIC_API_KEY"    "Anthropic/api-key"]
-   :venice-api-key      ["VENICE_API_KEY"       "venice/hive-mcp"]
+   :venice-api-key      ["VENICE_API_KEY"       "Venice/api-key"]
    :groq-api-key        ["GROQ_API_KEY"         "groq/hive-mcp"]
    :together-api-key    ["TOGETHER_API_KEY"     "together/hive-mcp"]
    :fireworks-api-key   ["FIREWORKS_API_KEY"    "fireworks/hive-mcp"]})

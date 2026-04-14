@@ -9,8 +9,25 @@
 ;;; ============================================================================
 ;;; IMemoryStore Protocol (Core CRUD + Search)
 ;;; ============================================================================
+;;;
+;;; Reload-safety: `defprotocol` is NOT idempotent. Re-evaluating this form
+;;; generates a fresh host interface class in the current classloader,
+;;; silently invalidating every defrecord extender that was compiled against
+;;; the previous interface. That shows up as `satisfies?` returning false
+;;; and protocol dispatch failing with "No implementation of method ... for
+;;; class: <record>" — the exact failure mode observed after L2 multi-store
+;;; registry refactor when nREPL / addon load races caused the protocol ns
+;;; to re-evaluate after addons had already compiled their stores.
+;;;
+;;; The `defonce`-guarded block below ensures `defprotocol` runs exactly
+;;; once per JVM. On subsequent reloads of this namespace, the existing
+;;; interface class and method Vars are preserved, so extenders compiled
+;;; against them keep dispatching correctly.
 
-(defprotocol IMemoryStore
+(defonce ^:private -imemorystore-defined? (atom false))
+
+(when (compare-and-set! -imemorystore-defined? false true)
+  (defprotocol IMemoryStore
   "Storage backend protocol for memory entries."
 
   ;;; =========================================================================
@@ -83,41 +100,85 @@
     "Get store status and configuration info.")
 
   (reset-store! [this]
-    "Reset the store to empty state."))
+    "Reset the store to empty state.")))
 
 ;;; ============================================================================
-;;; Active Store Management
+;;; Store Registry (Multi-Store)
 ;;; ============================================================================
+;;;
+;;; The registry maps named keys to IMemoryStore instances. The :default slot
+;;; backs all legacy callers of `(get-store)`. Additional slots can host
+;;; independent stores (e.g. cartography-scoped backends) without disturbing
+;;; existing code.
 
-(defonce ^:private active-store (atom nil))
+(defonce ^:private store-registry (atom {}))
 
-(defn set-store!
-  "Set the active memory store implementation."
-  [store]
+(defn register-store!
+  "Register `store` under `key` in the multi-store registry.
+   Returns the registered store."
+  [key store]
   {:pre [(satisfies? IMemoryStore store)]}
-  (reset! active-store store)
+  (swap! store-registry assoc key store)
   store)
 
-(defn get-store
-  "Get the active memory store, or throw if none set."
+(defn unregister-store!
+  "Remove the store at `key`. No-op if absent. Does NOT disconnect
+   the underlying store; callers are responsible for lifecycle."
+  [key]
+  (swap! store-registry dissoc key)
+  nil)
+
+(defn registered-stores
+  "Return the current registry map {key -> store}. Read-only snapshot."
   []
-  (or @active-store
-      (throw (ex-info "No memory store configured. Call set-store! first."
-                      {:hint "Initialize with chroma-store or datascript-store"}))))
+  @store-registry)
+
+(defn reset-registry!
+  "Clear all entries from the registry. Intended for tests.
+   Does NOT disconnect underlying stores."
+  []
+  (reset! store-registry {})
+  nil)
+
+(defn get-store
+  "Get a memory store from the registry.
+   0-arity: return the :default store, throw if none registered
+            (backward-compatible with legacy callers).
+   1-arity: return the store registered under `key`, throw if absent."
+  ([]
+   (or (:default @store-registry)
+       (throw (ex-info "No default memory store registered. Call set-store! or register-store! :default first."
+                       {:registry-keys (vec (keys @store-registry))
+                        :hint "Initialize with chroma-store, milvus addon, or datascript-store"}))))
+  ([key]
+   (or (get @store-registry key)
+       (throw (ex-info (str "Unknown memory store key: " key)
+                       {:store-key key
+                        :available (vec (keys @store-registry))})))))
+
+(defn set-store!
+  "Legacy single-store setter. Routes to the :default slot of the
+   multi-store registry for backward compatibility with existing callers."
+  [store]
+  {:pre [(satisfies? IMemoryStore store)]}
+  (register-store! :default store)
+  store)
 
 (defn store-set?
-  "Check if a memory store has been configured."
+  "Check if a default memory store has been configured."
   []
-  (some? @active-store))
+  (some? (:default @store-registry)))
 
 (defn reset-active-store!
-  "Reset the active store atom to nil."
+  "Disconnect and clear the :default store. Leaves other registry
+   entries untouched."
   []
-  (when-let [store @active-store]
+  (when-let [store (:default @store-registry)]
     (try
       (disconnect! store)
       (catch Exception _)))
-  (reset! active-store nil))
+  (swap! store-registry dissoc :default)
+  nil)
 
 ;;; ============================================================================
 ;;; Lifecycle Convenience Functions
@@ -133,14 +194,14 @@
   []
   (when (store-set?)
     (try
-      (:healthy? (health-check @active-store))
+      (:healthy? (health-check (get-store)))
       (catch Exception _ false))))
 
 (defn active-store-status
   "Get comprehensive status of the active store."
   []
   (when (store-set?)
-    (let [store @active-store]
+    (let [store (get-store)]
       (merge (store-status store)
              (try (health-check store)
                   (catch Exception e
@@ -149,18 +210,22 @@
 ;;; ============================================================================
 ;;; IMemoryStoreWithAnalytics Protocol (Optional Extension)
 ;;; ============================================================================
+;;; Reload-safe: see note on IMemoryStore above.
 
-(defprotocol IMemoryStoreWithAnalytics
-  "Optional extension for analytics tracking."
+(defonce ^:private -iwithanalytics-defined? (atom false))
 
-  (log-access! [this id]
-    "Log an access event for an entry.")
+(when (compare-and-set! -iwithanalytics-defined? false true)
+  (defprotocol IMemoryStoreWithAnalytics
+    "Optional extension for analytics tracking."
 
-  (record-feedback! [this id feedback]
-    "Record helpfulness feedback for an entry.")
+    (log-access! [this id]
+      "Log an access event for an entry.")
 
-  (get-helpfulness-ratio [this id]
-    "Calculate helpfulness ratio for an entry."))
+    (record-feedback! [this id feedback]
+      "Record helpfulness feedback for an entry.")
+
+    (get-helpfulness-ratio [this id]
+      "Calculate helpfulness ratio for an entry.")))
 
 (defn analytics-store?
   "Check if the store supports analytics tracking."
@@ -170,23 +235,61 @@
 ;;; ============================================================================
 ;;; IMemoryStoreWithStaleness Protocol (Optional Extension)
 ;;; ============================================================================
+;;; Reload-safe: see note on IMemoryStore above.
 
-(defprotocol IMemoryStoreWithStaleness
-  "Optional extension for staleness tracking."
+(defonce ^:private -iwithstaleness-defined? (atom false))
 
-  (update-staleness! [this id staleness-opts]
-    "Update staleness tracking fields for an entry.")
+(when (compare-and-set! -iwithstaleness-defined? false true)
+  (defprotocol IMemoryStoreWithStaleness
+    "Optional extension for staleness tracking."
 
-  (get-stale-entries [this threshold opts]
-    "Get entries with staleness probability above threshold.")
+    (update-staleness! [this id staleness-opts]
+      "Update staleness tracking fields for an entry.")
 
-  (propagate-staleness! [this source-id depth]
-    "Propagate staleness from source entry to dependents."))
+    (get-stale-entries [this threshold opts]
+      "Get entries with staleness probability above threshold.")
+
+    (propagate-staleness! [this source-id depth]
+      "Propagate staleness from source entry to dependents.")))
 
 (defn staleness-store?
   "Check if the store supports staleness tracking."
   [store]
   (satisfies? IMemoryStoreWithStaleness store))
+
+;;; ============================================================================
+;;; IMemoryStoreTemporal Protocol (Bitemporal Extension)
+;;; ============================================================================
+;;; Reload-safe: see note on IMemoryStore above.
+;;; Only proximum implements this; other stores return :not-supported.
+
+(defonce ^:private -iwithtemporal-defined? (atom false))
+
+(when (compare-and-set! -iwithtemporal-defined? false true)
+  (defprotocol IMemoryStoreTemporal
+    "Bitemporal query extension for memory stores.
+     Provides as-of, history, and between queries over immutable fact logs."
+
+    (asof-entry [this id timestamp]
+      "Return the value of entry `id` as it was known at `timestamp`.
+       Returns nil if entry did not exist at that time.")
+
+    (history-entry [this id]
+      "Return seq of [timestamp value] pairs for all versions of entry `id`,
+       ordered oldest-first.")
+
+    (asof-query [this criteria timestamp]
+      "Return entries matching `criteria` as they were known at `timestamp`.
+       Criteria is a map with optional :type, :tags keys.")
+
+    (between-query [this criteria t1 t2]
+      "Return entries matching `criteria` that existed between t1 and t2.
+       Criteria is a map with optional :type, :tags keys.")))
+
+(defn temporal-store?
+  "Check if the store supports bitemporal queries."
+  [store]
+  (satisfies? IMemoryStoreTemporal store))
 
 ;;; ============================================================================
 ;;; Utility Functions

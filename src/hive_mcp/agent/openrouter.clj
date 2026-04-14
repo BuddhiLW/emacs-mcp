@@ -25,7 +25,7 @@
                    :default-model "anthropic/claude-3-haiku"}
    :venice        {:api-url       "https://api.venice.ai/api/v1/chat/completions"
                    :secret-key    :venice-api-key
-                   :default-model "llama-3.3-70b"}
+                   :default-model "venice-uncensored"}
    :groq          {:api-url       "https://api.groq.com/openai/v1/chat/completions"
                    :secret-key    :groq-api-key
                    :default-model "llama-3.3-70b-versatile"}

@@ -1,5 +1,5 @@
-(ns hive-mcp.agent.drone.backend.legacy-loop
-  "LegacyLoopBackend -- IDroneExecutionBackend wrapping the existing OpenRouter drone loop."
+(ns hive-mcp.agent.drone.backend.openrouter-loop
+  "OpenRouterLoopBackend -- IDroneExecutionBackend wrapping the OpenRouter drone loop."
   (:require [hive-mcp.agent.drone.backend :as backend]
             [hive-mcp.agent.drone.tool-allowlist :as allowlist]
             [hive-mcp.agent.registry :as registry]
@@ -57,15 +57,15 @@
    :steps      0
    :tool-calls 0})
 
-(defrecord LegacyLoopBackend [model-override]
+(defrecord OpenRouterLoopBackend [model-override]
   backend/IDroneExecutionBackend
 
   (execute-drone [_this task-context]
     (let [{:keys [task model preset tools max-steps trace drone-id cwd]} task-context
           effective-model (or model-override model (config/default-drone-model))
-          effective-id    (or drone-id "legacy-drone")]
+          effective-id    (or drone-id "openrouter-drone")]
       (try
-        (log/info "LegacyLoopBackend executing"
+        (log/info "OpenRouterLoopBackend executing"
                   {:drone-id effective-id :model effective-model :max-steps max-steps})
 
         (let [llm-backend     (create-llm-backend effective-model preset)
@@ -82,7 +82,7 @@
                                 :trace?       (boolean trace)
                                 :agent-id     effective-id})]
 
-          (log/info "LegacyLoopBackend completed"
+          (log/info "OpenRouterLoopBackend completed"
                     {:drone-id effective-id
                      :status   (:status loop-result)
                      :turns    (:turns loop-result)})
@@ -90,7 +90,7 @@
           (build-result loop-result effective-model))
 
         (catch Exception e
-          (log/error {:event      :legacy-loop/execution-failed
+          (log/error {:event      :openrouter-loop/execution-failed
                       :drone-id   effective-id
                       :model      effective-model
                       :error      (ex-message e)})
@@ -100,12 +100,12 @@
     true)
 
   (backend-type [_this]
-    :legacy-loop))
+    :openrouter-loop))
 
-(defn ->legacy-loop-backend
-  "Create a LegacyLoopBackend instance."
+(defn ->openrouter-loop-backend
+  "Create an OpenRouterLoopBackend instance."
   [& [{:keys [model]}]]
-  (->LegacyLoopBackend model))
+  (->OpenRouterLoopBackend model))
 
-(defmethod backend/resolve-backend :legacy-loop [context]
-  (->legacy-loop-backend {:model (:model context)}))
+(defmethod backend/resolve-backend :openrouter-loop [context]
+  (->openrouter-loop-backend {:model (:model context)}))

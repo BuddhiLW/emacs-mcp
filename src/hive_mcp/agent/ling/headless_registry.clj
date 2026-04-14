@@ -93,12 +93,13 @@
 
 (defn best-headless-for-provider
   "Return the best headless-id for a provider keyword (:claude, :openai, etc.).
-   Preference order for :claude: :claude-sdk > :claude-process.
+   Preference order for :claude: :hive-agent > :claude-sdk > :claude-process.
    Returns nil if no backend available for the provider."
   [provider-kw]
   (let [registered (registered-headless)]
     (case provider-kw
       :claude (cond
+                (contains? registered :hive-agent) :hive-agent
                 (contains? registered :claude-sdk) :claude-sdk
                 (contains? registered :claude-process) :claude-process
                 :else nil)

@@ -25,7 +25,8 @@ RUN curl -sL "https://github.com/babashka/babashka/releases/download/v${BB_VERSI
       | tar -xzf - -C /usr/local/bin bb
 
 COPY analyze.sh /usr/local/bin/analyze.sh
-RUN chmod +x /usr/local/bin/analyze.sh
+COPY extract.bb /usr/local/bin/extract.bb
+RUN chmod +x /usr/local/bin/analyze.sh /usr/local/bin/extract.bb
 
 ENV ANALYSIS_INTERVAL_SECONDS=300
 ENV JAVA_OPTS="-Xmx1g -Xms256m"

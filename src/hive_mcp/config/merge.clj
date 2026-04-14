@@ -22,9 +22,52 @@
               :presets-path nil}
    :project-overrides {}
    :parent-rules []
+   :memory {:default-store :chroma
+            :routes {:decision    :chroma
+                     :snippet     :chroma
+                     :preference  :chroma
+                     :pattern     :chroma
+                     :system      :chroma
+                     :context     :chroma
+                     :reflection  :chroma
+                     :note        :chroma}
+            ;; Routes can also be maps for dual-write scenarios:
+            ;; :snippet {:primary :milvus :projection :chroma}
+            :stores {:chroma {:addon :hive-chroma
+                              :host "localhost"
+                              :port 8000}
+                     ;; Example: Milvus store (uncomment to enable)
+                     ;; :milvus {:addon :hive-milvus
+                     ;;          :host "localhost"
+                     ;;          :port 19530
+                     ;;          :collection "hive_memory"}
+                     ;; Example: Proximum store (uncomment to enable)
+                     ;; :proximum {:addon :hive-proximum
+                     ;;            :host "localhost"
+                     ;;            :port 50051}
+                     }}
    :embeddings {:ollama {:host "http://localhost:11434"
                          :model "nomic-embed-text"}
                 :openrouter {:model "qwen/qwen3-embedding-8b"}}
+   :embedder {:default :ollama-nomic
+              :routes {:type/conversation-turn :openrouter-qwen3
+                       :type/turn-summary      :openrouter-qwen3
+                       :type/decision          :openrouter-qwen3
+                       :type/plan              :openrouter-qwen3
+                       :type/session-summary   :openrouter-qwen3
+                       :type/convention        :openrouter-qwen3
+                       :type/axiom             :ollama-nomic
+                       :type/principle         :ollama-nomic
+                       :type/snippet           :ollama-nomic
+                       :type/note              :ollama-nomic}
+              :providers {:ollama-nomic     {:impl :ollama
+                                             :model "nomic-embed-text"
+                                             :max-tokens 2048
+                                             :dimension 768}
+                          :openrouter-qwen3 {:impl :openrouter
+                                             :model "qwen/qwen3-embedding-8b"
+                                             :max-tokens 32768
+                                             :dimension 4096}}}
    :services {:chroma {:mode :local :host "localhost" :port 8000}
               :ollama {:mode :local :host "http://localhost:11434" :model "nomic-embed-text"}
               :datahike {:mode :local :path "data/kg"}
@@ -46,7 +89,7 @@
                       ;; to start, so 60s is the safe default. Configurable via:
                       ;;   {:services {:forge {:readiness-timeout-ms 90000}}}
                       :readiness-timeout-ms 60000}
-              :drone {:mode :local :default-model "devstral-small:24b" :default-backend :openrouter}
+              :drone {:mode :local :default-model "devstral-small:24b"}
               :nats {:mode :local
                      :enabled false
                      :url "nats://localhost:4222"
@@ -54,7 +97,15 @@
                      :max-reconnects 5
                      :reconnect-wait 1000}
               :scheduler {:mode :local :enabled true :interval-minutes 60
-                          :memory-limit 50 :edge-limit 100 :disc-enabled true}}
+                          :memory-limit 50 :edge-limit 100 :disc-enabled true}
+              :memory-store {:backend :chroma}
+              :qdrant-carto {:mode :local
+                             :host "localhost"
+                             :port 6333
+                             :collection "carto-snippets"
+                             :embedding {:provider :ollama
+                                         :model "nomic-embed-code"}}
+              :carto-store {:backend :qdrant-carto}}
    :secrets {:openrouter-api-key nil
              :openai-api-key nil
              :anthropic-api-key nil

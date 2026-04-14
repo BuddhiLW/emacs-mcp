@@ -33,15 +33,26 @@ services:
     build:
       context: ./docker/lsp-sidecar
     container_name: hive-mcp-lsp-sidecar
+    # Workspace mount is configurable so the sidecar can index any project
+    # under a single host root, not just hive-mcp.
+    #
+    # HIVE_LSP_WORKSPACE_ROOT (host path) — defaults to ${HOME}/PP so that
+    # both hive/* subprojects and sibling repos (e.g. PP/sec/<project>) are
+    # visible. Project-ids on the MCP side are paths relative to this root
+    # (e.g. "hive/hive-mcp", "sec/hexstrike-ai/labs/.../probe").
+    #
+    # To override:  export HIVE_LSP_WORKSPACE_ROOT=/some/host/path
+    #               docker compose up -d --force-recreate lsp-sidecar
     volumes:
       - ${HOME}/.cache/hive-lsp:/cache
-      - .:/workspace:rw
+      - ${HIVE_LSP_WORKSPACE_ROOT:-${HOME}/PP}:/workspace:rw
     environment:
       - ANALYSIS_INTERVAL_SECONDS=300
       - JAVA_OPTS=-Xmx1g -Xms256m
-      # LSP_PROJECTS unset → auto-discovers deps.edn via find
-      # Set to comma-separated RELATIVE paths for explicit projects (e.g. "subproj-a,subproj-b")
-      # NEVER use absolute paths here — discover_projects prepends /workspace/
+      # LSP_PROJECTS unset → auto-discovers deps.edn via find (maxdepth 3,
+      # so /workspace/<group>/<project>/deps.edn is found).
+      # Set to comma-separated RELATIVE paths for explicit projects
+      # (e.g. "hive/hive-mcp,hive/lsp-mcp"). Absolute paths are stripped.
     restart: unless-stopped
 
   # =============================================================================
@@ -113,6 +124,22 @@ services:
   #     - etcd
   #     - minio
   #   restart: unless-stopped
+
+  # =============================================================================
+  # Core: Qdrant (Carto snippets, default, always starts)
+  # Dedicated vector store for cartography snippets — keeps code embeddings
+  # isolated from the general :memory-store so recall tuning is independent.
+  # Used by :services :carto-store {:backend :qdrant-carto}.
+  # =============================================================================
+  qdrant-carto:
+    image: qdrant/qdrant:latest
+    container_name: hive-mcp-qdrant-carto
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - hive-qdrant-carto-data:/qdrant/storage
+    restart: unless-stopped
 
   # =============================================================================
   # Core: NATS Server (default, always starts)
@@ -201,6 +228,8 @@ services:
 volumes:
   # Core (always created)
   chroma-data:
+    driver: local
+  hive-qdrant-carto-data:
     driver: local
   # lsp-cache: replaced with bind mount to ~/.cache/hive-lsp for host ↔ container sharing
 

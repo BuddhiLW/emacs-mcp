@@ -9,7 +9,8 @@
 
    Function signatures match the chroma API callers expect (keyword args where
    chroma used keyword args) so resolve-site swaps are zero-change for callers."
-  (:require [hive-mcp.protocols.memory :as proto]))
+  (:require [hive-mcp.protocols.memory :as proto]
+            [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -23,6 +24,31 @@
   "Index a memory entry via the active backend. Returns entry ID."
   [entry]
   (proto/add-entry! (proto/get-store) entry))
+
+(defn index-memory-entries!
+  "Batch-index multiple memory entries via the active backend.
+   Each entry is indexed through the store's add-entry! protocol method,
+   which handles embedding and metadata persistence internally.
+
+   Arguments:
+     entries - sequential collection of entry maps (same shape as index-memory-entry!)
+
+   Returns:
+     Vector of entry IDs (one per input entry, positionally matched).
+     Entries that fail individually are logged and returned as nil in that position.
+
+   Callers (e.g. cartography/scan.clj) should chunk large batches themselves
+   to avoid holding the store lock for extended periods."
+  [entries]
+  (let [store (proto/get-store)]
+    (mapv (fn [entry]
+            (try
+              (proto/add-entry! store entry)
+              (catch Exception e
+                (log/warn "index-memory-entries!: entry failed:"
+                          (:id entry) (ex-message e))
+                nil)))
+          entries)))
 
 (defn get-entry-by-id
   "Get a memory entry by ID from the active backend."
@@ -88,6 +114,35 @@
    Pure function — delegates to protocols.memory/content-hash."
   [content]
   (proto/content-hash content))
+
+(defn generate-id
+  "Generate a unique timestamped ID for memory entries.
+   Delegates to protocols.memory/generate-id."
+  []
+  (proto/generate-id))
+
+(defn get-embedding-provider
+  "Get the current embedding provider.
+   Delegates to chroma.embeddings/get-embedding-provider (embedding
+   config is backend-independent — lives outside IMemoryStore)."
+  []
+  (when-let [f (try (requiring-resolve 'hive-mcp.chroma.embeddings/get-embedding-provider)
+                    (catch Exception _ nil))]
+    (f)))
+
+(defn embedding-configured?
+  "Check if an embedding provider is configured and available.
+   Delegates to chroma.embeddings/embedding-configured? (embedding
+   config is backend-independent — lives outside IMemoryStore)."
+  []
+  (when-let [f (try (requiring-resolve 'hive-mcp.chroma.embeddings/embedding-configured?)
+                    (catch Exception _ nil))]
+    (f)))
+
+(defn cleanup-expired!
+  "Delete expired entries via the active backend."
+  []
+  (proto/cleanup-expired! (proto/get-store)))
 
 (defn available?
   "Check if a memory store backend is configured and ready."

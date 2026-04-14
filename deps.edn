@@ -125,6 +125,11 @@
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
         io.github.hive-agi/hive-emacs {:git/tag "v0.3.2" :git/sha "c1a6473"}
 
+        ;; hive-proximum — temporal/bitemporal memory backend (IMemoryStore via IAddon)
+        ;; Auto-discovered via META-INF/hive-addons/hive-proximum.edn manifest.
+        ;; Stub store until backend impl lands (task 486248c0).
+        io.github.hive-agi/hive-proximum {:local/root "../hive-proximum"}
+
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
         integrant/integrant {:mvn/version "1.0.1"}

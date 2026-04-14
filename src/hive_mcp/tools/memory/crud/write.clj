@@ -17,6 +17,7 @@
             [hive-weave.pool :as wpool]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.crystal.recall :as recall]
+            [clojure.string :as str]
             [taoensso.timbre :as log]))
 
 (def ^:const ^:private memory-write-timeout-ms
@@ -116,6 +117,30 @@
                            :abstraction-level abstraction-level
                            :knowledge-gaps knowledge-gaps})))
 
+(def ^:private ^:const read-after-write-attempts 6)
+(def ^:private ^:const read-after-write-base-ms 40)
+
+(defn- fetch-with-retry
+  "Read an entry by id with bounded exponential-ish backoff. Addresses
+   read-after-write consistency lag on some IMemoryStore backends
+   (e.g. Milvus's HTTP transport where `:consistency-level :strong` on
+   get doesn't always surface the just-written row on the first poll).
+
+   Attempts: `read-after-write-attempts`, waits grow linearly from
+   `read-after-write-base-ms`. Total worst-case budget ≈ 40+80+120+160+200
+   = 600 ms, which stays well under the 30 s memory-write-timeout-ms
+   and is invisible to callers when the first read already succeeds."
+  [store entry-id openrouter?]
+  (loop [attempt 1]
+    (let [fetched (if openrouter?
+                    (plans/get-plan entry-id)
+                    (mem-proto/get-entry store entry-id))]
+      (cond
+        (some? fetched) fetched
+        (>= attempt read-after-write-attempts) nil
+        :else (do (Thread/sleep (* attempt read-after-write-base-ms))
+                  (recur (inc attempt)))))))
+
 (defn- finalize-entry!
   "Wire KG edges, fetch created entry, notify channel, and format response."
   [entry-id openrouter? kg-params project-id agent-id
@@ -124,7 +149,7 @@
         edge-ids (create-kg-edges! entry-id kg-params project-id agent-id)
         _ (when (and (seq edge-ids) (not openrouter?))
             (mem-proto/update-entry! store entry-id {:kg-outgoing edge-ids}))
-        created (if openrouter? (plans/get-plan entry-id) (mem-proto/get-entry store entry-id))]
+        created (fetch-with-retry store entry-id openrouter?)]
     (when-not created
       (log/error "Failed to retrieve entry after indexing:" entry-id
                  "openrouter?" openrouter?))
@@ -139,10 +164,10 @@
     (if created
       (mcp-json (cond-> (fmt/entry->json-alist created)
                   (seq edge-ids) (assoc :kg_edges_created edge-ids)))
-      (mcp-error (str "Entry indexed as " entry-id " but retrieval failed. Check Chroma connectivity.")))))
+      (mcp-error (str "Entry indexed as " entry-id " but retrieval failed. Check memory store connectivity.")))))
 
 (defn- do-add!
-  "Inner core of handle-add. Runs the Chroma/KG/plan IO path.
+  "Inner core of handle-add. Runs the memory-store/KG/plan IO path.
    Intended to be submitted to the memory pool for isolation."
   [{:keys [type content tags duration directory agent_id
            kg_implements kg_supersedes kg_depends_on kg_refines abstraction_level]}]
@@ -178,13 +203,26 @@
                            :expires expires :project-id project-id
                            :abstraction-level abstraction-level
                            :knowledge-gaps knowledge-gaps :agent-id agent-id}
-                entry-id (index-entry! openrouter? entry-ctx)
-                _ (recall/register-created-id! entry-id project-id)
-                kg-params {:kg_implements (:kg-implements-vec kg-vecs)
-                           :kg_supersedes (:kg-supersedes-vec kg-vecs)
-                           :kg_depends_on (:kg-depends-on-vec kg-vecs)
-                           :kg_refines    (:kg-refines-vec kg-vecs)}]
-            (finalize-entry! entry-id openrouter? kg-params project-id agent-id entry-ctx)))))))
+                raw-id (index-entry! openrouter? entry-ctx)]
+            ;; Contract guard: IMemoryStore/add-entry! must return a non-blank
+            ;; id string. Some backends (e.g. Milvus under circuit-breaker
+            ;; fail-soft) return a {:success? false ...} failure map instead,
+            ;; which used to silently poison KG edges and surface as the
+            ;; misleading "Entry indexed as {...} but retrieval failed" error.
+            ;; Reject map / nil / blank returns up front with an actionable
+            ;; message so the store's real failure reason is visible.
+            (if-not (and (string? raw-id) (not (str/blank? raw-id)))
+              (mcp-error (str "Memory store add-entry! did not return an id "
+                              "(got " (pr-str raw-id) "). "
+                              "Backend is likely degraded or offline — "
+                              "check store health and retry."))
+              (let [entry-id raw-id
+                    _ (recall/register-created-id! entry-id project-id)
+                    kg-params {:kg_implements (:kg-implements-vec kg-vecs)
+                               :kg_supersedes (:kg-supersedes-vec kg-vecs)
+                               :kg_depends_on (:kg-depends-on-vec kg-vecs)
+                               :kg_refines    (:kg-refines-vec kg-vecs)}]
+                (finalize-entry! entry-id openrouter? kg-params project-id agent-id entry-ctx)))))))))
 
 (defn handle-add
   "Add an entry to project memory with optional KG edge creation.

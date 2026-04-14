@@ -238,6 +238,33 @@
                     (update :slave/parent #(when % (:slave/id %)))
                     (update :slave/current-task #(when % (:task/id %)))))))))
 
+(defn get-child-project-ids
+  "Get unique project-ids of slaves whose parent belongs to the given project.
+
+   Used by piggyback assembly to include cross-project descendant shouts.
+   A coordinator in project A that spawned lings into project B will get B
+   in the returned set, so piggyback can include those lings' messages.
+
+   Arguments:
+     parent-project-id - Project ID of the parent/coordinator
+
+   Returns:
+     Set of project-id strings (may be empty, never includes nil or parent-project-id)"
+  [parent-project-id]
+  (let [c (conn/ensure-conn)
+        db @c
+        child-pids (d/q '[:find [?cpid ...]
+                          :in $ ?ppid
+                          :where
+                          ;; Find slaves in the parent project
+                          [?pe :slave/project-id ?ppid]
+                          ;; Find children of those parent slaves
+                          [?ce :slave/parent ?pe]
+                          ;; Get the child's project-id
+                          [?ce :slave/project-id ?cpid]]
+                        db parent-project-id)]
+    (disj (set child-pids) nil parent-project-id)))
+
 (defn get-slave-ids-by-project
   "Get slave IDs for a project (optimized for kill operations).
 

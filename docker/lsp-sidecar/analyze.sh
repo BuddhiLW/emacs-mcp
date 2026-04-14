@@ -18,16 +18,36 @@ analyze_project() {
 
     echo "Analyzing project $project_id at $project_root"
 
+    # clojure-lsp dumps "Read-only file system" warnings to stdout, polluting
+    # the EDN output. Pipe through grep -v to strip them. Also use a writable
+    # kondo cache dir to prevent sync_cache errors on read-only mounts.
+    local kondo_cache="$CACHE_DIR/kondo-cache/$project_id"
+    mkdir -p "$kondo_cache"
     if java $JAVA_OPTS -jar "$LSP_JAR" dump --project-root "$project_root" \
         --output '{:format :edn :filter-keys [:analysis :dep-graph]}' \
         --analysis '{:type :project-only}' \
-        > "$cache_path/dump.edn.tmp" 2>"$cache_path/dump.log"; then
+        2>"$cache_path/dump.log" \
+        | grep -v 'Read-only file system' \
+        > "$cache_path/dump.edn.tmp"; then
         local end_time
         end_time=$(date +%s)
         local duration_ms=$(( (end_time - start_time) * 1000 ))
         mv "$cache_path/dump.edn.tmp" "$cache_path/dump.edn"
-        echo "{:timestamp $start_time :duration-ms $duration_ms :project-root \"$project_root\" :project-id \"$project_id\" :status :ok}" > "$cache_path/meta.edn"
-        echo "Analysis successful for $project_id (${duration_ms}ms)"
+
+        # Post-process: extract focused data files from monolithic dump.
+        # This avoids 40+ min EDN parse on the host JVM side.
+        echo "Extracting focused data files for $project_id..."
+        if bb /usr/local/bin/extract.bb "$cache_path"; then
+            echo "Extraction completed for $project_id"
+        else
+            echo "Extraction failed for $project_id (non-fatal, dump.edn still available)"
+        fi
+
+        local final_end
+        final_end=$(date +%s)
+        local total_ms=$(( (final_end - start_time) * 1000 ))
+        echo "{:timestamp $start_time :duration-ms $total_ms :project-root \"$project_root\" :project-id \"$project_id\" :status :ok :extracted true}" > "$cache_path/meta.edn"
+        echo "Analysis + extraction successful for $project_id (${total_ms}ms)"
     else
         local exit_code=$?
         rm -f "$cache_path/dump.edn.tmp"
@@ -40,11 +60,24 @@ discover_projects() {
     if [ -n "${LSP_PROJECTS:-}" ]; then
         IFS=',' read -ra PROJECTS <<< "$LSP_PROJECTS"
         for proj in "${PROJECTS[@]}"; do
-            echo "/workspace/$proj:$proj"
+            # Normalize: strip leading slashes and /workspace/ prefix to prevent path duplication
+            proj="${proj#/}"
+            proj="${proj#workspace/}"
+            proj="${proj#/}"
+            if [ "$proj" = "workspace" ] || [ -z "$proj" ]; then
+                # Root workspace requested — use WORKSPACE directly
+                echo "$WORKSPACE:workspace"
+            else
+                echo "$WORKSPACE/$proj:$proj"
+            fi
         done
     else
-        find "$WORKSPACE" -maxdepth 2 -name deps.edn -exec dirname {} \; | while read -r dir; do
-            echo "$dir:$(basename "$dir")"
+        # maxdepth 3 so /workspace/<group>/<project>/deps.edn is found.
+        # Project-id is the path relative to /workspace (preserves grouping
+        # so "hive/hive-mcp" and "sec/foo" don't collide on basename).
+        find "$WORKSPACE" -mindepth 1 -maxdepth 3 -name deps.edn -exec dirname {} \; | while read -r dir; do
+            local rel="${dir#$WORKSPACE/}"
+            echo "$dir:$rel"
         done
     fi
 }

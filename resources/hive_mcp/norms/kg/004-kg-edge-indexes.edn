@@ -1,0 +1,6 @@
+{:tx-data
+ [;; NO-OP: Indexes are now defined in 001-kg-edge-schema.edn.
+  ;; Datahike does not support adding :db/index to existing attributes.
+  ;; This norm exists only so the norm runner marks it as applied and
+  ;; stops retrying on databases created before the 001 fix.
+  ]}

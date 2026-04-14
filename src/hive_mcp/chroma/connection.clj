@@ -64,10 +64,24 @@
           (cache-collection! (create-new-collection coll-name dim)
                              (str "Created Chroma collection: " coll-name " dimension: " dim))))))
 
+(defonce ^:private named-collection-cache (atom {}))
+
+(defn get-or-create-named-collection
+  "Get or create a named collection with explicit dimension.
+   Caches per collection-name. Used by type-based embedder routing."
+  [coll-name dimension]
+  (or (get @named-collection-cache coll-name)
+      (let [coll (or (try-get-collection coll-name)
+                     (create-new-collection coll-name dimension))]
+        (swap! named-collection-cache assoc coll-name coll)
+        (log/info "Named collection ready:" coll-name "dimension:" dimension)
+        coll)))
+
 (defn reset-collection-cache!
   "Reset the collection cache (for testing/reconnection)."
   []
-  (reset! collection-cache nil))
+  (reset! collection-cache nil)
+  (reset! named-collection-cache {}))
 
 (defn status
   "Get Chroma integration status."

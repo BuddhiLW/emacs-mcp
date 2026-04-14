@@ -6,6 +6,7 @@
             [hive-mcp.config.io :as config-io]
             [hive-mcp.config.resolve :as resolve]
             [hive-mcp.config.secrets :as secrets]
+            [hive-mcp.config.schema :as schema]
             [hive-dsl.result :as result]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -54,6 +55,19 @@
          merged (if user-config
                   (merge/deep-merge merge/default-config user-config)
                   merge/default-config)
+         ;; Validate config schema (warn on invalid, don't block startup)
+         validation (schema/validate-config merged)
+         _ (when-not (:valid? validation)
+             (log/warn "Config validation errors (startup continues with merged config):"
+                       (:humanized validation)))
+         ;; Validate :memory section specifically for actionable errors
+         mem-validation (schema/validate-memory-config merged)
+         _ (when (and mem-validation (not (:valid? mem-validation)))
+             (log/error "Memory routing config is invalid — memory router may fail:"
+                        (:humanized mem-validation)
+                        "\nExpected shape: {:default-store :keyword"
+                        ":routes {type-kw :store-kw-or-{:primary :kw :projection :kw}}"
+                        ":stores {store-kw {:addon :kw ...}}}"))
          ;; Resolve secrets: config → env → pass(1) → nil
          {:keys [secrets sources]} (secrets/resolve-all-secrets (:secrets merged))
          merged (assoc merged :secrets secrets)]
@@ -117,6 +131,38 @@
   (resolve/get-parent-for-path (get-parent-rules) directory-path))
 
 ;; =============================================================================
+;; Memory Config Accessors
+;; =============================================================================
+
+(defn get-memory-config
+  "Return the :memory map from global config."
+  []
+  (:memory (get-global-config)))
+
+(defn get-memory-route
+  "Return the route for a given memory type keyword.
+   Falls back to :default-store if no specific route exists."
+  [type-kw]
+  (let [mem (get-memory-config)]
+    (or (get-in mem [:routes type-kw])
+        (:default-store mem))))
+
+(defn get-memory-store
+  "Return the store definition for a given store keyword."
+  [store-kw]
+  (get-in (get-memory-config) [:stores store-kw]))
+
+;; =============================================================================
+;; Generic Path Accessor
+;; =============================================================================
+
+(defn get-in-config
+  "Read a value at a keyword path vector from the cached config.
+   Example: (config/get-in-config [:memory :routes :decision]) => :chroma"
+  [path]
+  (get-in (get-global-config) path))
+
+;; =============================================================================
 ;; Service & Secret Accessors (delegate to resolve layer)
 ;; =============================================================================
 
@@ -156,7 +202,7 @@
   []
   (get-service-value :drone :default-backend
                      :env "DRONE_DEFAULT_BACKEND"
-                     :default :openrouter))
+                     :default nil))
 
 ;; =============================================================================
 ;; Dotted Key Path Access

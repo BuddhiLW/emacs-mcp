@@ -1,11 +1,12 @@
 (ns hive-mcp.tools.catchup
   "Native Catchup workflow — thin facade delegating to sub-namespaces.
 
-   Gathers session context from Chroma memory with project scoping.
-   Designed for the /catchup skill to restore context at session start.
+   Gathers session context from the registered IMemoryStore (currently
+   Milvus or Qdrant) with project scoping. Designed for the /catchup skill
+   to restore context at session start.
 
    Sub-namespace delegation (Sprint 2):
-   - catchup.scope     — scope-filtered Chroma queries, project context
+   - catchup.scope     — scope-filtered store queries, project context
    - catchup.format    — entry metadata transforms, response builders
    - catchup.git       — git status via Emacs
    - catchup.spawn     — spawn-time context injection (dual-mode)
@@ -20,6 +21,7 @@
             [hive-mcp.tools.catchup.scope :as catchup-scope]
             [hive-mcp.tools.catchup.format :as fmt]
             [hive-mcp.tools.catchup.git :as catchup-git]
+            [hive-mcp.tools.catchup.carto :as catchup-carto]
             [hive-mcp.tools.catchup.spawn :as catchup-spawn]
             [hive-mcp.channel.memory-piggyback :as memory-piggyback]
             [hive-mcp.channel.piggyback :as piggyback]
@@ -49,39 +51,47 @@
 ;; =============================================================================
 
 (defn- safe-deref
-  "Deref a future with timeout-ms. Returns default on timeout or exception."
-  [fut timeout-ms default]
-  (try
-    (let [result (deref fut timeout-ms ::timeout)]
-      (if (= result ::timeout)
-        (do (future-cancel fut)
-            (log/debug "catchup: parallel query timed out")
-            default)
-        result))
-    (catch Exception e
-      (log/debug "catchup: parallel deref failed:" (.getMessage e))
-      default)))
+  "Deref a future with timeout-ms. Returns default on timeout or exception.
+   Label identifies which query timed out so operators can spot silent drops."
+  ([fut timeout-ms default]
+   (safe-deref fut timeout-ms default "unlabeled"))
+  ([fut timeout-ms default label]
+   (try
+     (let [result (deref fut timeout-ms ::timeout)]
+       (if (= result ::timeout)
+         (do (future-cancel fut)
+             (log/warn "catchup: parallel query timed out after" timeout-ms "ms:" label)
+             default)
+         result))
+     (catch Exception e
+       (log/warn "catchup: parallel deref failed for" label ":" (.getMessage e))
+       default))))
 
 (def ^:private ^:const query-timeout-ms
-  "Timeout for individual parallel query futures."
-  15000)
+  "Timeout for individual parallel query futures.
+   Milvus tag-filter queries on dense namespaces can exceed 30s (see memory
+   20260413145532). query-axioms parallelizes its formal+legacy sub-queries
+   internally, but cold-path budget must still cover the slower of the two
+   plus pool-queue jitter."
+  60000)
 
 ;; =============================================================================
 ;; Main Catchup Handler
 ;; =============================================================================
 
 (defn handle-native-catchup
-  "Native Clojure catchup implementation that queries Chroma directly.
-   Returns structured catchup data with proper project scoping.
+  "Native Clojure catchup implementation that queries the registered
+   IMemoryStore directly. Returns structured catchup data with proper
+   project scoping.
 
    If an enrichment addon is registered via :cu/a, it runs
    fire-and-forget. Results arrive via piggyback on subsequent calls."
   [args]
   (let [directory (:directory args)]
-    (log/info "native-catchup: querying Chroma with project scope" {:directory directory})
-    ;; Guard: early return if Chroma not configured
+    (log/info "native-catchup: querying memory store with project scope" {:directory directory})
+    ;; Guard: early return if no store registered
     (if-not (mem-proto/store-set?)
-      (fmt/chroma-not-configured-error)
+      (fmt/store-not-configured-error)
       (try
         (let [project-id (scope/get-current-project-id directory)
               project-name (catchup-scope/get-current-project-name directory)
@@ -97,16 +107,18 @@
               f-snippets    (pool/with-io (catchup-scope/query-scoped-entries "snippet" nil project-id 20))
               f-expiring    (pool/with-io (catchup-scope/query-expiring-entries project-id 20))
               f-git         (pool/with-io (catchup-git/gather-git-info directory))
+              f-carto       (pool/with-io (catchup-carto/get-status project-id))
 
               ;; ── Wave 1: Collect with timeout ──
-              axioms               (safe-deref f-axioms query-timeout-ms [])
-              principles           (safe-deref f-principles query-timeout-ms [])
-              priority-conventions (safe-deref f-priority query-timeout-ms [])
-              sessions             (safe-deref f-sessions query-timeout-ms [])
-              decisions            (safe-deref f-decisions query-timeout-ms [])
-              snippets             (safe-deref f-snippets query-timeout-ms [])
-              expiring             (safe-deref f-expiring query-timeout-ms [])
-              git-info             (safe-deref f-git query-timeout-ms {})
+              axioms               (safe-deref f-axioms query-timeout-ms [] "axioms")
+              principles           (safe-deref f-principles query-timeout-ms [] "principles")
+              priority-conventions (safe-deref f-priority query-timeout-ms [] "priority-conventions")
+              sessions             (safe-deref f-sessions query-timeout-ms [] "sessions")
+              decisions            (safe-deref f-decisions query-timeout-ms [] "decisions")
+              snippets             (safe-deref f-snippets query-timeout-ms [] "snippets")
+              expiring             (safe-deref f-expiring query-timeout-ms [] "expiring")
+              git-info             (safe-deref f-git query-timeout-ms {} "git-info")
+              carto-status         (safe-deref f-carto query-timeout-ms nil "carto-status")
 
               ;; ── Wave 2: Dependent query (needs axiom + priority IDs) ──
               conventions (safe-deref
@@ -115,7 +127,7 @@
                               project-id
                               (set (map :id axioms))
                               (set (map :id priority-conventions))))
-                           query-timeout-ms [])
+                           query-timeout-ms [] "conventions")
 
               ;; Convert to metadata (pure, fast)
               axioms-meta (mapv fmt/entry->axiom-meta axioms)
@@ -212,6 +224,7 @@
             :sessions-meta sessions-meta :decisions-meta decisions-base
             :conventions-meta conventions-base :snippets-meta snippets-meta
             :expiring-meta expiring-meta
+            :carto-status carto-status
             :context-refs context-refs}))
         (catch Exception e
           (fmt/catchup-error e))))))
@@ -221,15 +234,15 @@
 ;; =============================================================================
 
 (defn handle-native-wrap
-  "Native Clojure wrap implementation that persists to Chroma directly.
-   Delegates to :catchup/wrap extension (provided by addon)
-   for harvesting and crystallization."
+  "Native Clojure wrap implementation that persists to the registered
+   IMemoryStore directly. Delegates to :catchup/wrap extension
+   (provided by addon) for harvesting and crystallization."
   [args]
   (let [directory (:directory args)
         agent-id (:agent_id args)]
-    (log/info "native-wrap: crystallizing to Chroma" {:directory directory :agent-id agent-id})
+    (log/info "native-wrap: crystallizing to memory store" {:directory directory :agent-id agent-id})
     (if-not (mem-proto/store-set?)
-      (fmt/chroma-not-configured-error)
+      (fmt/store-not-configured-error)
       (if-let [wrap-fn (ext/get-extension :catchup/wrap)]
         (try
           (let [result (wrap-fn {:directory directory :agent-id agent-id})

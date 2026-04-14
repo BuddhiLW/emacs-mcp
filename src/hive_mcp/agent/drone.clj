@@ -18,6 +18,7 @@
             [hive-mcp.swarm.logic :as logic]
             [hive-mcp.events.core :as ev]
             [hive-mcp.telemetry.prometheus :as prom]
+            [hive-mcp.tools.swarm.channel :as channel]
             [clojure.set]
             [hive-dsl.result :as r]
             [hive-dsl.bounded-atom :refer [bkeys]]
@@ -201,7 +202,7 @@
                                (throw (ex-info "No delegate-fn provided - use delegate! for standalone execution"
                                                {:drone-id id}))))
             start-time (System/currentTimeMillis)
-            result (execution-fn {:backend (or backend :openrouter)
+            result (execution-fn {:backend backend
                                   :preset effective-preset
                                   :model selected-model
                                   :task augmented-task
@@ -233,6 +234,20 @@
                                        :parent-id parent-id
                                        :error (str (:result result))
                                        :error-type :execution}]))
+
+        ;; Bridge: write result to event-journal so `agent collect` can find it
+        ;; without depending on NATS/channel infrastructure being active.
+        (channel/record-task-result!
+         task-id
+         (if (= :completed (:status result))
+           {:status "completed"
+            :result (str (:result result))
+            :slave-id id
+            :timestamp (System/currentTimeMillis)}
+           {:status "failed"
+            :error (str (:result result))
+            :slave-id id
+            :timestamp (System/currentTimeMillis)}))
 
         (prom/record-drone-result! {:model selected-model
                                     :task-type (name effective-task-type)

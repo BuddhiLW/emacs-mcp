@@ -1,9 +1,9 @@
 (ns hive-mcp.tools.memory.crud.query
   "Query operations for memory with filtered retrieval and scope hierarchy."
-  (:require [hive-mcp.tools.memory.core :refer [with-chroma]]
+  (:require [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.format :as fmt]
-            [hive-mcp.tools.core :refer [mcp-json mcp-error coerce-int!]]
+            [hive-mcp.tools.core :refer [mcp-json mcp-error coerce-int! coerce-vec!]]
             [hive-mcp.memory.domain :as domain]
             [hive-dsl.adt :refer [adt-case]]
             [hive-mcp.protocols.memory :as mem-proto]
@@ -129,17 +129,19 @@
   [{:keys [type tags exclude_tags limit duration scope directory include_descendants verbosity]}]
   (let [directory (or directory (ctx/current-directory))
         include-descendants? (boolean include_descendants)
-        metadata-only? (not= verbosity "full")]
+        metadata-only? (not= verbosity "full")
+        tags         (coerce-vec! tags :tags [])
+        exclude-tags (coerce-vec! exclude_tags :exclude_tags [])]
     (log/info "mcp-memory-query:" type "scope:" scope "directory:" directory
               "include_descendants:" include-descendants? "verbosity:" (or verbosity "metadata"))
     (try
       (let [limit-val (coerce-int! limit :limit 20)]
-        (with-chroma
+        (with-store
           (let [project-id  (scope/get-current-project-id directory)
                 sf          (domain/parse-scope scope project-id)
                 project-ids (resolve-project-ids-for-db sf include-descendants?)
                 entries     (fetch-entries type project-ids tags limit-val include-descendants?
-                                           :exclude-tags exclude_tags)
+                                           :exclude-tags exclude-tags)
                 filtered    (apply-scope-filter entries sf include-descendants?)
                 results     (apply-post-filters filtered tags duration limit-val)]
             (format-query-results results project-id metadata-only?))))

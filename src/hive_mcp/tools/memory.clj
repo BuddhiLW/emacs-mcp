@@ -15,7 +15,7 @@
      * migration.clj: project migration, JSON import
 
    Supporting modules:
-   - core.clj: with-chroma, with-entry macros (error handling)
+   - core.clj: with-store, with-entry macros (error handling)
    - scope.clj: project scope utilities
    - format.clj: JSON formatting utilities
    - duration.clj: duration constants and calculations"

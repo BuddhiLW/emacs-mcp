@@ -29,12 +29,13 @@
   []
   (mapcat (fn [[_agent-id entry]]
             (let [{:keys [messages]} (:data entry)]
-              (for [{:keys [event-type message task timestamp project-id]} messages]
-                {:agent-id _agent-id
-                 :event-type event-type
-                 :message (or message task "")
-                 :timestamp timestamp
-                 :project-id (or project-id "global")})))
+              (for [{:keys [event-type message task timestamp project-id shout-id]} messages]
+                (cond-> {:agent-id _agent-id
+                         :event-type event-type
+                         :message (or message task "")
+                         :timestamp timestamp
+                         :project-id (or project-id "global")}
+                  shout-id (assoc :shout-id shout-id)))))
           @(:atom state/agent-registry)))
 
 (piggyback/register-message-source! all-hivemind-messages)
@@ -73,6 +74,7 @@
      a feedback loop: shout! → :ling/completed handler → :shout effect → shout!"
   [agent-id event-type data]
   (let [now (System/currentTimeMillis)
+        shout-id (str (random-uuid))
         resolved-slave (queries/get-slave-by-name-or-id agent-id)
         resolved-slave-id (or (:slave/id resolved-slave) agent-id)
         explicit-project-id (:project-id data)
@@ -89,14 +91,17 @@
         message (cond-> {:event-type event-type
                          :timestamp now
                          :project-id project-id
+                         :shout-id shout-id
                          :data (dissoc data :task :message :directory :project-id)}
                   (:task data) (assoc :task (:task data))
                   (:message data) (assoc :message (:message data)))
         ;; Backbone payload — flat, self-contained, no internal references
+        ;; shout-id enables cross-path dedup (atom + backbone deliver same shout)
         backbone-payload {:agent-id agent-id
                           :event-type event-type
                           :timestamp now
                           :project-id project-id
+                          :shout-id shout-id
                           :message (:message data)
                           :task (:task data)
                           :data (dissoc data :task :message :directory :project-id)}]

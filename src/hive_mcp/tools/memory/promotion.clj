@@ -5,7 +5,7 @@
    - handle-xpoll-promote: MCP handler for xpoll scanning
    - run-xpoll-cycle!: Hook handler for crystallize-session
    - Pure helpers: walk-tiers, build-xpoll-plan"
-  (:require [hive-mcp.tools.memory.core :refer [with-chroma]]
+  (:require [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.duration :as dur]
             [hive-mcp.tools.core :refer [mcp-json]]
             [hive-mcp.crystal.core :as crystal]
@@ -98,7 +98,7 @@
   "Scan and auto-promote entries accessed across multiple projects."
   [{:keys [_directory min_projects limit dry_run]}]
   (log/info "mcp-memory-xpoll-promote: scanning for cross-project knowledge")
-  (with-chroma
+  (with-store
     (let [limit-val   (or (some-> limit int) 500)
           opts        {:min-projects (or (some-> min_projects int) 2)}
           store (mem-proto/get-store)

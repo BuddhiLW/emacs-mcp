@@ -108,6 +108,20 @@
       (throw (ex-info "Failed to get plans collection after creation"
                       {:collection collection-name :dimension dim}))))
 
+(defn- cache-and-return-collection!
+  "Cache `coll` under the plans collection cache, log the action,
+   and return `coll`. Used by both the dimension-mismatch recreate
+   branch and the fresh-create branch of `get-or-create-collection`
+   to DRY up the common tail (cache + log + return)."
+  [coll required-dim action]
+  (reset! collection-cache coll)
+  (log/info (case action
+              :recreated "Recreated plans collection:"
+              :created   "Created plans collection:"
+              "Cached plans collection:")
+            collection-name "dimension:" required-dim)
+  coll)
+
 (defn- get-or-create-collection
   "Get existing plans collection or create new one.
 
@@ -143,15 +157,15 @@
                 (log/warn "Plans embedding dimension changed:" existing-dim "->" required-dim ". Recreating collection.")
                 (delete-collection!)
                 (reset! collection-cache nil)
-                (let [new-coll (create-collection-with-dimension required-dim)]
-                  (reset! collection-cache new-coll)
-                  (log/info "Recreated plans collection:" collection-name "dimension:" required-dim)
-                  new-coll))))
+                (cache-and-return-collection!
+                  (create-collection-with-dimension required-dim)
+                  required-dim
+                  :recreated))))
           ;; No existing collection - create new
-          (let [new-coll (create-collection-with-dimension required-dim)]
-            (reset! collection-cache new-coll)
-            (log/info "Created plans collection:" collection-name "dimension:" required-dim)
-            new-coll))))))
+          (cache-and-return-collection!
+            (create-collection-with-dimension required-dim)
+            required-dim
+            :created))))))
 
 (defn reset-collection-cache!
   "Reset the collection cache. For testing."
@@ -228,25 +242,24 @@
 
    COLLECTION-AWARE: Uses collection-specific embedding provider."
   [{:keys [id type] :as entry}]
-  (result/try-effect* :plan/index-failed
-                      (let [coll (get-or-create-collection)
-                            provider (chroma/get-provider-for collection-name)
-                            entry-id (or id (let [ts (java.time.LocalDateTime/now)
-                                                  fmt (java.time.format.DateTimeFormatter/ofPattern "yyyyMMddHHmmss")]
-                                              (str (.format ts fmt) "-" (subs (str (java.util.UUID/randomUUID)) 0 8))))
-                            doc-text (entry-to-document entry)
-                            embedding (chroma/embed-text provider doc-text)
-                            metadata (extract-entry-metadata entry)]
-                        (ws/deref-safe! (chroma-api/add coll [{:id entry-id
-                                                              :embedding embedding
-                                                              :document doc-text
-                                                              :metadata metadata}]
-                                                           :upsert? true)
-                                       30000)
-                        (log/info "Indexed" (or type "plan") "in plans collection:" entry-id
-                                  (when (:plan-status metadata) (str "status:" (:plan-status metadata)))
-                                  (when (:steps-count metadata) (str "steps:" (:steps-count metadata))))
-                        entry-id)))
+  (let [coll (get-or-create-collection)
+        provider (chroma/get-provider-for collection-name)
+        entry-id (or id (let [ts (java.time.LocalDateTime/now)
+                              fmt (java.time.format.DateTimeFormatter/ofPattern "yyyyMMddHHmmss")]
+                          (str (.format ts fmt) "-" (subs (str (java.util.UUID/randomUUID)) 0 8))))
+        doc-text (entry-to-document entry)
+        embedding (chroma/embed-text provider doc-text)
+        metadata (extract-entry-metadata entry)]
+    (ws/deref-safe! (chroma-api/add coll [{:id entry-id
+                                           :embedding embedding
+                                           :document doc-text
+                                           :metadata metadata}]
+                                    :upsert? true)
+                    30000)
+    (log/info "Indexed" (or type "plan") "in plans collection:" entry-id
+              (when (:plan-status metadata) (str "status:" (:plan-status metadata)))
+              (when (:steps-count metadata) (str "steps:" (:steps-count metadata))))
+    entry-id))
 
 (defn search-plans
   "Search plan entries using semantic similarity.

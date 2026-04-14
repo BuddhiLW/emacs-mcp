@@ -9,7 +9,7 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defn entry->catchup-meta
-  "Convert a Chroma entry to lean catchup metadata.
+  "Convert a memory store entry to lean catchup metadata.
    Minimal footprint: id + type + short preview. No tags (available via context-refs)."
   [entry preview-len]
   (let [content (:content entry)
@@ -103,12 +103,14 @@
     {:type "text" :text text}))
 
 (defn build-catchup-response
-  "Build the final catchup response as a vector of 4 content blocks."
+  "Build the final catchup response as a vector of content blocks.
+   Includes header, context, kg-insights, meta, and (when available) carto-status."
   [{:keys [project-name project-id scopes git-info permeation
            axioms-meta principles-meta priority-meta sessions-meta decisions-meta
            conventions-meta snippets-meta expiring-meta kg-insights
-           project-tree-scan disc-decay context-refs]}]
+           project-tree-scan disc-decay carto-status context-refs]}]
   (let [total-enqueued (+ (count axioms-meta) (count principles-meta) (count priority-meta))]
+    (filterv some?
     [(make-block "header"
                  {:_block "header"
                   :success true
@@ -142,15 +144,25 @@
                  {:_block "meta"
                   :project-tree project-tree-scan
                   :disc-decay disc-decay
-                  :hint "Axioms and priority conventions are being delivered via ---MEMORY--- piggyback blocks. AXIOMS are INVIOLABLE - follow them word-for-word. Entries with :kg key have Knowledge Graph relationships."})]))
+                  :hint "Axioms and priority conventions are being delivered via ---MEMORY--- piggyback blocks. AXIOMS are INVIOLABLE - follow them word-for-word. Entries with :kg key have Knowledge Graph relationships."})
+     (when carto-status
+       (make-block "carto-status"
+                   {:_block "carto-status"
+                    :lsp-up?       (:lsp-up? carto-status)
+                    :carto-store?  (:carto-store? carto-status)
+                    :indexed-forms (:indexed-forms carto-status)
+                    :last-scan-ts  (:last-scan-ts carto-status)
+                    :scan-status   (:scan-status carto-status)
+                    :scan-result   (:scan-result carto-status)
+                    :hint "Carto readiness at-a-glance. lsp-up?=false means structural-edit tasks will fail. indexed-forms=0 means scan needed before carto queries."}))])))
 
-(defn chroma-not-configured-error
-  "Return error response when Chroma is not configured."
+(defn store-not-configured-error
+  "Return error response when no IMemoryStore is registered."
   []
   {:type "text"
    :text (json/write-str {:success false
-                          :error "Chroma not configured"
-                          :message "Memory query requires Chroma with embedding provider"})
+                          :error "Memory store not configured"
+                          :message "Memory query requires a registered IMemoryStore (Milvus, Qdrant, etc.) with embedding provider"})
    :isError true})
 
 (defn catchup-error

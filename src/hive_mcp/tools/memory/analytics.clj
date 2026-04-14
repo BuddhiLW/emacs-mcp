@@ -1,6 +1,6 @@
 (ns hive-mcp.tools.memory.analytics
   "Analytics handlers for memory feedback and usage tracking."
-  (:require [hive-mcp.tools.memory.core :refer [with-chroma]]
+  (:require [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.format :as fmt]
             [hive-mcp.tools.core :refer [mcp-json]]
@@ -37,7 +37,7 @@
   "Log access to a memory entry, incrementing access-count and updating last-accessed."
   [{:keys [id directory]}]
   (log/info "mcp-memory-log-access:" id "directory:" directory)
-  (with-chroma
+  (with-store
     (let [store (mem-proto/get-store)]
       (if-let [entry (mem-proto/get-entry store id)]
         (let [new-count (inc (or (:access-count entry) 0))
@@ -75,7 +75,7 @@
   "Submit helpfulness feedback for a memory entry."
   [{:keys [id feedback]}]
   (log/info "mcp-memory-feedback:" id feedback)
-  (with-chroma
+  (with-store
     (let [store (mem-proto/get-store)]
       (if-let [entry (mem-proto/get-entry store id)]
         (let [prev-helpful (or (:helpful-count entry) 0)
@@ -102,7 +102,7 @@
   "Get helpfulness ratio for a memory entry."
   [{:keys [id]}]
   (log/info "mcp-memory-helpfulness-ratio:" id)
-  (with-chroma
+  (with-store
     (let [store (mem-proto/get-store)]
       (if-let [entry (mem-proto/get-entry store id)]
         (let [helpful (or (:helpful-count entry) 0)

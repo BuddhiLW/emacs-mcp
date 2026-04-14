@@ -102,15 +102,17 @@
 (defn buffer-backbone-event!
   "Buffer an event received from the NATS backbone for piggyback delivery.
    Normalizes to the same shape as message-source-fn output.
-   Events with nil agent-id (e.g. coordinator tool-executed) are silently dropped."
-  [{:keys [agent-id event-type message task timestamp project-id]}]
+   Events with nil agent-id (e.g. coordinator tool-executed) are silently dropped.
+   Preserves :shout-id for cross-path dedup when present."
+  [{:keys [agent-id event-type message task timestamp project-id shout-id]}]
   (when agent-id
-    (let [normalized {:agent-id    agent-id
-                      :event-type  event-type
-                      :message     (or message task "")
-                      :task        task
-                      :timestamp   (or timestamp (System/currentTimeMillis))
-                      :project-id  (or project-id "global")}]
+    (let [normalized (cond-> {:agent-id    agent-id
+                              :event-type  event-type
+                              :message     (or message task "")
+                              :task        task
+                              :timestamp   (or timestamp (System/currentTimeMillis))
+                              :project-id  (or project-id "global")}
+                      shout-id (assoc :shout-id shout-id))]
       (swap! backbone-buffer
              (fn [buf]
                (let [updated (conj buf normalized)]
@@ -126,14 +128,20 @@
   (reset! backbone-buffer []))
 
 (defn- dedupe-messages
-  "Remove duplicate messages by [agent-id timestamp event-type] key.
-   Preserves insertion order (source-fn messages take precedence)."
+  "Remove duplicate messages using :shout-id (idempotency key) when present,
+   falling back to [agent-id timestamp event-type-name] composite key.
+   Preserves insertion order (source-fn messages take precedence).
+
+   The shout-id approach is needed because the atom path stores event-type
+   as a keyword while the NATS/backbone path deserializes it as a string —
+   the old composite key missed these cross-path duplicates."
   [msgs]
   (let [seen (volatile! #{})]
     (filterv (fn [msg]
-               (let [k [(:agent-id msg)
-                        (:timestamp msg)
-                        (:event-type msg)]]
+               (let [k (or (:shout-id msg)
+                           [(:agent-id msg)
+                            (:timestamp msg)
+                            (some-> (:event-type msg) name)])]
                  (if (@seen k)
                    false
                    (do (vswap! seen conj k) true))))
@@ -164,15 +172,23 @@
 
 (s/def ::project-id (s/nilable string?))
 
+(s/def ::additional-project-ids (s/nilable (s/coll-of string? :kind set?)))
+
 (s/fdef get-messages
   :args (s/cat :agent-id ::agent-id
-               :kwargs (s/keys* :opt-un [::project-id]))
+               :kwargs (s/keys* :opt-un [::project-id ::additional-project-ids]))
   :ret ::messages)
 
 (defn get-messages
   "Get new hivemind messages since last call for this agent+project.
-   Dual-path: merges messages from atom-based source and backbone buffer."
-  [agent-id & {:keys [project-id]}]
+   Dual-path: merges messages from atom-based source and backbone buffer.
+
+   Options:
+     :project-id              - Primary project scope for filtering
+     :additional-project-ids  - Set of extra project-ids to include (for cross-project
+                                descendant shouts). Messages from these projects are
+                                included alongside the primary project's messages."
+  [agent-id & {:keys [project-id additional-project-ids]}]
   (when (and (nil? project-id) (not= agent-id "coordinator"))
     (log/warn "Agent" agent-id "reading hivemind without project-id - using global cursor"))
   (let [all-msgs (merged-messages)]
@@ -180,13 +196,14 @@
       (let [effective-project (or project-id "global")
             cursor-key [agent-id effective-project]
             last-cursor (get @agent-read-cursors cursor-key 0)
+            ;; Build the set of accepted project-ids
+            accepted-pids (cond-> #{"global"}
+                            project-id (conj project-id)
+                            (seq additional-project-ids) (into additional-project-ids))
             new-msgs (->> all-msgs
                           (filter (fn [msg]
                                     (and (> (:timestamp msg) last-cursor)
-                                         (if project-id
-                                           (or (= (:project-id msg) project-id)
-                                               (= (:project-id msg) "global"))
-                                           (= (:project-id msg) "global")))))
+                                         (contains? accepted-pids (:project-id msg)))))
                           (sort-by :timestamp)
                           vec)
             max-ts (when (seq new-msgs)

@@ -589,12 +589,12 @@
      (observe-request-duration! ~tool duration#)
      result#))
 
-(defmacro with-chroma-timing
+(defmacro with-store-timing
   "Execute body and record duration in chroma-query-seconds histogram.
    Returns the result of body execution.
 
    Usage:
-     (with-chroma-timing :search
+     (with-store-timing :search
        (chroma/search ...))"
   [operation & body]
   `(let [start# (System/nanoTime)

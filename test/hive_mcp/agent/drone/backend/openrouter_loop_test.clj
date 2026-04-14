@@ -1,5 +1,5 @@
-(ns hive-mcp.agent.drone.backend.legacy-loop-test
-  "Tests for LegacyLoopBackend — IDroneExecutionBackend wrapping OpenRouter drone loop.
+(ns hive-mcp.agent.drone.backend.openrouter-loop-test
+  "Tests for OpenRouterLoopBackend — IDroneExecutionBackend wrapping OpenRouter drone loop.
 
    Tests cover:
    - Protocol satisfaction and contract compliance
@@ -10,7 +10,7 @@
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.string]
             [hive-mcp.agent.drone.backend :as backend]
-            [hive-mcp.agent.drone.backend.legacy-loop :as legacy]
+            [hive-mcp.agent.drone.backend.openrouter-loop :as openrouter-loop]
             [hive-mcp.agent.drone.loop]
             [hive-mcp.agent.registry]))
 
@@ -19,13 +19,13 @@
 ;; =============================================================================
 
 (defn ensure-registered-fixture
-  "Re-register :legacy-loop defmethod before each test (require is no-op
+  "Re-register :openrouter-loop defmethod before each test (require is no-op
    if ns already loaded, so we must explicitly eval the defmethod)."
   [f]
-  (defmethod backend/resolve-backend :legacy-loop [context]
-    (legacy/->legacy-loop-backend {:model (:model context)}))
+  (defmethod backend/resolve-backend :openrouter-loop [context]
+    (openrouter-loop/->openrouter-loop-backend {:model (:model context)}))
   (f)
-  (remove-method backend/resolve-backend :legacy-loop))
+  (remove-method backend/resolve-backend :openrouter-loop))
 
 (use-fixtures :each ensure-registered-fixture)
 
@@ -34,8 +34,8 @@
 ;; =============================================================================
 
 (deftest protocol-satisfaction-test
-  (testing "LegacyLoopBackend satisfies IDroneExecutionBackend"
-    (let [b (legacy/->legacy-loop-backend)]
+  (testing "OpenRouterLoopBackend satisfies IDroneExecutionBackend"
+    (let [b (openrouter-loop/->openrouter-loop-backend)]
       (is (satisfies? backend/IDroneExecutionBackend b)
           "Should satisfy the protocol"))))
 
@@ -44,10 +44,10 @@
 ;; =============================================================================
 
 (deftest backend-type-test
-  (testing "backend-type returns :legacy-loop"
-    (let [b (legacy/->legacy-loop-backend)]
-      (is (= :legacy-loop (backend/backend-type b))
-          "backend-type should return :legacy-loop"))))
+  (testing "backend-type returns :openrouter-loop"
+    (let [b (openrouter-loop/->openrouter-loop-backend)]
+      (is (= :openrouter-loop (backend/backend-type b))
+          "backend-type should return :openrouter-loop"))))
 
 ;; =============================================================================
 ;; Section 3: supports-validation?
@@ -55,9 +55,9 @@
 
 (deftest supports-validation-test
   (testing "supports-validation? returns true"
-    (let [b (legacy/->legacy-loop-backend)]
+    (let [b (openrouter-loop/->openrouter-loop-backend)]
       (is (true? (backend/supports-validation? b))
-          "Legacy loop backend should support validation"))))
+          "OpenRouter loop backend should support validation"))))
 
 ;; =============================================================================
 ;; Section 4: Constructor
@@ -65,12 +65,12 @@
 
 (deftest constructor-defaults-test
   (testing "Default constructor has nil model-override"
-    (let [b (legacy/->legacy-loop-backend)]
+    (let [b (openrouter-loop/->openrouter-loop-backend)]
       (is (nil? (:model-override b))
           "Default model-override should be nil")))
 
   (testing "Constructor with model override"
-    (let [b (legacy/->legacy-loop-backend {:model "custom-model"})]
+    (let [b (openrouter-loop/->openrouter-loop-backend {:model "custom-model"})]
       (is (= "custom-model" (:model-override b))
           "model-override should be set"))))
 
@@ -79,17 +79,17 @@
 ;; =============================================================================
 
 (deftest resolve-backend-registration-test
-  (testing ":legacy-loop backend is resolved correctly"
-    (let [resolved (backend/resolve-backend {:backend :legacy-loop
+  (testing ":openrouter-loop backend is resolved correctly"
+    (let [resolved (backend/resolve-backend {:backend :openrouter-loop
                                              :model "test-model"})]
       (is (satisfies? backend/IDroneExecutionBackend resolved)
           "Resolved backend should satisfy protocol")
-      (is (= :legacy-loop (backend/backend-type resolved))
-          "Resolved backend should be :legacy-loop"))))
+      (is (= :openrouter-loop (backend/backend-type resolved))
+          "Resolved backend should be :openrouter-loop"))))
 
 (deftest resolve-backend-passes-model-test
   (testing "resolve-backend passes model from context to backend"
-    (let [resolved (backend/resolve-backend {:backend :legacy-loop
+    (let [resolved (backend/resolve-backend {:backend :openrouter-loop
                                              :model "devstral-small:24b"})]
       (is (= "devstral-small:24b" (:model-override resolved))
           "Model should be passed through from context"))))
@@ -100,7 +100,7 @@
 
 (deftest execute-drone-with-mock-test
   (testing "execute-drone returns standardized result with mocked LLM"
-    (let [b (legacy/->legacy-loop-backend {:model "mock-model"})
+    (let [b (openrouter-loop/->openrouter-loop-backend {:model "mock-model"})
           ;; Mock the agentic loop to return a successful result
           mock-loop-result {:status :completed
                             :result "Task completed successfully"
@@ -143,7 +143,7 @@
 
 (deftest execute-drone-max-steps-status-test
   (testing "execute-drone normalizes :max_steps to :completed"
-    (let [b (legacy/->legacy-loop-backend)]
+    (let [b (openrouter-loop/->openrouter-loop-backend)]
       (with-redefs [hive-mcp.agent.drone.loop/run-agentic-loop
                     (fn [_ts _ctx _opts]
                       {:status :max_steps :result "Ran out of steps"
@@ -162,7 +162,7 @@
 
 (deftest execute-drone-noop-status-test
   (testing "execute-drone normalizes :noop to :failed"
-    (let [b (legacy/->legacy-loop-backend)]
+    (let [b (openrouter-loop/->openrouter-loop-backend)]
       (with-redefs [hive-mcp.agent.drone.loop/run-agentic-loop
                     (fn [_ts _ctx _opts]
                       {:status :noop :result "No backend"
@@ -185,7 +185,7 @@
 
 (deftest execute-drone-handles-backend-creation-error-test
   (testing "execute-drone returns :failed when LLM backend creation throws"
-    (let [b (legacy/->legacy-loop-backend {:model "bad-model"})]
+    (let [b (openrouter-loop/->openrouter-loop-backend {:model "bad-model"})]
       (with-redefs [requiring-resolve
                     (fn [sym]
                       (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
@@ -202,7 +202,7 @@
 
 (deftest execute-drone-handles-loop-exception-test
   (testing "execute-drone returns :failed when agentic loop throws"
-    (let [b (legacy/->legacy-loop-backend)]
+    (let [b (openrouter-loop/->openrouter-loop-backend)]
       (with-redefs [hive-mcp.agent.drone.loop/run-agentic-loop
                     (fn [_ts _ctx _opts]
                       (throw (ex-info "Connection timeout" {:type :timeout})))
@@ -222,4 +222,4 @@
 
 (comment
   ;; Run all tests
-  (clojure.test/run-tests 'hive-mcp.agent.drone.backend.legacy-loop-test))
+  (clojure.test/run-tests 'hive-mcp.agent.drone.backend.openrouter-loop-test))

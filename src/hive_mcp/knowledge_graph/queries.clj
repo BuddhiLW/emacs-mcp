@@ -347,7 +347,7 @@
   {:pre [(string? node-id)]}
   (let [incoming (edges/get-edges-to node-id)
         outgoing (edges/get-edges-from node-id)
-        all-edges (concat incoming outgoing)
+        all-edges (into incoming outgoing)
 
         ;; Group by relation
         incoming-by-rel (group-by :kg-edge/relation incoming)
@@ -407,7 +407,7 @@
             (map (fn [node-id]
                    (let [incoming (get edges-to-map node-id [])
                          outgoing (get edges-from-map node-id [])
-                         all-edges (concat incoming outgoing)
+                         all-edges (into incoming outgoing)
 
                          incoming-by-rel (group-by :kg-edge/relation incoming)
                          outgoing-by-rel (group-by :kg-edge/relation outgoing)

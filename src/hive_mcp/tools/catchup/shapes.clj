@@ -3,8 +3,8 @@
 
    Three shapes flow through catchup → enrichment → synthesis:
 
-   1. Raw Chroma entry: {:id :content :type :tags ...}
-      Source: Chroma queries in catchup.clj / scope.clj
+   1. Raw store entry: {:id :content :type :tags ...}
+      Source: IMemoryStore queries in catchup.clj / scope.clj
       Used by: synthesis LLM prompt, axiom/priority piggyback
 
    2. Catchup meta: {:id :T :P}
@@ -23,7 +23,7 @@
 
 (defn entry-content
   "Extract content string from any entry shape.
-   Checks :content (raw Chroma), :preview, :P (catchup meta) in order.
+   Checks :content (raw store), :preview, :P (catchup meta) in order.
    Returns empty string if none found."
   [entry]
   (str (or (:content entry) (:preview entry) (:P entry) "")))

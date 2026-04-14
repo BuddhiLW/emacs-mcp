@@ -1,6 +1,6 @@
 (ns hive-mcp.tools.memory.crud.retrieve
   "Retrieval operations for memory: get-full, batch-get, check-duplicate, update-tags."
-  (:require [hive-mcp.tools.memory.core :refer [with-chroma]]
+  (:require [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.format :as fmt]
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
@@ -38,7 +38,7 @@
   "Get full content of a memory entry by ID with KG edges."
   [{:keys [id]}]
   (log/info "mcp-memory-get-full:" id)
-  (with-chroma
+  (with-store
     (let [store (mem-proto/get-store)]
       (if-let [entry (or (mem-proto/get-entry store id)
                          (plans/get-plan id))]
@@ -59,7 +59,7 @@
   [{:keys [ids]}]
   (if (or (nil? ids) (empty? ids))
     (mcp-error "ids is required (array of memory entry ID strings)")
-    (with-chroma
+    (with-store
       (let [store (mem-proto/get-store)
             results (mapv (fn [id]
                             (if-let [entry (or (mem-proto/get-entry store id)
@@ -84,7 +84,7 @@
   "Check if content already exists in memory."
   [{:keys [type content directory]}]
   (log/info "mcp-memory-check-duplicate:" type "directory:" directory)
-  (with-chroma
+  (with-store
     (let [store (mem-proto/get-store)
           project-id (scope/get-current-project-id directory)
           hash (mem-proto/content-hash content)
@@ -97,7 +97,7 @@
   "Replace tags on an existing memory entry."
   [{:keys [id tags]}]
   (log/info "mcp-memory-update-tags:" id "tags:" tags)
-  (with-chroma
+  (with-store
     (let [store (mem-proto/get-store)]
       (if-let [_existing (mem-proto/get-entry store id)]
         (let [updated (mem-proto/update-entry! store id {:tags (or tags [])})]

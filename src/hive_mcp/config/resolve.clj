@@ -3,7 +3,8 @@
    Promote layer: takes a config map (or rules), returns resolved values."
   (:require [clojure.java.shell :as shell]
             [clojure.string :as str]
-            [hive-dsl.result :refer [rescue]]))
+            [hive-dsl.result :refer [rescue]]
+            [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -30,6 +31,33 @@
                   (when-let [raw (System/getenv env)]
                     (if parse (parse raw) raw)))]
     (or effective-val env-val default)))
+
+;; =============================================================================
+;; Carto Store Resolution
+;; =============================================================================
+
+(defn resolve-carto-store
+  "Resolve the :carto-store service config with WARN-not-fail fallback.
+
+   Cartography snippets live in a dedicated vector store (qdrant-carto by
+   default). If :services :carto-store is absent from the merged config,
+   we log a warning and fall back to the shared :memory-store config so the
+   system keeps booting. Production deployments should declare :carto-store
+   explicitly.
+
+   Returns the resolved service config map (never nil when either key exists).
+   Returns nil only when neither :carto-store nor :memory-store is configured."
+  [config]
+  (let [carto (get-in config [:services :carto-store])
+        fallback (get-in config [:services :memory-store])]
+    (cond
+      carto carto
+      fallback (do (log/warn "resolve-carto-store: :services :carto-store not configured,"
+                             "falling back to :memory-store. Declare :carto-store in config.edn"
+                             "to silence this warning (e.g. {:services {:carto-store {:backend :qdrant-carto}}}).")
+                   fallback)
+      :else (do (log/warn "resolve-carto-store: neither :carto-store nor :memory-store configured.")
+                nil))))
 
 ;; =============================================================================
 ;; Secrets

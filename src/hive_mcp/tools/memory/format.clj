@@ -6,16 +6,18 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defn entry->json-alist
-  "Convert entry map to JSON-serializable format."
+  "Convert entry map to JSON-serializable format.
+   Returns nil when entry is nil (defensive guard against silent {:tags []} output)."
   [entry]
-  (let [base (-> entry
-                 (update :tags #(or % []))
-                 (dissoc :document))
-        kg-outgoing (:kg-outgoing base)
-        kg-incoming (:kg-incoming base)]
-    (cond-> (dissoc base :kg-outgoing :kg-incoming)
-      (seq kg-outgoing) (assoc :kg_outgoing_ids kg-outgoing)
-      (seq kg-incoming) (assoc :kg_incoming_ids kg-incoming))))
+  (when entry
+    (let [base (-> entry
+                   (update :tags #(or % []))
+                   (dissoc :document))
+          kg-outgoing (:kg-outgoing base)
+          kg-incoming (:kg-incoming base)]
+      (cond-> (dissoc base :kg-outgoing :kg-incoming)
+        (seq kg-outgoing) (assoc :kg_outgoing_ids kg-outgoing)
+        (seq kg-incoming) (assoc :kg_incoming_ids kg-incoming)))))
 
 (defn- truncate-string
   "Truncate string to max-len, adding ellipsis if truncated."

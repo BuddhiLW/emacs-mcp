@@ -8,7 +8,7 @@
 
    Re-exports handle-decay and handle-xpoll-promote for backward compatibility
    with tools/memory.clj facade."
-  (:require [hive-mcp.tools.memory.core :refer [with-chroma with-entry]]
+  (:require [hive-mcp.tools.memory.core :refer [with-store with-entry]]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.format :as fmt]
             [hive-mcp.tools.memory.duration :as dur]
@@ -36,7 +36,7 @@
   "Set duration category for a memory entry."
   [{:keys [id duration]}]
   (log/info "mcp-memory-set-duration:" id duration)
-  (with-chroma
+  (with-store
     (let [store (mem-proto/get-store)
           expires (dur/calculate-expires duration)
           updated (mem-proto/update-entry! store id {:duration duration
@@ -79,7 +79,7 @@
   "Remove all expired memory entries and clean up their KG edges."
   [_]
   (log/info "mcp-memory-cleanup-expired")
-  (with-chroma
+  (with-store
     (let [{:keys [count deleted-ids repaired]} (mem-proto/cleanup-expired! (mem-proto/get-store))
           edges-removed (when (seq deleted-ids)
                           (reduce (fn [total id]
@@ -145,7 +145,7 @@
         limit-val (coerce-int! limit :limit 20)
         directory (or directory (ctx/current-directory))]
     (log/info "mcp-memory-expiring-soon:" days-val "limit:" limit-val "directory:" directory)
-    (with-chroma
+    (with-store
       (let [project-id (scope/get-current-project-id directory)
             all-entries (mem-proto/entries-expiring-soon (mem-proto/get-store) days-val {})
             scope-filter (scope/make-scope-tag project-id)

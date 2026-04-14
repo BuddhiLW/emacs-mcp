@@ -1,6 +1,6 @@
 (ns hive-mcp.tools.memory.migration
   "Migration handlers for memory project and storage transitions."
-  (:require [hive-mcp.tools.memory.core :refer [with-chroma]]
+  (:require [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.memory.temporal :as temporal]
@@ -23,7 +23,7 @@
   "Migrate memory from one project-id to another (Chroma + KG edges)."
   [{:keys [old-project-id new-project-id update-scopes]}]
   (log/info "mcp-memory-migrate-project:" old-project-id "->" new-project-id)
-  (with-chroma
+  (with-store
     (let [store (mem-proto/get-store)
           entries (mem-proto/query-entries store {:project-id old-project-id :limit 10000})
           migrated (atom 0)
@@ -100,7 +100,7 @@
                                     (str "tag-filter=" tag-filter))
                 old-project-id "->" new-project-id
                 (when dry-run "(dry-run)"))
-      (with-chroma
+      (with-store
         (let [store          (mem-proto/get-store)
               old-scope-tag  (scope/make-scope-tag old-project-id)
               new-scope-tag  (scope/make-scope-tag new-project-id)
@@ -221,7 +221,7 @@
   "Import memory entries from legacy JSON storage to Chroma."
   [{:keys [project-id dry-run]}]
   (log/info "mcp-memory-import-json:" project-id "dry-run:" dry-run)
-  (with-chroma
+  (with-store
     (let [pid (or project-id (scope/get-current-project-id))
           elisp (format "(json-encode (list :notes (hive-mcp-memory-query 'note nil %s 1000 nil t)
                                             :snippets (hive-mcp-memory-query 'snippet nil %s 1000 nil t)
@@ -273,7 +273,7 @@
 (defn handle-detect-orphaned
   "Detect orphaned hash-based scope tags in memory."
   [_args]
-  (with-chroma
+  (with-store
     (let [entries (mem-proto/query-entries (mem-proto/get-store) {:limit 5000 :include-expired? true})
           scope-entries (->> entries
                              (mapcat (fn [entry]
@@ -312,7 +312,7 @@
 
     :else
     (let [dry-run (if (nil? dry_run) true dry_run)]
-      (with-chroma
+      (with-store
         (let [store (mem-proto/get-store)
               old-tag (str "scope:project:" old_scope)
               entries (mem-proto/query-entries store {:limit 5000 :include-expired? true})
@@ -386,7 +386,7 @@
 
       (if dry-run
         (let [chroma-count (rescue 0
-                                   (with-chroma
+                                   (with-store
                                      (count (mem-proto/query-entries (mem-proto/get-store)
                                                                      {:project-id old-project-id
                                                                       :limit 10000}))))

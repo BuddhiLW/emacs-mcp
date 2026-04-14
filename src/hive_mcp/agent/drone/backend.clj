@@ -22,7 +22,13 @@
   (fn [context] (:backend context)))
 
 (defmethod resolve-backend :default [context]
-  (throw (IllegalArgumentException.
-          (str "No IDroneExecutionBackend registered for backend: "
-               (pr-str (:backend context))
-               ". Available backends are registered via (defmethod resolve-backend :key ...)"))))
+  (let [k (:backend context)]
+    (if (= k :openrouter)
+      {:error :unknown-backend
+       :key :openrouter
+       :fix :use-openrouter-loop-or-omit
+       :hint "Use :openrouter-loop explicitly or omit :backend to use best-backend() priority (fsm-agentic → sdk-drone → openrouter-loop)"}
+      (throw (IllegalArgumentException.
+              (str "No IDroneExecutionBackend registered for backend: "
+                   (pr-str k)
+                   ". Available backends are registered via (defmethod resolve-backend :key ...)"))))))

@@ -350,16 +350,41 @@
   (fn [args]
     (normalize-content (handler args))))
 
+(defn- resolve-child-project-ids
+  "Resolve project-ids of slaves spawned cross-project by agents in the given project.
+   Returns a set of project-id strings, or nil if none found.
+   Uses requiring-resolve to avoid circular dep on swarm.datascript.queries."
+  [project-id]
+  (when project-id
+    (try
+      (when-let [query-fn (requiring-resolve 'hive-mcp.swarm.datascript.queries/get-child-project-ids)]
+        (let [child-pids (query-fn project-id)]
+          (when (seq child-pids)
+            (log/debug "Piggyback: including child project-ids for" project-id ":" child-pids)
+            child-pids)))
+      (catch Exception e
+        (log/debug "Piggyback: child project-id resolution failed (non-fatal):" (.getMessage e))
+        nil))))
+
 (defn- get-piggyback-messages
   "Get hivemind piggyback messages for agent+project.
    SRP: Single responsibility - piggyback retrieval.
    Encapsulates dynamic require/resolve pattern.
 
    CRITICAL: project-id scoping prevents cross-project shout leakage.
-   Without it, coordinator-Y would consume shouts meant for coordinator-X."
+   Without it, coordinator-Y would consume shouts meant for coordinator-X.
+
+   Cross-project descendant support: also includes shouts from lings that
+   were spawned by agents in the coordinator's project but run in a different
+   project (e.g. batch-spawn into a different cwd). The parent→child hierarchy
+   in the swarm registry is used to resolve these additional project-ids."
   [agent-id project-id]
   (require 'hive-mcp.channel.piggyback)
-  ((resolve 'hive-mcp.channel.piggyback/get-messages) agent-id :project-id project-id))
+  (let [child-pids (resolve-child-project-ids project-id)]
+    ((resolve 'hive-mcp.channel.piggyback/get-messages)
+     agent-id
+     :project-id project-id
+     :additional-project-ids child-pids)))
 
 (defn- drain-memory-piggyback
   "Drain next batch of memory entries for a caller session.

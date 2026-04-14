@@ -316,12 +316,24 @@
        (if (string? x) (expand-str x) x))
      config)))
 
+(defn- addon-id->service-key
+  "Derive config.edn service key from addon ID.
+   \"hive.milvus\" → :milvus, \"bridge.foo\" → :foo"
+  [addon-id]
+  (some-> addon-id
+          (str/replace #"^[^.]+\." "")
+          keyword))
+
 (defn prepare-config
   "Prepare a manifest's config for addon initialization.
 
    Applies:
-   1. Environment variable expansion
-   2. Merges addon/id and addon/type into config for context
+   1. Merge config.edn :services values (authoritative config source)
+   2. Environment variable expansion (overrides for unset values)
+   3. Merges addon/id and addon/type into config for context
+
+   Config precedence (highest wins):
+     env vars > config.edn :services > manifest :addon/config defaults
 
    Arguments:
      manifest - Validated manifest map
@@ -329,8 +341,16 @@
    Returns:
      Config map ready for (initialize! addon config)"
   [manifest]
-  (let [raw-config (or (:addon/config manifest) {})]
-    (-> raw-config
+  (let [raw-config  (or (:addon/config manifest) {})
+        service-key (addon-id->service-key (:addon/id manifest))
+        file-config (when service-key
+                      (try
+                        (require 'hive-mcp.config.core)
+                        (let [get-svc (resolve 'hive-mcp.config.core/get-service-config)]
+                          (when get-svc
+                            (dissoc (get-svc service-key) :mode)))
+                        (catch Exception _ nil)))]
+    (-> (merge raw-config file-config)
         expand-env-vars
         (assoc :addon/id (:addon/id manifest)
                :addon/type (:addon/type manifest)))))
@@ -443,7 +463,7 @@
                                     (if (satisfies? proto/IAddon result)
                                       (do
                                         (register-fn! result)
-                                        (let [init-result (init-addon-fn! addon-id)]
+                                        (let [init-result (init-addon-fn! addon-id config)]
                                           (log/info "Addon initialized from manifest" {:addon/id addon-id})
                                           (assoc init-result :addon/id addon-id :source :manifest)))
                                       (do

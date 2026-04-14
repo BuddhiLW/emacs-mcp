@@ -5,6 +5,7 @@
             [hive-mcp.chroma.embeddings :as emb]
             [hive-mcp.chroma.gate :as gate]
             [hive-mcp.chroma.helpers :as h]
+            [hive-mcp.embeddings.service :as embedding-service]
             [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -32,12 +33,19 @@
            staleness-alpha staleness-beta staleness-source staleness-depth]
     :as entry}]
   (emb/require-embedding!)
-  (let [coll (conn/get-or-create-collection)
-        entry-id (or id (h/generate-id))
+  (let [entry-id (or id (h/generate-id))
         now (h/iso-timestamp)
         doc-text (h/memory-to-document entry)
+        resolved (try (embedding-service/resolve-provider-for-type type)
+                      (catch Exception _e nil))
+        _ (when resolved (embedding-service/validate-content-size! doc-text resolved))
+        coll (if resolved
+               (conn/get-or-create-named-collection
+                 (:collection-name resolved) (:dimension resolved))
+               (conn/get-or-create-collection))
+        provider (if resolved (:provider resolved) (emb/get-embedding-provider))
         embedding (gate/with-embedding-gate
-                    (emb/embed-text (emb/get-embedding-provider) doc-text))
+                    (emb/embed-text provider doc-text))
         provided {:type type :tags (h/join-tags tags) :content (h/serialize-content content)
                   :content-hash content-hash :created (or created now) :updated (or updated now)
                   :duration duration :expires expires :access-count access-count
@@ -94,12 +102,19 @@
     (mapv :id entries)))
 
 (defn get-entry-by-id
-  "Get a memory entry by ID from Chroma."
+  "Get a memory entry by ID from Chroma. Searches default + large collections."
   [id]
   (emb/require-embedding!)
   (let [coll (conn/get-or-create-collection)
-        results (gate/deref-read (chroma/get coll :ids [id] :include #{:documents :metadatas}))]
-    (some-> (first results) h/metadata->entry)))
+        results (gate/deref-read (chroma/get coll :ids [id] :include #{:documents :metadatas}))
+        entry (some-> (first results) h/metadata->entry)]
+    (or entry
+        ;; Try large-content collection if not found in default
+        (try
+          (let [lg-coll (conn/get-or-create-named-collection "hive-mcp-memory-4096d" 4096)
+                lg-results (gate/deref-read (chroma/get lg-coll :ids [id] :include #{:documents :metadatas}))]
+            (some-> (first lg-results) h/metadata->entry))
+          (catch Exception _ nil)))))
 
 (defn query-entries
   "Query memory entries from Chroma with filtering.
@@ -107,7 +122,16 @@
   [& {:keys [type project-id project-ids tags exclude-tags limit include-expired?]
       :or {limit 100 include-expired? false}}]
   (emb/require-embedding!)
-  (let [coll (conn/get-or-create-collection)
+  (let [colls (try (let [coll-names (embedding-service/type->collection-names type)]
+                     (mapv (fn [cn]
+                             (let [resolved (try (embedding-service/resolve-provider-for-type
+                                                   (or type "note"))
+                                                 (catch Exception _ nil))]
+                               (if (and resolved (= cn (:collection-name resolved)))
+                                 (conn/get-or-create-named-collection cn (:dimension resolved))
+                                 (conn/get-or-create-collection))))
+                           coll-names))
+                   (catch Exception _ [(conn/get-or-create-collection)]))
         base-clause (cond-> {}
                       type (assoc :type type)
                       project-ids (assoc :project-id {:$in (vec project-ids)})
@@ -124,16 +148,14 @@
                 (seq base-clause) base-clause
                 :else nil)
         fetch-limit (if include-expired? limit (+ limit 50))
-        ;; PERF: include only :metadatas — content is already stored inside
-        ;; metadata.content by index-memory-entry!, so fetching :documents
-        ;; doubles payload size for no gain. query-entries callers read
-        ;; (:content entry), never (:document entry). Dropping :documents
-        ;; roughly halves HTTP transfer + JSON-parse time for large result
-        ;; sets (see docs/carto-tag-query-perf.md).
-        results (gate/deref-read (chroma/get coll
-                                            :where where
-                                            :include #{:metadatas}
-                                            :limit fetch-limit))
+        ;; PERF: include only :metadatas — see docs/carto-tag-query-perf.md
+        results (mapcat (fn [coll]
+                          (try (gate/deref-read (chroma/get coll
+                                                           :where where
+                                                           :include #{:metadatas}
+                                                           :limit fetch-limit))
+                               (catch Exception _ [])))
+                        colls)
         entries (map h/metadata->entry results)
         {expired true live false} (group-by #(boolean (h/expired? %)) entries)]
     (when-not include-expired?
@@ -174,10 +196,15 @@
     (update-entry! entry-id updates)))
 
 (defn delete-entry!
-  "Delete a memory entry from the Chroma index."
+  "Delete a memory entry from the Chroma index. Tries both collections."
   [id]
   (let [coll (conn/get-or-create-collection)]
     (gate/deref-write (chroma/delete coll :ids [id]))
+    ;; Also try deleting from large collection (entry might be there)
+    (try
+      (let [lg-coll (conn/get-or-create-named-collection "hive-mcp-memory-4096d" 4096)]
+        (gate/deref-write (chroma/delete lg-coll :ids [id])))
+      (catch Exception _ nil))
     (log/debug "Deleted entry from Chroma:" id)
     id))
 

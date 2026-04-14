@@ -16,7 +16,7 @@
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.tools.memory.crud :as mem-crud]
             [hive-mcp.tools.memory.scope :as scope]
-            [hive-mcp.tools.memory.core :refer [with-chroma]]
+            [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.memory.temporal :as temporal]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.vectordb.facade :as facade]
@@ -132,12 +132,26 @@
 ;; ============================================================
 
 (defn- query-kanban-entries [project-id include-descendants? limit]
-  (let [all-project-ids (when-let [_ include-descendants?]
+  (let [global? (= project-id "global")
+        all-project-ids (when (and include-descendants? (not global?))
                           (resolve-project-ids-with-descendants project-id))
-        multi-project? (boolean all-project-ids)
-        entries (if-let [pids all-project-ids]
-                  (facade/query-entries :type "note" :project-ids pids :limit (max limit 500))
-                  (facade/query-entries :type "note" :project-id project-id :limit limit))]
+        multi-project? (or global? (boolean all-project-ids))
+        effective-limit (max limit 500)
+        entries (cond
+                  ;; Global + descendants: query all kanban entries (no project filter)
+                  (and global? include-descendants?)
+                  (facade/query-entries :type "note" :tags ["kanban"]
+                                        :limit effective-limit)
+                  ;; Specific project + descendants
+                  all-project-ids
+                  (facade/query-entries :type "note" :tags ["kanban"]
+                                        :project-ids all-project-ids
+                                        :limit effective-limit)
+                  ;; Single project scope
+                  :else
+                  (facade/query-entries :type "note" :tags ["kanban"]
+                                        :project-id project-id
+                                        :limit limit))]
     {:entries entries :multi-project? multi-project?}))
 
 (defn- filter-kanban-by-tags [entries required-tags]
@@ -344,19 +358,19 @@
   "List kanban tasks with minimal data for token optimization.
    HCR Wave 4: Pass include_descendants=true to aggregate child project tasks."
   [params]
-  (safe-call :kanban/list-failed #(with-chroma (list-slim* params))))
+  (safe-call :kanban/list-failed #(with-store (list-slim* params))))
 
 (defn handle-mem-kanban-move
   "Move task to new status. Moving to 'done' DELETES the task from memory.
    CTX Migration: Uses request context for directory extraction."
   [params]
-  (safe-call :kanban/move-failed #(with-chroma (move* params))))
+  (safe-call :kanban/move-failed #(with-store (move* params))))
 
 (defn handle-mem-kanban-stats
   "Get kanban statistics by status.
    HCR Wave 4: Pass include_descendants=true to aggregate child project stats."
   [params]
-  (safe-call :kanban/stats-failed #(with-chroma (stats* params))))
+  (safe-call :kanban/stats-failed #(with-store (stats* params))))
 
 (defn handle-mem-kanban-quick
   "Quick add task with defaults (todo, medium priority).
