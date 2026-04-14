@@ -47,9 +47,10 @@
         stop? (atom false)
         pump (future
                (while (not @stop?)
-                 (let [v (clojure.core.async/alt!!
-                           ch ([x] x)
-                           (clojure.core.async/timeout 20) :none)]
+                 (let [v #_{:clj-kondo/ignore [:unresolved-symbol]}
+                       (clojure.core.async/alt!!
+                         ch ([x] x)
+                         (clojure.core.async/timeout 20) :none)]
                    (when (and (not= v :none) (some? v))
                      (swap! acc conj v)))))]
     (try

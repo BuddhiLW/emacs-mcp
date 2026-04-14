@@ -140,7 +140,7 @@
 (defn mcp-visible?
   "Is this spawn mode visible in MCP tool enums?"
   [sm]
-  (get-in registry/registry [(adt-variant sm) :mcp?] false))
+  (get-in (registry/registry) [(adt-variant sm) :mcp?] false))
 
 ;; =============================================================================
 ;; Variant Sets (for iteration / validation)

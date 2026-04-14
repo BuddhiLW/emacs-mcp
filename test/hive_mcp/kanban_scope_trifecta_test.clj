@@ -8,7 +8,9 @@
 
    Tests the pure helper functions extracted from memory_kanban.clj."
   (:require [clojure.test :refer [deftest testing is]]
+            [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as tc-prop]
             [hive-test.trifecta :refer [deftrifecta]]
             [hive-test.properties :as props]))
 
@@ -111,22 +113,22 @@
 ;; 2. Property: filter-kanban-by-tags only returns kanban entries
 ;; =============================================================================
 
-(clojure.test.check.clojure-test/defspec prop-filter-only-returns-kanban 100
-  (clojure.test.check.properties/for-all
+(defspec prop-filter-only-returns-kanban 100
+  (tc-prop/for-all
     [entries gen-mixed-entries]
     (let [result (filter-kanban-by-tags entries ["kanban"])]
       (every? kanban-entry? result))))
 
-(clojure.test.check.clojure-test/defspec prop-filter-respects-tags 100
-  (clojure.test.check.properties/for-all
+(defspec prop-filter-respects-tags 100
+  (tc-prop/for-all
     [entries gen-mixed-entries]
     (let [result (filter-kanban-by-tags entries ["kanban" "todo"])]
       (every? (fn [e] (and (kanban-entry? e)
                            (contains? (set (:tags e)) "todo")))
               result))))
 
-(clojure.test.check.clojure-test/defspec prop-filter-subset-of-input 100
-  (clojure.test.check.properties/for-all
+(defspec prop-filter-subset-of-input 100
+  (tc-prop/for-all
     [entries gen-mixed-entries]
     (let [result (filter-kanban-by-tags entries ["kanban"])
           input-ids (set (map :id entries))]

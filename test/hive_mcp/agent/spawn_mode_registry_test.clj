@@ -8,7 +8,7 @@
 
 (deftest registry-is-array-map
   (testing "Registry preserves insertion order (array-map)"
-    (is (instance? clojure.lang.PersistentArrayMap smr/registry))))
+    (is (instance? clojure.lang.PersistentArrayMap (smr/registry)))))
 
 (deftest registry-has-expected-variants
   (testing "All expected spawn modes present"
@@ -22,7 +22,7 @@
 
 (deftest every-variant-has-required-keys
   (testing "Each variant has all required metadata keys"
-    (doseq [[mode-kw meta-map] smr/registry]
+    (doseq [[mode-kw meta-map] (smr/registry)]
       (testing (str "mode " mode-kw)
         (is (string? (:description meta-map))
             (str mode-kw " missing :description"))
@@ -39,7 +39,7 @@
 
 (deftest all-modes-consistent
   (testing "all-modes matches registry keys"
-    (is (= smr/all-modes (set (keys smr/registry))))))
+    (is (= smr/all-modes (set (keys (smr/registry)))))))
 
 (deftest all-mode-strings-consistent
   (testing "all-mode-strings has string versions of all-modes"
@@ -47,7 +47,7 @@
 
 (deftest mcp-modes-only-mcp-visible
   (testing "MCP modes are exactly those with :mcp? true"
-    (let [expected (->> smr/registry
+    (let [expected (->> (smr/registry)
                         (filter (fn [[_k v]] (:mcp? v)))
                         (mapv (comp name key)))]
       (is (= expected smr/mcp-modes))))
@@ -139,7 +139,7 @@
   (testing "openrouter has multi-model capability"
     (is (contains? (smr/capabilities :openrouter) :multi-model)))
   (testing "All modes have dispatch and kill"
-    (doseq [mode (keys smr/registry)]
+    (doseq [mode (keys (smr/registry))]
       (is (smr/has-capability? mode :dispatch)
           (str mode " missing :dispatch"))
       (is (smr/has-capability? mode :kill)
