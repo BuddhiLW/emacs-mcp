@@ -17,7 +17,7 @@
         nrepl/bencode {:mvn/version "1.2.0"}
 
         ;; Aleph for robust async TCP/networking (replaces custom sockets)
-        aleph/aleph {:mvn/version "0.9.5"}
+        aleph/aleph {:mvn/version "0.9.7"}
         manifold/manifold {:mvn/version "0.5.0"}
 
         ;; Logic programming for swarm hivemind coordination
@@ -41,7 +41,7 @@
         ;; Datahike for immutable graph storage with branching/time-travel
         ;; Content-addressable, supports branch/merge for multi-ling exploration
         ;; Part of replikativ ecosystem (pairs with yggdrasil)
-        org.replikativ/datahike {:mvn/version "0.8.1667"}
+        org.replikativ/datahike {:mvn/version "0.8.1671"}
 
         ;; Logging - SLF4J with Logback backend
         ;; clojure.tools.logging provides the Clojure facade
@@ -141,7 +141,7 @@
  {:mcp
   {:exec-fn hive-mcp.server.core/start!
    :exec-args {}
-   :extra-deps {nrepl/nrepl {:mvn/version "1.6.0"}
+   :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}
                 cider/cider-nrepl {:mvn/version "0.58.0"}}
    ;; Heap cap, G1GC tuning, string dedup for prompt/response data,
    ;; bounded core.async pool, Netty access
@@ -156,7 +156,7 @@
 
   :dev
   {:extra-paths ["dev" "test"]
-   :extra-deps {nrepl/nrepl {:mvn/version "1.6.0"}
+   :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}
                 cider/cider-nrepl {:mvn/version "0.58.0"}
                 refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
@@ -173,7 +173,7 @@
 
   :nrepl
   {:extra-paths ["dev" "test"]
-   :extra-deps {nrepl/nrepl {:mvn/version "1.6.0"}
+   :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}
                 cider/cider-nrepl {:mvn/version "0.58.0"}
                 refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
