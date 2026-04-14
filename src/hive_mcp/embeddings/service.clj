@@ -32,7 +32,13 @@
   (:require [hive-mcp.embeddings.config :as config]
             [hive-mcp.embeddings.registry :as registry]
             [hive-mcp.embeddings.cache :as embed-cache]
-            [hive-mcp.chroma.core :as chroma]
+            ;; DIP: depend on the EmbeddingProvider protocol boundary, not
+            ;; chroma.core (which re-aggregates concrete Chroma CRUD and
+            ;; transitively pulls hive-mcp.plan.plans → tools.memory.crud
+            ;; → agent.drone.feedback → agent.routing, creating a load
+            ;; cycle at test time). chroma.embeddings is the protocol-only
+            ;; seam — safe to depend on from the embedding domain service.
+            [hive-mcp.chroma.embeddings :as chroma]
             [hive-mcp.config.core :as global-config]
             [hive-mcp.dns.result :refer [rescue]]
             [taoensso.timbre :as log]))
