@@ -128,7 +128,7 @@
         ;; hive-proximum — temporal/bitemporal memory backend (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/hive-proximum.edn manifest.
         ;; Stub store until backend impl lands (task 486248c0).
-        io.github.hive-agi/hive-proximum {:local/root "../hive-proximum"}
+        io.github.hive-agi/hive-proximum {:git/tag "v0.1.1" :git/sha "7103bdd"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
