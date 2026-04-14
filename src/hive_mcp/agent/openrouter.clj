@@ -46,6 +46,73 @@
   "Provider preference order for auto-discovery."
   [:openrouter :venice :groq :together :fireworks :openai :ollama-compat])
 
+(declare best-available-provider)
+
+(defn effective-provider-registry
+  "Return provider-registry merged with config :llm-providers overrides.
+   Config values win; static registry is the fallback."
+  []
+  (let [config-providers (global-config/get-config-value "llm-providers")]
+    (if (map? config-providers)
+      (reduce-kv (fn [acc k v]
+                   (if (map? v)
+                     (update acc k merge v)
+                     acc))
+                 provider-registry
+                 config-providers)
+      provider-registry)))
+
+(defn validate-provider
+  "Validate provider keyword. Returns nil on success, error map on failure."
+  [provider]
+  (let [reg (effective-provider-registry)]
+    (when-not (contains? reg provider)
+      {:error :unknown-provider
+       :requested provider
+       :available (vec (keys reg))
+       :fix "Use one of the available providers, or add via: hive config set llm-providers.<name>.api-url <url>"})))
+
+(defn validate-model
+  "Validate model for a provider. Returns nil on success, error map on failure."
+  [provider model]
+  (let [reg (effective-provider-registry)
+        entry (get reg provider)
+        available (:available-models entry)]
+    (when (and (seq available) (not (some #{model} available)))
+      {:error :unknown-model-for-provider
+       :provider provider
+       :model model
+       :available (vec available)
+       :fix (str "Use one of the available models for " (name provider)
+                 ", or add via: hive config set llm-providers." (name provider)
+                 ".available-models [...]")})))
+
+(defn resolve-provider-model
+  "Resolve provider + model for an agent spawn/wave.
+   Resolution order:
+     1. Explicit provider+model from call
+     2. Explicit model only → infer from agent-defaults
+     3. Nothing → read :agent-defaults for agent-type
+     4. Fall through to provider :default-model
+   Returns {:provider <kw> :model <str>} or throws on validation failure."
+  [{:keys [provider model agent-type]}]
+  (let [agent-defaults (global-config/get-config-value "agent-defaults")
+        type-defaults  (get agent-defaults (keyword agent-type))
+        eff-provider   (or (some-> provider keyword)
+                           (some-> type-defaults :provider keyword)
+                           (best-available-provider))
+        reg            (effective-provider-registry)
+        reg-entry      (get reg eff-provider)
+        eff-model      (or model
+                           (:model type-defaults)
+                           (:default-model reg-entry))]
+    ;; Validate
+    (when-let [err (validate-provider eff-provider)]
+      (throw (ex-info (str "Unknown provider: " (name eff-provider)) err)))
+    (when-let [err (validate-model eff-provider eff-model)]
+      (log/warn "Model not in available-models list" err))
+    {:provider eff-provider :model eff-model}))
+
 ;;; ---------------------------------------------------------------------------
 ;;; Metrics
 ;;; ---------------------------------------------------------------------------

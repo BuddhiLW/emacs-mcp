@@ -11,6 +11,7 @@
             [hive-mcp.agent.drone :as drone]
             [hive-mcp.agent.type-registry :as agent-type-registry]
             [hive-mcp.agent.spawn-mode-registry :as spawn-registry]
+            [hive-mcp.agent.openrouter :as llm-registry]
             [hive-mcp.swarm.datascript.queries :as queries]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.server.guards :as guards]
@@ -58,7 +59,7 @@
 
    Defense-in-depth: denies spawn when called from a child ling process
    (HIVE_MCP_ROLE=child-ling). This prevents recursive agent spawning."
-  [{:keys [type name cwd presets model task files parent project_id kanban_task_id spawn_mode agents max_budget_usd]}]
+  [{:keys [type name cwd presets model provider task files parent project_id kanban_task_id spawn_mode agents max_budget_usd]}]
   ;; Layer 3: Defense-in-depth spawn guard
   (if-let [_ (when (guards/child-ling?) :denied)]
     (do
@@ -70,7 +71,12 @@
                    (agent-type-registry/spawnable? agent-type))
         (mcp-error (str "type must be one of: " (pr-str (agent-type-registry/mcp-enum))))
         (try
-          (let [agent-id (or name (helpers/generate-agent-id agent-type))
+          ;; Resolve provider+model via registry chain
+          (let [resolved (llm-registry/resolve-provider-model
+                           {:provider provider :model model :agent-type agent-type})
+                effective-model (:model resolved)
+                effective-provider (:provider resolved)
+                agent-id (or name (helpers/generate-agent-id agent-type))
                 effective-project-id (resolve-project-scope project_id cwd parent)]
             (case agent-type
               :ling
@@ -97,40 +103,49 @@
                                                               :presets presets-vec
                                                               :project-id effective-project-id
                                                               :spawn-mode effective-spawn-mode
-                                                              :model model}
+                                                              :model effective-model
+                                                              :provider effective-provider}
                                                        normalized-agents (assoc :agents normalized-agents)
                                                        max_budget_usd    (assoc :max-budget-usd max_budget_usd)))
                     slave-id (proto/spawn! ling-agent (cond-> {:task task
                                                                :parent parent
                                                                :kanban-task-id kanban_task_id
                                                                :spawn-mode (:spawn-mode ling-agent)
-                                                               :model model}
+                                                               :model effective-model
+                                                               :provider effective-provider}
                                                         max_budget_usd (assoc :max-budget-usd max_budget_usd)))]
                 (log/info "Spawned ling" {:requested-id agent-id
                                           :slave-id slave-id
                                           :spawn-mode (:spawn-mode ling-agent)
-                                          :model (or model "claude")
+                                          :provider effective-provider
+                                          :model effective-model
                                           :cwd cwd :presets presets-vec
                                           :project-id effective-project-id})
                 (mcp-json {:success true
                            :agent-id slave-id
                            :type :ling
                            :spawn-mode (:spawn-mode ling-agent)
-                           :model (or model "claude")
+                           :provider effective-provider
+                           :model effective-model
                            :cwd cwd
                            :presets presets-vec
                            :project-id effective-project-id}))
 
               :drone
               (let [drone-agent (drone/->drone agent-id {:cwd cwd
-                                                         :model model
+                                                         :model effective-model
+                                                         :provider effective-provider
                                                          :parent-id parent
                                                          :project-id effective-project-id})]
                 (proto/spawn! drone-agent {:files files})
-                (log/info "Spawned drone" {:id agent-id :cwd cwd :model model})
+                (log/info "Spawned drone" {:id agent-id :cwd cwd
+                                            :provider effective-provider
+                                            :model effective-model})
                 (mcp-json {:success true
                            :agent-id agent-id
                            :type :drone
+                           :provider effective-provider
+                           :model effective-model
                            :cwd cwd
                            :files files}))))
           (catch Exception e

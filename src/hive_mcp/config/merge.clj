@@ -113,6 +113,43 @@
              :groq-api-key nil
              :together-api-key nil
              :fireworks-api-key nil}
+   :llm-providers {:openrouter {:api-url       "https://openrouter.ai/api/v1/chat/completions"
+                                :secret-key    :openrouter-api-key
+                                :default-model "anthropic/claude-sonnet-4-6"
+                                :available-models ["deepseek/deepseek-v3.2"
+                                                   "moonshotai/kimi-k2.5"
+                                                   "z-ai/glm-4.6"
+                                                   "anthropic/claude-sonnet-4-6"
+                                                   "anthropic/claude-opus-4-6"
+                                                   "qwen/qwen3-6-plus"]}
+                   :venice     {:api-url       "https://api.venice.ai/api/v1/chat/completions"
+                                :secret-key    :venice-api-key
+                                :default-model "venice-uncensored"
+                                :available-models ["venice-uncensored"
+                                                   "qwen-3-6-plus"]}
+                   :groq       {:api-url       "https://api.groq.com/openai/v1/chat/completions"
+                                :secret-key    :groq-api-key
+                                :default-model "llama-3.3-70b-versatile"
+                                :available-models ["llama-3.3-70b-versatile"]}
+                   :together   {:api-url       "https://api.together.xyz/v1/chat/completions"
+                                :secret-key    :together-api-key
+                                :default-model "meta-llama/Llama-3.3-70B-Instruct-Turbo"
+                                :available-models ["meta-llama/Llama-3.3-70B-Instruct-Turbo"]}
+                   :fireworks  {:api-url       "https://api.fireworks.ai/inference/v1/chat/completions"
+                                :secret-key    :fireworks-api-key
+                                :default-model "accounts/fireworks/models/llama-v3p3-70b-instruct"
+                                :available-models ["accounts/fireworks/models/llama-v3p3-70b-instruct"]}
+                   :openai     {:api-url       "https://api.openai.com/v1/chat/completions"
+                                :secret-key    :openai-api-key
+                                :default-model "gpt-4o-mini"
+                                :available-models ["gpt-4o-mini" "gpt-4o"]}
+                   :ollama-compat {:api-url       "http://localhost:11434/v1/chat/completions"
+                                   :secret-key    nil
+                                   :default-model "devstral-small:24b"
+                                   :available-models ["devstral-small:24b"]}}
+   :agent-defaults {:ling       {:provider :openrouter :model "anthropic/claude-sonnet-4-6"}
+                    :drone      {:provider :openrouter :model "deepseek/deepseek-v3.2"}
+                    :compressor {:provider :venice     :model "venice-uncensored"}}
    :models {:task-models {:coding "x-ai/grok-code-fast-1"
                           :coding-alt "deepseek/deepseek-v3.2"
                           :testing "x-ai/grok-code-fast-1"
