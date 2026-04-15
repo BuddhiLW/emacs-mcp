@@ -7,7 +7,7 @@
    - Last scan timestamp (from cartography/tools scan-state)
 
    Pure read-only — does NOT trigger scans or modify carto state."
-  (:require [taoensso.timbre :as log]))
+  (:require [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -15,7 +15,7 @@
 (defn- try-resolve
   "Resolve a symbol lazily. Returns var or nil."
   [sym]
-  (try (requiring-resolve sym) (catch Exception _ nil)))
+  (rescue nil (requiring-resolve sym)))
 
 (defn- lsp-up?
   "Check if LSP sidecar Docker container is running.
@@ -33,22 +33,18 @@
     false))
 
 (defn- indexed-forms-count
-  "Count carto snippets in the :carto store. Returns 0 on failure."
+  "Count carto snippets in the :carto store. Returns 0 on failure.
+
+   Routes through hive-mcp.vectordb.carto-facade (the :carto slot) — the
+   same backend scan.clj writes to. Previously queried hive-mcp.chroma.crud
+   directly, which reads :default (Chroma) and missed Milvus-backed carto
+   snippets, always returning 0."
   [project-id]
-  (if-let [query-fn (try-resolve 'hive-mcp.chroma.crud/query-entries)]
+  (if-let [query-fn (try-resolve 'hive-mcp.vectordb.carto-facade/query-entries)]
     (try
-      (let [results (query-fn {:tags       ["carto"]
-                               :limit      1
-                               :project-id (or project-id "hive-mcp")
-                               :count-only true})]
-        ;; count-only may not be supported — fall back to counting results
-        (if (integer? results)
-          results
-          ;; Do a broader query to get a count estimate
-          (let [broad (query-fn {:tags       ["carto"]
-                                 :limit      10000
-                                 :project-id (or project-id "hive-mcp")})]
-            (count broad))))
+      (count (query-fn :tags       ["carto"]
+                       :limit      10000
+                       :project-id (or project-id "hive-mcp")))
       (catch Exception e
         (log/debug "carto indexed-forms-count failed:" (ex-message e))
         0))
