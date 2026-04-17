@@ -12,6 +12,7 @@
             [hive-mcp.concurrency.pool :as pool]
             [hive-mcp.dns.result :refer [rescue rescue-interrupt rescue-log]]
             [hive-mcp.tools.catchup.hierarchy :as hier]
+            [hive-mcp.tools.catchup.scope-filter :as sf]
             [hive-weave.pool :as wpool]
             [hive-weave.parallel :as wpar]
             [clojure.tools.logging :as log]
@@ -22,21 +23,9 @@
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-(defn distinct-by
-  "Return distinct elements from coll by the value of (f item)."
-  [f coll]
-  (let [seen (volatile! #{})]
-    (filterv (fn [item]
-               (let [key (f item)]
-                 (if (contains? @seen key)
-                   false
-                   (do (vswap! seen conj key) true))))
-             coll)))
-
-(defn- newest-first
-  "Sort entries by :created timestamp, newest first."
-  [entries]
-  (sort-by :created #(compare %2 %1) entries))
+;; Re-exports from scope_filter for backward-compat:
+(def distinct-by         sf/distinct-by)
+(def ^:private newest-first sf/newest-first)
 
 (defn get-current-project-name
   "Get current project name from .hive-project.edn or directory path (no Emacs dependency)."
@@ -52,44 +41,10 @@
               (let [parts (str/split (str directory) #"/")]
                 (last parts)))))))
 
-(defn filter-by-tags
-  "Filter entries to only those containing all specified tags."
-  [entries tags]
-  (if (seq tags)
-    (filter (fn [entry]
-              (let [entry-tags (set (:tags entry))]
-                (every? #(contains? entry-tags %) tags)))
-            entries)
-    entries))
-
-(defn- compute-full-scope-tags
-  "Compute full hierarchy scope tags for in-memory safety-net filtering."
-  [project-id]
-  (let [in-project? (and project-id (not= project-id "global"))]
-    (cond-> (kg-scope/full-hierarchy-scope-tags project-id)
-      in-project? (disj "scope:global"))))
-
-(defn- scope-filter-entries
-  "Apply in-memory scope filter as safety net."
-  [entries scope-tags visible-ids]
-  (filter (fn [entry]
-            (let [entry-tags (set (or (:tags entry) []))]
-              (or
-               (some entry-tags scope-tags)
-               (contains? visible-ids (:project-id entry)))))
-          entries))
-
-(defn- scope-pierce-entries
-  "Extract axioms and catchup-priority entries that pierce scope boundaries."
-  [entries project-id]
-  (let [in-project? (and project-id (not= project-id "global"))]
-    (when in-project?
-      (filter (fn [entry]
-                (let [entry-tags (set (or (:tags entry) []))
-                      entry-type (str (or (:type entry) ""))]
-                  (or (= entry-type "axiom")
-                      (contains? entry-tags "catchup-priority"))))
-              entries))))
+(def filter-by-tags           sf/filter-by-tags)
+(def ^:private compute-full-scope-tags sf/compute-full-scope-tags)
+(def ^:private scope-filter-entries    sf/scope-filter-entries)
+(def ^:private scope-pierce-entries    sf/scope-pierce-entries)
 
 (def ^:private scoped-branch-budget-ms
   "Per-branch budget for the hierarchy / global-piercing fan-out. Each branch
@@ -143,15 +98,7 @@
            newest-first
            (take limit-val)))))
 
-(defn entry-expiring-soon?
-  "Check if entry expires within 7 days."
-  [entry]
-  (when-let [exp (:expires entry)]
-    (rescue false
-            (let [exp-time (java.time.ZonedDateTime/parse exp)
-                  now (java.time.ZonedDateTime/now)
-                  week-later (.plusDays now 7)]
-              (.isBefore exp-time week-later)))))
+(def entry-expiring-soon? sf/entry-expiring-soon?)
 
 (defn query-expiring-entries
   "Query entries expiring within 7 days, scoped to project with scope-piercing."
