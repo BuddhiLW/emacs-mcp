@@ -14,6 +14,7 @@
             [hive-mcp.tools.catchup.hierarchy :as hier]
             [hive-mcp.tools.catchup.scope-filter :as sf]
             [hive-mcp.tools.catchup.axiom-cache :as axc]
+            [hive-mcp.tools.catchup.hydration :as hydr]
             [hive-weave.pool :as wpool]
             [hive-weave.parallel :as wpar]
             [clojure.tools.logging :as log]
@@ -259,70 +260,9 @@
       {:by-type (group-by #(some-> (:type %) name) sorted)
        :all     sorted})))
 
-(defn- has-tag? [entry tag]
-  (contains? (set (:tags entry)) tag))
-
-(defn- index-by-id
-  "Build an {id → entry} index from a coll of entries."
-  [entries]
-  (into {} (map (juxt :id identity)) entries))
-
-(def ^:private hydrate-chunk-size
-  "Split batch-get into N-sized chunks fanned out in parallel.
-   Milvus HTTP /get is roughly linear in row count but parallel chunks
-   overlap HTTP round-trip + server work. Sweep on 180 rows × 13 fields:
-     90×2=70s, 45×4=32s, 30×6=25s, 20×9=17s, 15×12=14s.
-   Chunk=20 balances concurrency with per-call overhead (~10x vs single-shot)."
-  20)
-
-(def ^:private hydrate-chunk-budget-ms
-  "Per-chunk timeout for hydrate fan-out. 20 rows × 13 fields lands ~2-3s
-   cold; 20s leaves 6x headroom before bounded-pmap fallback kicks in."
-  20000)
-
-(defn- batch-fetch-content
-  "Best-effort batch fetch from IMemoryStoreBatch, chunked + parallel via
-   hive-weave bounded-pmap. Returns [] when the active store doesn't
-   implement batch reads; timed-out chunks contribute []."
-  [ids]
-  (let [store (mem-proto/get-store)]
-    (cond
-      (not (and (seq ids) (mem-proto/batch-store? store)))
-      []
-
-      (<= (count ids) hydrate-chunk-size)
-      (rescue [] (mem-proto/get-entries store ids))
-
-      :else
-      (let [chunks (mapv vec (partition-all hydrate-chunk-size ids))
-            fetch  (fn [c] (mem-proto/get-entries store c))]
-        (vec (mapcat identity
-                     (wpar/bounded-pmap
-                       {:concurrency (count chunks)
-                        :timeout-ms  hydrate-chunk-budget-ms
-                        :fallback    []}
-                       fetch chunks)))))))
-
-(defn- merge-hydrated
-  "Prefer the hydrated entry when present; keep :distance from the
-   metadata shell (vector-search scores don't survive batch-get)."
-  [meta-entry hydrated-entry]
-  (if hydrated-entry
-    (cond-> hydrated-entry
-      (:distance meta-entry) (assoc :distance (:distance meta-entry)))
-    meta-entry))
-
-(defn- hydrate-content
-  "Phase-2 content re-hydration. Takes metadata-only entries, batch-fetches
-   their full content in one RPC, and returns hydrated entries in the same
-   order. Called after phase-1 trimming so we only pay content-transport
-   cost for the small, display-bound subset."
-  [entries]
-  (if-not (seq entries)
-    entries
-    (rescue entries
-      (let [by-id (-> (mapv :id entries) batch-fetch-content index-by-id)]
-        (mapv #(merge-hydrated % (get by-id (:id %))) entries)))))
+;; Re-exports from hydration for backward-compat:
+(def ^:private has-tag?        hydr/has-tag?)
+(def ^:private hydrate-buckets hydr/hydrate-buckets)
 
 (defn- split-by-type
   "Phase-1 trim: pick per-type buckets from the grouped+sorted bundle."
