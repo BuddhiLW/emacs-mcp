@@ -24,7 +24,7 @@
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [taoensso.timbre :as log])
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]])
   (:import [java.time ZonedDateTime]
            [java.time.format DateTimeFormatter]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -236,9 +236,8 @@
                        :agent-id (get content :agent-id)
                        :files (get content :files)
                        :completed-at (java.util.Date.)
-                       :session-id (try (when-let [sid (requiring-resolve 'hive-mcp.crystal.core/session-id)]
-                                          (sid))
-                                        (catch Exception _ nil))
+                       :session-id (rescue nil (when-let [sid (requiring-resolve 'hive-mcp.crystal.core/session-id)]
+                                          (sid)))
                        :context (get content :context)
                        :tags (filterv #(not (str/starts-with? % "scope:"))
                                       (or (:tags entry) []))}]

@@ -100,6 +100,11 @@
   [f]
   (wpool/submit! (memory-pool) f))
 
+(defn submit-catchup!
+  "Submit a catchup-branch task (parallel Chroma/KG sub-queries in catchup)."
+  [f]
+  (wpool/submit! (catchup-pool) f))
+
 ;; =============================================================================
 ;; DSL Macros — sugar that matches the hive-weave.pool primitives
 ;; =============================================================================
@@ -108,6 +113,7 @@
 (defmacro with-compute   [& body] `(submit-compute! (fn [] ~@body)))
 (defmacro with-event     [& body] `(submit-event!   (fn [] ~@body)))
 (defmacro with-memory    [& body] `(submit-memory!  (fn [] ~@body)))
+(defmacro with-catchup   [& body] `(submit-catchup! (fn [] ~@body)))
 
 (defmacro with-solo
   "Submit body to Clojure's solo executor (unbounded cached thread pool).

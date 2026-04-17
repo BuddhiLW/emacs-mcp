@@ -20,7 +20,7 @@
             [hive-mcp.extensions.registry :as ext]
             [hive-dsl.context.identity :as ctx-id]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -49,11 +49,9 @@
   "Resolve project-ids of cross-project descendants for piggyback inclusion."
   [project-id]
   (when project-id
-    (try
-      (when-let [query-fn (requiring-resolve 'hive-mcp.swarm.datascript.queries/get-child-project-ids)]
+    (rescue nil (when-let [query-fn (requiring-resolve 'hive-mcp.swarm.datascript.queries/get-child-project-ids)]
         (let [child-pids (query-fn project-id)]
-          (when (seq child-pids) child-pids)))
-      (catch Exception _e nil))))
+          (when (seq child-pids) child-pids))))))
 
 (defn- drain-hivemind-piggyback
   "Drain hivemind messages for an agent+project. Returns formatted messages or nil.

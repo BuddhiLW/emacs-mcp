@@ -42,7 +42,7 @@
             [hive-mcp.hooks.core :as hooks]
             [hive-mcp.tools.memory.scope :as scope]
             [clojure.core.async :as async :refer [go-loop <!]]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -82,7 +82,7 @@
    from the integrant init for :hive/swarm-sync."
   [bs]
   (when-let [old @swarm-bootstrap-atom]
-    (try (bootstrap/close! old) (catch Exception _ nil)))
+    (rescue nil (bootstrap/close! old)))
   (reset! swarm-bootstrap-atom bs)
   (log/info "Sync: swarm bootstrap injected"))
 

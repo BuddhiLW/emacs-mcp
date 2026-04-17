@@ -298,7 +298,7 @@
                      "All additional params beyond these common ones are forwarded to the target tool. "
                      "Key tool-specific params: "
                      "kanban: status, new_status, task_id, title, include_descendants, plan_id, plan_path; "
-                     "agent: type, cwd, spawn_mode, presets, task, model, max_budget_usd, parent, kanban_task_id; "
+                     "agent: type, cwd, spawn_mode, presets, task, model, provider, max_budget_usd, parent, kanban_task_id; "
                      "memory: duration, abstraction_level, scope, exclude_tags, limit, verbosity, feedback; "
                      "kg: start_node, node_id, from, to, relation, direction, max_depth, from_node, to_node, confidence; "
                      "wave: tasks, validate, lint_level, wave_id, mode, model, seeds, ctx_refs, kg_node_ids; "

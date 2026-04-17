@@ -13,7 +13,7 @@
             [hive-mcp.swarm.bootstrap.emacs :as emacs]
             [hive-mcp.swarm.bootstrap.datahike :as datahike]
             [hive-mcp.swarm.bootstrap.noop :as noop]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -21,12 +21,12 @@
 (def ^:private legacy-default :emacs)
 
 (defn- resolve-source
-  "Pure: pick the source keyword from explicit arg → config → legacy default."
+  "Pure: pick the source keyword from explicit arg → config → legacy default.
+   Config values may arrive as strings (e.g. \"datahike\" from config.edn),
+   so we keywordize the result to match multimethod dispatch keys."
   [source-arg config-fn]
-  (or source-arg
-      (try
-        (some-> (config-fn :swarm-sync :source :parse keyword))
-        (catch Exception _ nil))
+  (or (some-> source-arg keyword)
+      (rescue nil (some-> (config-fn :swarm-sync :source) keyword))
       legacy-default))
 
 (defmulti ^:private build-bootstrap

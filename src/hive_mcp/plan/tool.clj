@@ -18,7 +18,7 @@
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -82,8 +82,7 @@
       (if (:isError result)
         {:error (:text result)}
         ;; Parse the result to get the task ID
-        (let [parsed (try (json/read-str (:text result) :key-fn keyword)
-                          (catch Exception _ nil))]
+        (let [parsed (rescue nil (json/read-str (:text result) :key-fn keyword))]
           (if-let [task-id (or (:id parsed) (get parsed "id"))]
             {:ok task-id}
             {:error "Failed to get task ID from kanban create response"}))))

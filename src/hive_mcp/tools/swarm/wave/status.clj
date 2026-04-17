@@ -1,7 +1,7 @@
 (ns hive-mcp.tools.swarm.wave.status
   "Read-only wave status queries and formatting."
   (:require [hive-mcp.swarm.datascript :as ds]
-            [clojure.string]))
+            [clojure.string] [hive-dsl.result :refer [rescue]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -106,11 +106,9 @@
 (defn- get-validated-wave-sessions
   "Get validated wave sessions via requiring-resolve."
   []
-  (try
-    (when-let [list-fn (requiring-resolve
+  (rescue nil (when-let [list-fn (requiring-resolve
                         'hive-mcp.tools.swarm.validated-wave/list-validated-wave-sessions)]
-      (list-fn))
-    (catch Exception _ nil)))
+      (list-fn))))
 
 (defn get-active-waves
   "Get all currently active waves (both DataScript and validated sessions)."

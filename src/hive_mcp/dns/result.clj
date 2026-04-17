@@ -50,6 +50,17 @@
   [catch-class fallback & body]
   `(hive-dsl.result/guard ~catch-class ~fallback ~@body))
 
+(defmacro rescue-log
+  "Re-export of hive-dsl.result/rescue-log. Log+fallback sugar."
+  [label fallback & body]
+  `(hive-dsl.result/rescue-log ~label ~fallback ~@body))
+
+(defmacro rescue-interrupt
+  "Re-export of hive-dsl.result/rescue-interrupt. Silent on
+   InterruptedException, log+fallback on other throwables."
+  [label fallback & body]
+  `(hive-dsl.result/rescue-interrupt ~label ~fallback ~@body))
+
 (defmacro ok->
   "Re-export of hive-dsl.result/ok->. Thread-first through Results with smart-wrap."
   [expr & forms]

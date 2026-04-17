@@ -263,12 +263,21 @@
            :error nil)))
 
 (defn handle-scope-resolve
-  "Resolve project scope from directory.
+  "Resolve project scope from directory AND ensure project tree is populated.
    EDN handler key: :scope-resolve
+
+   Tree scan must happen BEFORE query-memory so that descendant-scopes
+   returns child project IDs. Without this, sessions stored under child
+   projects (e.g. hive-mcp under hive workspace) are invisible to catchup.
 
    Uses call-resource to eliminate nil-fn guards."
   [resources data]
   (let [directory    (:directory data)
+        ;; Ensure project tree is populated before scope queries run.
+        ;; This populates the tree-cache used by descendant-scopes in
+        ;; query-scoped-entries, so child project entries are visible.
+        _            (safe-call resources :tree-scan-fn
+                                [(or directory ".")] {:scanned false})
         project-id   (when directory (call-resource resources :scope-fn directory))
         project-name (when directory (call-resource resources :project-name-fn directory))
         scopes       (call-resource resources :build-scopes-fn project-name project-id)]

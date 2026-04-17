@@ -19,7 +19,7 @@
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.extensions.registry :as ext]
             [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -85,8 +85,7 @@
                        "(json-encode (hive-mcp-api-wrap-gather))")
           {:keys [success result]} (ec/eval-elisp elisp-call)]
       (when success
-        (try (json/read-str result :key-fn keyword)
-             (catch Exception _ nil))))))
+        (rescue nil (json/read-str result :key-fn keyword))))))
 
 ;;; =============================================================================
 ;;; Auto-KG Edge Creation

@@ -3,7 +3,7 @@
   (:require [clojure-chroma-client.api :as chroma]
             [clojure-chroma-client.config :as chroma-config]
             [hive-mcp.chroma.embeddings :as emb]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -33,8 +33,7 @@
 (defn- try-get-collection
   "Try to get existing collection, returns nil on failure."
   [coll-name]
-  (try (deref (chroma/get-collection coll-name) 10000 nil)
-       (catch Exception _ nil)))
+  (rescue nil (deref (chroma/get-collection coll-name) 10000 nil)))
 
 (defn- create-new-collection
   "Create a new Chroma collection with dimension metadata."

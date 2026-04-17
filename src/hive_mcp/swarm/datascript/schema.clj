@@ -107,15 +107,17 @@
 
 (defn claude-model?
   "Check if a model identifier represents a Claude Code CLI ling (default).
-   Returns true for nil, 'claude', or any 'anthropic/claude-*' model.
-   This determines routing: claude models use Claude Code CLI,
-   non-claude models route to OpenRouter API."
+   Returns true for nil, 'claude', any 'anthropic/claude-*' model, OR any
+   bare 'claude-*' model (Anthropic's native naming). This determines
+   routing: claude models use Claude Code CLI / Anthropic OAuth, non-claude
+   models route to OpenRouter API."
   [model]
   (or (nil? model)
       (= model "claude")
       (= model ling-model-default)
       (and (string? model)
-           (str/starts-with? model "anthropic/"))))
+           (or (str/starts-with? model "anthropic/")
+               (str/starts-with? model "claude-")))))
 
 (def task-types
   "Valid task type values for drone routing.

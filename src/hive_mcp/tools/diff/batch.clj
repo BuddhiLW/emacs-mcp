@@ -6,7 +6,7 @@
             [hive-mcp.tools.diff.handlers :as handlers]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]
-            [hive-dsl.bounded-atom :refer [bget bkeys]]))
+            [hive-dsl.bounded-atom :refer [bget bkeys]] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -51,8 +51,7 @@
         :manual-review (mapv #(select-keys % [:id :file-path :drone-id :auto-check]) manual-review)}
        (let [apply-results (for [{:keys [id]} auto-approvable]
                              (let [response (handlers/handle-apply-diff {:diff_id id})
-                                   parsed (try (json/read-str (:text response) :key-fn keyword)
-                                               (catch Exception _ nil))]
+                                   parsed (rescue nil (json/read-str (:text response) :key-fn keyword))]
                                (if (:isError response)
                                  {:status :failed :id id :error (:error parsed)}
                                  {:status :applied :id id :file-path (:file-path parsed)})))

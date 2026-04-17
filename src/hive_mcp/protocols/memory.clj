@@ -258,6 +258,33 @@
   (satisfies? IMemoryStoreWithStaleness store))
 
 ;;; ============================================================================
+;;; IMemoryStoreBatch Protocol (Optional Extension)
+;;; ============================================================================
+;;; Reload-safe: see note on IMemoryStore above.
+;;;
+;;; Batch fetch — single round-trip to the backend for multiple IDs. Introduced
+;;; to collapse N per-item RPCs (e.g. catchup enrichment in
+;;; hive-knowledge.catchup.insights/resolve-ids-to-previews) into one call.
+;;; Callers should prefer vectordb.facade/get-entries-by-ids which falls back
+;;; to per-item get-entry for stores that don't implement this.
+
+(defonce ^:private -iwithbatch-defined? (atom false))
+
+(when (compare-and-set! -iwithbatch-defined? false true)
+  (defprotocol IMemoryStoreBatch
+    "Optional extension for batched reads."
+
+    (get-entries [this ids]
+      "Fetch multiple entries by ID in a single backend round-trip.
+       Returns a seq of entry maps (missing IDs omitted). Order is not
+       guaranteed — callers must index by :id.")))
+
+(defn batch-store?
+  "Check if the store supports batched reads."
+  [store]
+  (satisfies? IMemoryStoreBatch store))
+
+;;; ============================================================================
 ;;; IMemoryStoreTemporal Protocol (Bitemporal Extension)
 ;;; ============================================================================
 ;;; Reload-safe: see note on IMemoryStore above.

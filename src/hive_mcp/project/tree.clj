@@ -115,7 +115,11 @@
   "Directory names to skip during scan — heavy, never contain .hive-project.edn."
   #{"node_modules" "target" ".cpcache" ".git" ".shadow-cljs" ".clj-kondo"
     ".lsp" ".nrepl" "dist" "build" "out" "__pycache__" ".venv" "venv"
-    ".gradle" ".m2" "classes" ".gitlibs"})
+    ".gradle" ".m2" "classes" ".gitlibs" "data" "backups"})
+
+(def ^:private default-concurrency
+  "Scan parallelism bounded by host CPU count (min 2, max 16)."
+  (max 2 (min 16 (.. Runtime getRuntime availableProcessors))))
 
 (defn- scannable-child?
   "Check if a directory should be scanned (not hidden, not in skip-dirs)."
@@ -162,7 +166,7 @@
                           (filter scannable-child?)
                           vec)
             child-results (wp/bounded-pmap
-                            {:concurrency 8 :timeout-ms 10000 :fallback []}
+                            {:concurrency default-concurrency :timeout-ms 60000 :fallback []}
                             (fn [child] (vec (scan-subtree child max-depth 1)))
                             children)]
         (cond-> (vec (mapcat identity child-results))
@@ -172,15 +176,22 @@
 ;; Project Entity Building
 ;; =============================================================================
 
+(defn- unrendered-template?
+  "Detects unrendered Mustache/Handlebars placeholders (e.g. {{artifact/id}})
+   leaking in from template skeletons under resources/."
+  [s]
+  (and (string? s) (str/includes? s "{{")))
+
 (defn- config->entity
   "Convert discovered project config to DataScript entity.
-   Includes hierarchy info from :parent-id."
+   Includes hierarchy info from :parent-id.
+   Skips unrendered template placeholders."
   [{:keys [path config]}]
   (let [project-id (:project-id config)
         parent-id (or (:parent-id config) (:parent config))
         project-type (or (:project-type config) :generic)
         tags (vec (or (:tags config) []))]
-    (when project-id
+    (when (and project-id (not (unrendered-template? project-id)))
       (cond-> {:project/id project-id
                :project/path path
                :project/type (if (keyword? project-type)

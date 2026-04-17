@@ -3,7 +3,7 @@
   (:require [hive-mcp.emacs.client :as ec]
             [clojure.string :as str]
             [clojure.java.io :as io]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -21,8 +21,7 @@
 (defn get-project-root
   "Get project root from Emacs or fall back to current working directory."
   []
-  (or (try (ec/project-root)
-           (catch Exception _ nil))
+  (or (rescue nil (ec/project-root))
       (System/getProperty "user.dir")))
 
 (defn translate-sandbox-path

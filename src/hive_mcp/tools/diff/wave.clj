@@ -7,7 +7,7 @@
             [clojure.data.json :as json]
             [clojure.string :as str]
             [taoensso.timbre :as log]
-            [hive-dsl.bounded-atom :refer [bkeys]]))
+            [hive-dsl.bounded-atom :refer [bkeys]] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -53,8 +53,7 @@
                     wave-diffs)
          results (for [{:keys [id]} to-apply]
                    (let [response (handlers/handle-apply-diff {:diff_id id})
-                         parsed (try (json/read-str (:text response) :key-fn keyword)
-                                     (catch Exception _ nil))]
+                         parsed (rescue nil (json/read-str (:text response) :key-fn keyword))]
                      (if (:isError response)
                        {:status :failed :id id :error (:error parsed)}
                        {:status :applied :id id :file (:file-path parsed)})))
@@ -86,8 +85,7 @@
         manual-review (remove #(get-in % [:auto-check :approved]) categorized)
         apply-results (for [{:keys [id]} auto-approvable]
                         (let [response (handlers/handle-apply-diff {:diff_id id})
-                              parsed (try (json/read-str (:text response) :key-fn keyword)
-                                          (catch Exception _ nil))]
+                              parsed (rescue nil (json/read-str (:text response) :key-fn keyword))]
                           (if (:isError response)
                             {:status :failed :id id :error (:error parsed)}
                             {:status :applied :id id})))

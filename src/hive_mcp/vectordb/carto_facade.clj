@@ -13,7 +13,7 @@
    Function signatures match vectordb.facade so the swap is zero-change for
    callers."
   (:require [hive-mcp.protocols.memory :as proto]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -129,8 +129,7 @@
    Delegates to chroma.embeddings/get-embedding-provider (embedding
    config is backend-independent — lives outside IMemoryStore)."
   []
-  (when-let [f (try (requiring-resolve 'hive-mcp.chroma.embeddings/get-embedding-provider)
-                    (catch Exception _ nil))]
+  (when-let [f (rescue nil (requiring-resolve 'hive-mcp.chroma.embeddings/get-embedding-provider))]
     (f)))
 
 (defn embedding-configured?
@@ -138,8 +137,7 @@
    Delegates to chroma.embeddings/embedding-configured? (embedding
    config is backend-independent — lives outside IMemoryStore)."
   []
-  (when-let [f (try (requiring-resolve 'hive-mcp.chroma.embeddings/embedding-configured?)
-                    (catch Exception _ nil))]
+  (when-let [f (rescue nil (requiring-resolve 'hive-mcp.chroma.embeddings/embedding-configured?))]
     (f)))
 
 (defn cleanup-expired!

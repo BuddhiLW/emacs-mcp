@@ -10,7 +10,7 @@
    Function signatures match the chroma API callers expect (keyword args where
    chroma used keyword args) so resolve-site swaps are zero-change for callers."
   (:require [hive-mcp.protocols.memory :as proto]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -54,6 +54,23 @@
   "Get a memory entry by ID from the active backend."
   [id]
   (proto/get-entry (proto/get-store) id))
+
+(defn get-entries-by-ids
+  "Batch-fetch memory entries by IDs from the active backend.
+
+   Uses IMemoryStoreBatch/get-entries (single RPC) when the store supports
+   it — the catchup enrichment hot path. Stores without batch support fall
+   back to N per-item get-entry calls.
+
+   Returns a vector of entry maps (missing IDs omitted). Order is not
+   guaranteed; callers index by :id."
+  [ids]
+  (let [ids (vec (distinct (remove nil? ids)))]
+    (when (seq ids)
+      (let [store (proto/get-store)]
+        (if (proto/batch-store? store)
+          (vec (proto/get-entries store ids))
+          (vec (keep #(rescue nil (proto/get-entry store %)) ids)))))))
 
 (defn query-entries
   "Query memory entries with filtering.
@@ -126,8 +143,7 @@
    Delegates to chroma.embeddings/get-embedding-provider (embedding
    config is backend-independent — lives outside IMemoryStore)."
   []
-  (when-let [f (try (requiring-resolve 'hive-mcp.chroma.embeddings/get-embedding-provider)
-                    (catch Exception _ nil))]
+  (when-let [f (rescue nil (requiring-resolve 'hive-mcp.chroma.embeddings/get-embedding-provider))]
     (f)))
 
 (defn embedding-configured?
@@ -135,8 +151,7 @@
    Delegates to chroma.embeddings/embedding-configured? (embedding
    config is backend-independent — lives outside IMemoryStore)."
   []
-  (when-let [f (try (requiring-resolve 'hive-mcp.chroma.embeddings/embedding-configured?)
-                    (catch Exception _ nil))]
+  (when-let [f (rescue nil (requiring-resolve 'hive-mcp.chroma.embeddings/embedding-configured?))]
     (f)))
 
 (defn cleanup-expired!

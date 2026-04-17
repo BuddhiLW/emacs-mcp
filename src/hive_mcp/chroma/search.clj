@@ -57,8 +57,7 @@
                              (catch Exception _ [nil]))]
     (if (= 1 (count coll-names))
       ;; Single collection — use matched provider for embedding
-      (let [resolved (try (embedding-service/resolve-provider-for-type (or type "note"))
-                          (catch Exception _ nil))
+      (let [resolved (r/rescue nil (embedding-service/resolve-provider-for-type (or type "note")))
             provider (if resolved (:provider resolved) (emb/get-embedding-provider))
             coll     (if resolved
                        (conn/get-or-create-named-collection

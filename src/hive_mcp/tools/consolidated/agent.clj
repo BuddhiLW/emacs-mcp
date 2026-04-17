@@ -96,7 +96,10 @@
                                          :items {:type "string"}
                                          :description "Preset names for ling (ling only)"}
                               "model" {:type "string"
-                                       :description "Model override for drone or ling. For drones: OpenRouter model ID. For lings: 'claude' (default, Claude Code CLI) or OpenRouter model ID (auto-forces headless spawn mode, e.g., 'moonshotai/kimi-k2.5')"}
+                                       :description "Model override for drone or ling. For drones: OpenAI-compat model ID. For lings: 'claude' (default, Claude Code CLI) or OpenAI-compat model ID (auto-forces headless spawn mode). Supports 'provider:model' prefix, e.g. 'venice:qwen3-coder-480b-a35b-instruct', 'groq:llama-3.3-70b-versatile', 'moonshotai/kimi-k2.5' (bare → openrouter)."}
+                              "provider" {:type "string"
+                                          :enum ["openrouter" "venice" "groq" "together" "fireworks" "openai" "ollama-compat"]
+                                          :description "Explicit OpenAI-compat LLM provider (overrides any 'provider:' prefix in model). Anthropic routing is automatic from model names (claude-*, anthropic/*)."}
                               "task" {:type "string"
                                       :description "Initial task to dispatch on spawn"}
                               "spawn_mode" {:type "string"
@@ -106,6 +109,10 @@
                                         :description "[spawn] Subagent definitions for Claude Agent SDK sessions. Map of agent-name to agent definition object. Each definition: {description: string, prompt: string, tools?: string[], model?: 'sonnet'|'opus'|'haiku'|'inherit'}. Only effective with agent-sdk spawn mode (headless)."}
                               "max_budget_usd" {:type "number"
                                                 :description "[spawn] Maximum USD spend for this agent. When set, registers a budget guardrail hook that denies+interrupts tool calls when cumulative cost exceeds the limit. E.g. 2.0 = $2 max."}
+                              "kg_compress" {:type "boolean"
+                                             :description "[spawn] Enable KG-compression between turns (default: true). Rewrites message history into compressed KG-derived context to keep context constant-size for long-running lings. SET TO FALSE for weaker models (qwen/qwen3.6-plus, z-ai/glm-5.1) that plan-paralyze on compressed context — they loop on identical tool calls because they can't infer 'already did X' from KG summaries. Strong models (claude, deepseek, kimi, gpt-5) handle kg_compress=true fine."}
+                              "sliding_window_size" {:type "integer"
+                                                     :description "[spawn] Number of recent raw conversation turns to keep in context alongside KG-compressed summaries. Default 5. Only effective when kg_compress=true. Larger = more coherent short-term recall, lower compression ratio. Planned: not yet implemented — reconstructor extension pending (kanban 20260415160150-4fd21a2a)."}
                               ;; common params
                               "agent_id" {:type "string"
                                           :description "Agent ID for status/kill/dispatch/claims"}

@@ -19,9 +19,11 @@
    with controllable per-branch latency, so they run in CI and are
    deterministic. The hive-ttracking EPIC (kanban 20260414104332-192b2da4)
    will replace the ad-hoc budget plumbing with `tt/track` + `deftest-tt`."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.tools.catchup.scope :as cs]))
+
+(use-fixtures :each (fn [t] (cs/invalidate-axioms-cache!) (t)))
 
 ;; =============================================================================
 ;; Mock store with per-query-type controllable latency

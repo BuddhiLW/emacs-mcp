@@ -6,7 +6,7 @@
             [hive-mcp.chroma.gate :as gate]
             [hive-mcp.chroma.helpers :as h]
             [hive-mcp.embeddings.service :as embedding-service]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -36,8 +36,7 @@
   (let [entry-id (or id (h/generate-id))
         now (h/iso-timestamp)
         doc-text (h/memory-to-document entry)
-        resolved (try (embedding-service/resolve-provider-for-type type)
-                      (catch Exception _e nil))
+        resolved (rescue nil (embedding-service/resolve-provider-for-type type))
         _ (when resolved (embedding-service/validate-content-size! doc-text resolved))
         coll (if resolved
                (conn/get-or-create-named-collection
@@ -110,11 +109,9 @@
         entry (some-> (first results) h/metadata->entry)]
     (or entry
         ;; Try large-content collection if not found in default
-        (try
-          (let [lg-coll (conn/get-or-create-named-collection "hive-mcp-memory-4096d" 4096)
+        (rescue nil (let [lg-coll (conn/get-or-create-named-collection "hive-mcp-memory-4096d" 4096)
                 lg-results (gate/deref-read (chroma/get lg-coll :ids [id] :include #{:documents :metadatas}))]
-            (some-> (first lg-results) h/metadata->entry))
-          (catch Exception _ nil)))))
+            (some-> (first lg-results) h/metadata->entry))))))
 
 (defn query-entries
   "Query memory entries from Chroma with filtering.
@@ -124,9 +121,8 @@
   (emb/require-embedding!)
   (let [colls (try (let [coll-names (embedding-service/type->collection-names type)]
                      (mapv (fn [cn]
-                             (let [resolved (try (embedding-service/resolve-provider-for-type
-                                                   (or type "note"))
-                                                 (catch Exception _ nil))]
+                             (let [resolved (rescue nil (embedding-service/resolve-provider-for-type
+                                                   (or type "note")))]
                                (if (and resolved (= cn (:collection-name resolved)))
                                  (conn/get-or-create-named-collection cn (:dimension resolved))
                                  (conn/get-or-create-collection))))
@@ -201,10 +197,8 @@
   (let [coll (conn/get-or-create-collection)]
     (gate/deref-write (chroma/delete coll :ids [id]))
     ;; Also try deleting from large collection (entry might be there)
-    (try
-      (let [lg-coll (conn/get-or-create-named-collection "hive-mcp-memory-4096d" 4096)]
-        (gate/deref-write (chroma/delete lg-coll :ids [id])))
-      (catch Exception _ nil))
+    (rescue nil (let [lg-coll (conn/get-or-create-named-collection "hive-mcp-memory-4096d" 4096)]
+        (gate/deref-write (chroma/delete lg-coll :ids [id]))))
     (log/debug "Deleted entry from Chroma:" id)
     id))
 

@@ -37,7 +37,7 @@
             [hive-hot.core :as hot]
             [hive-hot.events :as hot-events]
             [taoensso.timbre :as log]
-            [clojure.string :as str]))
+            [clojure.string :as str] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -337,10 +337,8 @@
    :nats means also bridge slave events from the IEventBackbone."
   [opts]
   (or (:event-backbone opts)
-      (try
-        (some-> (global-config/get-service-value :swarm-sync :event-backbone
-                                                 :parse keyword))
-        (catch Exception _ nil))
+      (rescue nil (some-> (global-config/get-service-value :swarm-sync :event-backbone
+                                                 :parse keyword)))
       :local))
 
 (defn start-swarm-sync!

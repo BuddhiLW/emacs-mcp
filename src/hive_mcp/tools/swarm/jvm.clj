@@ -7,7 +7,7 @@
             [hive-mcp.tools.swarm.jvm.classifier :as classifier]
             [hive-mcp.tools.swarm.jvm.orphan :as orphan]
             [hive-mcp.tools.swarm.jvm.memory :as memory]
-            [hive-mcp.tools.swarm.jvm.summary :as summary]))
+            [hive-mcp.tools.swarm.jvm.summary :as summary] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -85,9 +85,7 @@
                                                 :true_orphans_only true}))
 
           cleanup-data (when cleanup-result
-                         (try
-                           (json/read-str (:text cleanup-result) :key-fn keyword)
-                           (catch Exception _ nil)))
+                         (rescue nil (json/read-str (:text cleanup-result) :key-fn keyword)))
 
           orphans-killed (when cleanup-data (count (:killed cleanup-data)))
           final-mem (if (and cleanup-data (pos? (or orphans-killed 0)))
