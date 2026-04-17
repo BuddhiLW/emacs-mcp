@@ -25,18 +25,30 @@
     (factory-fn {:model model})))
 
 (defn- build-fsm-resources
-  "Build the FSM resources map from task-context."
+  "Build the FSM resources map from task-context.
+   Delegates to drone-loop/make-production-resources for tool wiring
+   (tool-schemas + execute-tools-fn), then merges task-specific context."
   [task-context opts]
   (let [{:keys [model tools preset sandbox cwd drone-id]} task-context
-        {:keys [tool-executor-fn]} opts
-        llm-factory (or (:llm-backend-factory opts) default-llm-backend-factory)]
-    (cond-> {:model       model
-             :tools       (or tools [])
-             :preset      preset
-             :sandbox     sandbox
-             :cwd         (or cwd ".")
-             :drone-id    drone-id
-             :backend (llm-factory model)}
+        {:keys [tool-executor-fn llm-backend-factory]} opts
+        llm-factory (or llm-backend-factory default-llm-backend-factory)
+        backend     (llm-factory model)
+        ;; Resolve production tool wiring via drone-loop
+        prod-resources-fn (resolve-drone-loop-fn
+                           'hive-mcp.workflows.sub-fsms.drone-loop/make-production-resources)
+        ;; Pass nil tools to get-schemas = all tools; [] = none.
+        ;; Drone needs tools to edit files, so nil (= all) is correct default.
+        base-resources (if prod-resources-fn
+                         (prod-resources-fn backend {:tools    (seq tools)
+                                                     :agent-id drone-id})
+                         {:backend backend})]
+    (cond-> (merge base-resources
+                   {:model    model
+                    :tools    (or tools [])
+                    :preset   preset
+                    :sandbox  sandbox
+                    :cwd      (or cwd ".")
+                    :drone-id drone-id})
       tool-executor-fn
       (assoc :tool-executor tool-executor-fn))))
 

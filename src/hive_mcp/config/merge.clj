@@ -116,12 +116,13 @@
    :llm-providers {:openrouter {:api-url       "https://openrouter.ai/api/v1/chat/completions"
                                 :secret-key    :openrouter-api-key
                                 :default-model "anthropic/claude-sonnet-4-6"
-                                :available-models ["deepseek/deepseek-v3.2"
-                                                   "moonshotai/kimi-k2.5"
-                                                   "z-ai/glm-4.6"
+                                :available-models ["moonshotai/kimi-k2.5"
+                                                   "minimax/minimax-m2.7"
+                                                   "qwen/qwen3.6-plus"
+                                                   "z-ai/glm-5.1"
+                                                   "xiaomi/mimo-v2-pro"
                                                    "anthropic/claude-sonnet-4-6"
-                                                   "anthropic/claude-opus-4-6"
-                                                   "qwen/qwen3-6-plus"]}
+                                                   "anthropic/claude-opus-4-6"]}
                    :venice     {:api-url       "https://api.venice.ai/api/v1/chat/completions"
                                 :secret-key    :venice-api-key
                                 :default-model "venice-uncensored"
@@ -147,29 +148,29 @@
                                    :secret-key    nil
                                    :default-model "devstral-small:24b"
                                    :available-models ["devstral-small:24b"]}}
-   :agent-defaults {:ling       {:provider :openrouter :model "anthropic/claude-sonnet-4-6"}
-                    :drone      {:provider :openrouter :model "deepseek/deepseek-v3.2"}
+   :agent-defaults {:ling       {:provider :openrouter :model "moonshotai/kimi-k2.5"}
+                    :drone      {:provider :openrouter :model "minimax/minimax-m2.7"}
                     :compressor {:provider :venice     :model "venice-uncensored"}}
-   :models {:task-models {:coding "x-ai/grok-code-fast-1"
-                          :coding-alt "deepseek/deepseek-v3.2"
-                          :testing "x-ai/grok-code-fast-1"
-                          :bugfix "x-ai/grok-code-fast-1"
-                          :general "x-ai/grok-code-fast-1"
-                          :arch "deepseek/deepseek-v3.2"
-                          :docs "deepseek/deepseek-v3.2"}
-            :routing {:testing {:primary "x-ai/grok-code-fast-1"
-                                :secondary "deepseek/deepseek-v3.2"}
-                      :refactoring {:primary "x-ai/grok-code-fast-1"
-                                    :secondary "deepseek/deepseek-v3.2"}
-                      :implementation {:primary "x-ai/grok-code-fast-1"
-                                       :secondary "deepseek/deepseek-v3.2"}
-                      :bugfix {:primary "x-ai/grok-code-fast-1"
-                               :secondary "deepseek/deepseek-v3.2"}
-                      :documentation {:primary "deepseek/deepseek-v3.2"
-                                      :secondary "x-ai/grok-code-fast-1"}
-                      :general {:primary "x-ai/grok-code-fast-1"
-                                :secondary "deepseek/deepseek-v3.2"}}
-            :default-model "x-ai/grok-code-fast-1"}})
+   :models {:task-models {:coding     "moonshotai/kimi-k2.5"
+                          :coding-alt "minimax/minimax-m2.7"
+                          :testing    "moonshotai/kimi-k2.5"
+                          :bugfix     "moonshotai/kimi-k2.5"
+                          :general    "moonshotai/kimi-k2.5"
+                          :arch       "qwen/qwen3.6-plus"
+                          :docs       "z-ai/glm-5.1"}
+            :routing {:testing        {:primary "moonshotai/kimi-k2.5"
+                                       :secondary "minimax/minimax-m2.7"}
+                      :refactoring    {:primary "moonshotai/kimi-k2.5"
+                                       :secondary "minimax/minimax-m2.7"}
+                      :implementation {:primary "moonshotai/kimi-k2.5"
+                                       :secondary "minimax/minimax-m2.7"}
+                      :bugfix         {:primary "moonshotai/kimi-k2.5"
+                                       :secondary "minimax/minimax-m2.7"}
+                      :documentation  {:primary "z-ai/glm-5.1"
+                                       :secondary "qwen/qwen3.6-plus"}
+                      :general        {:primary "moonshotai/kimi-k2.5"
+                                       :secondary "qwen/qwen3.6-plus"}}
+            :default-model "moonshotai/kimi-k2.5"}})
 
 ;; =============================================================================
 ;; Pure Transformations

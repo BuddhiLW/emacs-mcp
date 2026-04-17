@@ -8,10 +8,10 @@
 
 (def ^:private hardcoded-task-models
   "Fallback task-models when config.edn has no :models.task-models key."
-  {:coding "moonshotai/kimi-k2.5"
-   :coding-alt "deepseek/deepseek-v3.2"
-   :arch "deepseek/deepseek-v3.2"
-   :docs "deepseek/deepseek-v3.2"})
+  {:coding     "moonshotai/kimi-k2.5"
+   :coding-alt "minimax/minimax-m2.7"
+   :arch       "qwen/qwen3.6-plus"
+   :docs       "z-ai/glm-5.1"})
 
 (defn- load-task-models
   "Load task-models from config.edn, falling back to hardcoded defaults."

@@ -21,6 +21,7 @@
             [hive-mcp.agent.hive-agent-bridge :as ha-bridge]
             [hive-mcp.agent.registry :as registry]
             [hive-mcp.tools.diff :as diff]
+            [hive-mcp.agent.drone.execution.finalize :as exec-fin]
             [hive-mcp.events.core :as ev]
             [hive-mcp.hivemind.core :as hivemind]))
 
@@ -201,7 +202,7 @@
                     execution/phase:execute-agentic!
                     (fn [_ctx _spec _config]
                       {:status :completed :result "ok"})
-                    execution/phase:finalize!
+                    exec-fin/phase:finalize!
                     (fn [_ctx _spec _config raw diffs]
                       raw)
                     execution/phase:cleanup!
@@ -243,7 +244,7 @@
                     execution/phase:execute-agentic!
                     (fn [_ctx _spec _config]
                       {:status :completed :result "ok"})
-                    execution/phase:finalize!
+                    exec-fin/phase:finalize!
                     (fn [_ctx _spec _config raw diffs]
                       raw)
                     execution/phase:cleanup!

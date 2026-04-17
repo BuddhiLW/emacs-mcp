@@ -18,7 +18,7 @@
             [hive-mcp.schema.cider :as cider-schema]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -29,12 +29,17 @@
 
 (defn- elisp->result
   "Execute elisp and convert response to Result.
-   {:success true :result r} -> (ok r), {:success false :error e} -> (err ...)"
-  [elisp]
-  (let [{:keys [success result error]} (ec/eval-elisp elisp)]
-    (if success
-      (result/ok result)
-      (result/err :cider/elisp-failed {:message (str error)}))))
+   {:success true :result r} -> (ok r), {:success false :error e} -> (err ...)
+   Optional timeout-ms overrides the default emacsclient timeout."
+  ([elisp] (elisp->result elisp nil))
+  ([elisp timeout-ms]
+   (let [{:keys [success result error]}
+         (if timeout-ms
+           (ec/eval-elisp-with-timeout elisp timeout-ms)
+           (ec/eval-elisp elisp))]
+     (if success
+       (result/ok result)
+       (result/err :cider/elisp-failed {:message (str error)})))))
 
 (defn- try-result
   "Execute thunk f returning Result; catch unexpected exceptions as error Result.
@@ -130,7 +135,7 @@
                  (if-let [session (find-connected-session sessions)]
                    (do (log/info "ensure-cider-connected: using existing session" session)
                        (result/ok session))
-                   (let [project-dir (try (ec/project-root) (catch Exception _ nil))]
+                   (let [project-dir (rescue nil (ec/project-root))]
                      (log/info "ensure-cider-connected: spawning 'auto'" {:project-dir project-dir})
                      (spawn-and-wait* "auto" project-dir)))))
 
@@ -155,16 +160,22 @@
 (defn- handle-cider-eval-common
   "Common eval handler with validation, telemetry, and auto-connect retry.
    DRYs handle-cider-eval-silent and handle-cider-eval-explicit.
-   elisp-fn: (fn [code] elisp-expression-string)"
+   elisp-fn: (fn [code] elisp-expression-string)
+   timeout-ms: optional emacsclient timeout override (default 5000)"
   [params telemetry-key elisp-fn]
   (try
     (v/validate-cider-eval-request params)
-    (let [{:keys [code]} params]
+    (let [{:keys [code timeout]} params
+          ;; Convert CIDER timeout (seconds) to emacsclient timeout (ms).
+          ;; Add 2s buffer so emacsclient doesn't race the nREPL timeout.
+          ;; Default: 62s (CIDER default nREPL timeout is 60s).
+          nrepl-timeout (or timeout 60)
+          ec-timeout-ms (+ (* nrepl-timeout 1000) 2000)]
       (telemetry/with-eval-telemetry telemetry-key code nil
         (result->mcp
          (try-result :cider/eval-failed
                      #(with-auto-connect*
-                        (fn [] (elisp->result (elisp-fn code))))))))
+                        (fn [] (elisp->result (elisp-fn code) ec-timeout-ms)))))))
     (catch clojure.lang.ExceptionInfo e
       (if (= :validation (:type (ex-data e)))
         (v/wrap-validation-error e)

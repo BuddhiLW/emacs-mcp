@@ -6,7 +6,7 @@
    preserves backward compatibility for 28 direct callers in hive-mcp core.
 
    Dynamic vars kept for backward compat; real vars live in hive-emacs.client."
-  (:require [taoensso.timbre :as log]))
+  (:require [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -42,10 +42,7 @@
 (defn- resolve-emacs-fn
   "Resolve a function from hive-emacs.client. Returns nil if not available."
   [sym]
-  (try
-    (requiring-resolve sym)
-    (catch Exception _
-      nil)))
+  (rescue nil (requiring-resolve sym)))
 
 (defn eval-elisp-with-timeout
   "Execute elisp code with a timeout.
@@ -56,7 +53,13 @@
   ([code] (eval-elisp-with-timeout code *default-timeout-ms*))
   ([code timeout-ms]
    (if-let [f (resolve-emacs-fn 'hive-emacs.client/eval-elisp-with-timeout)]
-     (f code timeout-ms)
+     ;; Rebind hive-emacs *max-timeout-ms* when caller needs more than 30s
+     ;; (e.g. CIDER eval with long-running expressions).
+     (if-let [max-var (when (> (or timeout-ms 0) *max-timeout-ms*)
+                         (resolve-emacs-fn 'hive-emacs.client/*max-timeout-ms*))]
+       (with-bindings {max-var timeout-ms}
+         (f code timeout-ms))
+       (f code timeout-ms))
      {:success false
       :error "hive-emacs not on classpath — Emacs integration unavailable"})))
 
