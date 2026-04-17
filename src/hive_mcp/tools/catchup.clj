@@ -16,7 +16,8 @@
    - handle-native-catchup  — main catchup handler
    - handle-native-wrap     — wrap/crystallize handler
    - spawn-context          — re-export from catchup.spawn"
-  (:require [hive-mcp.protocols.memory :as mem-proto]
+  (:require [hive-mcp.agent.context :as ctx]
+            [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.catchup.scope :as catchup-scope]
             [hive-mcp.tools.catchup.format :as fmt]
@@ -28,8 +29,10 @@
             [hive-mcp.channel.context-store :as context-store]
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.concurrency.pool :as pool]
+            [hive-mcp.project.tree :as project-tree]
             [hive-mcp.dns.result :refer [rescue]]
             [hive-dsl.context.identity :as ctx-id]
+            [hive-ttracking.core :as tt]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -68,12 +71,19 @@
        default))))
 
 (def ^:private ^:const query-timeout-ms
-  "Timeout for individual parallel query futures.
-   Milvus tag-filter queries on dense namespaces can exceed 30s (see memory
-   20260413145532). query-axioms parallelizes its formal+legacy sub-queries
-   internally, but cold-path budget must still cover the slower of the two
-   plus pool-queue jitter."
-  60000)
+  "Outer safe-deref timeout for the bundle/git/carto futures. The bundle
+   future runs query-all-scoped (fork-join with its own 60s per-branch
+   budget) AND hydrate-buckets (single batch-get for ~270 survivors).
+   Measured 2026-04-17 on a 45-project hive hierarchy:
+     query-all-scoped   : ~42s
+     hydrate-buckets    : ~162s  (Milvus batch-get on ~270 ids)
+     total bundle       : ~204s
+   60s was the original value and caused silent empty bundles whenever the
+   hierarchy was non-trivial — the outer safe-deref hit its timeout long
+   before hydrate finished, returning the {} default and propagating 0
+   counts to every catchup bucket. 300s gives hydrate realistic headroom
+   until the Milvus batch-get path is itself optimized."
+  300000)
 
 ;; =============================================================================
 ;; Main Catchup Handler
@@ -87,47 +97,50 @@
    If an enrichment addon is registered via :cu/a, it runs
    fire-and-forget. Results arrive via piggyback on subsequent calls."
   [args]
-  (let [directory (:directory args)]
+  (let [directory (or (:directory args)
+                      (ctx/current-directory)
+                      (:_caller_cwd args))]
     (log/info "native-catchup: querying memory store with project scope" {:directory directory})
     ;; Guard: early return if no store registered
     (if-not (mem-proto/store-set?)
       (fmt/store-not-configured-error)
       (try
-        (let [project-id (scope/get-current-project-id directory)
+        ;; Prefer the project-id already resolved by wrap-handler-context
+        ;; (which considers :_caller_cwd / user.dir fallbacks). Only recompute
+        ;; from directory when ctx is unbound (e.g. direct repl call).
+        (let [project-id (or (ctx/current-project-id)
+                             (scope/get-current-project-id directory))
               project-name (catchup-scope/get-current-project-name directory)
               scopes (fmt/build-scopes project-name project-id)
 
-              ;; ── Wave 1: Fire independent queries in parallel (bounded by IO pool) ──
-              f-axioms      (pool/with-io (catchup-scope/query-axioms project-id))
-              f-principles  (pool/with-io (catchup-scope/query-scoped-entries "principle" nil project-id 50))
-              f-priority    (pool/with-io (catchup-scope/query-scoped-entries "convention" ["catchup-priority"]
-                                                                              project-id 50))
-              f-sessions    (pool/with-io (catchup-scope/query-scoped-entries "note" ["session-summary"] project-id 10))
-              f-decisions   (pool/with-io (catchup-scope/query-scoped-entries "decision" nil project-id 50))
-              f-snippets    (pool/with-io (catchup-scope/query-scoped-entries "snippet" nil project-id 20))
-              f-expiring    (pool/with-io (catchup-scope/query-expiring-entries project-id 20))
-              f-git         (pool/with-io (catchup-git/gather-git-info directory))
-              f-carto       (pool/with-io (catchup-carto/get-status project-id))
+              ;; ── Tree scan: ensure project hierarchy is populated before queries ──
+              ;; Without this, descendant-scopes returns [] and sessions stored
+              ;; under child projects (e.g. hive-mcp under hive) are invisible.
+              _ (rescue nil (project-tree/maybe-scan-project-tree! (or directory ".")))
 
-              ;; ── Wave 1: Collect with timeout ──
-              axioms               (safe-deref f-axioms query-timeout-ms [] "axioms")
-              principles           (safe-deref f-principles query-timeout-ms [] "principles")
-              priority-conventions (safe-deref f-priority query-timeout-ms [] "priority-conventions")
-              sessions             (safe-deref f-sessions query-timeout-ms [] "sessions")
-              decisions            (safe-deref f-decisions query-timeout-ms [] "decisions")
-              snippets             (safe-deref f-snippets query-timeout-ms [] "snippets")
-              expiring             (safe-deref f-expiring query-timeout-ms [] "expiring")
-              git-info             (safe-deref f-git query-timeout-ms {} "git-info")
-              carto-status         (safe-deref f-carto query-timeout-ms nil "carto-status")
+              ;; ── Wave 1: ONE memory bundle + git + carto in parallel ──
+              ;; The bundle replaces 7 per-type Milvus RPCs with 2 queries
+              ;; (hierarchy + global-pierce), grouped by :type in memory. Avoids
+              ;; Milvus type-filter scalar-scan storms that blew the budget.
+              f-bundle (pool/with-io ((tt/timed-query "catchup/bundle-total"
+                                                      #(catchup-scope/query-catchup-bundle project-id))))
+              f-git    (pool/with-io ((tt/timed-query "catchup/git-total"
+                                                      #(catchup-git/gather-git-info directory))))
+              f-carto  (pool/with-io ((tt/timed-query "catchup/carto-total"
+                                                      #(catchup-carto/get-status project-id))))
 
-              ;; ── Wave 2: Dependent query (needs axiom + priority IDs) ──
-              conventions (safe-deref
-                           (pool/with-io
-                             (catchup-scope/query-regular-conventions
-                              project-id
-                              (set (map :id axioms))
-                              (set (map :id priority-conventions))))
-                           query-timeout-ms [] "conventions")
+              bundle        (safe-deref f-bundle query-timeout-ms {} "bundle")
+              git-info      (safe-deref f-git query-timeout-ms {} "git-info")
+              carto-status  (safe-deref f-carto query-timeout-ms nil "carto-status")
+
+              axioms               (:axioms bundle [])
+              principles           (:principles bundle [])
+              priority-conventions (:priority-conventions bundle [])
+              sessions             (:sessions bundle [])
+              decisions            (:decisions bundle [])
+              snippets             (:snippets bundle [])
+              expiring             (:expiring bundle [])
+              conventions          (:conventions bundle [])
 
               ;; Convert to metadata (pure, fast)
               axioms-meta (mapv fmt/entry->axiom-meta axioms)
