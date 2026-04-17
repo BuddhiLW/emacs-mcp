@@ -8,6 +8,7 @@
             [hive-mcp.swarm.datascript.lings :as ds-lings]
             [hive-mcp.swarm.datascript.queries :as ds-queries]
             [hive-mcp.swarm.datascript.schema :as schema]
+            [hive-mcp.config.core :as global-config]
             [hive-mcp.protocols.dispatch :as dispatch-ctx]
             [clojure.string :as str]
             [hive-dsl.result :as r]
@@ -15,6 +16,22 @@
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
+
+(def ^:private provider->secret-key
+  "Maps provider keyword to config secret key for API key resolution."
+  {:openrouter :openrouter-api-key
+   :openai     :openai-api-key
+   :venice     :venice-api-key
+   :groq       :groq-api-key
+   :together   :together-api-key
+   :fireworks  :fireworks-api-key})
+
+(defn- resolve-api-key-for-provider
+  "Resolve API key from hive-mcp config secrets for a given provider.
+   Returns the key string or nil. Bridges config.edn secrets → headless spawn."
+  [provider]
+  (when-let [secret-key (get provider->secret-key (keyword provider))]
+    (r/rescue nil (global-config/get-secret secret-key))))
 
 (defn resolve-effective-mode
   "Pure function: raw spawn inputs -> effective spawn mode keyword.
@@ -53,6 +70,9 @@
            :project-id (:project-id ling)
            :spawn-mode (:spawn-mode ling)
            :model (:model ling)}
+    (:provider ling) (assoc :provider (:provider ling))
+    (some? (:kg-compress? ling)) (assoc :kg-compress? (:kg-compress? ling))
+    (:sliding-window-size ling) (assoc :sliding-window-size (:sliding-window-size ling))
     (:agents ling) (assoc :agents (:agents ling))))
 
 (defn- slave->ling-opts
@@ -188,11 +208,19 @@
         ;; system prompt via :preset-content.
         preset-content (when (and headless? (seq presets))
                          (load-presets-content presets))
+        ;; Resolve API key from hive-mcp config secrets for headless backends.
+        ;; hive-agent reads System/getenv directly, but secrets may only exist
+        ;; in config.edn (resolved via pass(1) at startup). Bridge here.
+        resolved-api-key (when headless?
+                           (resolve-api-key-for-provider
+                            (or (:provider ctx) :openrouter)))
         spawn-opts (cond-> (if enriched-task
                              (assoc opts :task enriched-task)
                              opts)
                      (seq preset-content)
-                     (assoc :preset-content preset-content))]
+                     (assoc :preset-content preset-content)
+                     resolved-api-key
+                     (assoc :api-key resolved-api-key))]
 
     ;; PRE-REGISTER in DataScript BEFORE strategy-spawn!.
     ;; For headless backends, strategy-spawn! may trigger start! which fires
@@ -275,7 +303,7 @@
 
       slave-id)))
 
-(defrecord Ling [id cwd presets project-id spawn-mode model agents max-budget-usd]
+(defrecord Ling [id cwd presets project-id spawn-mode model provider kg-compress? sliding-window-size agents max-budget-usd]
   IAgent
 
   (spawn! [this opts]
@@ -428,8 +456,11 @@
                         :project-id (:project-id opts)
                         :spawn-mode effective-spawn-mode
                         :model model-val}
-                 (:agents opts)         (assoc :agents (:agents opts))
-                 (:max-budget-usd opts) (assoc :max-budget-usd (:max-budget-usd opts))))))
+                 (:provider opts)           (assoc :provider (:provider opts))
+                 (some? (:kg-compress? opts)) (assoc :kg-compress? (:kg-compress? opts))
+                 (:sliding-window-size opts) (assoc :sliding-window-size (:sliding-window-size opts))
+                 (:agents opts)             (assoc :agents (:agents opts))
+                 (:max-budget-usd opts)     (assoc :max-budget-usd (:max-budget-usd opts))))))
 
 (defn create-ling!
   "Create and spawn a new ling agent."
