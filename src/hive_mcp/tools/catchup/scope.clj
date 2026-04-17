@@ -10,15 +10,15 @@
   (:require [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.concurrency.pool :as pool]
-            [hive-mcp.dns.result :refer [rescue rescue-interrupt rescue-log]]
+            [hive-mcp.dns.result :refer [rescue]]
             [hive-mcp.tools.catchup.hierarchy :as hier]
             [hive-mcp.tools.catchup.scope-filter :as sf]
+            [hive-mcp.tools.catchup.axiom-cache :as axc]
             [hive-weave.pool :as wpool]
             [hive-weave.parallel :as wpar]
             [clojure.tools.logging :as log]
             [clojure.string :as str]
-            [clojure.set :as set])
-  (:import [java.util.concurrent Future TimeUnit TimeoutException]))
+            [clojure.set :as set]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -121,108 +121,9 @@
          newest-first
          (take (or limit 20)))))
 
-(def ^:private axioms-formal-budget-ms
-  "Wall-clock budget for the formal `type=axiom` branch. query-scoped-entries
-   issues TWO sequential Milvus calls (hierarchy + global-piercing), each
-   ~5-6s on the type-filter cold path, so we budget 20s to stay well under
-   the 60s catchup acceptance gate while still letting the formal branch land
-   even on cold-path Milvus queries."
-  20000)
-
-(defn- deref-with-deadline
-  "Block on `fut` up to `deadline-ms` wall-clock. On timeout, cancel(true)
-   and log under `label`; on exception, log and return []. Never throws."
-  [^Future fut deadline-ms label budget-ms]
-  (let [remaining (max 0 (- deadline-ms (System/currentTimeMillis)))]
-    (try
-      (.get fut remaining TimeUnit/MILLISECONDS)
-      (catch TimeoutException _
-        (.cancel fut true)
-        (log/warnf "catchup/query-axioms %s branch exceeded budget (%sms) — cancelled, partial results"
-                   label budget-ms)
-        [])
-      (catch Throwable t
-        (log/warnf t "catchup/query-axioms %s branch failed — partial results" label)
-        []))))
-
-(def ^:private axioms-cache-ttl-ms
-  "Per-project TTL for query-axioms results. Axioms churn rarely; a 5-min
-   cache eliminates repeated Chroma cold-path type-filter scans that blow
-   through the 20s budget on projects with few/no axioms."
-  (* 5 60 1000))
-
-(def ^:private axioms-cache
-  "{project-id {:result [...] :expires-at epoch-ms :stored-at epoch-ms}}"
-  (atom {}))
-
-(def ^:private axioms-refreshing
-  "Set of project-ids currently being refreshed in the background. Gates
-   against thundering-herd when several catchup calls race on a stale entry."
-  (atom #{}))
-
-(defn invalidate-axioms-cache!
-  "Drop cached axiom results. Call after add/update/delete of axiom entries."
-  ([] (reset! axioms-cache {}))
-  ([project-id] (swap! axioms-cache dissoc project-id)))
-
-(defn- fetch-axioms-sync!
-  "Synchronous fetch with budget. Stores result in cache, returns it.
-
-   Axioms are global: every `type=axiom` entry is visible from every project,
-   including those authored under siblings that are neither ancestors nor
-   descendants. We therefore skip the hierarchy + scope-piercing filters and
-   hit the store with an unscoped `type=axiom` scan."
-  [project-id now]
-  (let [store (mem-proto/get-store)
-        formal-deadline (+ now axioms-formal-budget-ms)
-        f-formal (pool/with-catchup
-                   (rescue-interrupt "catchup/query-axioms" []
-                     (->> (mem-proto/query-entries
-                            store
-                            {:type "axiom"
-                             :limit 200
-                             :output-fields hier/metadata-projection})
-                          (sort-by :created #(compare %2 %1))
-                          (take 100)
-                          vec)))
-        formal (deref-with-deadline f-formal formal-deadline "formal"
-                                    axioms-formal-budget-ms)]
-    (swap! axioms-cache assoc project-id
-           {:result formal
-            :expires-at (+ now axioms-cache-ttl-ms)
-            :stored-at now})
-    formal))
-
-(defn- trigger-refresh!
-  "Fire-and-forget background refresh of axioms cache — stale-while-revalidate.
-   Gated by `axioms-refreshing` to avoid thundering-herd: only the caller that
-   actually adds project-id to the in-flight set submits the refresh task.
-   Errors are logged via rescue-log; the in-flight slot is always released."
-  [project-id]
-  (let [[old new] (swap-vals! axioms-refreshing
-                              (fn [s] (if (contains? s project-id) s (conj s project-id))))]
-    (when (not= old new)
-      (pool/with-catchup
-        (rescue-log "catchup/query-axioms:refresh" nil
-          (fetch-axioms-sync! project-id (System/currentTimeMillis)))
-        (swap! axioms-refreshing disj project-id)))))
-
-(defn query-axioms
-  "Query axiom entries via the formal `type=axiom` branch.
-
-   Stale-while-revalidate cache: a hit within TTL returns immediately; an
-   expired hit also returns immediately and triggers a background refresh
-   so the next call sees fresh data without blocking this one. Cold first
-   call on a project pays the synchronous `axioms-formal-budget-ms` cost.
-   Use `invalidate-axioms-cache!` after mutating axioms."
-  [project-id]
-  (let [now   (System/currentTimeMillis)
-        hit   (get @axioms-cache project-id)
-        fresh (and hit (< now (:expires-at hit)))]
-    (cond
-      fresh         (:result hit)
-      hit           (do (trigger-refresh! project-id) (:result hit))
-      :else         (fetch-axioms-sync! project-id now))))
+;; Re-exports from axiom_cache for backward-compat:
+(def invalidate-axioms-cache! axc/invalidate-axioms-cache!)
+(def query-axioms             axc/query-axioms)
 
 (defn query-regular-conventions
   "Query conventions excluding axioms and priority ones."
