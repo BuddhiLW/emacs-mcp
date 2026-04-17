@@ -9,13 +9,45 @@
    refresh so repeat catchups don't re-pay the 20s budget."
   (:require [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.concurrency.pool :as pool]
-            [hive-mcp.dns.result :refer [rescue-interrupt rescue-log]]
+            [hive-mcp.dns.result :refer [rescue rescue-interrupt rescue-log]]
             [hive-mcp.tools.catchup.hierarchy :as hier]
             [clojure.tools.logging :as log])
   (:import [java.util.concurrent Future TimeUnit TimeoutException]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
+
+;; =============================================================================
+;; Telemetry wrapper — DI via hive-ttracking when present (mirrors bundle.clj)
+;; =============================================================================
+
+(def ^:private tt-timed-query-var
+  "Late-bound reference to `hive-ttracking.core/timed-query`. DI via
+   classpath presence so the ns still loads on minimal CI builds."
+  (delay
+    (rescue nil
+            (require 'hive-ttracking.core)
+            (resolve 'hive-ttracking.core/timed-query))))
+
+(defn- timed-query-inline
+  "Fallback telemetry wrapper used when hive-ttracking is absent."
+  [label qfn]
+  (fn []
+    (let [t0 (System/currentTimeMillis)
+          result (qfn)
+          elapsed (- (System/currentTimeMillis) t0)
+          n (count (or result []))]
+      (if (zero? n)
+        (log/warn "catchup axiom-cache" label "returned 0 entries in" elapsed "ms")
+        (log/info "catchup axiom-cache" label ":" n "entries in" elapsed "ms"))
+      result)))
+
+(defn- timed-query
+  "Dispatch to hive-ttracking.core/timed-query when available, else inline."
+  [label qfn]
+  (if-let [tt @tt-timed-query-var]
+    (tt label qfn)
+    (timed-query-inline label qfn)))
 
 (def ^:private axioms-formal-budget-ms
   "Wall-clock budget for the formal `type=axiom` branch. Cold-path Chroma
@@ -66,11 +98,12 @@
         formal-deadline (+ now axioms-formal-budget-ms)
         f-formal (pool/with-catchup
                    (rescue-interrupt "catchup/query-axioms" []
-                     (->> (mem-proto/query-entries
-                            store
-                            {:type "axiom"
-                             :limit 200
-                             :output-fields hier/metadata-projection})
+                     (->> ((timed-query "axioms/formal"
+                                        #(mem-proto/query-entries
+                                           store
+                                           {:type "axiom"
+                                            :limit 200
+                                            :output-fields hier/metadata-projection})))
                           (sort-by :created #(compare %2 %1))
                           (take 100)
                           vec)))

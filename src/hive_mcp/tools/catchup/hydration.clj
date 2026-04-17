@@ -9,10 +9,43 @@
   (:require [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.dns.result :refer [rescue]]
             [hive-mcp.tools.catchup.scope-filter :as sf]
-            [hive-weave.parallel :as wpar]))
+            [hive-weave.parallel :as wpar]
+            [clojure.tools.logging :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
+
+;; =============================================================================
+;; Telemetry wrapper — DI via hive-ttracking when present
+;; =============================================================================
+
+(def ^:private tt-timed-query-var
+  "Late-bound reference to `hive-ttracking.core/timed-query`. DI via
+   classpath presence so the ns still loads on minimal CI builds."
+  (delay
+    (rescue nil
+            (require 'hive-ttracking.core)
+            (resolve 'hive-ttracking.core/timed-query))))
+
+(defn- timed-query-inline
+  "Fallback telemetry wrapper used when hive-ttracking is absent."
+  [label qfn]
+  (fn []
+    (let [t0 (System/currentTimeMillis)
+          result (qfn)
+          elapsed (- (System/currentTimeMillis) t0)
+          n (count (or result []))]
+      (if (zero? n)
+        (log/warn "catchup hydration" label "returned 0 entries in" elapsed "ms")
+        (log/info "catchup hydration" label ":" n "entries in" elapsed "ms"))
+      result)))
+
+(defn- timed-query
+  "Dispatch to hive-ttracking.core/timed-query when available, else inline."
+  [label qfn]
+  (if-let [tt @tt-timed-query-var]
+    (tt label qfn)
+    (timed-query-inline label qfn)))
 
 (defn has-tag?
   "True when `entry` has `tag` in its tag set. PUBLIC — used by bundle/split."
@@ -47,11 +80,13 @@
       []
 
       (<= (count ids) hydrate-chunk-size)
-      (rescue [] (mem-proto/get-entries store ids))
+      (rescue [] ((timed-query "hydrate/single-shot"
+                               #(mem-proto/get-entries store ids))))
 
       :else
       (let [chunks (mapv vec (partition-all hydrate-chunk-size ids))
-            fetch  (fn [c] (mem-proto/get-entries store c))]
+            fetch  (fn [c] ((timed-query "hydrate/chunk"
+                                         #(mem-proto/get-entries store c))))]
         (vec (mapcat identity
                      (wpar/bounded-pmap
                        {:concurrency (count chunks)
