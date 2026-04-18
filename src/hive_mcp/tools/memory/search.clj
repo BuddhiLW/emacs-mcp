@@ -17,8 +17,9 @@
             [taoensso.timbre :as log]))
 
 (def ^:const ^:private memory-search-timeout-ms
-  "Timeout budget for a memory search (Chroma federated query + KG filter)."
-  15000)
+  "Timeout budget for a memory search (Milvus federated query + KG filter).
+   30s accommodates multi-project fan-out on cold Milvus paths."
+  30000)
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -137,6 +138,16 @@
                         :type         type
                         :project-ids  visible-project-ids
                         :exclude-tags effective-excludes})
+        ;; Auto tag fallback: retry without exclude-tags when filtered search
+        ;; returns empty but excludes were active (avoids false-negative searches)
+        store-results (if (and (empty? store-results) (seq effective-excludes))
+                        (do (log/warn "search fallback: retrying without exclude-tags for query:" query)
+                            (mem-proto/search-similar
+                             store query
+                             {:limit       (* limit-val 2)
+                              :type        type
+                              :project-ids visible-project-ids}))
+                        store-results)
         normalized-store (mapv store-entry->normalized store-results)
         ingest-results  (when-let [search-fn (chroma-search/resolve-ingest-search)]
                           (rescue nil

@@ -24,6 +24,8 @@
             [hive-mcp.tools.catchup.git :as catchup-git]
             [hive-mcp.tools.catchup.carto :as catchup-carto]
             [hive-mcp.tools.catchup.spawn :as catchup-spawn]
+            [hive-mcp.tools.catchup.scope-filter :as sf]
+            [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.channel.memory-piggyback :as memory-piggyback]
             [hive-mcp.channel.piggyback :as piggyback]
             [hive-mcp.channel.context-store :as context-store]
@@ -188,7 +190,32 @@
                           (piggyback/evict-stale-cursors! 1800000) ;; 30 min
                           (memory-piggyback/adopt-buffer! raw-caller-id)))
 
-              piggyback-entries (into (into (vec axioms) principles) priority-conventions)
+              ;; Scope-filter piggyback: keep entries relevant to this agent's
+              ;; project hierarchy. Axioms pierce scope (always included).
+              ;; Entries without scope tags pass through (global by convention).
+              piggyback-raw (into (into (vec axioms) principles) priority-conventions)
+              piggyback-entries
+              (let [in-project? (and project-id (not= project-id "global"))]
+                (if-not in-project?
+                  piggyback-raw
+                  (let [scope-tags (sf/compute-full-scope-tags project-id)
+                        visible-ids (set (conj (or (rescue [] (kg-scope/visible-scopes project-id))
+                                                   [project-id])
+                                               "global"))]
+                    (filterv (fn [entry]
+                               (let [tags (set (or (:tags entry) []))
+                                     entry-type (str (or (:type entry) ""))]
+                                 (or
+                                  ;; Axioms always pierce scope
+                                  (= entry-type "axiom")
+                                  ;; catchup-priority entries pierce scope
+                                  (contains? tags "catchup-priority")
+                                  ;; No scope tag = global, passes through
+                                  (not-any? #(.startsWith ^String % "scope:project:") tags)
+                                  ;; Scope-matching entries pass through
+                                  (some tags scope-tags)
+                                  (contains? visible-ids (:project-id entry)))))
+                             piggyback-raw))))
 
               ;; Dual-write: Cache entry categories in context-store for pass-by-ref mode.
               ;; Uses context-put-batch! to write all categories in parallel via futures.

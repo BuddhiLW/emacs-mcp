@@ -74,17 +74,21 @@
 
 (defn query-entries
   "Query memory entries with filtering.
-   Accepts keyword args for backward compat with chroma API."
-  [& {:keys [type project-id project-ids tags exclude-tags limit include-expired?]
+   Accepts keyword args for backward compat with chroma API.
+   :output-fields — optional seq of field-name strings for projection
+   (e.g. [\"id\" \"type\" \"tags\"]), passed through to the store backend."
+  [& {:keys [type project-id project-ids tags exclude-tags limit
+             include-expired? output-fields]
       :or {limit 100 include-expired? false}}]
   (proto/query-entries (proto/get-store)
-                       {:type             type
-                        :project-id       project-id
-                        :project-ids      project-ids
-                        :tags             tags
-                        :exclude-tags     exclude-tags
-                        :limit            limit
-                        :include-expired? include-expired?}))
+                       (cond-> {:type             type
+                                :project-id       project-id
+                                :project-ids      project-ids
+                                :tags             tags
+                                :exclude-tags     exclude-tags
+                                :limit            limit
+                                :include-expired? include-expired?}
+                         output-fields (assoc :output-fields output-fields))))
 
 (defn find-duplicate
   "Find entry with matching content-hash in the given type.

@@ -159,7 +159,8 @@
 
   (query-entries [_this opts]
     (let [{:keys [type project-id project-ids tags exclude-tags
-                  limit include-expired? grounded-from]
+                  limit include-expired? grounded-from
+                  output-fields]  ;; accepted for interface compat; chroma ignores projection
            :or {limit 100 include-expired? false}} opts]
       (if grounded-from
         (chroma/query-grounded-from grounded-from)

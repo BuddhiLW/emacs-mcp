@@ -19,8 +19,9 @@
   (into [:enum] (type-registry/all-type-strings)))
 
 (def MemoryDuration
-  "Valid duration values for memory entries."
-  [:enum "session" "short" "medium" "long" "permanent"])
+  "Valid duration values for memory entries.
+   Aligned with graph/schema.clj duration-types (SST)."
+  [:enum "ephemeral" "short" "medium" "long" "permanent"])
 
 ;; =============================================================================
 ;; Tags
@@ -141,6 +142,21 @@
    :memory/metadata MemoryMetadata
    :memory/abstraction-level AbstractionLevel
    :memory/project-scope ProjectScope})
+
+;; =============================================================================
+;; Boundary Validation
+;; =============================================================================
+
+(defn validate-add-request
+  "Validate an add-entry request at the IO boundary. Returns nil on success,
+   or a map {:errors [...]} with humanized Malli errors on failure.
+   Designed as opt-in guard for callers of vectordb.facade/index-memory-entry!."
+  [entry]
+  (let [explanation (m/explain MemoryEntryMinimal entry)]
+    (when explanation
+      {:errors (mapv (fn [{:keys [path value]}]
+                       {:path path :value value})
+                     (:errors explanation))})))
 
 (comment
   ;; Example usage

@@ -284,6 +284,22 @@
   [store]
   (satisfies? IMemoryStoreBatch store))
 
+(defn get-entries-projected
+  "Batch-fetch entries by IDs, then trim to `output-fields` when provided.
+   Projection is applied client-side so all IMemoryStoreBatch impls benefit
+   without needing per-backend changes. When `output-fields` is nil,
+   returns full entries (backward compat).
+
+   output-fields: seq of field-name strings (e.g. [\"id\" \"type\" \"tags\"])."
+  ([store ids]
+   (get-entries store ids))
+  ([store ids {:keys [output-fields]}]
+   (let [entries (get-entries store ids)]
+     (if (seq output-fields)
+       (let [ks (set (map keyword output-fields))]
+         (mapv #(select-keys % ks) entries))
+       entries))))
+
 ;;; ============================================================================
 ;;; IMemoryStoreTemporal Protocol (Bitemporal Extension)
 ;;; ============================================================================
