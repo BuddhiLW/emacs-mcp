@@ -14,7 +14,7 @@
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.duration :as dur]
             [hive-mcp.extensions.registry :as ext]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.dns.result :as result]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -91,7 +91,7 @@
   "Bind all synthesize dependencies to deterministic fakes.
    opts keys:
      :summary     — return from summarize-session-progress (nil = no-content)
-     :entry-id    — return from chroma/index-memory-entry!"
+     :entry-id    — return from facade/index-memory-entry!"
   [opts & body]
   `(let [opts# ~opts]
      (ext/register! :ch/a (fn [_#] {:promoted 0 :skipped 0 :below 0 :evaluated 0}))
@@ -128,10 +128,10 @@
           ctx/current-directory
           (fn [] "/tmp/synth-test")
 
-          chroma/index-memory-entry!
+          facade/index-memory-entry!
           (fn [_#] (get opts# :entry-id "entry-synth-001"))
 
-          chroma/content-hash
+          facade/content-hash
           (fn [c#] (str (hash c#)))]
 
          (let [result# (do ~@body)]
@@ -288,6 +288,28 @@
         (ext/deregister! :ch/c)
         (ext/deregister! :ch/d)
         (ext/deregister! :ch/e)))))
+
+;; =============================================================================
+;; Golden: tasks-only harvest (no progress-notes, no commits) produces summary
+;; Regression: DataScript tasks have :title but no :content — must not be
+;; silently dropped by summarize-session-progress-fallback's content filter.
+;; =============================================================================
+
+(deftest golden-synthesize-tasks-only-not-empty
+  (testing "DataScript tasks (have :title, no :content) produce a summary, not nil"
+    ;; This tests the pure summarize-session-progress fn directly.
+    ;; DataScript-shaped tasks have :title but no :content key.
+    ;; The content filter must not silently drop them.
+    (let [ds-tasks [{:id "task-1" :title "Fix auth bug" :completed-at "2026-04-18T10:00:00Z"
+                     :agent-id "coordinator" :source :datascript}
+                    {:id "task-2" :title "Add validation" :completed-at "2026-04-18T11:00:00Z"
+                     :agent-id "coordinator" :source :datascript}]
+          harvested {:summary {:kg-edge-count 0 :kanban-movement-count 0}}
+          result (crystal/summarize-session-progress ds-tasks [] harvested)]
+      (is (some? result) "Tasks-only harvest must produce a summary, not nil")
+      (is (string? (:content result)) "Summary must have string content")
+      (is (.contains (:content result) "Fix auth bug") "Summary must mention task titles")
+      (is (.contains (:content result) "Add validation") "Summary must mention all tasks"))))
 
 ;; =============================================================================
 ;; Property: any valid harvested input → synthesize returns required keys

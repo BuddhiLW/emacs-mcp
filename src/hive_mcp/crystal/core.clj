@@ -443,13 +443,16 @@
   (let [notes (->> (or notes []) (filter map?))
         git-commits (or git-commits [])
         notes-with-content (->> notes
-                                (filter #(let [c (:content %)]
-                                           (and (some? c)
-                                                (if (string? c) (not (str/blank? c)) true)))))
+                                (filter #(let [c (:content %)
+                                               t (:title %)]
+                                           (or (and (some? c)
+                                                    (if (string? c) (not (str/blank? c)) true))
+                                               (and (some? t)
+                                                    (if (string? t) (not (str/blank? t)) true))))))
         task-count (count (filter #(some #{"completed-task"} (:tags %)) notes-with-content))
         session (session-id)
         note-summaries (->> notes-with-content
-                            (map #(extract-content-summary (:content %)))
+                            (map #(extract-content-summary (or (:content %) %)))
                             (remove #(contains? #{"(no content)" "(empty)"} %))
                             (map #(str "- " %))
                             (str/join "\n"))

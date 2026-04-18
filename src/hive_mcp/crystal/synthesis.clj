@@ -1,14 +1,14 @@
 (ns hive-mcp.crystal.synthesis
   "Session synthesis — transforms harvested data into a crystallized summary.
 
-   Pure formatting functions + effectful boundary for Chroma storage
+   Pure formatting functions + effectful boundary for memory store storage
    and lifecycle operations (promotion, decay, xpoll, memory-decay, provenance).
 
    Input:  harvested map (from hooks/harvest-all)
    Output: SessionSummary map
 
    SessionSummary shape (content path):
-     {:summary-id   string?       ;; Chroma entry ID
+     {:summary-id   string?       ;; memory store entry ID
       :session      string?       ;; session identifier
       :project-id   string?       ;; project scope
       :session-timing map?        ;; {:session-start :session-end :duration-minutes}
@@ -152,13 +152,13 @@
    Takes the harvested map (from hooks/harvest-all) and:
    1. Builds a text summary from progress notes + tasks + commits
    2. Appends temporal metadata block
-   3. Stores to Chroma as short-term note
+   3. Stores to memory store as short-term note
    4. Runs lifecycle operations in parallel (promotion, decay, xpoll, etc.)
 
    Returns SessionSummary map.
 
    Two paths:
-   - Content path: summary stored to Chroma, lifecycle runs in parallel
+   - Content path: summary stored to memory store, lifecycle runs in parallel
    - No-content path: lifecycle runs for maintenance, result marked :skipped"
   [{:keys [progress-notes completed-tasks git-commits directory _recalls] :as harvested}]
   (log/info "Synthesizing session:" (crystal/session-id) (when directory (str "directory:" directory)))
@@ -185,8 +185,8 @@
                 :session-timing session-timing
                 :stats (:summary harvested)}
                lifecycle))
-      ;; Content exists — start lifecycle IN PARALLEL with Chroma indexing
-      ;; (lifecycle ops don't depend on the Chroma entry-id)
+      ;; Content exists — start lifecycle IN PARALLEL with memory store indexing
+      ;; (lifecycle ops don't depend on the memory store entry-id)
       (let [content (build-summary-content summary session-timing harvested)
             tags (build-summary-tags summary project-id)
             expires (dur/calculate-expires "short")
@@ -203,14 +203,14 @@
                                           :expires (or expires "")
                                           :project-id project-id
                                           :content-hash (facade/content-hash content)}))
-            chroma-ms (- (System/currentTimeMillis) t0)
+            store-ms (- (System/currentTimeMillis) t0)
             ;; Collect lifecycle results (likely already done — they ran during embedding)
             lifecycle (deref lifecycle-fut op-timeout
                              {:error "lifecycle-timeout"})]
-        (log/info "synthesize: chroma" chroma-ms "ms, lifecycle overlapped")
+        (log/info "synthesize: store" store-ms "ms, lifecycle overlapped")
         (if (result/ok? store-r)
           (let [entry-id (:ok store-r)]
-            (log/info "Created session summary in Chroma:" entry-id "project:" project-id)
+            (log/info "Created session summary in memory store:" entry-id "project:" project-id)
             (merge {:summary-id entry-id
                     :session (crystal/session-id)
                     :project-id project-id
