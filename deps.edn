@@ -112,12 +112,12 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL, error taxonomy
         io.github.hive-agi/hive-dsl
-        {:git/tag "v0.4.0" :git/sha "c561cb7d111b86b2e2c5a8446465dc5e3ab95778"}
+        {:git/tag "v0.4.1" :git/sha "07ab02a"}
 
         ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
         ;; Overrides default Chroma store when Milvus is reachable.
-        io.github.hive-agi/hive-milvus {:git/tag "v0.1.2" :git/sha "2ce45dc"}
+        io.github.hive-agi/hive-milvus {:git/tag "v0.1.3" :git/sha "d9d3ea1"}
 
         ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj
         io.github.hive-agi/hive-weave {:git/tag "v0.2.1" :git/sha "51bed20"}
