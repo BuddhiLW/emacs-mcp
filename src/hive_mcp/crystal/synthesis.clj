@@ -206,7 +206,7 @@
             store-ms (- (System/currentTimeMillis) t0)
             ;; Collect lifecycle results (likely already done — they ran during embedding)
             lifecycle (deref lifecycle-fut op-timeout
-                             {:error "lifecycle-timeout"})]
+                             {:lifecycle-error "timeout"})]
         (log/info "synthesize: store" store-ms "ms, lifecycle overlapped")
         (if (result/ok? store-r)
           (let [entry-id (:ok store-r)]

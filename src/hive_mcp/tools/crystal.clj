@@ -122,11 +122,13 @@
                                                    :agent-id agent-id}))))
 
 (defn- crystallize-session-result
-  "Run crystallize-session, handling domain-level :error. Returns Result."
+  "Run crystallize-session, handling domain-level :error. Returns Result.
+   A result with BOTH :summary-id and :error/:lifecycle-error is a partial
+   success — the entry was stored but lifecycle ops had issues. Treat as ok."
   [harvested project-id]
   (try
     (let [r (crystal-hooks/crystallize-session harvested)]
-      (if (:error r)
+      (if (and (:error r) (not (:summary-id r)))
         (result/err :crystal/crystallize-failed
                     {:message (:error r) :project-id project-id})
         (result/ok r)))

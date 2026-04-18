@@ -7,7 +7,9 @@
    - Last scan timestamp (from cartography/tools scan-state)
 
    Pure read-only — does NOT trigger scans or modify carto state."
-  (:require [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
+  (:require [hive-mcp.extensions.registry :as ext]
+            [taoensso.timbre :as log]
+            [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -51,10 +53,10 @@
     0))
 
 (defn- last-scan-info
-  "Extract last scan timestamp from cartography/tools scan-state-snapshot.
+  "Extract last scan timestamp via :carto/scan-state-snapshot extension.
    Returns {:last-scan-ts long :scan-status keyword} or nil."
   [project-id]
-  (if-let [snapshot-fn (try-resolve 'hive-knowledge.cartography.tools/scan-state-snapshot)]
+  (if-let [snapshot-fn (ext/get-extension :carto/scan-state-snapshot)]
     (try
       (let [state (snapshot-fn (or project-id "hive-mcp"))]
         (when state

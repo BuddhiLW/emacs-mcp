@@ -397,3 +397,75 @@
                    :memory-ids-accessed (vec (repeat n-accessed "id"))})]
       (and (string? result)
            (.contains result "### Temporal Metadata")))))
+
+;; =============================================================================
+;; Regression: lifecycle timeout must not poison synthesize result with :error
+;; Bug: deref timeout default was {:error "lifecycle-timeout"} which merged
+;; :error into a result that also had :summary-id, causing
+;; crystallize-session-result to treat a partial success as total failure.
+;; =============================================================================
+
+(deftest regression-lifecycle-timeout-no-error-key
+  (testing "Lifecycle timeout produces :lifecycle-error, not :error key"
+    ;; The timeout default was {:error "lifecycle-timeout"} which polluted the
+    ;; result map, causing crystallize-session-result to treat a stored entry
+    ;; as a total failure. Fix: use {:lifecycle-error "timeout"}.
+    ;;
+    ;; Instead of waiting for a real 15s timeout, we test the merge behavior
+    ;; directly: a result map with both :summary-id and :lifecycle-error
+    ;; must NOT contain :error.
+    (let [;; Simulate what synthesize produces when lifecycle times out
+          store-result {:summary-id "entry-timeout-001"
+                        :session "test-session"
+                        :project-id "test-project"
+                        :session-timing {:session-start nil :session-end nil :duration-minutes 0}
+                        :stats {}}
+          lifecycle-timeout {:lifecycle-error "timeout"}
+          result (merge store-result lifecycle-timeout)]
+      (is (= "entry-timeout-001" (:summary-id result))
+          "Entry stored despite lifecycle timeout")
+      (is (not (contains? result :error))
+          ":error key must never appear alongside :summary-id")
+      (is (= "timeout" (:lifecycle-error result))
+          "Lifecycle timeout uses :lifecycle-error key"))))
+
+(deftest golden-synthesize-content-with-lifecycle-timeout-no-error-key
+  (testing "Content path with lifecycle timeout has :summary-id but no :error"
+    (with-synthesis-mocks
+      {:summary {:content "## Summary" :tags ["wrap" "session-summary"]}
+       :entry-id "entry-partial-001"}
+      (let [result (synthesis/synthesize
+                    (assoc base-harvested
+                           :progress-notes [{:content "work"}]))]
+        (is (string? (:summary-id result)) "summary-id must be present")
+        (is (not (contains? result :error))
+            ":error key must never appear alongside :summary-id")))))
+
+;; =============================================================================
+;; Regression: crystallize-session-result must treat partial success as ok
+;; When synthesize returns {:summary-id X :lifecycle-error "timeout"},
+;; crystallize-session-result must return result/ok (not result/err).
+;; =============================================================================
+
+(deftest regression-crystallize-session-result-partial-success
+  (testing "crystallize-session-result treats :summary-id + :lifecycle-error as ok"
+    (require '[hive-mcp.tools.crystal] :reload)
+    (let [crystallize-session-result @(resolve 'hive-mcp.tools.crystal/crystallize-session-result)]
+      ;; Case 1: Both :summary-id and :lifecycle-error → ok (entry stored)
+      (with-redefs [hive-mcp.crystal.hooks/crystallize-session
+                    (fn [_] {:summary-id "entry-001" :session "test" :lifecycle-error "timeout"})]
+        (let [r (crystallize-session-result {} "test-project")]
+          (is (result/ok? r) "Partial success (stored + lifecycle-error) must be ok")
+          (is (= "entry-001" (:summary-id (:ok r))))))
+
+      ;; Case 2: :error WITHOUT :summary-id → err (total failure)
+      (with-redefs [hive-mcp.crystal.hooks/crystallize-session
+                    (fn [_] {:error "store failed" :session "test"})]
+        (let [r (crystallize-session-result {} "test-project")]
+          (is (not (result/ok? r)) "Total failure (:error, no :summary-id) must be err")))
+
+      ;; Case 3: :summary-id + legacy :error → ok (backward compat with old lifecycle key)
+      (with-redefs [hive-mcp.crystal.hooks/crystallize-session
+                    (fn [_] {:summary-id "entry-002" :error "lifecycle-timeout" :session "test"})]
+        (let [r (crystallize-session-result {} "test-project")]
+          (is (result/ok? r) "When :summary-id present, :error should not cause failure"))))))

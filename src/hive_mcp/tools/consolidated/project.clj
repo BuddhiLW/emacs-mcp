@@ -1,12 +1,25 @@
 (ns hive-mcp.tools.consolidated.project
-  "Consolidated Project CLI tool."
+  "Consolidated project tool — absorbs kanban, config, session, workflow.
+
+   Project's own commands stay flat (info, files, search, etc.).
+   Absorbed domains use nested prefixes: 'kanban list', 'config get', etc.
+   Addons can extend via contribute-commands! \"project\"."
   (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
+            [hive-mcp.tools.composite :as composite]
             [hive-mcp.tools.result-bridge :as rb]
             [hive-mcp.tools.projectile :as projectile-handlers]
+            [hive-mcp.tools.consolidated.kanban :as c-kanban]
+            [hive-mcp.tools.consolidated.config :as c-config]
+            [hive-mcp.tools.consolidated.session :as c-session]
+            [hive-mcp.tools.consolidated.workflow :as c-workflow]
             [hive-mcp.project.tree :as tree]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.dns.result :as result]
             [taoensso.timbre :as log]))
+
+;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
+;;
+;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; ── Pure Result-returning functions ───────────────────────────────────────────
 
@@ -47,22 +60,18 @@
 
 ;; ── Public handlers (MCP boundary) ────────────────────────────────────────────
 
-(defn handle-project-scan
-  "Scan filesystem for .hive-project.edn files and build project hierarchy."
-  [params]
+(defn handle-project-scan [params]
   (rb/result->mcp (rb/try-result :project/scan-failed #(scan* params))))
 
-(defn handle-project-tree
-  "Query the cached project tree structure from DataScript."
-  [params]
+(defn handle-project-tree [params]
   (rb/result->mcp (rb/try-result :project/tree-failed #(tree* params))))
 
-(defn handle-project-staleness
-  "Check if project tree needs re-scanning."
-  [params]
+(defn handle-project-staleness [params]
   (rb/result->mcp (rb/try-result :project/staleness-failed #(staleness* params))))
 
-(def handlers
+;; ── Core project handlers ────────────────────────────────────────────────
+
+(def project-handlers
   {:info      projectile-handlers/handle-projectile-info
    :files     projectile-handlers/handle-projectile-files
    :search    projectile-handlers/handle-projectile-search
@@ -73,8 +82,26 @@
    :tree      handle-project-tree
    :staleness handle-project-staleness})
 
+;; =============================================================================
+;; Canonical Handlers — project flat + kanban/config/session/workflow nested
+;; =============================================================================
+
+(def canonical-handlers
+  (merge project-handlers
+         {:kanban   c-kanban/handlers
+          :config   c-config/handlers
+          :session  c-session/handlers
+          :workflow c-workflow/handlers}))
+
+;; Keep backward compat alias
+(def handlers canonical-handlers)
+
 (def handle-project
-  (make-cli-handler handlers))
+  (composite/build-merged-handler "project" canonical-handlers))
+
+;; =============================================================================
+;; Tool Definition
+;; =============================================================================
 
 (def tool-def
   {:name "project"
@@ -82,20 +109,49 @@
    :description "Projectile project operations: info (project details), files (list files), search (content search), find (find by filename), recent (recently visited), list (all projects), scan (discover .hive-project.edn hierarchy), tree (query cached hierarchy), staleness (check if rescan needed). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["info" "files" "search" "find" "recent" "list" "scan" "tree" "staleness" "help"]
-                                         :description "Project operation to perform"}
+                                         :description "Project operation. Subdomains: 'kanban list', 'config get', 'session wrap', 'workflow forge strike'. Use command='help' to list all."}
+                              ;; Project params
                               "pattern" {:type "string"
-                                         :description "Glob pattern to filter files or search pattern"}
+                                         :description "Glob pattern or search pattern"}
                               "filename" {:type "string"
                                           :description "Filename to search for"}
                               "directory" {:type "string"
-                                           :description "Root directory for scan/staleness check"}
+                                           :description "Working directory for project scope"}
                               "max_depth" {:type "integer"
                                            :description "Maximum scan depth (default: 5)"}
                               "force" {:type "boolean"
                                        :description "Force rescan even if fresh"}
                               "project_id" {:type "string"
-                                            :description "Project ID to query tree for"}}
+                                            :description "Project ID to query tree for"}
+                              ;; Kanban params
+                              "title" {:type "string" :description "[kanban create] Task title"}
+                              "description" {:type "string" :description "[kanban create] Task description"}
+                              "task_id" {:type "string" :description "[kanban update] Task ID"}
+                              "new_status" {:type "string"
+                                            :enum ["todo" "inprogress" "inreview" "done"]
+                                            :description "[kanban update] Target status"}
+                              "status" {:type "string"
+                                        :enum ["todo" "inprogress" "inreview" "done"]
+                                        :description "[kanban list] Filter by status"}
+                              "include_descendants" {:type "boolean"
+                                                     :description "[kanban] Include child project tasks (HCR). Default true."}
+                              "plan_id" {:type "string" :description "[kanban plan-to-kanban] Memory plan entry ID"}
+                              "plan_path" {:type "string" :description "[kanban plan-to-kanban] File path to plan"}
+                              ;; Config params
+                              "key" {:type "string" :description "[config] Dotted key path (e.g. \"embeddings.ollama.host\")"}
+                              "value" {:description "[config set] Value to set"}
+                              ;; Session params
+                              "commit_msg" {:type "string" :description "[session complete] Git commit message"}
+                              "task_ids" {:type "array" :items {:type "string"}
+                                          :description "[session/workflow] Kanban task IDs to mark done"}
+                              "agent_id" {:type "string" :description "[session/workflow] Agent ID"}
+                              ;; Workflow params
+                              "task_filter" {:type "string" :description "[workflow forge] Title prefix filter for survey"}
+                              ;; Shared
+                              "operations" {:type "array" :items {:type "object"}
+                                            :description "Array of operations for batch commands"}
+                              "parallel" {:type "boolean"
+                                          :description "Run batch operations in parallel (default: false)"}}
                  :required ["command"]}
    :handler handle-project})
 

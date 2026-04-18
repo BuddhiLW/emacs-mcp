@@ -1,65 +1,57 @@
 (ns hive-mcp.tools.consolidated.code
-  "Consolidated code intelligence tool — merges cider, analysis, codebase-map, clojure.
+  "Consolidated code intelligence tool — core: cider + clojure (basic-tools-mcp).
 
-   Uses nested command namespacing:
+   Addons extend via contribute-commands! \"code\" at runtime.
+   hive-mcp core has ZERO knowledge of addon tool names (OCP).
+
+   Core subdomains:
      code cider eval          — REPL evaluation
      code cider doc           — docstring lookup
-     code analysis lint       — clj-kondo linting (addon-contributed)
-     code analysis outline    — namespace outline (addon-contributed)
-     code carto scan          — codebase indexing (addon-contributed)
      code clojure check       — delimiter checking
      code clojure format      — cljfmt formatting
 
-   analysis and carto commands are contributed dynamically by addons.
-   Addons can extend via contribute-commands! \"code\"."
+   Addon-contributed subdomains appear dynamically at runtime."
   (:require [hive-mcp.tools.composite :as composite]
             [hive-mcp.tools.consolidated.cider :as c-cider]
-            [hive-mcp.extensions.registry :as ext]))
+            [clojure.string :as str]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
-;; Lazy Resolution for addon-registered tools
+;; Core Subdomain Handlers (only hive-mcp-owned tools)
 ;; =============================================================================
 
 (defn- resolve-handler [sym]
   (try (requiring-resolve sym) (catch Exception _ nil)))
 
-(defn- get-addon-tool-handler
-  "Get handler from addon-registered tool by name."
-  [tool-name]
-  (when-let [tools (ext/get-registered-tools)]
-    (some (fn [t] (when (= tool-name (:name t)) (:handler t))) tools)))
+(defn- make-delegating-handler
+  "Strip subdomain prefix and delegate to inner handler."
+  [subdomain-name inner-handler-fn]
+  (fn [params]
+    (let [full-cmd (str (:command params))
+          prefix (str subdomain-name " ")
+          sub-cmd (if (str/starts-with? full-cmd prefix)
+                    (subs full-cmd (count prefix))
+                    full-cmd)]
+      (inner-handler-fn (assoc params :command sub-cmd)))))
 
-;; Clojure tool handler (basic-tools-mcp)
+;; Clojure tool handler (basic-tools-mcp — AGPL, hive-mcp dep)
 (defn- handle-clojure [params]
   (if-let [h (resolve-handler 'basic-tools-mcp.tools/handle-clojure)]
     (h params)
     {:content [{:type "text" :text "clojure handler not available"}] :isError true}))
 
-;; Codebase-map handler (addon-registered, resolved at call time)
-(defn- handle-carto [params]
-  (if-let [h (get-addon-tool-handler "codebase-map")]
-    (h params)
-    {:content [{:type "text" :text "codebase-map handler not available (addon not loaded)"}] :isError true}))
-
-;; Analysis handler (composite, built from addon contributions)
-(defn- handle-analysis [params]
-  (let [handler (composite/build-composite-handler "analysis")]
-    (handler params)))
-
 ;; =============================================================================
-;; Canonical Handlers — nested by subdomain
+;; Canonical Handlers — only core-owned subdomains
+;; Addon subdomains injected via contribute-commands! "code" (OCP)
 ;; =============================================================================
 
 (def canonical-handlers
-  "Nested handler tree. Dispatch via 'cider eval', 'analysis lint', etc."
+  "Core handler tree. Addons extend at runtime via contribute-commands! \"code\"."
   {:cider    c-cider/handlers
-   :analysis {:_handler handle-analysis}
-   :carto    {:_handler handle-carto}
-   :clojure  {:_handler handle-clojure}})
+   :clojure  {:_handler (make-delegating-handler "clojure" handle-clojure)}})
 
 (def handlers canonical-handlers)
 
@@ -70,10 +62,10 @@
 (def tool-def
   {:name "code"
    :consolidated true
-   :description "Code analysis: analyze, audit, bridge-status, callers, calls, codebase-map, compare, cursor-info, definition, definitions, extract, file, find_var, graph, hotspots, hover, impact, lint, live-references, navigate, ns-graph, outline, references, resolve, scc, search, search-forms, semantic-glob, server-info, smart-read, status, structural-grep, symbols, sync, unused_vars, workspaces. Use command='help' to list all."
+   :description "Code intelligence: cider (REPL eval/doc/info/complete), clojure (check/repair/format/eval/wrap). Addons extend dynamically. Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command"   {:type "string"
-                                           :description "Code operation. Prefix with subdomain: 'cider eval', 'analysis lint', 'carto scan', 'clojure check'. Use command='help' to list all."}
+                                           :description "Code operation. Core: 'cider eval', 'clojure check'. Addon subdomains appear dynamically. Use command='help' to list all."}
                               ;; Cider params
                               "code"      {:type "string"
                                            :description "Clojure code to evaluate"}
@@ -101,7 +93,14 @@
                               "repl_type" {:type "string"
                                            :enum ["clj" "cljs" "cljel"]
                                            :description "REPL type: clj (default), cljs, or cljel"}
-                              ;; Analysis/carto params
+                              ;; Clojure params
+                              "file_path" {:type "string"
+                                           :description "Path to Clojure file"}
+                              "line"      {:type "integer"
+                                           :description "1-based line number (for wrap)"}
+                              "template"  {:type "string"
+                                           :description "Wrap template with %s placeholder"}
+                              ;; Generic params (used by addon-contributed commands)
                               "file"      {:type "string"
                                            :description "File path"}
                               "path"      {:type "string"
@@ -115,14 +114,7 @@
                               "depth"     {:type "integer"
                                            :description "Traversal depth (default: 2)"}
                               "limit"     {:type "integer"
-                                           :description "Max results"}
-                              ;; Clojure params
-                              "file_path" {:type "string"
-                                           :description "Path to Clojure file"}
-                              "line"      {:type "integer"
-                                           :description "1-based line number (for wrap)"}
-                              "template"  {:type "string"
-                                           :description "Wrap template with %s placeholder"}}
+                                           :description "Max results"}}
                  :required ["command"]}
    :handler (composite/build-merged-handler "code" canonical-handlers)})
 

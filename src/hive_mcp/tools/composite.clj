@@ -3,10 +3,8 @@
 
    Supports two modes:
    1. Pure composite (addon-only): tool has no core handlers, all commands from addons.
-      Example: 'analysis' — all commands contributed by hive-knowledge addon.
    2. Merged composite (core + addon): tool has canonical core handlers that addons
       can extend or override.
-      Example: 'code' — core has eval/lint, addon adds smart-read/audit.
 
    Addon handlers override core handlers with the same name (addon wins).
    Re-resolves contributions on each call for hot-reload support."

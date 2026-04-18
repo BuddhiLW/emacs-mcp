@@ -263,8 +263,7 @@
 ;;; Reload-safe: see note on IMemoryStore above.
 ;;;
 ;;; Batch fetch — single round-trip to the backend for multiple IDs. Introduced
-;;; to collapse N per-item RPCs (e.g. catchup enrichment in
-;;; hive-knowledge.catchup.insights/resolve-ids-to-previews) into one call.
+;;; to collapse N per-item RPCs (e.g. catchup enrichment) into one call.
 ;;; Callers should prefer vectordb.facade/get-entries-by-ids which falls back
 ;;; to per-item get-entry for stores that don't implement this.
 

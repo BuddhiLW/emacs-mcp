@@ -6,9 +6,8 @@
 
    Cartography snippets (type=snippet, tags contain 'carto') live on a
    dedicated backend (typically qdrant via hive-qdrant addon) so they do not
-   pollute the general memory store. External callers in hive-knowledge
-   (cartography/scan, carto_editing/*) should requiring-resolve symbols from
-   this namespace instead of the general facade.
+   pollute the general memory store. Addon callers should requiring-resolve
+   symbols from this namespace instead of the general facade.
 
    Function signatures match vectordb.facade so the swap is zero-change for
    callers."
