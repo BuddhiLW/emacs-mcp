@@ -169,13 +169,18 @@
 ;; =============================================================================
 
 (deftest golden-synthesize-no-content
-  (testing "synthesize with no content returns skipped result with lifecycle stats"
+  (testing "synthesize with no synthesized summary still persists a minimal breadcrumb"
+    ;; Contract change (bugfix): every wrap MUST leave a memory-store trace.
+    ;; Quiet sessions now fall back to minimal-wrap-summary instead of skipping.
     (with-synthesis-mocks
-      {:summary nil}
+      {:summary nil
+       :entry-id "entry-minimal-001"}
       (let [result (synthesis/synthesize base-harvested)]
-        ;; Structure
-        (is (true? (:skipped result)) "should be marked skipped")
-        (is (= "no-content" (:reason result)))
+        ;; Structure: content-path shape even when no synthesized summary
+        (is (= "entry-minimal-001" (:summary-id result))
+            "Quiet sessions still persist and return a :summary-id")
+        (is (not (contains? result :skipped))
+            "No silent skip — every wrap persists")
         (is (= "test-session-synth" (:session result)))
         (is (= "synth-project" (:project-id result)))
         (is (map? (:session-timing result)))
@@ -236,16 +241,17 @@
 
 (deftest golden-synthesize-shape-contract
   (testing "Both paths produce key sets compatible with crystallize-session golden"
-    ;; No-content path keys
+    ;; Minimal-breadcrumb path keys (was: no-content skip path)
     (with-synthesis-mocks
-      {:summary nil}
+      {:summary nil
+       :entry-id "entry-minimal-001"}
       (let [result (synthesis/synthesize base-harvested)
-            expected-keys #{:skipped :reason :session :project-id
+            expected-keys #{:summary-id :session :project-id
                             :session-timing :stats
                             :promotion-stats :decay-stats :xpoll-stats
                             :memory-decay-stats :file-provenance-stats}]
         (is (= expected-keys (set (keys result)))
-            "No-content path key set must match contract")))
+            "Quiet-session path key set must match contract (persists, no :skipped)")))
 
     ;; Content path keys
     (with-synthesis-mocks
@@ -446,6 +452,68 @@
 ;; When synthesize returns {:summary-id X :lifecycle-error "timeout"},
 ;; crystallize-session-result must return result/ok (not result/err).
 ;; =============================================================================
+
+;; =============================================================================
+;; RED: wrap must always persist a session memory, even on no-content path
+;; Bug: `synthesize` short-circuits on `(nil? summary)` and returns
+;; {:skipped true :reason "no-content"} WITHOUT calling facade/index-memory-entry!
+;; — so `workflow wrap` silently produces zero persisted memories for sessions
+;; whose harvest yields no progress-notes, no commits, no KG edges, no kanban
+;; movements, and no memory activity.
+;;
+;; Contract under test: every wrap should leave a trace in the memory store,
+;; at minimum a "session-wrap" note carrying session-timing + stats so that
+;; /workflow catchup has a breadcrumb to follow.
+;; =============================================================================
+
+(deftest red-wrap-always-persists-session-memory
+  (testing "synthesize must call facade/index-memory-entry! even with empty harvest"
+    (let [calls (atom [])]
+      (ext/register! :ch/a (fn [_] {:promoted 0 :skipped 0 :below 0 :evaluated 0}))
+      (ext/register! :ch/b (fn [_] {:decayed 0 :pruned 0 :fresh 0 :evaluated 0}))
+      (ext/register! :ch/c (fn [_] {:promoted 0 :candidates 0 :total-scanned 0}))
+      (ext/register! :ch/d (fn [_] {:decayed 0 :expired 0 :total-scanned 0}))
+      (ext/register! :ch/e (fn [_] {:files-captured 0}))
+      (try
+        (with-redefs
+          [crystal/summarize-session-progress (fn [& _] nil)
+           crystal/summarize-memory-activity  (fn [& _] nil)
+           crystal/session-id                 (fn [] "test-session-red")
+           crystal/session-timing-metadata    (fn [_ _]
+                                                {:session-start "2026-04-18T10:00:00Z"
+                                                 :session-end   "2026-04-18T12:00:00Z"
+                                                 :duration-minutes 120})
+           scope/get-current-project-id       (fn [_] "red-project")
+           scope/inject-project-scope         (fn [tags _] tags)
+           dur/calculate-expires              (fn [_] "2026-06-18T00:00:00Z")
+           ctx/current-directory              (fn [] "/tmp/red-test")
+           facade/index-memory-entry!         (fn [entry]
+                                                (swap! calls conj entry)
+                                                "entry-red-001")
+           facade/content-hash                (fn [c] (str (hash c)))]
+          (let [result (synthesis/synthesize base-harvested)]
+            ;; The core contract: a memory entry MUST be persisted.
+            (is (pos? (count @calls))
+                "facade/index-memory-entry! must be called at least once")
+            ;; It must carry the session-wrap tag so catchup can find it.
+            (when (pos? (count @calls))
+              (let [entry (first @calls)
+                    tags  (set (:tags entry))]
+                (is (contains? tags "session-wrap")
+                    "persisted entry must be tagged session-wrap")
+                (is (string? (:content entry))
+                    "persisted entry must have string content")
+                (is (not (clojure.string/blank? (:content entry)))
+                    "persisted entry content must not be blank")))
+            ;; Result must carry a :summary-id pointing at the persisted entry.
+            (is (string? (:summary-id result))
+                "synthesize result must include :summary-id, not silently skip")))
+        (finally
+          (ext/deregister! :ch/a)
+          (ext/deregister! :ch/b)
+          (ext/deregister! :ch/c)
+          (ext/deregister! :ch/d)
+          (ext/deregister! :ch/e))))))
 
 (deftest regression-crystallize-session-result-partial-success
   (testing "crystallize-session-result treats :summary-id + :lifecycle-error as ok"

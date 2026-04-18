@@ -72,6 +72,26 @@
   (let [base-tags (into (or (:tags summary) []) ["auto-kg" "session-wrap" "temporal"])]
     (scope/inject-project-scope base-tags project-id)))
 
+(defn minimal-wrap-summary
+  "Build a minimal session-wrap summary when no progress/activity was harvested.
+   Guarantees every wrap leaves a breadcrumb in the memory store so catchup can
+   reconstruct session boundaries even for quiet sessions (read-only browsing,
+   pure Q&A, etc.).
+   Pure function — no IO."
+  [session-id harvested]
+  (let [stats (or (:summary harvested) {})]
+    {:type :note
+     :content (str "## Session Summary: " session-id "\n\n"
+                   "### Activity\n"
+                   "- Progress notes: " (or (:progress-count stats) 0) "\n"
+                   "- Completed tasks: " (or (:task-count stats) 0) "\n"
+                   "- Commits: " (or (:commit-count stats) 0) "\n"
+                   "- Memories created: " (or (:created-count stats) 0) "\n"
+                   "- Memories accessed: " (or (:accessed-count stats) 0) "\n"
+                   "\n(Quiet session — no synthesized progress; breadcrumb persisted for catchup.)")
+     :tags ["session-summary" "wrap-generated" "wrap-minimal"]
+     :duration :short}))
+
 ;; =============================================================================
 ;; Extension Delegation Helpers
 ;; =============================================================================
@@ -166,29 +186,22 @@
   (let [project-id (or (when directory (scope/get-current-project-id directory)) "global")
         session-timing (or (:session-timing harvested)
                            (crystal/session-timing-metadata nil (java.time.Instant/now)))
-        summary (or (crystal/summarize-session-progress
-                     (concat progress-notes completed-tasks)
-                     git-commits
-                     harvested)
-                    (crystal/summarize-memory-activity
-                     {:created  (count (or (:memory-ids-created harvested) []))
-                      :accessed (count (or (:memory-ids-accessed harvested) []))}
-                     harvested))]
-    (if (nil? summary)
-      ;; No content — still run lifecycle ops for maintenance
-      (let [lifecycle (run-lifecycle-ops! project-id directory :harvested harvested)]
-        (log/info "No content to synthesize for session:" (crystal/session-id))
-        (merge {:skipped true
-                :reason "no-content"
-                :session (crystal/session-id)
-                :project-id project-id
-                :session-timing session-timing
-                :stats (:summary harvested)}
-               lifecycle))
-      ;; Content exists — start lifecycle IN PARALLEL with memory store indexing
-      ;; (lifecycle ops don't depend on the memory store entry-id)
-      (let [content (build-summary-content summary session-timing harvested)
-            tags (build-summary-tags summary project-id)
+        content-summary (or (crystal/summarize-session-progress
+                             (concat progress-notes completed-tasks)
+                             git-commits
+                             harvested)
+                            (crystal/summarize-memory-activity
+                             {:created  (count (or (:memory-ids-created harvested) []))
+                              :accessed (count (or (:memory-ids-accessed harvested) []))}
+                             harvested))
+        ;; Every wrap MUST leave a breadcrumb: fall back to a minimal
+        ;; session-wrap note when no content was synthesized.
+        minimal? (nil? content-summary)
+        summary (or content-summary
+                    (minimal-wrap-summary (crystal/session-id) harvested))]
+    (let [content (build-summary-content summary session-timing harvested)
+            tags (cond-> (build-summary-tags summary project-id)
+                   minimal? (conj "wrap-minimal"))
             expires (dur/calculate-expires "short")
             ;; Start lifecycle ops on solo executor (avoids IO pool nesting —
             ;; run-lifecycle-ops! internally submits 5 ops to IO pool via pool/with-io)
@@ -218,7 +231,7 @@
                     :stats (:summary harvested)}
                    lifecycle))
           {:error (:message store-r)
-           :session (crystal/session-id)})))))
+           :session (crystal/session-id)}))))
 
 (comment
   ;; Example: synthesize with minimal harvested data
