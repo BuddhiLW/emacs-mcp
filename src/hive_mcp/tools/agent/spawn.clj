@@ -140,16 +140,25 @@
                                                          :parent-id parent
                                                          :project-id effective-project-id})]
                 (proto/spawn! drone-agent {:files files})
-                (log/info "Spawned drone" {:id agent-id :cwd cwd
-                                            :provider effective-provider
-                                            :model effective-model})
-                (mcp-json {:success true
+                ;; Auto-dispatch when task provided (matches ling spawn behavior)
+                (let [task-id (when task
+                                (let [delegate-fn @(requiring-resolve 'hive-mcp.agent.core/delegate-agentic-drone!)]
+                                  (proto/dispatch! drone-agent {:task task
+                                                                :files files
+                                                                :delegate-fn delegate-fn})))]
+                  (log/info "Spawned drone" {:id agent-id :cwd cwd
+                                              :provider effective-provider
+                                              :model effective-model
+                                              :auto-dispatched? (some? task-id)})
+                  (cond-> {:success true
                            :agent-id agent-id
                            :type :drone
                            :provider effective-provider
                            :model effective-model
                            :cwd cwd
-                           :files files}))))
+                           :files files}
+                    task-id (assoc :task-id task-id)
+                    :always mcp-json)))))
           (catch Exception e
             (log/error "Failed to spawn agent" {:type agent-type :error (ex-message e)})
             (mcp-error (str "Failed to spawn " (clojure.core/name agent-type) ": " (ex-message e)))))))))

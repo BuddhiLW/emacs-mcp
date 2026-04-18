@@ -46,12 +46,15 @@
            nil))))
 
 (defn- resolve-child-project-ids
-  "Resolve project-ids of cross-project descendants for piggyback inclusion."
+  "Resolve descendant project-ids using the project hierarchy tree
+   (.hive-project.edn), NOT the Datascript slave registry. Tree-based
+   resolution survives ling cleanup — shouts from terminated child-project
+   lings remain visible to the parent coordinator."
   [project-id]
   (when project-id
-    (rescue nil (when-let [query-fn (requiring-resolve 'hive-mcp.swarm.datascript.queries/get-child-project-ids)]
-        (let [child-pids (query-fn project-id)]
-          (when (seq child-pids) child-pids))))))
+    (rescue nil (when-let [desc-fn (requiring-resolve 'hive-mcp.knowledge-graph.scope/descendant-scopes)]
+        (let [child-pids (desc-fn project-id)]
+          (when (seq child-pids) (set child-pids)))))))
 
 (defn- drain-hivemind-piggyback
   "Drain hivemind messages for an agent+project. Returns formatted messages or nil.

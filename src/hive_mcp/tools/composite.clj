@@ -1,10 +1,15 @@
 (ns hive-mcp.tools.composite
   "Build consolidated MCP tools dynamically from addon command contributions.
 
-   Produces tool definitions identical in shape to other consolidated tools
-   (:name, :consolidated, :description, :inputSchema, :handler).
+   Supports two modes:
+   1. Pure composite (addon-only): tool has no core handlers, all commands from addons.
+      Example: 'analysis' — all commands contributed by hive-knowledge addon.
+   2. Merged composite (core + addon): tool has canonical core handlers that addons
+      can extend or override.
+      Example: 'code' — core has eval/lint, addon adds smart-read/audit.
 
-   New addons auto-extend the composite command tree without touching hive-mcp core."
+   Addon handlers override core handlers with the same name (addon wins).
+   Re-resolves contributions on each call for hot-reload support."
   (:require [hive-mcp.extensions.registry :as ext]
             [hive-mcp.tools.cli :as cli]
             [clojure.string :as str]))
@@ -14,27 +19,58 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
+;; Addon Contribution → Handler Map
+;; =============================================================================
+
+(defn- addon-commands->handlers
+  "Convert addon command contributions to keyword->fn handler map.
+   Supports both flat handlers and nested handler trees."
+  [tool-name]
+  (when-let [commands (ext/get-contributed-commands tool-name)]
+    (into {} (map (fn [[cmd {:keys [handler]}]]
+                    [(keyword cmd) handler])
+                  commands))))
+
+;; =============================================================================
 ;; Composite Handler Builder
 ;; =============================================================================
 
 (defn build-composite-handler
-  "Build a handler fn that dispatches to contributed addon handlers.
-   Re-resolves contributions on each call so hot-reload picks up changes."
+  "Build a handler fn that dispatches to contributed addon handlers only.
+   Re-resolves contributions on each call so hot-reload picks up changes.
+   Use build-merged-handler when core handlers exist."
   [tool-name]
   (fn [params]
-    (let [commands (ext/get-contributed-commands tool-name)
-          handlers (into {} (map (fn [[cmd {:keys [handler]}]]
-                                   [(keyword cmd) handler])
-                                 commands))
+    (let [handlers (or (addon-commands->handlers tool-name) {})
           cli-fn (cli/make-cli-handler handlers)]
       (cli-fn params))))
+
+(defn build-merged-handler
+  "Build a handler fn that merges core handlers with addon contributions.
+   Addon handlers override core handlers with the same name (addon wins).
+   Re-resolves addon contributions on each call for hot-reload.
+
+   canonical-handlers: keyword->fn map (or nested tree) from consolidated tool.
+   tool-name: string name used for addon contribution lookup.
+
+   Optional coerce-schema: passed through to cli/make-cli-handler."
+  ([tool-name canonical-handlers]
+   (build-merged-handler tool-name canonical-handlers nil))
+  ([tool-name canonical-handlers coerce-schema]
+   (fn [params]
+     (let [addon-cmds (addon-commands->handlers tool-name)
+           merged (if addon-cmds
+                    (merge canonical-handlers addon-cmds)
+                    canonical-handlers)
+           cli-fn (cli/make-cli-handler merged coerce-schema)]
+       (cli-fn params)))))
 
 ;; =============================================================================
 ;; Composite Tool Definition Builder
 ;; =============================================================================
 
 (defn build-composite-tool
-  "Build a consolidated tool definition from addon contributions.
+  "Build a consolidated tool definition from addon contributions only.
    description-prefix: e.g. \"Code analysis\"
    Returns tool-def map identical in shape to other consolidated tools."
   [tool-name description-prefix]
@@ -57,6 +93,33 @@
                    :required ["command"]}
      :handler handler}))
 
+(defn build-merged-tool
+  "Build a consolidated tool definition from core handlers + addon contributions.
+   core-tool-def: existing tool definition map with :handler, :inputSchema, etc.
+   Returns updated tool-def with addon commands merged into command enum and handler.
+
+   The tool-def's :handler is replaced with a merged handler that dispatches to
+   both core and addon commands. The :inputSchema command enum is extended with
+   addon command names."
+  [core-tool-def]
+  (let [tool-name (:name core-tool-def)
+        addon-cmds (ext/get-contributed-commands tool-name)
+        addon-cmd-names (vec (sort (keys (or addon-cmds {}))))
+        addon-params (apply merge-with merge (map :params (vals (or addon-cmds {}))))
+        ;; Extract core handlers from the tool's canonical-handlers if available
+        ;; Otherwise the core handler is already embedded in the tool-def
+        core-enum (get-in core-tool-def [:inputSchema :properties "command" :enum] [])]
+    (if (empty? addon-cmds)
+      core-tool-def
+      (-> core-tool-def
+          ;; Extend command enum with addon commands
+          (assoc-in [:inputSchema :properties "command" :enum]
+                    (vec (sort (distinct (concat core-enum addon-cmd-names)))))
+          ;; Merge addon params into schema
+          (update-in [:inputSchema :properties] merge addon-params)
+          ;; Mark as composite
+          (assoc :composite true)))))
+
 ;; =============================================================================
 ;; Handler Map for Registry Introspection
 ;; =============================================================================
@@ -70,6 +133,15 @@
           (map (fn [[cmd {:keys [handler]}]]
                  [(keyword cmd) handler])
                commands))))
+
+(defn build-merged-handlers
+  "Build handler map merging core + addon for registry introspection.
+   canonical-handlers: keyword->fn map from consolidated tool."
+  [tool-name canonical-handlers]
+  (let [addon-cmds (addon-commands->handlers tool-name)]
+    (if addon-cmds
+      (merge canonical-handlers addon-cmds)
+      canonical-handlers)))
 
 ;; =============================================================================
 ;; Batch Builder

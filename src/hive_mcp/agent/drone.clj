@@ -140,13 +140,12 @@
           effective-parent (or (:parent-id opts) parent-id
                                (System/getenv "CLAUDE_SWARM_SLAVE_ID"))]
 
-      (let [tx-result (ds/add-slave! id {:slave/status :spawning
-                                         :slave/name "drone"
-                                         :slave/agent-type :drone
-                                         :slave/depth 2
-                                         :slave/parent effective-parent
-                                         :slave/cwd cwd
-                                         :slave/project-id project-id})]
+      (let [tx-result (ds/add-slave! id {:status :spawning
+                                         :name "drone"
+                                         :depth 2
+                                         :parent effective-parent
+                                         :cwd cwd
+                                         :project-id project-id})]
         (when-not (and tx-result (seq (:tx-data tx-result)))
           (log/error {:event :drone/spawn-failed
                       :drone-id id
@@ -174,7 +173,7 @@
                                     :files (or files [])
                                     :task-type task-type}])
 
-      (log/info "Drone spawned" {:id id :task-type task-type :files (count (or files 0))})
+      (log/info "Drone spawned" {:id id :task-type task-type :files (count (or files []))})
       id))
 
   (dispatch! [_this task-opts]

@@ -164,12 +164,13 @@
    Returns immediately after kicking off harvest+crystallize in background.
    Completion notified via hivemind shout (:crystal/wrap-notify)."
   [{:keys [agent_id directory]}]
-  (log/info "session-wrap: START (async)" {:agent agent_id :directory directory})
-  (wrap-async! agent_id directory)
+  (let [directory (or directory (ctx/current-directory))]
+    (log/info "session-wrap: START (async)" {:agent agent_id :directory directory})
+    (wrap-async! agent_id directory)
   (mcp-json {:status "wrap-started"
              :agent-id (or agent_id (ctx/current-agent-id) "coordinator")
              :directory directory
-             :message "Crystallization running in background. Completion notified via hivemind."}))
+             :message "Crystallization running in background. Completion notified via hivemind."})))
 
 (defn handle-catchup
   "Restore session context from Chroma memory.

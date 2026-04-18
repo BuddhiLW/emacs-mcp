@@ -144,11 +144,16 @@
    :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}
                 cider/cider-nrepl {:mvn/version "0.58.0"}}
    ;; Heap cap, G1GC tuning, string dedup for prompt/response data,
-   ;; bounded core.async pool, Netty access
+   ;; bounded core.async pool, Netty access, aggressive GC return-to-OS
    :jvm-opts ["-Xmx4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
+              "-XX:G1PeriodicGCInterval=60000"
+              "-XX:+G1PeriodicGCInvokesConcurrent"
+              "-XX:MinHeapFreeRatio=20"
+              "-XX:MaxHeapFreeRatio=40"
+              "-XX:G1HeapRegionSize=4m"
               "-Dclojure.core.async.pool-size=8"
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
@@ -160,11 +165,16 @@
                 cider/cider-nrepl {:mvn/version "0.58.0"}
                 refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
-   ;; Netty access, Proximum HNSW SIMD
+   ;; Netty access, Proximum HNSW SIMD, aggressive GC return-to-OS
    :jvm-opts ["-Xmx4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
+              "-XX:G1PeriodicGCInterval=60000"
+              "-XX:+G1PeriodicGCInvokesConcurrent"
+              "-XX:MinHeapFreeRatio=20"
+              "-XX:MaxHeapFreeRatio=40"
+              "-XX:G1HeapRegionSize=4m"
               "-Dclojure.core.async.pool-size=8"
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
@@ -177,11 +187,16 @@
                 cider/cider-nrepl {:mvn/version "0.58.0"}
                 refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
-   ;; Netty access, Proximum HNSW SIMD
+   ;; Netty access, Proximum HNSW SIMD, aggressive GC return-to-OS
    :jvm-opts ["-Xmx4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
+              "-XX:G1PeriodicGCInterval=60000"
+              "-XX:+G1PeriodicGCInvokesConcurrent"
+              "-XX:MinHeapFreeRatio=20"
+              "-XX:MaxHeapFreeRatio=40"
+              "-XX:G1HeapRegionSize=4m"
               "-Dclojure.core.async.pool-size=8"
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"

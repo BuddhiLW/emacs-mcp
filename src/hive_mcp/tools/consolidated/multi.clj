@@ -25,6 +25,7 @@
             [hive-mcp.tools.consolidated.migration :as c-migration]
             [hive-mcp.tools.consolidated.config :as c-config]
             [hive-mcp.tools.consolidated.workflow :as c-workflow]
+            [hive-mcp.tools.consolidated.transcript :as c-transcript]
             [hive-mcp.tools.result-bridge :as rb]
             [hive-mcp.tools.core :refer [mcp-error]]
             [hive-mcp.dns.result :refer [rescue]]
@@ -51,8 +52,9 @@
    :emacs     c-emacs/handle-emacs
    :wave      c-wave/handle-wave
    :migration c-migration/handle-migration
-   :config    c-config/handle-config
-   :workflow  c-workflow/handle-workflow})
+   :config     c-config/handle-config
+   :workflow   c-workflow/handle-workflow
+   :transcript c-transcript/handle-transcript})
 
 (def ^:private tool-names
   (sort (map name (keys tool-handlers))))

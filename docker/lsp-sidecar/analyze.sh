@@ -23,9 +23,21 @@ analyze_project() {
     # kondo cache dir to prevent sync_cache errors on read-only mounts.
     local kondo_cache="$CACHE_DIR/kondo-cache/$project_id"
     mkdir -p "$kondo_cache"
+
+    # Build --settings: if project has .lsp/config.edn, clojure-lsp reads it.
+    # Otherwise, force plain classpath (no aliases) to avoid transitive dep
+    # failures from :test/:dev aliases. clojure-lsp auto-discovers aliases
+    # from deps.edn and tries -A:test:dev by default — this breaks projects
+    # with unresolvable transitive deps in test/dev profiles.
+    local settings='{}'
+    if [ ! -f "$project_root/.lsp/config.edn" ]; then
+        settings='{:project-specs [{:project-path "deps.edn" :classpath-cmd ["clojure" "-Spath"]}]}'
+    fi
+
     if java $JAVA_OPTS -jar "$LSP_JAR" dump --project-root "$project_root" \
         --output '{:format :edn :filter-keys [:analysis :dep-graph]}' \
         --analysis '{:type :project-only}' \
+        --settings "$settings" \
         2>"$cache_path/dump.log" \
         | grep -v 'Read-only file system' \
         > "$cache_path/dump.edn.tmp"; then

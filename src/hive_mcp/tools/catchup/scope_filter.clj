@@ -55,8 +55,8 @@
           entries))
 
 (defn scope-pierce-entries
-  "Extract axioms and catchup-priority entries that pierce scope boundaries.
-   Returns nil when caller is at global scope (no piercing needed)."
+  "Extract axioms, catchup-priority, and session-summary entries that pierce
+   scope boundaries. Returns nil when caller is at global scope (no piercing needed)."
   [entries project-id]
   (let [in-project? (and project-id (not= project-id "global"))]
     (when in-project?
@@ -64,7 +64,8 @@
                 (let [entry-tags (set (or (:tags entry) []))
                       entry-type (str (or (:type entry) ""))]
                   (or (= entry-type "axiom")
-                      (contains? entry-tags "catchup-priority"))))
+                      (contains? entry-tags "catchup-priority")
+                      (contains? entry-tags "session-summary"))))
               entries))))
 
 (defn entry-expiring-soon?

@@ -183,16 +183,21 @@
 ;; Piggyback Draining
 ;; =============================================================================
 
-(defn- resolve-child-project-ids [project-id]
+(defn- resolve-child-project-ids
+  "Resolve descendant project-ids using the project hierarchy tree
+   (.hive-project.edn), NOT the Datascript slave registry. Tree-based
+   resolution survives ling cleanup — shouts from terminated child-project
+   lings remain visible to the parent coordinator."
+  [project-id]
   (when project-id
     (try
-      (when-let [query-fn (requiring-resolve 'hive-mcp.swarm.datascript.queries/get-child-project-ids)]
-        (let [child-pids (query-fn project-id)]
+      (when-let [desc-fn (requiring-resolve 'hive-mcp.knowledge-graph.scope/descendant-scopes)]
+        (let [child-pids (desc-fn project-id)]
           (when (seq child-pids)
-            (log/debug "Piggyback: including child project-ids for" project-id ":" child-pids)
-            child-pids)))
+            (log/debug "Piggyback: including descendant project-ids for" project-id ":" child-pids)
+            (set child-pids))))
       (catch Exception e
-        (log/debug "Piggyback: child project-id resolution failed (non-fatal):" (.getMessage e))
+        (log/debug "Piggyback: descendant project-id resolution failed (non-fatal):" (.getMessage e))
         nil))))
 
 (defn- get-piggyback-messages [agent-id project-id]

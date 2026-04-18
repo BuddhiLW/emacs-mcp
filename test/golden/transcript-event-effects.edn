@@ -1,0 +1,23 @@
+{:session-started
+ {:transcript-ensure-store!
+  {:agent-id "golden-1",
+   :model "test-model",
+   :task "golden task",
+   :backend :datahike},
+  :log
+  {:level :info,
+   :message
+   "[transcript] Session started for golden-1 (model=test-model)"}},
+ :session-ended
+ {:transcript-close! {:agent-id "golden-1"},
+  :log
+  {:level :info,
+   :message
+   "[transcript] Session ended for golden-1 (10 turns, :outcome/completed)"}},
+ :entry-no-store
+ {:transcript-ensure-store!
+  {:agent-id "golden-no-store", :backend :datahike},
+  :log
+  {:level :info,
+   :message
+   "[transcript] Lazy-creating Datahike store for golden-no-store"}}}
