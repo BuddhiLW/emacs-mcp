@@ -130,6 +130,10 @@
         ;; Stub store until backend impl lands (task 486248c0).
         io.github.hive-agi/hive-proximum {:git/tag "v0.1.1" :git/sha "7103bdd"}
 
+        ;; hive-ttracking — telemetry/timing (timed-query, track*, bench*).
+        ;; Consumed by catchup.clj and siblings (bundle/hydration/hierarchy).
+        io.github.hive-agi/hive-ttracking {:git/tag "v0.1.2" :git/sha "9ede26f"}
+
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
         integrant/integrant {:mvn/version "1.0.1"}
