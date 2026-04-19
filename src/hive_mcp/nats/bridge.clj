@@ -179,6 +179,74 @@
       (log/debug "[Bridge] Callback fire failed for" task-id (.getMessage e)))))
 
 ;; =============================================================================
+;; Error summarization — cap drone error payloads before shouting
+;; =============================================================================
+
+(def ^:private ^:const max-summary-len 300)
+
+(defn- truncate-str
+  "Truncate s to max-summary-len, appending ellipsis if trimmed."
+  [s]
+  (let [s (str s)]
+    (if (<= (count s) max-summary-len)
+      s
+      (str (subs s 0 max-summary-len) "…"))))
+
+(defn- summarize-drone-error
+  "Summarize a drone error payload for shouting — never emit >~300 chars.
+
+   Rules:
+   - string       → first 300 chars + '…' (if longer)
+   - ex-info/Throwable → type + ex-message (truncated)
+   - map          → prefer (:error/type), (:message), (ex-message); drop rest
+   - collection > 5 items → '<N items, first: <truncated>>'
+   - fallback     → truncated (pr-str x)
+
+   Guards against drones echoing whole JSON arrays (e.g. kanban-list response)
+   as their error — that floods piggyback blocks and wastes coordinator context."
+  [error]
+  (cond
+    (nil? error)
+    "unknown error"
+
+    (string? error)
+    (truncate-str error)
+
+    (instance? Throwable error)
+    (let [msg (ex-message error)
+          data (ex-data error)
+          etype (some-> data :error/type)]
+      (truncate-str
+       (cond
+         (and etype msg) (str etype " " msg)
+         etype (str etype)
+         msg msg
+         :else (.getName (class error)))))
+
+    (map? error)
+    (let [etype (:error/type error)
+          msg (or (:message error) (:error/message error))
+          exm (ex-message error)
+          picked (cond
+                   (and etype msg) (str etype " " msg)
+                   etype (str etype)
+                   msg msg
+                   exm exm
+                   :else (pr-str (select-keys error [:error/type :message
+                                                     :error/message :type])))]
+      (truncate-str picked))
+
+    (and (coll? error) (not (map? error)))
+    (let [n (count error)]
+      (if (> n 5)
+        (truncate-str
+         (str "<" n " items, first: " (pr-str (first error)) ">"))
+        (truncate-str (pr-str error))))
+
+    :else
+    (truncate-str (pr-str error))))
+
+;; =============================================================================
 ;; Hivemind Auto-Shout (drone visibility via piggyback)
 ;; =============================================================================
 
@@ -234,7 +302,7 @@
     (fire-callback-if-registered! task-id event-data)
     (auto-shout-drone-event!
      task-id :error
-     (str "Drone " task-id " failed: " (or error "unknown error")))))
+     (str "Drone " task-id " failed: " (summarize-drone-error error)))))
 
 ;; =============================================================================
 ;; Subscriber Side — Hivemind Shout Fanout (M1, protocol-mediated)
