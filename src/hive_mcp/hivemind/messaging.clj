@@ -46,6 +46,30 @@
   [event-type]
   (event-registry/slave-status event-type))
 
+(def ^:const ^:private shout-message-cap
+  "Hard ceiling on the :message and :task strings carried in a shout.
+   Bounded to keep one bad shout from flooding every consumer's context window
+   (per-agent ring × backbone fanout × N subscribers). Sources that need more
+   should write to memory and reference the entry-id in the shout."
+  800)
+
+(def ^:const ^:private shout-message-head
+  "Head bytes preserved when a shout payload exceeds shout-message-cap."
+  600)
+
+(defn- truncate-shout-string
+  "Cap any shout payload at shout-message-cap. Keeps the head, appends a marker
+   noting how many chars were dropped. nil → nil. Non-strings are pr-str'd
+   first so accidental coll/map :message values are still bounded."
+  [v]
+  (when (some? v)
+    (let [s (if (string? v) v (pr-str v))]
+      (if (<= (count s) shout-message-cap)
+        s
+        (let [dropped (- (count s) shout-message-head)]
+          (str (subs s 0 shout-message-head)
+               " … [truncated, dropped " dropped " chars]"))))))
+
 (defn- publish-shout-to-backbone!
   "Publish shout via IEventBackbone. Subscribers handle fanout.
    Uses requiring-resolve for bridge to avoid circular dep."
@@ -88,13 +112,17 @@
                        (:project-id vessel-ctx)
                        (when directory (mem-scope/get-current-project-id directory))
                        "global")
+        ;; Cap message/task at canonical ingestion. One bad shout can otherwise
+        ;; pollute the per-agent 10-message ring AND every backbone subscriber.
+        capped-message (truncate-shout-string (:message data))
+        capped-task (truncate-shout-string (:task data))
         message (cond-> {:event-type event-type
                          :timestamp now
                          :project-id project-id
                          :shout-id shout-id
                          :data (dissoc data :task :message :directory :project-id)}
-                  (:task data) (assoc :task (:task data))
-                  (:message data) (assoc :message (:message data)))
+                  capped-task (assoc :task capped-task)
+                  capped-message (assoc :message capped-message))
         ;; Backbone payload — flat, self-contained, no internal references
         ;; shout-id enables cross-path dedup (atom + backbone deliver same shout)
         backbone-payload {:agent-id agent-id
@@ -102,8 +130,8 @@
                           :timestamp now
                           :project-id project-id
                           :shout-id shout-id
-                          :message (:message data)
-                          :task (:task data)
+                          :message capped-message
+                          :task capped-task
                           :data (dissoc data :task :message :directory :project-id)}]
     ;; 1. Local state — always (bounded-atom for piggyback reads)
     (let [current (or (bget state/agent-registry agent-id) {:messages [] :last-seen nil})
