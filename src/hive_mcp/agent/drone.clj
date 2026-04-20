@@ -18,6 +18,7 @@
             [hive-mcp.swarm.logic :as logic]
             [hive-mcp.events.core :as ev]
             [hive-mcp.telemetry.prometheus :as prom]
+            [hive-mcp.tools.swarm.channel :as channel]
             [clojure.set]
             [hive-dsl.result :as r]
             [hive-dsl.bounded-atom :refer [bkeys]]
@@ -139,13 +140,12 @@
           effective-parent (or (:parent-id opts) parent-id
                                (System/getenv "CLAUDE_SWARM_SLAVE_ID"))]
 
-      (let [tx-result (ds/add-slave! id {:slave/status :spawning
-                                         :slave/name "drone"
-                                         :slave/agent-type :drone
-                                         :slave/depth 2
-                                         :slave/parent effective-parent
-                                         :slave/cwd cwd
-                                         :slave/project-id project-id})]
+      (let [tx-result (ds/add-slave! id {:status :spawning
+                                         :name "drone"
+                                         :depth 2
+                                         :parent effective-parent
+                                         :cwd cwd
+                                         :project-id project-id})]
         (when-not (and tx-result (seq (:tx-data tx-result)))
           (log/error {:event :drone/spawn-failed
                       :drone-id id
@@ -173,7 +173,7 @@
                                     :files (or files [])
                                     :task-type task-type}])
 
-      (log/info "Drone spawned" {:id id :task-type task-type :files (count (or files 0))})
+      (log/info "Drone spawned" {:id id :task-type task-type :files (count (or files []))})
       id))
 
   (dispatch! [_this task-opts]
@@ -201,7 +201,7 @@
                                (throw (ex-info "No delegate-fn provided - use delegate! for standalone execution"
                                                {:drone-id id}))))
             start-time (System/currentTimeMillis)
-            result (execution-fn {:backend (or backend :openrouter)
+            result (execution-fn {:backend backend
                                   :preset effective-preset
                                   :model selected-model
                                   :task augmented-task
@@ -233,6 +233,20 @@
                                        :parent-id parent-id
                                        :error (str (:result result))
                                        :error-type :execution}]))
+
+        ;; Bridge: write result to event-journal so `agent collect` can find it
+        ;; without depending on NATS/channel infrastructure being active.
+        (channel/record-task-result!
+         task-id
+         (if (= :completed (:status result))
+           {:status "completed"
+            :result (str (:result result))
+            :slave-id id
+            :timestamp (System/currentTimeMillis)}
+           {:status "failed"
+            :error (str (:result result))
+            :slave-id id
+            :timestamp (System/currentTimeMillis)}))
 
         (prom/record-drone-result! {:model selected-model
                                     :task-type (name effective-task-type)

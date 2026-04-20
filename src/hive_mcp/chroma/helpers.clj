@@ -1,7 +1,7 @@
 (ns hive-mcp.chroma.helpers
   "Shared utility functions for Chroma operations."
   (:require [clojure.data.json :as json]
-            [clojure.string :as str]))
+            [clojure.string :as str] [hive-dsl.result :refer [rescue]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -11,9 +11,7 @@
   "Parse ISO string to ZonedDateTime, returns nil on failure."
   [s]
   (when (and (string? s) (seq s))
-    (try
-      (java.time.ZonedDateTime/parse s)
-      (catch Exception _ nil))))
+    (rescue nil (java.time.ZonedDateTime/parse s))))
 
 (defn- json-string?
   "Check if string looks like JSON (starts with { or [)."

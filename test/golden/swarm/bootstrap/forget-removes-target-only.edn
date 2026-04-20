@@ -1,0 +1,6 @@
+[{:slave-id "keep-1",
+  :name "keep",
+  :status :idle,
+  :depth 1,
+  :cwd "/k",
+  :project-id "p"}]

@@ -2,15 +2,18 @@
   "Dynamic backend discovery and routing for drone execution.
 
    Probes available backend namespaces and selects the best one.
-   Priority: fsm-agentic > sdk-drone > hive-agent > legacy-loop."
+   Priority: fsm-agentic > sdk-drone > openrouter-loop.
+
+   Note: :hive-agent backend removed (deprecated 0.16.0).
+   HiveAgentBackend delegated to hive-agent-bridge shim which is
+   superseded by sdk-drone (hive-claude Agent SDK)."
   (:require [taoensso.timbre :as log]))
 
 (def ^:private backend-nses
   "Ordered list of [backend-key namespace-sym] by preference (highest first)."
   [[:fsm-agentic 'hive-mcp.agent.drone.backend.fsm-agentic]
    [:sdk-drone   'hive-mcp.agent.drone.backend.sdk-drone]
-   [:hive-agent  'hive-mcp.agent.drone.backend.hive-agent]
-   [:legacy-loop 'hive-mcp.agent.drone.backend.legacy-loop]])
+   [:openrouter-loop 'hive-mcp.agent.drone.backend.openrouter-loop]])
 
 (defonce ^:private available-backends (atom nil))
 (defonce ^:private failed-backends (atom #{}))
@@ -43,6 +46,6 @@
                                                  :failed   failed})))))
 
 (defn best-backend
-  "Return the highest-priority available backend keyword, or :legacy-loop as fallback."
+  "Return the highest-priority available backend keyword, or :openrouter-loop as fallback."
   []
-  (or (first @available-backends) :legacy-loop))
+  (or (first @available-backends) :openrouter-loop))

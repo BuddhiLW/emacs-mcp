@@ -15,7 +15,7 @@
 
 ;; Buffer State
 
-(defonce ^{:doc "Map of [agent-id project-id] -> {:entries [...] :cursor 0}."}
+(defonce ^{:doc "Map of caller-id-key -> {:entries [...] :cursor 0} (session-scoped)."}
   buffers
   (atom {}))
 
@@ -72,11 +72,10 @@
 ;; Public API
 
 (defn enqueue-result!
-  "Enqueue a completed async result into the buffer with content-hash dedup."
-  [agent-id project-id result-map]
-  (let [buffer-key (ctx-id/make-buffer-key
-                    (ctx-id/parse-caller-id agent-id)
-                    (ctx-id/parse-project-scope project-id))
+  "Enqueue a completed async result into the buffer with content-hash dedup.
+   Session-scoped: keyed by caller-id only (no project dimension)."
+  [caller-id result-map]
+  (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))
         entry (assoc result-map
                      :timestamp (now-epoch-seconds)
                      :content-hash (content-hash result-map))]
@@ -95,11 +94,9 @@
               "buffer:" buffer-key)))
 
 (defn drain!
-  "Drain next batch of async results within char budget for an agent+project."
-  [agent-id project-id]
-  (let [buffer-key (ctx-id/make-buffer-key
-                    (ctx-id/parse-caller-id agent-id)
-                    (ctx-id/parse-project-scope project-id))
+  "Drain next batch of async results within char budget for a caller session."
+  [caller-id]
+  (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))
         buf (get @buffers buffer-key)]
     (when (and buf (< (:cursor buf) (count (:entries buf))))
       (let [{:keys [entries cursor]} buf
@@ -141,11 +138,9 @@
           is-done (assoc :done true))))))
 
 (defn has-pending?
-  "Check if an agent+project has undrained async results."
-  [agent-id project-id]
-  (let [buffer-key (ctx-id/make-buffer-key
-                    (ctx-id/parse-caller-id agent-id)
-                    (ctx-id/parse-project-scope project-id))
+  "Check if a caller session has undrained async results."
+  [caller-id]
+  (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))
         buf (get @buffers buffer-key)]
     (and (some? buf)
          (< (:cursor buf) (count (:entries buf))))))
@@ -160,11 +155,9 @@
         @buffers))
 
 (defn clear-buffer!
-  "Clear buffer for a specific agent+project. For testing."
-  [agent-id project-id]
-  (let [buffer-key (ctx-id/make-buffer-key
-                    (ctx-id/parse-caller-id agent-id)
-                    (ctx-id/parse-project-scope project-id))]
+  "Clear buffer for a specific caller session. For testing."
+  [caller-id]
+  (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))]
     (swap! buffers dissoc buffer-key)))
 
 (defn reset-all!

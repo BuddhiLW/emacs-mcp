@@ -704,16 +704,34 @@
 (defn unreg-fx
   "Remove effect handler for fx-id.
    Returns true if the handler was found and removed, false if not found.
-   Delegates to hive.events.fx/unreg-fx. Thread-safe."
+   Accesses hive.events.fx/fx-registry atom directly (unreg-fx not in library API).
+   Thread-safe (uses swap! on atom)."
   [fx-id]
-  (fx/unreg-fx fx-id))
+  (let [removed? (atom false)
+        registry @(resolve 'hive.events.fx/fx-registry)]
+    (swap! registry
+           (fn [handlers]
+             (if (contains? handlers fx-id)
+               (do (reset! removed? true)
+                   (dissoc handlers fx-id))
+               handlers)))
+    @removed?))
 
 (defn unreg-cofx
   "Remove coeffect handler for cofx-id.
    Returns true if the handler was found and removed, false if not found.
-   Delegates to hive.events.cofx/unreg-cofx. Thread-safe."
+   Accesses hive.events.cofx/cofx-registry atom directly (unreg-cofx not in library API).
+   Thread-safe (uses swap! on atom)."
   [cofx-id]
-  (cofx/unreg-cofx cofx-id))
+  (let [removed? (atom false)
+        registry @(resolve 'hive.events.cofx/cofx-registry)]
+    (swap! registry
+           (fn [handlers]
+             (if (contains? handlers cofx-id)
+               (do (reset! removed? true)
+                   (dissoc handlers cofx-id))
+               handlers)))
+    @removed?))
 
 ;; =============================================================================
 ;; Inspection / Diagnostics API (E1)
@@ -726,15 +744,15 @@
 
 (defn registered-effects
   "Return set of registered effect IDs.
-   Delegates to hive.events.fx/registered-fx-ids."
+   Reads hive.events.fx/fx-registry atom directly (registered-fx-ids not in library API)."
   []
-  (fx/registered-fx-ids))
+  (set (keys @(deref (resolve 'hive.events.fx/fx-registry)))))
 
 (defn registered-coeffects
   "Return set of registered coeffect IDs.
-   Delegates to hive.events.cofx/registered-cofx-ids."
+   Reads hive.events.cofx/cofx-registry atom directly (registered-cofx-ids not in library API)."
   []
-  (cofx/registered-cofx-ids))
+  (set (keys @(deref (resolve 'hive.events.cofx/cofx-registry)))))
 
 (defn handler-registry-status
   "Return a summary of all registered handlers across event, fx, and cofx registries.

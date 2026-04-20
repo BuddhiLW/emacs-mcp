@@ -1,0 +1,7 @@
+{:in-datascript? true,
+ :in-bootstrap
+ [{:slave-id "it-ling-1",
+   :name "integration-worker",
+   :status :initializing,
+   :depth 1,
+   :project-id "it-proj"}]}

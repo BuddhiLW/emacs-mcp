@@ -1,0 +1,8 @@
+{:ds-keep? true,
+ :ds-drop? false,
+ :bootstrap
+ [{:slave-id "it-keep-1",
+   :name "keep",
+   :status :initializing,
+   :depth 1,
+   :project-id "it-keep"}]}

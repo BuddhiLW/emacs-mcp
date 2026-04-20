@@ -6,7 +6,7 @@
    - Session store (Datalevin) creation, recording, cleanup
    - Fallback to DataScript in-memory KG when Datalevin unavailable
    - phase:execute-agentic! resolves IDroneExecutionBackend and dispatches
-   - Backend fallback from :hive-agent to :legacy-loop
+   - Backend fallback from :hive-agent to :openrouter-loop
 
    Tests mock backend/resolve-backend to avoid external API calls."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
@@ -21,6 +21,7 @@
             [hive-mcp.agent.hive-agent-bridge :as ha-bridge]
             [hive-mcp.agent.registry :as registry]
             [hive-mcp.tools.diff :as diff]
+            [hive-mcp.agent.drone.execution.finalize :as exec-fin]
             [hive-mcp.events.core :as ev]
             [hive-mcp.hivemind.core :as hivemind]))
 
@@ -201,7 +202,7 @@
                     execution/phase:execute-agentic!
                     (fn [_ctx _spec _config]
                       {:status :completed :result "ok"})
-                    execution/phase:finalize!
+                    exec-fin/phase:finalize!
                     (fn [_ctx _spec _config raw diffs]
                       raw)
                     execution/phase:cleanup!
@@ -243,7 +244,7 @@
                     execution/phase:execute-agentic!
                     (fn [_ctx _spec _config]
                       {:status :completed :result "ok"})
-                    execution/phase:finalize!
+                    exec-fin/phase:finalize!
                     (fn [_ctx _spec _config raw diffs]
                       raw)
                     execution/phase:cleanup!

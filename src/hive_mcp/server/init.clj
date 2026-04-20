@@ -28,11 +28,16 @@
             [hive-mcp.memory.store.chroma :as chroma-store]
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.swarm.sync :as sync]
+            [hive-mcp.swarm.bootstrap.factory :as bootstrap-factory]
+            [hive-mcp.swarm.event-bridge :as swarm-event-bridge]
+            [hive-mcp.channel.piggyback :as piggyback]
+            [hive-mcp.channel.instruction-store :as instruction-store]
+            [hive-mcp.protocols.event-backbone :as eb]
             [hive-mcp.swarm.logic :as logic]
             [hive-hot.core :as hot]
             [hive-hot.events :as hot-events]
             [taoensso.timbre :as log]
-            [clojure.string :as str]))
+            [clojure.string :as str] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -274,14 +279,61 @@
 ;; Memory Store Wiring
 ;; =============================================================================
 
+(defn- resolve-memory-backend
+  "Resolve the configured memory backend id.
+
+   Reads, in order:
+     1. :services :memory-store :backend   (authoritative — user's config.edn)
+     2. :memory :default-store             (legacy key still used by routes)
+     3. \"chroma\"                         (default for green-field install)
+
+   Ensures the global config atom is populated — wire-memory-store! is
+   invoked in Phase 4, before Phase 5.5's explicit load-global-config!.
+   Returns a lowercase string (e.g. \"milvus\", \"chroma\")."
+  []
+  (result/rescue nil (global-config/load-global-config!))
+  (let [cfg (global-config/get-global-config)
+        b   (or (get-in cfg [:services :memory-store :backend])
+                (get-in cfg [:memory :default-store])
+                "chroma")]
+    (-> b name clojure.string/lower-case)))
+
 (defn wire-memory-store!
-  "Wire ChromaMemoryStore as active IMemoryStore backend (Phase 1 vectordb abstraction).
-   Must run AFTER init-embedding-provider! since Chroma config is set there."
+  "Wire the active IMemoryStore backend based on global config.
+
+   Dispatch: :services :memory-store :backend (fallback :memory :default-store).
+     - \"milvus\": defer to hive-milvus addon. Its initialize! calls set-store!
+       during Phase 4.5 (load-extensions!).
+     - anything else: wire ChromaMemoryStore immediately (legacy behavior).
+
+   Must run AFTER init-embedding-provider! since Chroma config is set there.
+   A post-extensions fallback in `ensure-memory-store!` guarantees a live
+   store even when the selected addon fails to register."
   []
   (result/rescue nil
-                 (let [store (chroma-store/create-store)]
-                   (mem-proto/set-store! store)
-                   (log/info "ChromaMemoryStore wired as active IMemoryStore backend"))))
+                 (let [backend (resolve-memory-backend)]
+                   (case backend
+                     "milvus"
+                     (log/info "wire-memory-store!: deferring to hive-milvus addon"
+                               {:backend backend})
+
+                     (let [store (chroma-store/create-store)]
+                       (mem-proto/set-store! store)
+                       (log/info "ChromaMemoryStore wired as active IMemoryStore backend"
+                                 {:backend backend}))))))
+
+(defn ensure-memory-store!
+  "Guarantee an active IMemoryStore after addon loading.
+
+   Called in Phase 4.6 (after load-extensions!). If the configured backend's
+   addon failed to register a store, wire ChromaMemoryStore as a safety
+   fallback so memory queries don't throw 'No memory store configured'."
+  []
+  (result/rescue nil
+                 (when-not (mem-proto/store-set?)
+                   (log/warn "ensure-memory-store!: no store after extensions; wiring Chroma fallback")
+                   (let [store (chroma-store/create-store)]
+                     (mem-proto/set-store! store)))))
 
 ;; =============================================================================
 ;; Channel Bridge + Sync
@@ -295,13 +347,67 @@
                  (channel-bridge/init!)
                  (log/info "Channel bridge initialized - channel events will dispatch to hive-events")))
 
+(defn- build-swarm-bootstrap
+  "Construct the configured ISwarmBootstrap.
+   Honors explicit opts, falling back to `services.swarm-sync.source` in
+   config.edn (default :emacs for backwards compatibility)."
+  [opts]
+  (bootstrap-factory/make-bootstrap
+   opts
+   (fn [section key & {:as get-opts}]
+     (apply global-config/get-service-value section key (mapcat identity get-opts)))))
+
+(defn- resolve-event-backbone
+  "Pick the event backbone for swarm-sync: explicit opts > config.edn > :local.
+   :local means in-process channel.core only (legacy default).
+   :nats means also bridge slave events from the IEventBackbone."
+  [opts]
+  (or (:event-backbone opts)
+      (rescue nil (some-> (global-config/get-service-value :swarm-sync :event-backbone
+                                                 :parse keyword)))
+      :local))
+
 (defn start-swarm-sync!
-  "Start swarm sync - bridges channel events to logic database.
-   This enables: task-completed -> release claims -> process queue."
-  []
-  (result/rescue nil
-                 (sync/start-sync!)
-                 (log/info "Swarm sync started - logic database will track swarm state")))
+  "Start swarm sync — bridges channel events to logic database, rehydrates
+   the in-memory registry from the configured ISwarmBootstrap source, and
+   (optionally) bridges the IEventBackbone (NATS) into the in-process event
+   bus so distributed slave events reach the same handlers.
+
+   Args:
+     opts — {:source         :emacs|:datahike|:none
+             :event-backbone :local|:nats
+             :db-path        string
+             :timeout-ms     int}
+            (all optional; defaults resolved from config.edn)
+
+   Order matters:
+     1. Build + inject bootstrap (durable slave projection)
+     2. start-sync! (subscribes to channel.core; runs bootstrap reload)
+     3. Start NATS event bridge if requested (NATS → channel.core)"
+  ([] (start-swarm-sync! {}))
+  ([opts]
+   (result/rescue nil
+                  (let [bs (build-swarm-bootstrap opts)]
+                    (sync/set-swarm-bootstrap! bs))
+                  (sync/start-sync!)
+                  (let [eb (resolve-event-backbone opts)]
+                    (when (= :nats eb)
+                      (let [started? (swarm-event-bridge/start-nats-bridge!)]
+                        (if started?
+                          (log/info "Swarm sync: NATS event bridge started")
+                          (log/warn "Swarm sync: NATS event bridge requested but not started"
+                                    " (backbone may be disconnected — check :hive/nats init)")))
+                      ;; Rewire the piggyback instruction queue through NATS so
+                      ;; coordinators and lings in separate JVMs share a queue.
+                      (let [bb (eb/get-backbone)]
+                        (if (eb/connected? bb)
+                          (do (instruction-store/rewire!
+                               piggyback/instruction-queues
+                               bb)
+                              (log/info "Swarm sync: piggyback instruction store bound to NATS"))
+                          (log/warn "Swarm sync: piggyback instruction store staying local"
+                                    " (NATS backbone not connected)")))))
+                  (log/info "Swarm sync started - logic database will track swarm state"))))
 
 ;; =============================================================================
 ;; Hot-Reload Watcher
@@ -508,3 +614,52 @@
                    (registry-init!)
                    (set-engine! (create-engine))
                    (log/info "FSM workflow engine initialized and wired as active IWorkflowEngine"))))
+
+;; =============================================================================
+;; nREPL-mode initialization (for dev/bb-mcp without full -main)
+;; =============================================================================
+
+(defn- tool->registry-entry
+  "Convert a make-tool result to a registry entry [name {:tool spec, :handler fn}]."
+  [t]
+  [(:name t) {:tool (dissoc t :handler)
+              :handler (:handler t)}])
+
+(defn populate-server-context!
+  "Populate server-context-atom with middleware-wrapped tool handlers.
+
+   CRITICAL: Uses routes/make-tool to wrap handlers with the full middleware
+   chain (piggyback, context, normalize, etc.). Without make-tool, bb-mcp
+   gets raw handlers and no ---MEMORY---/---HIVEMIND--- blocks are attached."
+  []
+  (require 'hive-mcp.server.core)
+  (require 'hive-mcp.tools.registry)
+  (require 'hive-mcp.extensions.registry)
+  (let [consolidated ((resolve 'hive-mcp.tools.registry/get-consolidated-tools))
+        extensions   ((resolve 'hive-mcp.extensions.registry/get-registered-tools))
+        wrapped      (mapv routes/make-tool (concat consolidated extensions))
+        tools        (into {} (map tool->registry-entry wrapped))
+        ctx-atom     (deref (resolve 'hive-mcp.server.core/server-context-atom))]
+    (swap! ctx-atom (fn [_] {:tools (atom tools)}))
+    (log/info "server-context populated:" (count tools) "tools (middleware-wrapped)")))
+
+(defn nrepl-init!
+  "Initialize essential services for nREPL-mode operation (dev REPL, bb-mcp).
+   Runs the subset of -main phases needed for tools to work via nREPL:
+   - Phase 4: Embedding provider + memory store
+   - Phase 4.5: Extension/addon loading
+   - Server context: Populate server-context-atom for bb-mcp dynamic tools
+
+   Safe to call multiple times (idempotent via defonce atoms).
+   Called automatically by dev/user.clj on startup."
+  []
+  (log/info "nrepl-init! starting...")
+  ;; Phase 4: Embedding + memory
+  (init-embedding-provider!)
+  (wire-memory-store!)
+
+  ;; Phase 4.5: Extensions
+  (load-extensions!)
+
+  (populate-server-context!)
+  (log/info "nrepl-init! complete"))

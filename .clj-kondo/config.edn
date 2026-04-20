@@ -1,4 +1,10 @@
-{:lint-as {;; pldb/db-rel defines relations - column names are schema, not symbols
+{;; hive-dsl defadt macro hook — expands to 4 def forms so generated
+ ;; type/ctor/pred/coercer symbols resolve.
+ :hooks {:analyze-call {hive-dsl.adt/defadt hive-dsl.hooks.defadt/defadt}}
+
+ :lint-as {;; multi_dsl_e2e_test when-resolved macro binds a single symbol like if-let
+           hive-mcp.tools.multi-dsl-e2e-test/when-resolved clojure.core/if-let
+           ;; pldb/db-rel defines relations - column names are schema, not symbols
            clojure.core.logic.pldb/db-rel clojure.core/declare
            ;; with-entry binds entry symbol like let
            hive-mcp.tools.memory.core/with-entry clojure.core/let
@@ -13,13 +19,29 @@
            hive-mcp.addons.pool/with-connection clojure.core/with-open
            ;; test.check defspec defines test vars like deftest
            clojure.test.check.clojure-test/defspec clojure.test/deftest
+           ;; test.check for-all binds like let
+           clojure.test.check.properties/for-all clojure.core/let
            ;; hive-test property macros expand to defspec
            hive-test.properties/defprop-total clojure.test/deftest
            hive-test.properties/defprop-idempotent clojure.test/deftest
            hive-test.properties/defprop-roundtrip clojure.test/deftest
            hive-test.properties/defprop-complement clojure.test/deftest
            hive-test.properties/defprop-fsm-terminates clojure.test/deftest
-           hive-test.properties/defprops-monad clojure.test/deftest}
+           hive-test.properties/defprop-commutative clojure.test/deftest
+           hive-test.properties/defprop-concurrent-safe clojure.test/deftest
+           hive-test.properties/defprop-invariant clojure.test/deftest
+           hive-test.properties/defprop-metamorphic clojure.test/deftest
+           hive-test.properties/defprop-sequential-equiv clojure.test/deftest
+           hive-test.properties/defprops-monad clojure.test/deftest
+           ;; hive-test golden macros expand to deftest
+           hive-test.golden/deftest-golden clojure.test/deftest
+           hive-test.golden/deftest-golden-fn clojure.test/deftest
+           ;; hive-test mutation macros expand to deftest
+           hive-test.mutation/deftest-mutations clojure.test/deftest
+           hive-test.mutation/deftest-mutation-witness clojure.test/deftest
+           ;; hive-test trifecta composite
+           hive-test.trifecta/deftrifecta clojure.test/deftest
+           hive-test.trifecta/deftest-facets clojure.test/deftest}
 
  :linters {:unresolved-var
            {:exclude [;; core.logic vars that may not be in kondo's database

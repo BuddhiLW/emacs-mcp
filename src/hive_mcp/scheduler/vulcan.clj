@@ -1,7 +1,7 @@
 (ns hive-mcp.scheduler.vulcan
   "KG-aware task prioritization for the Forge Belt."
   (:require [hive-mcp.knowledge-graph.edges :as kg-edges]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.dns.result :refer [rescue]]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -20,11 +20,11 @@
                 dep-edges (filter #(= :depends-on (:kg-edge/relation %)) edges)]
             (set (map :kg-edge/to dep-edges)))))
 
-(defn task-exists-in-chroma?
-  "Check if a task still exists in Chroma."
+(defn task-exists?
+  "Check if a task still exists in the memory store."
   [task-id]
   (rescue false
-          (some? (chroma/get-entry-by-id task-id))))
+          (some? (facade/get-entry-by-id task-id))))
 
 ;; =============================================================================
 ;; Pure Readiness Calculations
@@ -125,7 +125,7 @@
   ([tasks completed-ids] (prioritize-tasks tasks completed-ids {}))
   ([tasks completed-ids {:keys [deps-fn exists-fn task_ids]
                          :or {deps-fn get-task-deps
-                              exists-fn task-exists-in-chroma?}}]
+                              exists-fn task-exists?}}]
    (let [scoped (if (seq task_ids)
                   (filterv #(contains? (set task_ids) (:id %)) tasks)
                   tasks)

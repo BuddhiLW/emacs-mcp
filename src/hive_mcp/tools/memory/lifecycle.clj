@@ -8,7 +8,7 @@
 
    Re-exports handle-decay and handle-xpoll-promote for backward compatibility
    with tools/memory.clj facade."
-  (:require [hive-mcp.tools.memory.core :refer [with-chroma with-entry]]
+  (:require [hive-mcp.tools.memory.core :refer [with-store with-entry]]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.format :as fmt]
             [hive-mcp.tools.memory.duration :as dur]
@@ -19,7 +19,7 @@
             [hive-mcp.dns.result :as result]
             [hive-mcp.memory.types :as mt]
             [hive-mcp.memory.temporal :as temporal]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
@@ -36,10 +36,11 @@
   "Set duration category for a memory entry."
   [{:keys [id duration]}]
   (log/info "mcp-memory-set-duration:" id duration)
-  (with-chroma
-    (let [expires (dur/calculate-expires duration)
-          updated (chroma/update-entry! id {:duration duration
-                                            :expires (or expires "")})]
+  (with-store
+    (let [store (mem-proto/get-store)
+          expires (dur/calculate-expires duration)
+          updated (mem-proto/update-entry! store id {:duration duration
+                                                     :expires (or expires "")})]
       (if updated
         {:type "text" :text (json/write-str (fmt/entry->json-alist updated))}
         (mcp-error "Entry not found")))))
@@ -52,9 +53,10 @@
       (if-not changed?
         {:type "text" :text (json/write-str {:message boundary-msg
                                              :duration new-duration})}
-        (let [expires (dur/calculate-expires new-duration)
-              updated (chroma/update-entry! id {:duration new-duration
-                                                :expires (or expires "")})]
+        (let [store (mem-proto/get-store)
+              expires (dur/calculate-expires new-duration)
+              updated (mem-proto/update-entry! store id {:duration new-duration
+                                                         :expires (or expires "")})]
           {:type "text" :text (json/write-str (fmt/entry->json-alist updated))})))))
 
 (defn handle-promote
@@ -77,8 +79,8 @@
   "Remove all expired memory entries and clean up their KG edges."
   [_]
   (log/info "mcp-memory-cleanup-expired")
-  (with-chroma
-    (let [{:keys [count deleted-ids repaired]} (chroma/cleanup-expired!)
+  (with-store
+    (let [{:keys [count deleted-ids repaired]} (mem-proto/cleanup-expired! (mem-proto/get-store))
           edges-removed (when (seq deleted-ids)
                           (reduce (fn [total id]
                                     (+ total (kg-edges/remove-edges-for-node! id)))
@@ -112,7 +114,7 @@
                                             :helpful-count :unhelpful-count
                                             :access-count :project-id])
         :project-id     (:project-id entry)})
-      (chroma/delete-entry! id)
+      (mem-proto/delete-entry! (mem-proto/get-store) id)
       (when (pos? edges-removed)
         (log/info "Cleaned up" edges-removed "KG edges for expired entry" id))
       {:type "text" :text (json/write-str {:expired id
@@ -143,9 +145,9 @@
         limit-val (coerce-int! limit :limit 20)
         directory (or directory (ctx/current-directory))]
     (log/info "mcp-memory-expiring-soon:" days-val "limit:" limit-val "directory:" directory)
-    (with-chroma
+    (with-store
       (let [project-id (scope/get-current-project-id directory)
-            all-entries (chroma/entries-expiring-soon days-val)
+            all-entries (mem-proto/entries-expiring-soon (mem-proto/get-store) days-val {})
             scope-filter (scope/make-scope-tag project-id)
             filtered (->> all-entries
                           (filter #(scope/matches-scope? % scope-filter))

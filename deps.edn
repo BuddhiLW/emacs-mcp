@@ -17,7 +17,7 @@
         nrepl/bencode {:mvn/version "1.2.0"}
 
         ;; Aleph for robust async TCP/networking (replaces custom sockets)
-        aleph/aleph {:mvn/version "0.9.5"}
+        aleph/aleph {:mvn/version "0.9.7"}
         manifold/manifold {:mvn/version "0.5.0"}
 
         ;; Logic programming for swarm hivemind coordination
@@ -29,19 +29,19 @@
         ;; Datascript for in-memory graph storage (GraphStore backend)
         datascript/datascript {:mvn/version "1.7.8"}
         ;; me.tonsky namespace for datascript/datahike: provided by local 0.3.118 jar.
-        ;; org.replikativ namespace for Proximum: provided by hive-knowledge addon (0.4.119).
+        ;; org.replikativ namespace for Datahike: provided by addon (0.4.119).
         ;; Different group IDs → both on classpath, non-overlapping namespaces.
         persistent-sorted-set/persistent-sorted-set-compat
         {:local/root "lib/persistent-sorted-set-0.3.118.jar"}
 
         ;; Datalevin for durable graph storage (GraphStore backend, optional)
         ;; LMDB-backed Datalog — requires Java 21+
-        datalevin/datalevin {:mvn/version "0.10.5"}
+        datalevin/datalevin {:mvn/version "0.10.7"}
 
         ;; Datahike for immutable graph storage with branching/time-travel
         ;; Content-addressable, supports branch/merge for multi-ling exploration
         ;; Part of replikativ ecosystem (pairs with yggdrasil)
-        org.replikativ/datahike {:mvn/version "0.7.1650"}
+        org.replikativ/datahike {:mvn/version "0.8.1671"}
 
         ;; Logging - SLF4J with Logback backend
         ;; clojure.tools.logging provides the Clojure facade
@@ -55,7 +55,7 @@
         com.taoensso/timbre {:mvn/version "6.8.0"}
 
         ;; Schema validation (malli)
-        metosin/malli {:mvn/version "0.20.0"}
+        metosin/malli {:mvn/version "0.20.1"}
 
         ;; Chroma vector database client - BuddhiLW fork with v2 API support
         io.github.buddhilw/clojure-chroma-client
@@ -81,7 +81,7 @@
         ;; hive-events - re-frame inspired event system for JVM
         ;; v0.4.0 adds sub-FSM composition + multi-dispatch
         io.github.hive-agi/hive-events
-        {:git/tag "v0.4.0" :git/sha "e3d9f7c"}
+        {:git/tag "v0.5.1" :git/sha "ac48b40"}
 
         ;; hive-hot - unified hot-reload with events integration
         io.github.hive-agi/hive-hot
@@ -99,7 +99,7 @@
         ;; java-diff-utils for proper unified diff computation (hunks, context)
         ;; Used by drone diff protocol for token-efficient diff storage
         io.github.java-diff-utils/java-diff-utils {:mvn/version "4.15"}
-        org.replikativ/yggdrasil {:mvn/version "0.2.20"}
+        org.replikativ/yggdrasil {:mvn/version "0.2.23"}
 
         ;; Kabel — WebSocket transport for distributed Datahike writer backend
         ;; Symmetric peer-to-peer with middleware, transit/fressian serialization
@@ -112,23 +112,52 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL, error taxonomy
         io.github.hive-agi/hive-dsl
-        {:git/tag "v0.3.5" :git/sha "224b3c257e6aaf48ffa78b1e3362aca04e3fbd1f"}
+        {:git/tag "v0.4.1" :git/sha "07ab02a"}
+
+        ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
+        ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
+        ;; Overrides default Chroma store when Milvus is reachable.
+        io.github.hive-agi/hive-milvus {:git/tag "v0.1.3" :git/sha "d9d3ea1"}
+
+        ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj
+        io.github.hive-agi/hive-weave {:git/tag "v0.2.1" :git/sha "51bed20"}
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
-        io.github.hive-agi/hive-emacs {:git/tag "v0.2.0" :git/sha "05a3a07"}}
+        io.github.hive-agi/hive-emacs {:git/tag "v0.4.0" :git/sha "03cd3ca"}
+
+        ;; hive-proximum — temporal/bitemporal memory backend (IMemoryStore via IAddon)
+        ;; Auto-discovered via META-INF/hive-addons/hive-proximum.edn manifest.
+        ;; Stub store until backend impl lands (task 486248c0).
+        io.github.hive-agi/hive-proximum {:git/tag "v0.1.1" :git/sha "7103bdd"}
+
+        ;; hive-ttracking — telemetry/timing (timed-query, track*, bench*).
+        ;; Consumed by catchup.clj and siblings (bundle/hydration/hierarchy).
+        io.github.hive-agi/hive-ttracking {:git/tag "v0.1.2" :git/sha "9ede26f"}
+
+        ;; Integrant — lifecycle framework for component-based systems
+        ;; Replaces monolithic start! with declarative system map + profile merging
+        integrant/integrant {:mvn/version "1.0.1"}
+        ;; meta-merge for deep-merging profile EDN over base system.edn
+        meta-merge/meta-merge {:mvn/version "1.0.0"}
+}
 
  :aliases
  {:mcp
   {:exec-fn hive-mcp.server.core/start!
    :exec-args {}
-   :extra-deps {nrepl/nrepl {:mvn/version "1.3.1"}
+   :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}
                 cider/cider-nrepl {:mvn/version "0.58.0"}}
    ;; Heap cap, G1GC tuning, string dedup for prompt/response data,
-   ;; bounded core.async pool, Netty access
+   ;; bounded core.async pool, Netty access, aggressive GC return-to-OS
    :jvm-opts ["-Xmx4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
+              "-XX:G1PeriodicGCInterval=60000"
+              "-XX:+G1PeriodicGCInvokesConcurrent"
+              "-XX:MinHeapFreeRatio=20"
+              "-XX:MaxHeapFreeRatio=40"
+              "-XX:G1HeapRegionSize=4m"
               "-Dclojure.core.async.pool-size=8"
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
@@ -136,15 +165,20 @@
 
   :dev
   {:extra-paths ["dev" "test"]
-   :extra-deps {nrepl/nrepl {:mvn/version "1.3.1"}
+   :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}
                 cider/cider-nrepl {:mvn/version "0.58.0"}
                 refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
-   ;; Netty access, Proximum HNSW SIMD
+   ;; Netty access, Proximum HNSW SIMD, aggressive GC return-to-OS
    :jvm-opts ["-Xmx4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
+              "-XX:G1PeriodicGCInterval=60000"
+              "-XX:+G1PeriodicGCInvokesConcurrent"
+              "-XX:MinHeapFreeRatio=20"
+              "-XX:MaxHeapFreeRatio=40"
+              "-XX:G1HeapRegionSize=4m"
               "-Dclojure.core.async.pool-size=8"
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
@@ -153,15 +187,20 @@
 
   :nrepl
   {:extra-paths ["dev" "test"]
-   :extra-deps {nrepl/nrepl {:mvn/version "1.3.1"}
+   :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}
                 cider/cider-nrepl {:mvn/version "0.58.0"}
                 refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
-   ;; Netty access, Proximum HNSW SIMD
+   ;; Netty access, Proximum HNSW SIMD, aggressive GC return-to-OS
    :jvm-opts ["-Xmx4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
+              "-XX:G1PeriodicGCInterval=60000"
+              "-XX:+G1PeriodicGCInvokesConcurrent"
+              "-XX:MinHeapFreeRatio=20"
+              "-XX:MaxHeapFreeRatio=40"
+              "-XX:G1HeapRegionSize=4m"
               "-Dclojure.core.async.pool-size=8"
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
@@ -176,14 +215,18 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 ;; Generative testing for spec validation
-                org.clojure/test.check {:mvn/version "1.1.1"}}
+                org.clojure/test.check {:mvn/version "1.1.1"}
+                ;; Trifecta macro: golden + property + mutation facets
+                io.github.hive-agi/hive-test {:git/tag "v0.2.0" :git/sha "841da83"}}
    :main-opts ["-m" "cognitect.test-runner"]}
 
   ;; CI-friendly: Run only unit tests (excludes tests requiring Emacs)
   :test-unit
   {:extra-paths ["test"]
    :extra-deps {io.github.cognitect-labs/test-runner
-                {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                org.clojure/test.check {:mvn/version "1.1.1"}
+                io.github.hive-agi/hive-test {:git/tag "v0.2.0" :git/sha "841da83"}}
    :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:excludes [:integration]}}
@@ -192,14 +235,23 @@
   :test-integration
   {:extra-paths ["test"]
    :extra-deps {io.github.cognitect-labs/test-runner
-                {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                io.github.hive-agi/hive-test
+                {:git/tag "v0.2.0" :git/sha "841da83"}}
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:includes [:integration]}}
 
+  ;; Uberjar build via tools.build (see build.clj)
+  ;; Usage: clj -T:build uber
+  ;;        clj -T:build uber :profile k8s-headless
+  :build
+  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.9"}}
+   :ns-default build}
+
 ;; Local dev overrides for sibling :local/root projects.
   ;; start-mcp.sh auto-merges deps.local.edn via -Sdeps when present.
   ;; Create deps.local.edn (gitignored) with :deps key, e.g.:
-  ;;   {:deps {io.github.hive-agi/hive-events {:git/tag "v0.4.0" :git/sha "e3d9f7c"}}}
+  ;;   {:deps {io.github.hive-agi/hive-events {:git/tag "v0.5.1" :git/sha "ac48b40"}}}
   ;; NOTE: Use :deps (top-level key), NOT :override-deps (alias-level only).
   }}

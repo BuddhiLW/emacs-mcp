@@ -14,7 +14,7 @@
             [hive-mcp.emacs.daemon-selection :as selection]
             [hive-mcp.swarm.datascript.queries :as queries]
             [hive-mcp.swarm.datascript.lings :as lings]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -214,14 +214,12 @@
           healed  (count (filter :success? results))
           failed  (- (count results) healed)]
       ;; Emit event for Olympus visibility
-      (try
-        (when-let [emit-fn (requiring-resolve 'hive-mcp.transport.olympus/emit-agent-event!)]
+      (rescue nil (when-let [emit-fn (requiring-resolve 'hive-mcp.transport.olympus/emit-agent-event!)]
           (emit-fn :daemon/orphans-healed
                    {:orphans-found (count orphans)
                     :healed healed
                     :failed failed
-                    :details (mapv #(select-keys % [:ling-id :action :success?]) results)}))
-        (catch Exception _ nil))
+                    :details (mapv #(select-keys % [:ling-id :action :success?]) results)})))
       {:orphans-found (count orphans)
        :healed        healed
        :failed        failed

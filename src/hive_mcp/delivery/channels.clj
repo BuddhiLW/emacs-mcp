@@ -6,6 +6,7 @@
    - CoreAsyncChannel        — hive-mcp.channel.core/publish!
    - ChannelBroadcastChannel — hive-mcp.channel.core/broadcast!
    - OlympusChannel          — hive-mcp.transport.olympus/emit-hivemind-shout!
+   - PiggybackChannel        — hive-mcp.channel.piggyback/buffer-backbone-event!
 
    All use requiring-resolve to avoid circular dependencies.
    All deliveries are non-fatal — failures log but don't propagate."
@@ -109,6 +110,30 @@
         (log/debug "[OlympusChannel] Delivery failed:" (.getMessage e))))))
 
 ;;; ============================================================================
+;;; PiggybackChannel
+;;; ============================================================================
+
+(defrecord PiggybackChannel []
+  dc/IDeliveryChannel
+  (channel-id [_this] :piggyback)
+
+  (available? [_this]
+    true)  ;; Piggyback buffer is always available (atom-based, in-process)
+
+  (deliver! [_this {:keys [agent-id event-type message task timestamp project-id shout-id] :as event}]
+    (try
+      (when-let [buffer-fn (requiring-resolve 'hive-mcp.channel.piggyback/buffer-backbone-event!)]
+        (buffer-fn (cond-> {:agent-id   agent-id
+                            :event-type event-type
+                            :message    message
+                            :task       task
+                            :timestamp  timestamp
+                            :project-id project-id}
+                     shout-id (assoc :shout-id shout-id))))
+      (catch Exception e
+        (log/debug "[PiggybackChannel] Delivery failed:" (.getMessage e))))))
+
+;;; ============================================================================
 ;;; Factory Functions
 ;;; ============================================================================
 
@@ -116,6 +141,7 @@
 (defn create-core-async-channel [] (->CoreAsyncChannel))
 (defn create-channel-broadcast-channel [] (->ChannelBroadcastChannel))
 (defn create-olympus-channel [] (->OlympusChannel))
+(defn create-piggyback-channel [] (->PiggybackChannel))
 
 (defn register-default-channels!
   "Register all default delivery channels. Called during system init."
@@ -124,4 +150,5 @@
   (dc/register-channel! (create-core-async-channel))
   (dc/register-channel! (create-channel-broadcast-channel))
   (dc/register-channel! (create-olympus-channel))
+  (dc/register-channel! (create-piggyback-channel))
   (log/info "[DeliveryChannels] Registered:" (mapv dc/channel-id (dc/get-channels))))

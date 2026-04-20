@@ -110,3 +110,8 @@
 (def get-completed-task coordination/get-completed-task)
 (def get-completed-tasks-this-session coordination/get-completed-tasks-this-session)
 (def clear-completed-tasks! coordination/clear-completed-tasks!)
+
+;; Kanban movements (session-scoped status transitions)
+(def register-kanban-movement! coordination/register-kanban-movement!)
+(def get-kanban-movements-this-session coordination/get-kanban-movements-this-session)
+(def clear-kanban-movements! coordination/clear-kanban-movements!)

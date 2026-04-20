@@ -1,32 +1,41 @@
 (ns hive-mcp.tools.catchup.scope
-  "Scope resolution and query functions for catchup workflow."
-  (:require [hive-mcp.chroma.core :as chroma]
-            [hive-mcp.knowledge-graph.scope :as kg-scope]
+  "Facade for catchup scope resolution + query orchestration.
+
+   Thin re-export layer that preserves the historical public API while
+   the implementation lives in per-concern child namespaces. Production
+   callers (tools.catchup, tools.catchup.spawn, workflows.catchup_session)
+   and tests (scope_test, query_axioms_regression_test, spawn_test,
+   hints_test) bind to the `catchup.scope/*` symbols; this namespace
+   forwards each to the canonical implementation.
+
+   Child namespaces:
+     - catchup.hierarchy    — project-id resolution + chunked parallel fetch
+     - catchup.scope-filter — pure filter/sort/dedupe helpers
+     - catchup.axiom-cache  — stale-while-revalidate `type=axiom` cache
+     - catchup.hydration    — phase-2 batch-get content pipeline
+     - catchup.bundle       — per-type + single-pull query orchestrators
+
+   The only logic still resident here is `get-current-project-name`, which
+   resolves the current project from `.hive-project.edn` or the directory
+   path — it sits at a different layer (project discovery) from the query
+   orchestration below."
+  (:require [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.dns.result :refer [rescue]]
-            [clojure.string :as str]
-            [clojure.set :as set]))
+            [hive-mcp.tools.catchup.scope-filter :as sf]
+            [hive-mcp.tools.catchup.axiom-cache :as axc]
+            [hive-mcp.tools.catchup.bundle :as bundle]
+            [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-(defn distinct-by
-  "Return distinct elements from coll by the value of (f item)."
-  [f coll]
-  (let [seen (volatile! #{})]
-    (filterv (fn [item]
-               (let [key (f item)]
-                 (if (contains? @seen key)
-                   false
-                   (do (vswap! seen conj key) true))))
-             coll)))
-
-(defn- newest-first
-  "Sort entries by :created timestamp, newest first."
-  [entries]
-  (sort-by :created #(compare %2 %1) entries))
+;; =============================================================================
+;; Project discovery (lives here — not a query orchestration concern)
+;; =============================================================================
 
 (defn get-current-project-name
-  "Get current project name from .hive-project.edn or directory path (no Emacs dependency)."
+  "Get current project name from .hive-project.edn or directory path
+   (no Emacs dependency)."
   ([] (get-current-project-name nil))
   ([directory]
    (rescue nil
@@ -39,120 +48,27 @@
               (let [parts (str/split (str directory) #"/")]
                 (last parts)))))))
 
-(defn filter-by-tags
-  "Filter entries to only those containing all specified tags."
-  [entries tags]
-  (if (seq tags)
-    (filter (fn [entry]
-              (let [entry-tags (set (:tags entry))]
-                (every? #(contains? entry-tags %) tags)))
-            entries)
-    entries))
+;; =============================================================================
+;; Re-exports — scope_filter helpers
+;; =============================================================================
 
-(defn- compute-hierarchy-project-ids
-  "Compute the full set of visible project IDs for DB-level filtering."
-  [project-id]
-  (let [in-project? (and project-id (not= project-id "global"))]
-    (when in-project?
-      (let [visible (kg-scope/visible-scopes project-id)
-            descendants (kg-scope/descendant-scopes project-id)
-            all-ids (distinct (concat visible descendants))]
-        (vec (remove #(= "global" %) all-ids))))))
+(def distinct-by           sf/distinct-by)
+(def filter-by-tags        sf/filter-by-tags)
+(def entry-expiring-soon?  sf/entry-expiring-soon?)
 
-(defn- compute-full-scope-tags
-  "Compute full hierarchy scope tags for in-memory safety-net filtering."
-  [project-id]
-  (let [in-project? (and project-id (not= project-id "global"))]
-    (cond-> (kg-scope/full-hierarchy-scope-tags project-id)
-      in-project? (disj "scope:global"))))
+;; =============================================================================
+;; Re-exports — axiom_cache
+;; =============================================================================
 
-(defn- scope-filter-entries
-  "Apply in-memory scope filter as safety net."
-  [entries scope-tags visible-ids]
-  (filter (fn [entry]
-            (let [entry-tags (set (or (:tags entry) []))]
-              (or
-               (some entry-tags scope-tags)
-               (contains? visible-ids (:project-id entry)))))
-          entries))
+(def query-axioms              axc/query-axioms)
+(def invalidate-axioms-cache!  axc/invalidate-axioms-cache!)
 
-(defn- scope-pierce-entries
-  "Extract axioms and catchup-priority entries that pierce scope boundaries."
-  [entries project-id]
-  (let [in-project? (and project-id (not= project-id "global"))]
-    (when in-project?
-      (filter (fn [entry]
-                (let [entry-tags (set (or (:tags entry) []))
-                      entry-type (str (or (:type entry) ""))]
-                  (or (= entry-type "axiom")
-                      (contains? entry-tags "catchup-priority"))))
-              entries))))
+;; =============================================================================
+;; Re-exports — bundle orchestrators
+;; =============================================================================
 
-(defn query-scoped-entries
-  "Query Chroma entries filtered by project scope with hierarchy and scope-piercing."
-  [entry-type tags project-id limit]
-  (when (chroma/embedding-configured?)
-    (let [limit-val (or limit 20)
-          in-project? (and project-id (not= project-id "global"))
-          hierarchy-ids (compute-hierarchy-project-ids project-id)
-          over-fetch-factor (if hierarchy-ids 3 4)
-          entries (chroma/query-entries :type entry-type
-                                        :project-ids hierarchy-ids
-                                        :limit (min (* limit-val over-fetch-factor) 500))
-          full-scope-tags (compute-full-scope-tags project-id)
-          all-visible-ids (set (or hierarchy-ids ["global"]))
-          scoped (scope-filter-entries entries full-scope-tags all-visible-ids)
-          scope-piercing (when in-project?
-                           (let [global-entries (chroma/query-entries :type entry-type
-                                                                      :project-id "global"
-                                                                      :limit 100)]
-                             (scope-pierce-entries global-entries project-id)))
-          scoped (distinct-by :id (concat scoped scope-piercing))
-          filtered (filter-by-tags scoped tags)]
-      (->> filtered
-           newest-first
-           (take limit-val)))))
-
-(defn entry-expiring-soon?
-  "Check if entry expires within 7 days."
-  [entry]
-  (when-let [exp (:expires entry)]
-    (rescue false
-            (let [exp-time (java.time.ZonedDateTime/parse exp)
-                  now (java.time.ZonedDateTime/now)
-                  week-later (.plusDays now 7)]
-              (.isBefore exp-time week-later)))))
-
-(defn query-expiring-entries
-  "Query entries expiring within 7 days, scoped to project with scope-piercing."
-  [project-id limit]
-  (let [in-project? (and project-id (not= project-id "global"))
-        hierarchy-ids (compute-hierarchy-project-ids project-id)
-        entries (chroma/query-entries :project-ids hierarchy-ids
-                                      :limit 200)
-        full-scope-tags (compute-full-scope-tags project-id)
-        all-visible-ids (set (or hierarchy-ids ["global"]))
-        scoped (scope-filter-entries entries full-scope-tags all-visible-ids)
-        scope-piercing (when in-project?
-                         (let [global-entries (chroma/query-entries :project-id "global"
-                                                                    :limit 100)]
-                           (scope-pierce-entries global-entries project-id)))
-        scoped (distinct-by :id (concat scoped scope-piercing))]
-    (->> scoped
-         (filter entry-expiring-soon?)
-         newest-first
-         (take (or limit 20)))))
-
-(defn query-axioms
-  "Query axiom entries (both formal type and legacy tagged conventions)."
-  [project-id]
-  (let [formal (query-scoped-entries "axiom" nil project-id 100)
-        legacy (query-scoped-entries "convention" ["axiom"] project-id 100)]
-    (distinct-by :id (concat formal legacy))))
-
-(defn query-regular-conventions
-  "Query conventions excluding axioms and priority ones."
-  [project-id axiom-ids priority-ids]
-  (let [all-conventions (query-scoped-entries "convention" nil project-id 50)
-        excluded-ids (set/union axiom-ids priority-ids)]
-    (remove #(contains? excluded-ids (:id %)) all-conventions)))
+(def query-scoped-entries       bundle/query-scoped-entries)
+(def query-expiring-entries     bundle/query-expiring-entries)
+(def query-regular-conventions  bundle/query-regular-conventions)
+(def query-all-scoped           bundle/query-all-scoped)
+(def query-catchup-bundle       bundle/query-catchup-bundle)

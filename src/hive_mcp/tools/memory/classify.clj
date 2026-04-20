@@ -2,6 +2,7 @@
   "Abstraction level auto-classification using type, content, and tag signals."
   (:require [hive-mcp.extensions.registry :as ext]
             [hive-mcp.knowledge-graph.schema :as kg-schema]
+            [hive-dsl.result :refer [rescue]]
             [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -59,7 +60,5 @@
         tag-level (tag-level-signal tags)
         heuristic-level (or content-level tag-level type-level)
         enhanced-level (when-let [classify-fn (ext/get-extension :gs/classify)]
-                         (try
-                           (classify-fn entry-type content tags heuristic-level)
-                           (catch Exception _ nil)))]
+                         (rescue nil (classify-fn entry-type content tags heuristic-level)))]
     (or enhanced-level heuristic-level type-level)))

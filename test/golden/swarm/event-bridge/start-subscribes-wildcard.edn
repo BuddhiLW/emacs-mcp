@@ -1,0 +1,3 @@
+{:start-result true,
+ :subscribed ["hive.v1.slave.>"],
+ :bridge-status {:running true, :backbone-id :fake}}

@@ -19,7 +19,7 @@
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.extensions.registry :as ext]
             [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -85,8 +85,7 @@
                        "(json-encode (hive-mcp-api-wrap-gather))")
           {:keys [success result]} (ec/eval-elisp elisp-call)]
       (when success
-        (try (json/read-str result :key-fn keyword)
-             (catch Exception _ nil))))))
+        (rescue nil (json/read-str result :key-fn keyword))))))
 
 ;;; =============================================================================
 ;;; Auto-KG Edge Creation
@@ -123,11 +122,13 @@
                                                    :agent-id agent-id}))))
 
 (defn- crystallize-session-result
-  "Run crystallize-session, handling domain-level :error. Returns Result."
+  "Run crystallize-session, handling domain-level :error. Returns Result.
+   A result with BOTH :summary-id and :error/:lifecycle-error is a partial
+   success — the entry was stored but lifecycle ops had issues. Treat as ok."
   [harvested project-id]
   (try
     (let [r (crystal-hooks/crystallize-session harvested)]
-      (if (:error r)
+      (if (and (:error r) (not (:summary-id r)))
         (result/err :crystal/crystallize-failed
                     {:message (:error r) :project-id project-id})
         (result/ok r)))

@@ -870,14 +870,24 @@
         (is (contains? handler-map-keys h)
             (str "Handler " h " in EDN spec not found in handler-map"))))))
 
-(deftest edn-spec-dispatch-predicates-are-fn-forms-test
-  (testing "dispatch predicates in EDN spec are (fn ...) forms (lists)"
+(deftest edn-spec-dispatch-predicates-are-resolvable-test
+  (testing "dispatch predicates in EDN spec are keyword refs, (fn ...) forms, or functions"
     (let [spec (clojure.edn/read-string (slurp "resources/fsm/saa-workflow.edn"))]
       (doseq [[state-id state-def] (:fsm spec)
               :when (:dispatches state-def)
               [_target pred] (:dispatches state-def)]
-        (is (or (list? pred) (fn? pred))
-            (str "Dispatch predicate for " state-id " should be a fn form, got: " (type pred)))))))
+        (is (or (keyword? pred) (list? pred) (fn? pred))
+            (str "Dispatch predicate for " state-id " should be a keyword, fn form, or function, got: " (type pred))))))
+
+  (testing "all keyword predicates in EDN spec resolve via predicate-map"
+    (let [spec (clojure.edn/read-string (slurp "resources/fsm/saa-workflow.edn"))
+          pred-map-keys (set (keys sut/predicate-map))]
+      (doseq [[state-id state-def] (:fsm spec)
+              :when (:dispatches state-def)
+              [_target pred] (:dispatches state-def)
+              :when (keyword? pred)]
+        (is (contains? pred-map-keys pred)
+            (str "Predicate " pred " in " state-id " not found in predicate-map"))))))
 
 ;; =============================================================================
 ;; In-Code Spec Structure Tests

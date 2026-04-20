@@ -1,16 +1,60 @@
 (ns user
-  "Development namespace with spec instrumentation and REPL utilities.
+  "Development namespace with Integrant lifecycle and REPL utilities.
 
    Loaded automatically via :dev alias. Provides:
+   - Integrant system lifecycle: (go), (halt), (reset), (system)
    - Spec instrumentation toggle
    - Namespace reloading
-   - Test runners"
+   - Test runners
+
+   Profile selection: HIVE_PROFILE env var or :desktop default.
+   System config: resources/hive/system.edn + profile overlay.
+
+   Delegates lifecycle to hive-mcp.server.core (start!/stop!/reset!)."
   (:require [clojure.spec.alpha :as s]
             [clojure.spec.test.alpha :as stest]
             [clojure.repl :refer [doc source]]
             [clojure.pprint :refer [pprint]]
             [clojure.tools.trace :as trace]
-            [clj-reload.core :as reload]))
+            [clojure.java.io :as io]
+            [clj-reload.core :as reload]
+            [hive-mcp.server.core :as core]))
+
+;; ============================================================
+;; Integrant System Lifecycle — delegates to server.core
+;; ============================================================
+
+(defn system
+  "Return the current running Integrant system map, or nil."
+  []
+  @core/system)
+
+(defn go
+  "Initialize the Integrant system from system.edn + profile.
+   Profile defaults to HIVE_PROFILE env var or :desktop.
+   Idempotent — refuses to start if system already running."
+  ([] (core/start!))
+  ([profile]
+   (core/start! :profile profile)))
+
+(defn halt
+  "Halt the running Integrant system. Safe to call when no system running."
+  []
+  (core/stop!))
+
+(defn reset
+  "Halt system, reload changed namespaces via clj-reload, re-init system.
+   The full REPL-driven development cycle."
+  []
+  (core/reset!))
+
+(defn clear
+  "Clear system state without halting (for recovery from broken state).
+   Use when (halt) throws due to corrupted system."
+  []
+  (reset! core/system nil)
+  (println "System atom cleared.")
+  :cleared)
 
 ;; ============================================================
 ;; Spec Instrumentation
@@ -42,18 +86,13 @@
    (stest/check (stest/enumerate-namespace ns-sym))))
 
 ;; ============================================================
-;; Namespace Reloading
+;; Namespace Reloading (standalone, without Integrant cycle)
 ;; ============================================================
 
 (defn reload!
   "Hot-reload changed namespaces using clj-reload."
   []
   (reload/reload))
-
-(defn reset!
-  "Full reset - unload and reload all namespaces."
-  []
-  (reload/reload {:only :changed}))
 
 ;; ============================================================
 ;; Quick Test Runners
@@ -87,44 +126,35 @@
   (trace/untrace-ns ns-sym))
 
 ;; ============================================================
-;; WebSocket Channel (for bb-mcp bridge)
-;; ============================================================
-
-(defn start-websocket!
-  "Start the websocket channel server for bb-mcp communication.
-   Default port 9999, configurable via HIVE_WS_PORT env var."
-  ([] (start-websocket! (parse-long (or (System/getenv "HIVE_WS_PORT") "9999"))))
-  ([port]
-   (require '[hive-mcp.channel.websocket :as ws])
-   ((resolve 'hive-mcp.channel.websocket/start!) {:port port})
-   (println "WebSocket channel started on port" port)))
-
-(defn stop-websocket!
-  "Stop the websocket channel server."
-  []
-  (require '[hive-mcp.channel.websocket :as ws])
-  ((resolve 'hive-mcp.channel.websocket/stop!))
-  (println "WebSocket channel stopped"))
-
-;; ============================================================
-;; Startup
+;; Startup Banner
 ;; ============================================================
 
 (println "\n=== hive-mcp dev environment ===")
-(println "Commands:")
+(println "Integrant lifecycle:")
+(println "  (go)                 - Init system (profile from HIVE_PROFILE or :desktop)")
+(println "  (go :k8s-headless)   - Init with specific profile")
+(println "  (halt)               - Stop system")
+(println "  (reset)              - Halt + reload + go")
+(println "  (system)             - Inspect running system")
+(println "  (clear)              - Emergency: clear system atom")
+(println "Utilities:")
 (println "  (instrument-specs!)  - Enable spec validation")
 (println "  (unstrument-specs!)  - Disable spec validation")
-(println "  (check-specs)        - Run generative tests")
-(println "  (reload!)            - Hot-reload changed files")
+(println "  (reload!)            - Hot-reload changed files (no system cycle)")
 (println "  (run-tests 'ns)      - Run tests for namespace")
 (println "================================\n")
 
-;; Auto-start disabled - call (start-websocket!) manually or via systemd
-;; TODO: Re-enable when nREPL detection is reliable
-#_(when-not *command-line-args*
-    (future
-      (try
-        (Thread/sleep 3000)
-        (start-websocket!)
-        (catch Exception e
-          (println "WebSocket auto-start failed (non-fatal):" (.getMessage e))))))
+;; Auto-init: start Integrant system after nREPL is ready.
+;; bb-mcp connects via nREPL and needs server-context-atom populated,
+;; which happens inside start! after ig/init completes.
+(future
+  (try
+    (Thread/sleep 2000)
+    (if (io/resource "hive/system.edn")
+      (do
+        (println "Auto-starting Integrant system...")
+        (go)
+        (println "Integrant system started."))
+      (println "WARN: system.edn not found on classpath."))
+    (catch Exception e
+      (println "Auto-init failed (non-fatal):" (.getMessage e)))))

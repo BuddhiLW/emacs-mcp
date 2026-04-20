@@ -147,7 +147,9 @@
                      :type :lint-failed
                      :message "Lint check failed"}]
           result (r/guard Exception fallback
-                          (let [{:keys [findings]} (run-analysis file)
+                          (let [{:keys [findings timed-out]} (run-analysis file :timeout-ms 15000)
+                                _ (when timed-out
+                                    (log/warn "Lint timed out for drone validation" {:file file :timeout-ms 15000}))
                                 level-kw (keyword (or lint-level "error"))
                                 filtered (->> findings
                                               (filter #(case level-kw

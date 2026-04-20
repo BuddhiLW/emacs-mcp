@@ -350,3 +350,65 @@
   (testing "Real-world cider eval call with code string"
     (let [result (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-eval "(+ 1 2 3)")]
       (is (str/includes? result "(hive-mcp-cider-eval \"(+ 1 2 3)\")")))))
+
+;; =============================================================================
+;; Test require-and-call-plist-json
+;;
+;; Regression: positional arg ordering across CLJ↔Elisp boundary caused
+;; project-dir to land in repl-type slot → numberp/"coordinator" error.
+;; Plist-based calls eliminate positional ordering bugs entirely.
+;; =============================================================================
+
+(deftest test-require-and-call-plist-json-basic
+  (testing "Generates plist-based function call"
+    (let [result (el/require-and-call-plist-json
+                   'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                   {:name "test-session"})]
+      (is (str/starts-with? result "(progn"))
+      (is (str/includes? result "(require 'hive-mcp-cider nil t)"))
+      (is (str/includes? result "(fboundp 'hive-mcp-cider-spawn-session-from-plist)"))
+      (is (str/includes? result ":name \"test-session\""))
+      (is (str/includes? result "(list :name \"test-session\")")))))
+
+(deftest test-require-and-call-plist-json-nil-omission
+  (testing "Nil values are omitted from the plist"
+    (let [result (el/require-and-call-plist-json
+                   'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                   {:name "foo" :repl-type nil :project-dir nil :agent-id nil})]
+      ;; Only :name should appear — all nil values omitted
+      (is (str/includes? result ":name \"foo\""))
+      (is (not (str/includes? result ":repl-type")))
+      (is (not (str/includes? result ":project-dir")))
+      (is (not (str/includes? result ":agent-id"))))))
+
+(deftest test-require-and-call-plist-json-symbol-values
+  (testing "Clojure symbols emit as quoted elisp symbols"
+    (let [result (el/require-and-call-plist-json
+                   'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                   {:name "test" :repl-type 'clj})]
+      ;; Symbol 'clj should be quoted in elisp
+      (is (str/includes? result ":repl-type 'clj")))))
+
+(deftest test-require-and-call-plist-json-full-spawn-params
+  (testing "Full spawn params match expected elisp structure"
+    (let [result (el/require-and-call-plist-json
+                   'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                   {:name "agent-1"
+                    :repl-type 'clj
+                    :project-dir "/home/user/project"
+                    :agent-id "coordinator"})]
+      ;; All four params present with correct types
+      (is (str/includes? result ":name \"agent-1\""))
+      (is (str/includes? result ":repl-type 'clj"))
+      (is (str/includes? result ":project-dir \"/home/user/project\""))
+      (is (str/includes? result ":agent-id \"coordinator\""))
+      ;; Regression: agent-id must NOT end up where a port number goes
+      ;; With positional args this was: (spawn-session "agent-1" "/home/..." "coordinator")
+      ;; With plist: (spawn-session-from-plist (list :name "agent-1" :agent-id "coordinator" ...))
+      (is (not (str/includes? result "(hive-mcp-cider-spawn-session-from-plist \"agent-1\"")))))
+
+  (testing "Error fallback when feature not loaded"
+    (let [result (el/require-and-call-plist-json
+                   'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                   {:name "x"})]
+      (is (str/includes? result "hive-mcp-cider not loaded")))))

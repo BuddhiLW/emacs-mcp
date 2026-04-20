@@ -5,6 +5,7 @@
             [hive-mcp.tools.swarm.wave.status :as status]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.agent.context :as ctx]
+            [hive-mcp.agent.openrouter :as llm-registry]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]
             [hive-mcp.dns.result :refer [rescue]]))
@@ -95,6 +96,13 @@
                            :agentic
                            :delegate)
           effective-backend (normalize-backend backend)
+          ;; Validate provider+model via registry
+          _ (when effective-backend
+              (when-let [err (llm-registry/validate-provider effective-backend)]
+                (throw (ex-info (str "Unknown backend: " (name effective-backend)) err))))
+          _ (when (and effective-backend model)
+              (when-let [err (llm-registry/validate-model effective-backend model)]
+                (log/warn "Model not in available-models for backend" err)))
           normalized-tasks (mapv (fn [t]
                                    {:file (or (get t "file") (:file t))
                                     :task (or (get t "task") (:task t))})

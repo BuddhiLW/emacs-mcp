@@ -3,8 +3,10 @@
   (:require [clojure-chroma-client.api :as chroma]
             [hive-mcp.chroma.connection :as conn]
             [hive-mcp.chroma.embeddings :as emb]
+            [hive-mcp.chroma.gate :as gate]
             [hive-mcp.chroma.helpers :as h]
-            [taoensso.timbre :as log]))
+            [hive-mcp.embeddings.service :as embedding-service]
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -17,7 +19,7 @@
     (future
       (try
         (let [coll (conn/get-or-create-collection)]
-          @(chroma/delete coll :ids (vec expired-ids))
+          (gate/deref-write (chroma/delete coll :ids (vec expired-ids)))
           (log/info "Lazy eviction: deleted" (count expired-ids) "expired entries"))
         (catch Exception e
           (log/warn "Lazy eviction failed (non-blocking):" (.getMessage e)))))))
@@ -31,11 +33,18 @@
            staleness-alpha staleness-beta staleness-source staleness-depth]
     :as entry}]
   (emb/require-embedding!)
-  (let [coll (conn/get-or-create-collection)
-        entry-id (or id (h/generate-id))
+  (let [entry-id (or id (h/generate-id))
         now (h/iso-timestamp)
         doc-text (h/memory-to-document entry)
-        embedding (emb/embed-text (emb/get-embedding-provider) doc-text)
+        resolved (rescue nil (embedding-service/resolve-provider-for-type type))
+        _ (when resolved (embedding-service/validate-content-size! doc-text resolved))
+        coll (if resolved
+               (conn/get-or-create-named-collection
+                 (:collection-name resolved) (:dimension resolved))
+               (conn/get-or-create-collection))
+        provider (if resolved (:provider resolved) (emb/get-embedding-provider))
+        embedding (gate/with-embedding-gate
+                    (emb/embed-text provider doc-text))
         provided {:type type :tags (h/join-tags tags) :content (h/serialize-content content)
                   :content-hash content-hash :created (or created now) :updated (or updated now)
                   :duration duration :expires expires :access-count access-count
@@ -54,8 +63,8 @@
                   :staleness-source (when staleness-source (name staleness-source))
                   :staleness-depth staleness-depth}
         meta (merge h/metadata-defaults (into {} (remove (comp nil? val) provided)))]
-    @(chroma/add coll [{:id entry-id :embedding embedding :document doc-text :metadata meta}]
-                 :upsert? true)
+    (gate/deref-write (chroma/add coll [{:id entry-id :embedding embedding :document doc-text :metadata meta}]
+                                      :upsert? true))
     (log/debug "Indexed memory entry:" entry-id)
     entry-id))
 
@@ -67,7 +76,8 @@
   (let [coll (conn/get-or-create-collection)
         now  (h/iso-timestamp)
         docs (mapv h/memory-to-document entries)
-        embeddings (emb/embed-batch (emb/get-embedding-provider) docs)
+        embeddings (gate/with-embedding-gate
+                     (emb/embed-batch (emb/get-embedding-provider) docs))
         records (mapv (fn [entry doc emb-vec]
                         (let [provided {:type          (:type entry)
                                         :tags          (h/join-tags (:tags entry))
@@ -86,17 +96,22 @@
                            :document  doc
                            :metadata  meta}))
                       entries docs embeddings)]
-    @(chroma/add coll records :upsert? true)
+    (gate/deref-write (chroma/add coll records :upsert? true))
     (log/info "Indexed" (count entries) "memory entries in batch")
     (mapv :id entries)))
 
 (defn get-entry-by-id
-  "Get a memory entry by ID from Chroma."
+  "Get a memory entry by ID from Chroma. Searches default + large collections."
   [id]
   (emb/require-embedding!)
   (let [coll (conn/get-or-create-collection)
-        results @(chroma/get coll :ids [id] :include #{:documents :metadatas})]
-    (some-> (first results) h/metadata->entry)))
+        results (gate/deref-read (chroma/get coll :ids [id] :include #{:documents :metadatas}))
+        entry (some-> (first results) h/metadata->entry)]
+    (or entry
+        ;; Try large-content collection if not found in default
+        (rescue nil (let [lg-coll (conn/get-or-create-named-collection "hive-mcp-memory-4096d" 4096)
+                lg-results (gate/deref-read (chroma/get lg-coll :ids [id] :include #{:documents :metadatas}))]
+            (some-> (first lg-results) h/metadata->entry))))))
 
 (defn query-entries
   "Query memory entries from Chroma with filtering.
@@ -104,7 +119,15 @@
   [& {:keys [type project-id project-ids tags exclude-tags limit include-expired?]
       :or {limit 100 include-expired? false}}]
   (emb/require-embedding!)
-  (let [coll (conn/get-or-create-collection)
+  (let [colls (try (let [coll-names (embedding-service/type->collection-names type)]
+                     (mapv (fn [cn]
+                             (let [resolved (rescue nil (embedding-service/resolve-provider-for-type
+                                                   (or type "note")))]
+                               (if (and resolved (= cn (:collection-name resolved)))
+                                 (conn/get-or-create-named-collection cn (:dimension resolved))
+                                 (conn/get-or-create-collection))))
+                           coll-names))
+                   (catch Exception _ [(conn/get-or-create-collection)]))
         base-clause (cond-> {}
                       type (assoc :type type)
                       project-ids (assoc :project-id {:$in (vec project-ids)})
@@ -121,10 +144,14 @@
                 (seq base-clause) base-clause
                 :else nil)
         fetch-limit (if include-expired? limit (+ limit 50))
-        results @(chroma/get coll
-                             :where where
-                             :include #{:documents :metadatas}
-                             :limit fetch-limit)
+        ;; PERF: include only :metadatas — see docs/carto-tag-query-perf.md
+        results (mapcat (fn [coll]
+                          (try (gate/deref-read (chroma/get coll
+                                                           :where where
+                                                           :include #{:metadatas}
+                                                           :limit fetch-limit))
+                               (catch Exception _ [])))
+                        colls)
         entries (map h/metadata->entry results)
         {expired true live false} (group-by #(boolean (h/expired? %)) entries)]
     (when-not include-expired?
@@ -139,9 +166,9 @@
   [disc-path]
   (emb/require-embedding!)
   (let [coll (conn/get-or-create-collection)
-        results @(chroma/get coll
-                             :where {:grounded-from disc-path}
-                             :include #{:documents :metadatas})]
+        results (gate/deref-read (chroma/get coll
+                                            :where {:grounded-from disc-path}
+                                            :include #{:documents :metadatas}))]
     (map h/metadata->entry results)))
 
 (defn update-entry!
@@ -165,10 +192,13 @@
     (update-entry! entry-id updates)))
 
 (defn delete-entry!
-  "Delete a memory entry from the Chroma index."
+  "Delete a memory entry from the Chroma index. Tries both collections."
   [id]
   (let [coll (conn/get-or-create-collection)]
-    @(chroma/delete coll :ids [id])
+    (gate/deref-write (chroma/delete coll :ids [id]))
+    ;; Also try deleting from large collection (entry might be there)
+    (rescue nil (let [lg-coll (conn/get-or-create-named-collection "hive-mcp-memory-4096d" 4096)]
+        (gate/deref-write (chroma/delete lg-coll :ids [id]))))
     (log/debug "Deleted entry from Chroma:" id)
     id))
 
@@ -184,7 +214,7 @@
   []
   (try
     (let [coll (conn/get-or-create-collection)
-          all-entries @(chroma/get coll :include [:metadatas])]
+          all-entries (gate/deref-read (chroma/get coll :include [:metadatas]))]
       {:count (count all-entries)
        :types (frequencies (map #(get-in % [:metadata :type]) all-entries))})
     (catch Exception e

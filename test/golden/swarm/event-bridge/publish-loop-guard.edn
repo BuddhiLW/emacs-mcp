@@ -1,0 +1,3 @@
+{:local-events
+ [{:type :slave-spawned, :slave-id "ling-loop-1", :via :nats-bridge}],
+ :nats-publishes []}

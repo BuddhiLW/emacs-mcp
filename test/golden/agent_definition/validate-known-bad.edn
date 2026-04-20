@@ -1,0 +1,6 @@
+{:valid false,
+ :errors
+ {:agent-type ["should be a string"],
+  :description ["should be a string"],
+  :system-prompt ["missing required key"],
+  :max-turns ["should be a positive int"]}}

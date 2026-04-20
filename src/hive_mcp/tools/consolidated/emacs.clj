@@ -22,8 +22,8 @@
 
 ;; ── logic* fns (pure Result-returning) ───────────────────────────────────────
 
-(defn- eval* [{:keys [code]}]
-  (elisp->result (ec/eval-elisp code)))
+(defn- eval* [{:keys [code timeout_ms]}]
+  (elisp->result (ec/eval-elisp-with-timeout code (or timeout_ms ec/*default-timeout-ms*))))
 
 (defn- buffers* [_]
   (let [elisp "(json-encode (mapcar (lambda (b) (list :name (buffer-name b) :file (buffer-file-name b))) (buffer-list)))"]
@@ -165,6 +165,8 @@
                                          :description "Emacs operation to perform"}
                               "code" {:type "string"
                                       :description "Elisp code to evaluate"}
+                              "timeout_ms" {:type "integer"
+                                            :description "Timeout in milliseconds for eval (default: 5000, max: 30000)"}
                               "message" {:type "string"
                                          :description "Notification message"}
                               "level" {:type "string"

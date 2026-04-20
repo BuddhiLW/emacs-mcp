@@ -1,5 +1,6 @@
 (ns hive-mcp.protocols.dispatch
-  "Polymorphic dispatch context protocol for agent communication.")
+  "Polymorphic dispatch context protocol for agent communication."
+  (:require [hive-dsl.result :refer [rescue]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -72,9 +73,8 @@
         ;; at call time, not at require time.
         effective-fn (or reconstruct-fn
                          (fn [refs nodes sc]
-                           (when-let [f (try (requiring-resolve
-                                              'hive-mcp.context.reconstruction/reconstruct-context)
-                                             (catch Exception _ nil))]
+                           (when-let [f (rescue nil (requiring-resolve
+                                                     'hive-mcp.context.reconstruction/reconstruct-context))]
                              (f refs nodes sc))))]
     (->RefContext prompt
                   (or ctx-refs {})
@@ -86,10 +86,9 @@
   "Create an extension-backed dispatch context."
 
   [task-node-id kg-store]
-  (if-let [f (try
+  (if-let [f (rescue nil
                (when-let [get-ext (requiring-resolve 'hive-mcp.extensions.registry/get-extension)]
-                 (get-ext :dp/graph-ctx))
-               (catch Exception _ nil))]
+                 (get-ext :dp/graph-ctx)))]
     (f task-node-id kg-store)
     (->TextContext (str "Extension context unavailable. Task node: " task-node-id))))
 

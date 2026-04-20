@@ -15,9 +15,10 @@
             [hive-mcp.emacs.elisp :as el]
             [hive-mcp.telemetry.core :as telemetry]
             [hive-mcp.dns.validation :as v]
+            [hive-mcp.schema.cider :as cider-schema]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -28,12 +29,17 @@
 
 (defn- elisp->result
   "Execute elisp and convert response to Result.
-   {:success true :result r} -> (ok r), {:success false :error e} -> (err ...)"
-  [elisp]
-  (let [{:keys [success result error]} (ec/eval-elisp elisp)]
-    (if success
-      (result/ok result)
-      (result/err :cider/elisp-failed {:message (str error)}))))
+   {:success true :result r} -> (ok r), {:success false :error e} -> (err ...)
+   Optional timeout-ms overrides the default emacsclient timeout."
+  ([elisp] (elisp->result elisp nil))
+  ([elisp timeout-ms]
+   (let [{:keys [success result error]}
+         (if timeout-ms
+           (ec/eval-elisp-with-timeout elisp timeout-ms)
+           (ec/eval-elisp elisp))]
+     (if success
+       (result/ok result)
+       (result/err :cider/elisp-failed {:message (str error)})))))
 
 (defn- try-result
   "Execute thunk f returning Result; catch unexpected exceptions as error Result.
@@ -88,8 +94,9 @@
    Optionally accepts project-dir to ensure session connects to correct nREPL."
   ([session-name] (spawn-session-internal session-name nil))
   ([session-name project-dir]
-   (let [elisp (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-spawn-session
-                                         session-name project-dir nil)
+   (let [elisp (el/require-and-call-plist-json
+                 'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                 {:name session-name :project-dir project-dir})
          {:keys [success]} (ec/eval-elisp elisp)]
      success)))
 
@@ -128,7 +135,7 @@
                  (if-let [session (find-connected-session sessions)]
                    (do (log/info "ensure-cider-connected: using existing session" session)
                        (result/ok session))
-                   (let [project-dir (try (ec/project-root) (catch Exception _ nil))]
+                   (let [project-dir (rescue nil (ec/project-root))]
                      (log/info "ensure-cider-connected: spawning 'auto'" {:project-dir project-dir})
                      (spawn-and-wait* "auto" project-dir)))))
 
@@ -153,16 +160,22 @@
 (defn- handle-cider-eval-common
   "Common eval handler with validation, telemetry, and auto-connect retry.
    DRYs handle-cider-eval-silent and handle-cider-eval-explicit.
-   elisp-fn: (fn [code] elisp-expression-string)"
+   elisp-fn: (fn [code] elisp-expression-string)
+   timeout-ms: optional emacsclient timeout override (default 5000)"
   [params telemetry-key elisp-fn]
   (try
     (v/validate-cider-eval-request params)
-    (let [{:keys [code]} params]
+    (let [{:keys [code timeout]} params
+          ;; Convert CIDER timeout (seconds) to emacsclient timeout (ms).
+          ;; Add 2s buffer so emacsclient doesn't race the nREPL timeout.
+          ;; Default: 62s (CIDER default nREPL timeout is 60s).
+          nrepl-timeout (or timeout 60)
+          ec-timeout-ms (+ (* nrepl-timeout 1000) 2000)]
       (telemetry/with-eval-telemetry telemetry-key code nil
         (result->mcp
          (try-result :cider/eval-failed
                      #(with-auto-connect*
-                        (fn [] (elisp->result (elisp-fn code))))))))
+                        (fn [] (elisp->result (elisp-fn code) ec-timeout-ms)))))))
     (catch clojure.lang.ExceptionInfo e
       (if (= :validation (:type (ex-data e)))
         (v/wrap-validation-error e)
@@ -170,10 +183,13 @@
 
 (defn handle-cider-eval-silent
   "Evaluate Clojure code via CIDER silently with telemetry.
-   Auto-connects to CIDER if not connected (spawns 'auto' session if needed)."
+   Auto-connects to CIDER if not connected (spawns 'auto' session if needed).
+   Supports optional :timeout param (seconds)."
   [params]
-  (handle-cider-eval-common params :cider-silent
-                            (fn [code] (el/require-and-call-text 'hive-mcp-cider 'hive-mcp-cider-eval-silent code))))
+  (let [timeout (:timeout params)]
+    (handle-cider-eval-common params :cider-silent
+                              (fn [code] (el/require-and-call-text 'hive-mcp-cider 'hive-mcp-cider-eval-silent
+                                                                    code (or timeout nil))))))
 
 (defn handle-cider-eval-explicit
   "Evaluate Clojure code via CIDER interactively (shows in REPL) with telemetry.
@@ -228,12 +244,44 @@
 
 (defn handle-cider-spawn-session
   "Spawn a new named CIDER session with its own nREPL server.
-   Useful for parallel agent work where each agent needs isolated REPL."
-  [{:keys [name project_dir agent_id]}]
-  (log/info "cider-spawn-session" {:name name :agent_id agent_id})
+   Useful for parallel agent work where each agent needs isolated REPL.
+   Uses plist-based boundary crossing (ADT) to prevent positional arg bugs."
+  [{:keys [name project_dir agent_id repl_type]}]
+  (log/info "cider-spawn-session" {:name name :repl_type repl_type :agent_id agent_id})
   (handle-elisp :cider/spawn-failed
-                (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-spawn-session
-                                          name project_dir agent_id)))
+                (el/require-and-call-plist-json
+                  'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                  {:name      name
+                   :repl-type (when repl_type (symbol repl_type))
+                   :project-dir project_dir
+                   :agent-id  agent_id})))
+
+(defn handle-cider-connect-session
+  "Connect to an existing nREPL server as a named session.
+   Useful for connecting to shadow-cljs, lein, or other external nREPL servers.
+   Dispatches to the correct CIDER connect function based on repl_type.
+   Uses extended timeout (20s) because deferred connections poll in Emacs.
+   Coerces port from string to int (MCP JSON boundary)."
+  [{:keys [name host port repl_type agent_id] :as params}]
+  (try
+    (let [port (cond-> port (string? port) parse-long)
+          params (assoc params :port port)
+          elisp (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-connect-session
+                                          name (or host "localhost") port
+                                          (or repl_type "clj") agent_id)]
+      (cider-schema/validate-connect-params params)
+      (log/info "cider-connect-session" {:name name :host host :port port :repl_type repl_type})
+      (result->mcp
+       (try-result :cider/connect-failed
+                   (fn []
+                     (let [{:keys [success result error]} (ec/eval-elisp-with-timeout elisp 20000)]
+                       (if success
+                         (result/ok result)
+                         (result/err :cider/elisp-failed {:message (str error)})))))))
+    (catch clojure.lang.ExceptionInfo e
+      (if (= :validation (:type (ex-data e)))
+        (v/wrap-validation-error e)
+        (throw e)))))
 
 (defn handle-cider-list-sessions
   "List all active CIDER sessions with their status and ports."
@@ -243,12 +291,13 @@
                 (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-list-sessions)))
 
 (defn handle-cider-eval-session
-  "Evaluate Clojure code in a specific named CIDER session."
-  [{:keys [session_name code]}]
-  (log/info "cider-eval-session" {:session session_name :code-length (count code)})
+  "Evaluate Clojure code in a specific named CIDER session.
+   Supports optional :timeout param (seconds)."
+  [{:keys [session_name code timeout]}]
+  (log/info "cider-eval-session" {:session session_name :code-length (count code) :timeout timeout})
   (handle-elisp :cider/eval-session-failed
                 (el/require-and-call-text 'hive-mcp-cider 'hive-mcp-cider-eval-in-session
-                                          session_name code)))
+                                          session_name code (or timeout nil))))
 
 (defn- kill-session*
   "Kill a named session. Returns Result with confirmation message."

@@ -7,6 +7,7 @@
    - Change plans (dispatch_drone_wave)
    - Wave execution management
    - Completed task registry (session-scoped for wrap)
+   - Kanban movement registry (session-scoped status transitions for wrap)
 
    DDD: Application Service layer for multi-agent coordination."
   (:require [datascript.core :as d]
@@ -717,5 +718,88 @@
         count-cleared (count eids)]
     (when (seq eids)
       (log/debug "Clearing" count-cleared "completed tasks")
+      (d/transact! c (mapv (fn [eid] [:db/retractEntity eid]) eids)))
+    count-cleared))
+
+;;; =============================================================================
+;;; Kanban Movement Registry (Session-scoped status transitions for wrap)
+;;; =============================================================================
+
+(defn register-kanban-movement!
+  "Register a kanban status transition for wrap to harvest.
+
+   Called by kanban create/move handlers to track all status changes,
+   not just completions. Session-scoped and cleared after wrap.
+
+   Arguments:
+     opts - Map with keys:
+            :task-id    - Kanban task ID
+            :title      - Task title
+            :from       - Previous status (nil for creation)
+            :to         - New status
+            :agent-id   - Agent that triggered the move (auto-detected)
+            :project-id - Project scope
+
+   Returns:
+     Transaction report"
+  [{:keys [task-id title from to agent-id project-id]}]
+  {:pre [(string? task-id) (string? to)]}
+  (let [c (conn/ensure-conn)
+        auto-agent-id (or agent-id (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
+        movement-id (str "mv-" (System/currentTimeMillis) "-" (subs (str (java.util.UUID/randomUUID)) 0 8))
+        tx-data (cond-> {:kanban-movement/id movement-id
+                         :kanban-movement/task-id task-id
+                         :kanban-movement/to to
+                         :kanban-movement/at (conn/now)}
+                  title (assoc :kanban-movement/title title)
+                  from (assoc :kanban-movement/from from)
+                  auto-agent-id (assoc :kanban-movement/agent-id auto-agent-id)
+                  project-id (assoc :kanban-movement/project-id project-id))]
+    (log/debug "Registering kanban movement:" task-id from "->" to "project-id:" project-id)
+    (d/transact! c [tx-data])))
+
+(defn get-kanban-movements-this-session
+  "Get all kanban movements registered this session.
+
+   Used by wrap to harvest status transitions.
+
+   Options:
+   - :agent-id   - Filter by specific agent
+   - :project-id - Filter by project scope
+
+   Returns:
+     Seq of kanban-movement maps sorted by timestamp (chronological)"
+  [& {:keys [agent-id project-id]}]
+  (let [c (conn/ensure-conn)
+        db @c
+        all-movements (d/q '[:find [(pull ?e [*]) ...]
+                             :where [?e :kanban-movement/id _]]
+                           db)]
+    (->> all-movements
+         (filter (fn [mv]
+                   (or (nil? agent-id)
+                       (= agent-id (:kanban-movement/agent-id mv)))))
+         (filter (fn [mv]
+                   (or (nil? project-id)
+                       (= project-id (:kanban-movement/project-id mv)))))
+         (sort-by :kanban-movement/at)
+         (map (fn [mv] (dissoc mv :db/id))))))
+
+(defn clear-kanban-movements!
+  "Clear all kanban movements from the registry.
+
+   Called after wrap to reset for next session.
+
+   Returns:
+     Number of movements cleared"
+  []
+  (let [c (conn/ensure-conn)
+        db @c
+        eids (d/q '[:find [?e ...]
+                    :where [?e :kanban-movement/id _]]
+                  db)
+        count-cleared (count eids)]
+    (when (seq eids)
+      (log/debug "Clearing" count-cleared "kanban movements")
       (d/transact! c (mapv (fn [eid] [:db/retractEntity eid]) eids)))
     count-cleared))

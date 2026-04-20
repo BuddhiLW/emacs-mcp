@@ -17,6 +17,7 @@
   (:require [hive-mcp.protocols.event-backbone :as eb]
             [hive-mcp.protocols.delivery-channel :as dc]
             [hive-mcp.tools.swarm.channel :as channel]
+            [hive-mcp.channel.core :as channel-core]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -79,6 +80,22 @@
    hive.v1.event.>"
   []
   (str event-prefix ".>"))
+
+;; --- Agent (headless ling) subjects ---
+
+(def ^:private agent-prefix "hive.v1.agent")
+
+(defn agent-subject
+  "Build subject for a specific agent lifecycle event.
+   E.g. hive.v1.agent.completed.ling-abc123"
+  [ling-id event-type]
+  (str agent-prefix "." (name event-type) "." ling-id))
+
+(defn agent-wildcard
+  "Build wildcard subject for all agent events of a type.
+   E.g. hive.v1.agent.completed.>"
+  [event-type]
+  (str agent-prefix "." (name event-type) ".>"))
 
 ;; --- Tool notification subjects ---
 
@@ -165,6 +182,25 @@
     (log/debug "[Bridge] Published tool notification on" subject)))
 
 ;; =============================================================================
+;; Publisher Side — Agent (Headless Ling) Events
+;; =============================================================================
+
+(defn publish-agent-event!
+  "Publish headless agent lifecycle event via IEventBackbone.
+   Called from headless_adapter when agentic loop completes/fails.
+
+   Payload shape:
+   {:event-type :completed|:failed|:progress
+    :ling-id    \"ling-abc123\"
+    :result     {...}
+    :timestamp  1234567890}"
+  [{:keys [event-type ling-id] :as payload}]
+  (let [backbone (eb/get-backbone)
+        subject (agent-subject ling-id event-type)]
+    (eb/publish! backbone subject payload)
+    (log/debug "[Bridge] Published agent event on" subject)))
+
+;; =============================================================================
 ;; Callback Bridge (requiring-resolve to avoid circular deps)
 ;; =============================================================================
 
@@ -177,6 +213,74 @@
       (notify! task-id event-data))
     (catch Exception e
       (log/debug "[Bridge] Callback fire failed for" task-id (.getMessage e)))))
+
+;; =============================================================================
+;; Error summarization — cap drone error payloads before shouting
+;; =============================================================================
+
+(def ^:private ^:const max-summary-len 300)
+
+(defn- truncate-str
+  "Truncate s to max-summary-len, appending ellipsis if trimmed."
+  [s]
+  (let [s (str s)]
+    (if (<= (count s) max-summary-len)
+      s
+      (str (subs s 0 max-summary-len) "…"))))
+
+(defn- summarize-drone-error
+  "Summarize a drone error payload for shouting — never emit >~300 chars.
+
+   Rules:
+   - string       → first 300 chars + '…' (if longer)
+   - ex-info/Throwable → type + ex-message (truncated)
+   - map          → prefer (:error/type), (:message), (ex-message); drop rest
+   - collection > 5 items → '<N items, first: <truncated>>'
+   - fallback     → truncated (pr-str x)
+
+   Guards against drones echoing whole JSON arrays (e.g. kanban-list response)
+   as their error — that floods piggyback blocks and wastes coordinator context."
+  [error]
+  (cond
+    (nil? error)
+    "unknown error"
+
+    (string? error)
+    (truncate-str error)
+
+    (instance? Throwable error)
+    (let [msg (ex-message error)
+          data (ex-data error)
+          etype (some-> data :error/type)]
+      (truncate-str
+       (cond
+         (and etype msg) (str etype " " msg)
+         etype (str etype)
+         msg msg
+         :else (.getName (class error)))))
+
+    (map? error)
+    (let [etype (:error/type error)
+          msg (or (:message error) (:error/message error))
+          exm (ex-message error)
+          picked (cond
+                   (and etype msg) (str etype " " msg)
+                   etype (str etype)
+                   msg msg
+                   exm exm
+                   :else (pr-str (select-keys error [:error/type :message
+                                                     :error/message :type])))]
+      (truncate-str picked))
+
+    (and (coll? error) (not (map? error)))
+    (let [n (count error)]
+      (if (> n 5)
+        (truncate-str
+         (str "<" n " items, first: " (pr-str (first error)) ">"))
+        (truncate-str (pr-str error))))
+
+    :else
+    (truncate-str (pr-str error))))
 
 ;; =============================================================================
 ;; Hivemind Auto-Shout (drone visibility via piggyback)
@@ -195,6 +299,89 @@
                  :task (str "drone-task:" task-id)}))
     (catch Exception e
       (log/debug "[Bridge] Auto-shout failed for" task-id (.getMessage e)))))
+
+;; =============================================================================
+;; Hivemind Auto-Shout — Agent (Headless Ling) Events
+;; =============================================================================
+
+(defn- auto-shout-agent-event!
+  "Auto-shout headless ling completion/failure to hivemind for visibility.
+   Makes agent results appear in ---HIVEMIND--- piggyback blocks.
+   Mirrors auto-shout-drone-event! pattern.
+
+   BUG FIX: Uses bare ling-id (not \"agent:\"-prefixed) so that shout!
+   can resolve the slave in DataScript. The slave is registered under
+   its plain ling-id by execute-spawn-plan!, so prefixing caused
+   get-slave-by-name-or-id to miss the match."
+  [ling-id event-type summary-msg]
+  (try
+    (when-let [shout-fn (requiring-resolve 'hive-mcp.hivemind.core/shout!)]
+      (shout-fn ling-id
+                event-type
+                {:message summary-msg
+                 :task (str "headless-agent:" ling-id)}))
+    (catch Exception e
+      (log/debug "[Bridge] Agent auto-shout failed for" ling-id (.getMessage e)))))
+
+;; =============================================================================
+;; Subscriber Side — Agent (Headless Ling) Events
+;; =============================================================================
+
+(defn- republish-lifecycle-locally!
+  "Re-emit a slave-lifecycle event into the in-process channel.core bus
+   so swarm/sync handlers fire (Datascript update, Datahike write-through,
+   Olympus emit, queue processing).
+
+   Tagged `:via :nats-bridge` so swarm.event-bridge.publish-slave-event! does
+   not bounce it back out to NATS — this message is INBOUND from NATS already."
+  [event]
+  (try
+    (channel-core/publish! (assoc event :via :nats-bridge))
+    (catch Exception e
+      (log/warn "[Bridge] failed to republish lifecycle event:" (.getMessage e)))))
+
+(defn- handle-agent-completed
+  "Handle headless agent completion — auto-shout to hivemind piggyback AND
+   re-emit slave-lifecycle events into channel.core so swarm/sync handlers
+   fire (release claims, mark slave killed, write-through to Datahike).
+
+   Journal write is already done by headless_adapter; no duplicate write here."
+  [{:keys [ling-id task-id result] :as _msg}]
+  (log/info "[Bridge] agent completed:" ling-id)
+  (auto-shout-agent-event!
+   ling-id :completed
+   (str "Agent " ling-id " completed"
+        (when-let [r (:result result)] (str ": " (subs (str r) 0 (min 120 (count (str r))))))))
+  ;; Lifecycle: a headless agent completion is BOTH a task-completed and a
+  ;; slave-killed (one-shot agent-sdk semantics). Emit both so the swarm/sync
+  ;; handlers update task state and remove the slave entity.
+  (when task-id
+    (republish-lifecycle-locally! {:type :task-completed
+                                   :slave-id ling-id
+                                   :task-id task-id
+                                   :timestamp (System/currentTimeMillis)}))
+  (republish-lifecycle-locally! {:type :slave-killed
+                                 :slave-id ling-id
+                                 :timestamp (System/currentTimeMillis)}))
+
+(defn- handle-agent-failed
+  "Handle headless agent failure — auto-shout to hivemind piggyback AND
+   re-emit slave-lifecycle events into channel.core so swarm/sync handlers
+   fire (release claims, fail task, remove slave)."
+  [{:keys [ling-id task-id error] :as _msg}]
+  (log/info "[Bridge] agent failed:" ling-id)
+  (auto-shout-agent-event!
+   ling-id :error
+   (str "Agent " ling-id " failed: " (or error "unknown error")))
+  (when task-id
+    (republish-lifecycle-locally! {:type :task-failed
+                                   :slave-id ling-id
+                                   :task-id task-id
+                                   :error error
+                                   :timestamp (System/currentTimeMillis)}))
+  (republish-lifecycle-locally! {:type :slave-killed
+                                 :slave-id ling-id
+                                 :timestamp (System/currentTimeMillis)}))
 
 ;; =============================================================================
 ;; Subscriber Side — Drone Events (existing)
@@ -234,7 +421,7 @@
     (fire-callback-if-registered! task-id event-data)
     (auto-shout-drone-event!
      task-id :error
-     (str "Drone " task-id " failed: " (or error "unknown error")))))
+     (str "Drone " task-id " failed: " (summarize-drone-error error)))))
 
 ;; =============================================================================
 ;; Subscriber Side — Hivemind Shout Fanout (M1, protocol-mediated)
@@ -275,7 +462,10 @@
       (eb/subscribe! backbone (shout-wildcard) handle-shout-fanout!)
       ;; Tool notification fanout subscription (M1)
       (eb/subscribe! backbone (tool-wildcard) handle-tool-notification!)
-      (log/info "[Bridge] Subscriptions started (drone + shout + tool fanout)"))))
+      ;; Agent (headless ling) lifecycle subscriptions
+      (eb/subscribe! backbone (agent-wildcard :completed) handle-agent-completed)
+      (eb/subscribe! backbone (agent-wildcard :failed) handle-agent-failed)
+      (log/info "[Bridge] Subscriptions started (drone + shout + tool + agent fanout)"))))
 
 (defn stop-subscriptions!
   "Unsubscribe from all event subjects via IEventBackbone."
@@ -285,4 +475,6 @@
     (eb/unsubscribe! backbone (wildcard-subject :failed))
     (eb/unsubscribe! backbone (shout-wildcard))
     (eb/unsubscribe! backbone (tool-wildcard))
+    (eb/unsubscribe! backbone (agent-wildcard :completed))
+    (eb/unsubscribe! backbone (agent-wildcard :failed))
     (log/info "[Bridge] Subscriptions stopped")))

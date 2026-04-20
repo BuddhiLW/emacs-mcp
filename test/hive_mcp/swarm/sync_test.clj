@@ -110,7 +110,10 @@
   (testing "Handle-task-completed updates DataScript status"
     (ds/add-slave! "ds-ling" {:status :working :name "ds" :depth 1})
     (ds/add-task! "ds-task-1" "ds-ling" {:status :dispatched :files ["/a.clj"]})
-    (ds/claim-file! "/a.clj" "ds-ling" "ds-task-1")
+    ;; claim-file! takes an opts map (not a bare task-id string). Passing a
+    ;; string silently destructures to {:task-id nil}, so the claim is created
+    ;; with no :claim/task ref and release-claims-for-task! can't find it.
+    (ds/claim-file! "/a.clj" "ds-ling" {:task-id "ds-task-1"})
 
     (when-not (sync/get-hooks-registry)
       (sync/set-hooks-registry! (hooks/create-registry)))

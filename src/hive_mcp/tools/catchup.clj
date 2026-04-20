@@ -1,11 +1,12 @@
 (ns hive-mcp.tools.catchup
   "Native Catchup workflow — thin facade delegating to sub-namespaces.
 
-   Gathers session context from Chroma memory with project scoping.
-   Designed for the /catchup skill to restore context at session start.
+   Gathers session context from the registered IMemoryStore (currently
+   Milvus or Qdrant) with project scoping. Designed for the /catchup skill
+   to restore context at session start.
 
    Sub-namespace delegation (Sprint 2):
-   - catchup.scope     — scope-filtered Chroma queries, project context
+   - catchup.scope     — scope-filtered store queries, project context
    - catchup.format    — entry metadata transforms, response builders
    - catchup.git       — git status via Emacs
    - catchup.spawn     — spawn-time context injection (dual-mode)
@@ -15,19 +16,26 @@
    - handle-native-catchup  — main catchup handler
    - handle-native-wrap     — wrap/crystallize handler
    - spawn-context          — re-export from catchup.spawn"
-  (:require [hive-mcp.chroma.core :as chroma]
+  (:require [hive-mcp.agent.context :as ctx]
+            [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.catchup.scope :as catchup-scope]
             [hive-mcp.tools.catchup.format :as fmt]
             [hive-mcp.tools.catchup.git :as catchup-git]
+            [hive-mcp.tools.catchup.carto :as catchup-carto]
             [hive-mcp.tools.catchup.spawn :as catchup-spawn]
+            [hive-mcp.tools.catchup.scope-filter :as sf]
+            [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.channel.memory-piggyback :as memory-piggyback]
             [hive-mcp.channel.piggyback :as piggyback]
             [hive-mcp.channel.context-store :as context-store]
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.concurrency.pool :as pool]
+            [hive-mcp.project.tree :as project-tree]
             [hive-mcp.dns.result :refer [rescue]]
+            [hive-mcp.agent.context :as ctx]
             [hive-dsl.context.identity :as ctx-id]
+            [hive-ttracking.core :as tt]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -49,73 +57,93 @@
 ;; =============================================================================
 
 (defn- safe-deref
-  "Deref a future with timeout-ms. Returns default on timeout or exception."
-  [fut timeout-ms default]
-  (try
-    (let [result (deref fut timeout-ms ::timeout)]
-      (if (= result ::timeout)
-        (do (future-cancel fut)
-            (log/debug "catchup: parallel query timed out")
-            default)
-        result))
-    (catch Exception e
-      (log/debug "catchup: parallel deref failed:" (.getMessage e))
-      default)))
+  "Deref a future with timeout-ms. Returns default on timeout or exception.
+   Label identifies which query timed out so operators can spot silent drops."
+  ([fut timeout-ms default]
+   (safe-deref fut timeout-ms default "unlabeled"))
+  ([fut timeout-ms default label]
+   (try
+     (let [result (deref fut timeout-ms ::timeout)]
+       (if (= result ::timeout)
+         (do (future-cancel fut)
+             (log/warn "catchup: parallel query timed out after" timeout-ms "ms:" label)
+             default)
+         result))
+     (catch Exception e
+       (log/warn "catchup: parallel deref failed for" label ":" (.getMessage e))
+       default))))
 
 (def ^:private ^:const query-timeout-ms
-  "Timeout for individual parallel query futures."
-  15000)
+  "Outer safe-deref timeout for the bundle/git/carto futures. The bundle
+   future runs query-all-scoped (fork-join with its own 60s per-branch
+   budget) AND hydrate-buckets (single batch-get for ~270 survivors).
+   Measured 2026-04-17 on a 45-project hive hierarchy:
+     query-all-scoped   : ~42s
+     hydrate-buckets    : ~162s  (Milvus batch-get on ~270 ids)
+     total bundle       : ~204s
+   60s was the original value and caused silent empty bundles whenever the
+   hierarchy was non-trivial — the outer safe-deref hit its timeout long
+   before hydrate finished, returning the {} default and propagating 0
+   counts to every catchup bucket. 300s gives hydrate realistic headroom
+   until the Milvus batch-get path is itself optimized."
+  300000)
 
 ;; =============================================================================
 ;; Main Catchup Handler
 ;; =============================================================================
 
 (defn handle-native-catchup
-  "Native Clojure catchup implementation that queries Chroma directly.
-   Returns structured catchup data with proper project scoping.
+  "Native Clojure catchup implementation that queries the registered
+   IMemoryStore directly. Returns structured catchup data with proper
+   project scoping.
 
    If an enrichment addon is registered via :cu/a, it runs
    fire-and-forget. Results arrive via piggyback on subsequent calls."
   [args]
-  (let [directory (:directory args)]
-    (log/info "native-catchup: querying Chroma with project scope" {:directory directory})
-    ;; Guard: early return if Chroma not configured
-    (if-not (chroma/embedding-configured?)
-      (fmt/chroma-not-configured-error)
+  (let [directory (or (:directory args)
+                      (ctx/current-directory)
+                      (:_caller_cwd args))]
+    (log/info "native-catchup: querying memory store with project scope" {:directory directory})
+    ;; Guard: early return if no store registered
+    (if-not (mem-proto/store-set?)
+      (fmt/store-not-configured-error)
       (try
-        (let [project-id (scope/get-current-project-id directory)
+        ;; Prefer the project-id already resolved by wrap-handler-context
+        ;; (which considers :_caller_cwd / user.dir fallbacks). Only recompute
+        ;; from directory when ctx is unbound (e.g. direct repl call).
+        (let [project-id (or (ctx/current-project-id)
+                             (scope/get-current-project-id directory))
               project-name (catchup-scope/get-current-project-name directory)
               scopes (fmt/build-scopes project-name project-id)
 
-              ;; ── Wave 1: Fire independent queries in parallel (bounded by IO pool) ──
-              f-axioms      (pool/with-io (catchup-scope/query-axioms project-id))
-              f-principles  (pool/with-io (catchup-scope/query-scoped-entries "principle" nil project-id 50))
-              f-priority    (pool/with-io (catchup-scope/query-scoped-entries "convention" ["catchup-priority"]
-                                                                              project-id 50))
-              f-sessions    (pool/with-io (catchup-scope/query-scoped-entries "note" ["session-summary"] project-id 10))
-              f-decisions   (pool/with-io (catchup-scope/query-scoped-entries "decision" nil project-id 50))
-              f-snippets    (pool/with-io (catchup-scope/query-scoped-entries "snippet" nil project-id 20))
-              f-expiring    (pool/with-io (catchup-scope/query-expiring-entries project-id 20))
-              f-git         (pool/with-io (catchup-git/gather-git-info directory))
+              ;; ── Tree scan: ensure project hierarchy is populated before queries ──
+              ;; Without this, descendant-scopes returns [] and sessions stored
+              ;; under child projects (e.g. hive-mcp under hive) are invisible.
+              _ (rescue nil (project-tree/maybe-scan-project-tree! (or directory ".")))
 
-              ;; ── Wave 1: Collect with timeout ──
-              axioms               (safe-deref f-axioms query-timeout-ms [])
-              principles           (safe-deref f-principles query-timeout-ms [])
-              priority-conventions (safe-deref f-priority query-timeout-ms [])
-              sessions             (safe-deref f-sessions query-timeout-ms [])
-              decisions            (safe-deref f-decisions query-timeout-ms [])
-              snippets             (safe-deref f-snippets query-timeout-ms [])
-              expiring             (safe-deref f-expiring query-timeout-ms [])
-              git-info             (safe-deref f-git query-timeout-ms {})
+              ;; ── Wave 1: ONE memory bundle + git + carto in parallel ──
+              ;; The bundle replaces 7 per-type Milvus RPCs with 2 queries
+              ;; (hierarchy + global-pierce), grouped by :type in memory. Avoids
+              ;; Milvus type-filter scalar-scan storms that blew the budget.
+              f-bundle (pool/with-io ((tt/timed-query "catchup/bundle-total"
+                                                      #(catchup-scope/query-catchup-bundle project-id))))
+              f-git    (pool/with-io ((tt/timed-query "catchup/git-total"
+                                                      #(catchup-git/gather-git-info directory))))
+              f-carto  (pool/with-io ((tt/timed-query "catchup/carto-total"
+                                                      #(catchup-carto/get-status project-id))))
 
-              ;; ── Wave 2: Dependent query (needs axiom + priority IDs) ──
-              conventions (safe-deref
-                           (pool/with-io
-                             (catchup-scope/query-regular-conventions
-                              project-id
-                              (set (map :id axioms))
-                              (set (map :id priority-conventions))))
-                           query-timeout-ms [])
+              bundle        (safe-deref f-bundle query-timeout-ms {} "bundle")
+              git-info      (safe-deref f-git query-timeout-ms {} "git-info")
+              carto-status  (safe-deref f-carto query-timeout-ms nil "carto-status")
+
+              axioms               (:axioms bundle [])
+              principles           (:principles bundle [])
+              priority-conventions (:priority-conventions bundle [])
+              sessions             (:sessions bundle [])
+              decisions            (:decisions bundle [])
+              snippets             (:snippets bundle [])
+              expiring             (:expiring bundle [])
+              conventions          (:conventions bundle [])
 
               ;; Convert to metadata (pure, fast)
               axioms-meta (mapv fmt/entry->axiom-meta axioms)
@@ -133,7 +161,9 @@
                               :project-id project-id
                               :caller-id (:_caller_id args)
                               :decisions decisions-base
+                              :decisions-raw decisions
                               :conventions conventions-base
+                              :conventions-raw conventions
                               :sessions sessions-meta
                               :axioms axioms
                               :principles principles
@@ -143,9 +173,11 @@
               ;; incremental delivery via ---MEMORY--- blocks on subsequent calls.
               ;; Axioms first (highest priority), then priority conventions.
               ;;
-              ;; CURSOR ISOLATION: Uses ctx-id ADTs for canonical identity construction.
-              ;; Guarantees buffer key alignment with routes.clj piggyback wrappers.
-              caller (ctx-id/parse-caller-id (:_caller_id args))
+              ;; SESSION-SCOPED: memory piggyback uses raw caller-id (no project
+              ;; dimension) for buffer key alignment with routes.clj drain wrappers.
+              ;; Hivemind cursor still uses project-scoped piggyback-agent-id.
+              raw-caller-id (or (:_caller_id args) "coordinator")
+              caller (ctx-id/parse-caller-id raw-caller-id)
               scope (ctx-id/parse-project-scope project-id)
               piggyback-agent-id (ctx-id/make-piggyback-agent-id caller scope)
 
@@ -157,9 +189,34 @@
                         (do
                           (piggyback/adopt-cursor! piggyback-agent-id project-id)
                           (piggyback/evict-stale-cursors! 1800000) ;; 30 min
-                          (memory-piggyback/adopt-buffer! piggyback-agent-id project-id)))
+                          (memory-piggyback/adopt-buffer! raw-caller-id)))
 
-              piggyback-entries (into (into (vec axioms) principles) priority-conventions)
+              ;; Scope-filter piggyback: keep entries relevant to this agent's
+              ;; project hierarchy. Axioms pierce scope (always included).
+              ;; Entries without scope tags pass through (global by convention).
+              piggyback-raw (into (into (vec axioms) principles) priority-conventions)
+              piggyback-entries
+              (let [in-project? (and project-id (not= project-id "global"))]
+                (if-not in-project?
+                  piggyback-raw
+                  (let [scope-tags (sf/compute-full-scope-tags project-id)
+                        visible-ids (set (conj (or (rescue [] (kg-scope/visible-scopes project-id))
+                                                   [project-id])
+                                               "global"))]
+                    (filterv (fn [entry]
+                               (let [tags (set (or (:tags entry) []))
+                                     entry-type (str (or (:type entry) ""))]
+                                 (or
+                                  ;; Axioms always pierce scope
+                                  (= entry-type "axiom")
+                                  ;; catchup-priority entries pierce scope
+                                  (contains? tags "catchup-priority")
+                                  ;; No scope tag = global, passes through
+                                  (not-any? #(.startsWith ^String % "scope:project:") tags)
+                                  ;; Scope-matching entries pass through
+                                  (some tags scope-tags)
+                                  (contains? visible-ids (:project-id entry)))))
+                             piggyback-raw))))
 
               ;; Dual-write: Cache entry categories in context-store for pass-by-ref mode.
               ;; Uses context-put-batch! to write all categories in parallel via futures.
@@ -198,7 +255,7 @@
                         refs))
 
               _ (when (seq piggyback-entries)
-                  (memory-piggyback/enqueue! piggyback-agent-id project-id piggyback-entries context-refs))]
+                  (memory-piggyback/enqueue! raw-caller-id piggyback-entries context-refs))]
 
           (fmt/build-catchup-response
            {:project-name project-name :project-id project-id
@@ -208,6 +265,7 @@
             :sessions-meta sessions-meta :decisions-meta decisions-base
             :conventions-meta conventions-base :snippets-meta snippets-meta
             :expiring-meta expiring-meta
+            :carto-status carto-status
             :context-refs context-refs}))
         (catch Exception e
           (fmt/catchup-error e))))))
@@ -217,15 +275,15 @@
 ;; =============================================================================
 
 (defn handle-native-wrap
-  "Native Clojure wrap implementation that persists to Chroma directly.
-   Delegates to :catchup/wrap extension (provided by hive-knowledge)
-   for harvesting and crystallization."
+  "Native Clojure wrap implementation that persists to the registered
+   IMemoryStore directly. Delegates to :catchup/wrap extension
+   (provided by addon) for harvesting and crystallization."
   [args]
-  (let [directory (:directory args)
+  (let [directory (ctx/resolve-caller-directory args)
         agent-id (:agent_id args)]
-    (log/info "native-wrap: crystallizing to Chroma" {:directory directory :agent-id agent-id})
-    (if-not (chroma/embedding-configured?)
-      (fmt/chroma-not-configured-error)
+    (log/info "native-wrap: crystallizing to memory store" {:directory directory :agent-id agent-id})
+    (if-not (mem-proto/store-set?)
+      (fmt/store-not-configured-error)
       (if-let [wrap-fn (ext/get-extension :catchup/wrap)]
         (try
           (let [result (wrap-fn {:directory directory :agent-id agent-id})
@@ -242,5 +300,5 @@
              :text (json/write-str {:error (.getMessage e)})
              :isError true}))
         {:type "text"
-         :text (json/write-str {:error "Wrap extension not registered. Load hive-knowledge addon."})
+         :text (json/write-str {:error "Wrap extension not registered. Load the crystal addon."})
          :isError true}))))

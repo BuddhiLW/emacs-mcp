@@ -172,7 +172,18 @@
     (is (thrown-with-msg? IllegalArgumentException
                           #"No IDroneExecutionBackend registered"
                           (backend/resolve-backend {:backend :fantasy-llm}))
-        "Error message should mention IDroneExecutionBackend")))
+        "Error message should mention IDroneExecutionBackend"))
+
+  (testing "resolve-backend returns structured error for :openrouter (not an alias)"
+    (let [result (backend/resolve-backend {:backend :openrouter})]
+      (is (= :unknown-backend (:error result))
+          "Should return structured error, not throw")
+      (is (= :openrouter (:key result))
+          "Error should identify the bad key")
+      (is (= :use-openrouter-loop-or-omit (:fix result))
+          "Error should suggest the fix")
+      (is (string? (:hint result))
+          "Error should include a human-readable hint"))))
 
 (deftest resolve-backend-nil-backend-throws
   (testing "resolve-backend with nil :backend hits :default and throws"

@@ -1,6 +1,6 @@
 (ns hive-mcp.tools.catchup.spawn
   "Spawn context injection for ling priming."
-  (:require [hive-mcp.chroma.core :as chroma]
+  (:require [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.catchup.scope :as catchup-scope]
             [hive-mcp.tools.catchup.git :as catchup-git]
@@ -84,7 +84,7 @@
   "Generate a compact context payload for ling spawn injection."
   ([directory] (spawn-context directory {}))
   ([directory {:keys [mode task task-id] :or {mode :full}}]
-   (when (chroma/embedding-configured?)
+   (when (mem-proto/store-set?)
      (rescue nil
              (let [project-id (scope/get-current-project-id directory)
                    project-name (catchup-scope/get-current-project-name directory)]

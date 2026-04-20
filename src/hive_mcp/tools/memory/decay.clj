@@ -5,9 +5,9 @@
    - handle-decay: MCP handler for scheduled decay
    - run-decay-cycle!: Hook handler for crystallize-session
    - Pure helpers: query-scoped-entries, build-decay-plan"
-  (:require [hive-mcp.tools.memory.core :refer [with-chroma]]
+  (:require [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.scope :as scope]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.crystal.core :as crystal]
             [hive-mcp.memory.temporal :as temporal]
             [hive-mcp.tools.core :refer [mcp-json]]
@@ -25,8 +25,9 @@
   "Query Chroma entries filtered by project scope.
    Shared pipeline for decay and promotion handlers."
   [directory limit-val]
-  (let [all-entries (chroma/query-entries :limit limit-val
-                                          :include-expired? false)
+  (let [all-entries (mem-proto/query-entries (mem-proto/get-store)
+                                             {:limit limit-val
+                                              :include-expired? false})
         project-id (scope/get-current-project-id directory)
         scope-filter (scope/make-scope-tag project-id)]
     (filterv #(scope/matches-scope? % scope-filter) all-entries)))
@@ -55,9 +56,9 @@
   [entry opts]
   (when (crystal/decay-candidate? entry opts)
     (when-let [plan (build-decay-plan entry opts)]
-      (chroma/update-staleness! (:id entry)
-                                {:beta (:new-beta plan)
-                                 :source :time-decay})
+      (mem-proto/update-staleness! (mem-proto/get-store) (:id entry)
+                                   {:beta (:new-beta plan)
+                                    :source :time-decay})
       ;; Temporal dual-write: record decay event
       (temporal/record-mutation-silent!
        {:entry-id   (:id entry)
@@ -86,7 +87,7 @@
   "Run scheduled staleness decay on memory entries."
   [{:keys [directory access_threshold recency_days limit dry_run]}]
   (log/info "mcp-memory-decay: starting scheduled decay cycle")
-  (with-chroma
+  (with-store
     (let [directory     (resolve-directory directory)
           limit-val     (coerce-limit limit 200)
           opts          {:access-threshold (coerce-limit access_threshold 3)
@@ -96,7 +97,7 @@
           plans         (keep #(build-decay-plan % opts) candidates)
           applied       (if dry_run
                           (vec plans)
-                          (vec (keep #(apply-decay! (chroma/get-entry-by-id (:id %)) opts)
+                          (vec (keep #(apply-decay! (mem-proto/get-entry (mem-proto/get-store) (:id %)) opts)
                                      plans)))
           summary       {:decayed        (count applied)
                          :skipped        (- (count scoped) (count (vec plans)))
@@ -119,7 +120,7 @@
     (let [directory       (resolve-directory directory)
           limit-val       (coerce-limit limit 50)
           cleanup-result  (try
-                            (chroma/cleanup-expired!)
+                            (mem-proto/cleanup-expired! (mem-proto/get-store))
                             (catch Exception e
                               {:count 0 :deleted-ids []
                                :error (.getMessage e)}))

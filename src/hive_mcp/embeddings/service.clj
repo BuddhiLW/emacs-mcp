@@ -31,7 +31,14 @@
      (get-dimension-for \"hive-mcp-memory\")  ; => 768"
   (:require [hive-mcp.embeddings.config :as config]
             [hive-mcp.embeddings.registry :as registry]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.embeddings.cache :as embed-cache]
+            ;; DIP: depend on the EmbeddingProvider protocol boundary, not
+            ;; chroma.core (which re-aggregates concrete Chroma CRUD and
+            ;; transitively pulls hive-mcp.plan.plans → tools.memory.crud
+            ;; → agent.drone.feedback → agent.routing, creating a load
+            ;; cycle at test time). chroma.embeddings is the protocol-only
+            ;; seam — safe to depend on from the embedding domain service.
+            [hive-mcp.chroma.embeddings :as chroma]
             [hive-mcp.config.core :as global-config]
             [hive-mcp.dns.result :refer [rescue]]
             [taoensso.timbre :as log]))
@@ -144,10 +151,15 @@
      collection-name - Name of the Chroma collection
      text - Text to embed
 
-   Returns: Vector of floats (embedding)"
+   Returns: Vector of floats (embedding).
+
+   Results are cached in an in-process LRU+TTL keyed by
+   [collection-name, sha256(text)]. Repeat queries skip the provider."
   [collection-name text]
-  (let [provider (get-provider-for collection-name)]
-    (chroma/embed-text provider text)))
+  (or (embed-cache/lookup collection-name text)
+      (let [provider (get-provider-for collection-name)
+            vec      (chroma/embed-text provider text)]
+        (embed-cache/store! collection-name text vec))))
 
 (defn embed-batch-for-collection
   "Embed multiple texts using the provider configured for the collection.
@@ -198,6 +210,87 @@
    :collection-count (count @collection-configs)
    :global-fallback? (chroma/embedding-configured?)
    :registry (registry/cache-stats)})
+
+;; =============================================================================
+;; Type-based embedder routing (bridge — unblocks ollama 2048-tok ceiling)
+;; =============================================================================
+
+(def ^:private base-collection-name "hive-mcp-memory")
+
+(defn- embedder-config
+  "Read :embedder block from global config, with merge.clj defaults."
+  []
+  (get (global-config/get-global-config) :embedder))
+
+(defn- resolve-provider-key
+  "Look up provider key for a memory type string. Falls back to :default."
+  [type-str]
+  (let [cfg    (embedder-config)
+        routes (:routes cfg)
+        tk     (keyword "type" (name (or type-str "note")))]
+    (or (get routes tk)
+        (get routes (keyword (name (or type-str "note"))))
+        (:default cfg)
+        :ollama-nomic)))
+
+(defn resolve-provider-for-type
+  "Resolve embedding provider + metadata for a memory type.
+   Returns {:provider EmbeddingProvider, :dimension int, :max-tokens int,
+            :collection-name str, :provider-key keyword}."
+  [memory-type]
+  (let [cfg          (embedder-config)
+        provider-key (resolve-provider-key memory-type)
+        provider-spec (get-in cfg [:providers provider-key])]
+    (if provider-spec
+      (let [impl      (:impl provider-spec)
+            model     (:model provider-spec)
+            dimension (:dimension provider-spec)
+            max-toks  (:max-tokens provider-spec)
+            options   (case impl
+                        :ollama     {:host (get provider-spec :host "http://localhost:11434")}
+                        :openrouter {:api-key (global-config/get-secret :openrouter-api-key)}
+                        :openai     {:api-key (global-config/get-secret :openai-api-key)}
+                        {})
+            emb-cfg   (config/->EmbeddingConfig impl model dimension options)
+            coll-name (if (= dimension 768)
+                        base-collection-name
+                        (str base-collection-name "-" dimension "d"))]
+        {:provider        (registry/get-provider emb-cfg)
+         :dimension       dimension
+         :max-tokens      max-toks
+         :collection-name coll-name
+         :provider-key    provider-key})
+      ;; No embedder config → fall back to global provider
+      (let [global (chroma/get-embedding-provider)]
+        (when-not global
+          (throw (ex-info "No embedding provider available" {:type memory-type})))
+        {:provider        global
+         :dimension       (chroma/embedding-dimension global)
+         :max-tokens      2048
+         :collection-name base-collection-name
+         :provider-key    :fallback}))))
+
+(defn validate-content-size!
+  "Reject content exceeding the resolved provider's max-tokens.
+   Uses chars/4 heuristic for token estimation."
+  [doc-text {:keys [max-tokens provider-key] :as _resolved}]
+  (let [estimated-tokens (quot (count doc-text) 4)]
+    (when (> estimated-tokens max-tokens)
+      (throw (ex-info (str "Content too large for embedder " (name provider-key)
+                           " (" estimated-tokens " est. tokens > " max-tokens " max)")
+                      {:error       :embedder/input-too-large
+                       :provider    provider-key
+                       :max-tokens  max-tokens
+                       :actual      estimated-tokens
+                       :fix         "Use a memory type routed to openrouter-qwen3 (decision, plan, etc.)"})))))
+
+(defn type->collection-names
+  "Return the collection name(s) to search for a given type.
+   If type is nil (unscoped search), returns all known collection names."
+  [memory-type]
+  (if memory-type
+    [(-> (resolve-provider-for-type memory-type) :collection-name)]
+    [base-collection-name (str base-collection-name "-4096d")]))
 
 (defn reset-service!
   "Reset all service state. For testing."

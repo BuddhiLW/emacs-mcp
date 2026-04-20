@@ -1,0 +1,28 @@
+{:completed
+ {:result "Done", :turns 3, :tool-calls-made 5, :kg-path "/tmp/d"},
+ :aborted
+ {:result "[ABORTED]",
+  :turns 2,
+  :tool-calls-made 1,
+  :kg-path "/tmp/d",
+  :aborted? true},
+ :error
+ {:result "API fail",
+  :turns 1,
+  :tool-calls-made 0,
+  :kg-path "/tmp/d",
+  :error true},
+ :max-turns
+ {:result "warn", :turns 50, :tool-calls-made 49, :kg-path "/tmp/d"},
+ :constraint-hit
+ {:result "[CONSTRAINT: budget-exceeded]",
+  :turns 5,
+  :tool-calls-made 3,
+  :kg-path "/tmp/d",
+  :constraint :budget-exceeded},
+ :repeat-break
+ {:result "stuck",
+  :turns 4,
+  :tool-calls-made 12,
+  :kg-path "/tmp/d",
+  :repeat-break? true}}

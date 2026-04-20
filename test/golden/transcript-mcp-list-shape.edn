@@ -1,0 +1,4 @@
+{:has-transcripts true,
+ :has-count true,
+ :count-matches true,
+ :first-keys (:agent-id :modified :size-kb :source :sources)}

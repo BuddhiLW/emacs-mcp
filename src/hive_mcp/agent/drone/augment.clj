@@ -109,73 +109,73 @@
 ;; Pipeline functions extracted from augment-task
 ;; ---------------------------------------------------------------------------
 
-(defn- resolve-context-str
-  "Resolve context string via compressed > unified > legacy chain.
-   Returns map with :kg-ctx-str and path-specific strings for logging."
-  [task files {:keys [effective-root effective-project-id seeds use-unified
-                      token-budget ctx-refs kg-node-ids]}]
-  (let [;; Compressed path: pre-resolved context refs from wave dispatch
-        compressed-ctx-str
-        (when (seq ctx-refs)
-          (r/rescue nil
-                    (let [envelope (context-envelope/enrich-context
-                                    ctx-refs
-                                    (or kg-node-ids [])
-                                    effective-project-id
-                                    {:mode :inline})]
-                      (when (seq envelope)
-                        (log/info "augment-task using COMPRESSED context path (ctx-refs)"
-                                  {:project-id effective-project-id
-                                   :ref-count (count ctx-refs)
-                                   :kg-seeds (count (or kg-node-ids []))
-                                   :envelope-chars (count envelope)})
-                        envelope))))
+(defn- try-compressed
+  "Path 1: pre-resolved ctx-refs from wave dispatch. Precondition: (seq ctx-refs).
+   Returns {:kg-ctx-str s :compressed-ctx-str s} or nil."
+  [{:keys [ctx-refs kg-node-ids effective-project-id]}]
+  (when (seq ctx-refs)
+    (r/rescue nil
+              (let [envelope (context-envelope/enrich-context
+                              ctx-refs
+                              (or kg-node-ids [])
+                              effective-project-id
+                              {:mode :inline})]
+                (when (seq envelope)
+                  (log/info "augment-task using COMPRESSED context path (ctx-refs)"
+                            {:project-id effective-project-id
+                             :ref-count (count ctx-refs)
+                             :kg-seeds (count (or kg-node-ids []))
+                             :envelope-chars (count envelope)})
+                  {:kg-ctx-str         envelope
+                   :compressed-ctx-str envelope})))))
 
-        ;; Unified path: single KG traversal for conventions + domain
-        use-unified? (and (not compressed-ctx-str)
-                          use-unified
-                          (unified-ctx/unified-context-available?))
+(defn- format-unified-with-budget
+  "Apply entry-level budget (60% of total) to a unified-raw map, then format."
+  [unified-raw token-budget]
+  (if token-budget
+    (let [kg-budget (long (Math/floor (* (long token-budget) 0.6)))
+          selected  (budget/allocate-unified-entries
+                     {:total-budget kg-budget
+                      :conventions  (:conventions unified-raw)
+                      :decisions    (:decisions unified-raw)
+                      :snippets     (:snippets unified-raw)
+                      :domain       (:domain unified-raw)})
+          selected-ctx (assoc unified-raw
+                              :conventions (:conventions selected)
+                              :decisions   (:decisions selected)
+                              :snippets    (:snippets selected)
+                              :domain      (get selected :domain []))]
+      (log/info "augment-task unified entry-level budget"
+                {:kg-budget kg-budget
+                 :budget-used (:budget-used selected)
+                 :budget-remaining (:budget-remaining selected)
+                 :metadata (:metadata selected)})
+      (unified-ctx/format-unified-context selected-ctx))
+    (unified-ctx/format-unified-context unified-raw)))
 
-        unified-raw
-        (when use-unified?
-          (r/rescue nil
-                    (unified-ctx/prepare-drone-context
-                     {:task       task
-                      :seeds      seeds
-                      :project-id effective-project-id})))
+(defn- try-unified
+  "Path 2: single KG traversal for conventions + domain. Preconditions:
+   use-unified flag true AND unified-ctx available.
+   Returns {:kg-ctx-str s :unified-ctx-str s} or nil."
+  [{:keys [task seeds effective-project-id use-unified token-budget]}]
+  (when (and use-unified (unified-ctx/unified-context-available?))
+    (r/rescue nil
+              (when-let [unified-raw (unified-ctx/prepare-drone-context
+                                      {:task       task
+                                       :seeds      seeds
+                                       :project-id effective-project-id})]
+                (let [s (format-unified-with-budget unified-raw token-budget)]
+                  (when (seq s)
+                    {:kg-ctx-str      s
+                     :unified-ctx-str s}))))))
 
-        ;; Entry-level budget allocation before formatting
-        unified-ctx-str
-        (when unified-raw
-          (if token-budget
-            (let [kg-budget (long (Math/floor (* (long token-budget) 0.6)))
-                  selected (budget/allocate-unified-entries
-                            {:total-budget  kg-budget
-                             :conventions   (:conventions unified-raw)
-                             :decisions     (:decisions unified-raw)
-                             :snippets      (:snippets unified-raw)
-                             :domain        (:domain unified-raw)})
-                  selected-ctx (assoc unified-raw
-                                      :conventions (:conventions selected)
-                                      :decisions   (:decisions selected)
-                                      :snippets    (:snippets selected)
-                                      :domain      (get selected :domain []))]
-              (log/info "augment-task unified entry-level budget"
-                        {:kg-budget kg-budget
-                         :budget-used (:budget-used selected)
-                         :budget-remaining (:budget-remaining selected)
-                         :metadata (:metadata selected)})
-              (unified-ctx/format-unified-context selected-ctx))
-            (unified-ctx/format-unified-context unified-raw)))
-
-        ;; Legacy path: separate pipelines (fallback)
-        context-str (when-not (or compressed-ctx-str unified-ctx-str)
-                      (format-context-str (prepare-context)))
-
-        smart-ctx-str (when-not (or compressed-ctx-str unified-ctx-str)
-                        (build-smart-context files task effective-root effective-project-id))
-
-        primed-ctx-str (when (and (not compressed-ctx-str) (not unified-ctx-str) (seq seeds))
+(defn- try-legacy
+  "Path 3 (fallback): separate legacy pipelines — project catchup + smart context +
+   optional KG priming. Always returns a map (possibly with empty :kg-ctx-str)."
+  [{:keys [task files effective-root effective-project-id seeds]}]
+  (let [context-str   (r/rescue nil (format-context-str (prepare-context)))
+        smart-ctx-str (r/rescue nil (build-smart-context files task effective-root effective-project-id))
+        primed-ctx-str (when (seq seeds)
                          (r/rescue nil
                                    (let [primed (kg-priming/prime-context
                                                  {:task task
@@ -183,18 +183,38 @@
                                                   :project-id effective-project-id
                                                   :token-budget 1500})]
                                      (when (seq primed) primed))))
+        kg-ctx-str    (str context-str
+                           (when primed-ctx-str (str "\n" primed-ctx-str "\n"))
+                           (when smart-ctx-str (str "\n" smart-ctx-str "\n")))]
+    {:kg-ctx-str     kg-ctx-str
+     :primed-ctx-str primed-ctx-str}))
 
-        ;; Merge context sections: compressed > unified > legacy
-        kg-ctx-str (cond
-                     compressed-ctx-str compressed-ctx-str
-                     unified-ctx-str    unified-ctx-str
-                     :else              (str context-str
-                                             (when primed-ctx-str (str "\n" primed-ctx-str "\n"))
-                                             (when smart-ctx-str (str "\n" smart-ctx-str "\n"))))]
-    {:kg-ctx-str         kg-ctx-str
-     :compressed-ctx-str compressed-ctx-str
-     :unified-ctx-str    unified-ctx-str
-     :primed-ctx-str     primed-ctx-str}))
+(def ^:private empty-ctx-result
+  {:kg-ctx-str         ""
+   :compressed-ctx-str nil
+   :unified-ctx-str    nil
+   :primed-ctx-str     nil})
+
+(defn- resolve-context-str
+  "Resolve context via short-circuit priority chain: compressed > unified > legacy.
+   Each path is tried in order and the first non-nil result wins; later paths
+   are never evaluated. Returns a map shaped like `empty-ctx-result` so callers
+   (e.g. `log-augment-result!`) see a consistent schema."
+  [task files {:keys [effective-root effective-project-id seeds use-unified
+                      token-budget ctx-refs kg-node-ids]}]
+  (let [params {:task                 task
+                :files                files
+                :effective-root       effective-root
+                :effective-project-id effective-project-id
+                :seeds                seeds
+                :use-unified          use-unified
+                :token-budget         token-budget
+                :ctx-refs             ctx-refs
+                :kg-node-ids          kg-node-ids}]
+    (merge empty-ctx-result
+           (or (try-compressed params)
+               (try-unified params)
+               (try-legacy params)))))
 
 (defn- allocate-context-budget
   "Allocate token budget between context and file contents.

@@ -81,7 +81,8 @@
   (try
     (let [response (make-request host "/api/embeddings"
                                  {:model model
-                                  :prompt text})]
+                                  :prompt text
+                                  :keep_alive "24h"})]
       (:embedding response))
     (catch Exception e
       (if (context-length-error? e)

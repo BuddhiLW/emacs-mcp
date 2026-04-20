@@ -8,21 +8,25 @@
   {:db/ident       :kg-edge/from
    :db/valueType   :db.type/string
    :db/cardinality :db.cardinality/one
+   :db/index       true
    :db/doc         "Source node ID (memory entry ID)"}
 
   {:db/ident       :kg-edge/to
    :db/valueType   :db.type/string
    :db/cardinality :db.cardinality/one
+   :db/index       true
    :db/doc         "Target node ID (memory entry ID)"}
 
   {:db/ident       :kg-edge/relation
    :db/valueType   :db.type/keyword
    :db/cardinality :db.cardinality/one
+   :db/index       true
    :db/doc         "Relation type keyword from relation-types"}
 
   {:db/ident       :kg-edge/scope
    :db/valueType   :db.type/string
    :db/cardinality :db.cardinality/one
+   :db/index       true
    :db/doc         "Scope where edge was discovered (e.g., project-id)"}
 
   {:db/ident       :kg-edge/confidence

@@ -1,7 +1,7 @@
 (ns hive-mcp.agent.drone.context
   "Smart context injection for drone agents including surrounding lines, imports, kondo analysis, and conventions."
   (:require [hive-mcp.analysis.resolve :as resolve]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.knowledge-graph.disc :as kg-disc]
             [hive-dsl.result :as r]
             [clojure.string :as str]
@@ -149,8 +149,9 @@
   [task project-id]
   (let [result (r/guard Exception []
                  ;; Try semantic search first (filter by project at DB level)
-                        (let [results (chroma/search-similar task :type "convention" :limit 5
-                                                             :project-ids (when project-id [project-id]))]
+                        (let [store (mem-proto/get-store)
+                              results (mem-proto/search-similar store task {:type "convention" :limit 5
+                                                                            :project-ids (when project-id [project-id])})]
                           (if (seq results)
                             (->> results
                                  (map (fn [r]
@@ -160,9 +161,9 @@
                                  (take 3)
                                  vec)
                      ;; Fallback: query all conventions and filter
-                            (let [all-convs (chroma/query-entries :type "convention"
-                                                                  :project-id project-id
-                                                                  :limit 20)]
+                            (let [all-convs (mem-proto/query-entries store {:type "convention"
+                                                                            :project-id project-id
+                                                                            :limit 20})]
                               (->> all-convs
                                    (filter (fn [conv]
                                              (let [content (str/lower-case (str (:content conv)))
@@ -206,8 +207,8 @@
                                                   (not= hash (:disc/content-hash disc))))))
                               staleness (when disc (kg-disc/staleness-score disc))
                               grounded-entries (r/rescue nil
-                                                         (when (chroma/embedding-configured?)
-                                                           (->> (chroma/query-entries :limit 10)
+                                                         (when (mem-proto/store-set?)
+                                                           (->> (mem-proto/query-entries (mem-proto/get-store) {:limit 10})
                                                                 (filter #(= file-path (get-in % [:metadata :source-file])))
                                                                 (take 5))))]
                           {:disc disc

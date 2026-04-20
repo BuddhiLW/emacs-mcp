@@ -30,7 +30,7 @@
    SPDX-License-Identifier: AGPL-3.0-or-later"
   (:require [hive-mcp.knowledge-graph.connection :as kg-conn]
             [hive-mcp.agent.context :as ctx]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 
 ;; =============================================================================
 ;; Mutation ID Generation
@@ -106,10 +106,7 @@
   "Like record-mutation! but swallows all errors completely.
    Use in hot paths where even logging overhead matters."
   [opts]
-  (try
-    (record-mutation! opts)
-    (catch Exception _
-      nil)))
+  (rescue nil (record-mutation! opts)))
 
 ;; =============================================================================
 ;; Batch Recording (for cleanup/decay cycles)
@@ -153,7 +150,7 @@
       {:ok false :error (.getMessage e)})))
 
 ;; =============================================================================
-;; Query Helpers (for consumers — hive-knowledge IAddon)
+;; Query Helpers (for addon consumers)
 ;; =============================================================================
 
 (defn query-mutations

@@ -239,7 +239,7 @@
                                              ttl))
                     refs)))
               {} context-categories)
-      (catch Exception _e nil))))
+      (catch Exception e (log/warn "[catchup] context-store failed:" (.getMessage e))))))
 
 ;; =============================================================================
 ;; Handlers (pure functions: resources x data -> data')
@@ -263,12 +263,21 @@
            :error nil)))
 
 (defn handle-scope-resolve
-  "Resolve project scope from directory.
+  "Resolve project scope from directory AND ensure project tree is populated.
    EDN handler key: :scope-resolve
+
+   Tree scan must happen BEFORE query-memory so that descendant-scopes
+   returns child project IDs. Without this, sessions stored under child
+   projects (e.g. hive-mcp under hive workspace) are invisible to catchup.
 
    Uses call-resource to eliminate nil-fn guards."
   [resources data]
   (let [directory    (:directory data)
+        ;; Ensure project tree is populated before scope queries run.
+        ;; This populates the tree-cache used by descendant-scopes in
+        ;; query-scoped-entries, so child project entries are visible.
+        _            (safe-call resources :tree-scan-fn
+                                [(or directory ".")] {:scanned false})
         project-id   (when directory (call-resource resources :scope-fn directory))
         project-name (when directory (call-resource resources :project-name-fn directory))
         scopes       (call-resource resources :build-scopes-fn project-name project-id)]
@@ -355,20 +364,25 @@
 
    Uses store-context-categories helper for data-driven context caching.
    Also performs cursor hygiene: adopts previous coordinator's cursor and
-   cleans up orphaned buffers from dead bb-mcp instances."
+   cleans up orphaned buffers from dead bb-mcp instances.
+
+   Memory piggyback is session-scoped (caller-id only).
+   Hivemind cursor hygiene keeps project scope (piggyback-id)."
   [resources data]
   (let [project-id        (:project-id data)
         context-refs      (store-context-categories (:context-store-fn resources)
                                                     data project-id 600000)
         piggyback-entries (into (vec (:axioms data)) (:priority-conventions data))
+        caller-id         (or (:_caller_id data) "coordinator")
         piggyback-id      (ctx-id/make-piggyback-agent-id
-                           (ctx-id/parse-caller-id (:_caller_id data))
+                           (ctx-id/parse-caller-id caller-id)
                            (ctx-id/parse-project-scope project-id))]
-    ;; Cursor hygiene: adopt previous cursor + clean up stale state
+    ;; Cursor hygiene: adopt previous cursor + clean up stale state (hivemind — project-scoped)
     (when-let [cursor-adopt-fn (:cursor-adopt-fn resources)]
       (try (cursor-adopt-fn piggyback-id project-id) (catch Exception _)))
+    ;; Memory piggyback: session-scoped (caller-id only, no project dimension)
     (when (and (:piggyback-fn resources) (seq piggyback-entries))
-      ((:piggyback-fn resources) piggyback-id project-id piggyback-entries context-refs))
+      ((:piggyback-fn resources) caller-id piggyback-entries context-refs))
     (assoc data
            :context-refs context-refs
            :piggyback-enqueued? (boolean (seq piggyback-entries)))))

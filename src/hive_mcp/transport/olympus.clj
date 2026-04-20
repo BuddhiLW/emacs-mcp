@@ -471,106 +471,134 @@
                      "Access-Control-Allow-Origin" "*"}
            :body file})))))
 
+;; =============================================================================
+;; Route Handlers (SRP: one fn per route, pure response construction)
+;; =============================================================================
+
+(defn- route-cors-preflight
+  "CORS preflight response for OPTIONS requests."
+  []
+  {:status 204
+   :headers {"Access-Control-Allow-Origin" "*"
+             "Access-Control-Allow-Methods" "GET, POST, OPTIONS"
+             "Access-Control-Allow-Headers" "Content-Type"}})
+
+(defn- route-health
+  "Health check endpoint: GET /health"
+  []
+  (json-response 200
+                 {:status "healthy"
+                  :service "olympus-ws"
+                  :clients (count @clients)
+                  :timestamp (System/currentTimeMillis)}))
+
+(defn- route-snapshot
+  "Full state snapshot: GET /api/snapshot"
+  []
+  (json-response 200 (build-full-snapshot)))
+
+(defn- route-agents
+  "Agents snapshot: GET /api/agents"
+  []
+  (json-response 200
+                 {:type :agents
+                  :timestamp (System/currentTimeMillis)
+                  :data (build-agents-snapshot)}))
+
+(defn- route-waves
+  "Waves snapshot: GET /api/waves"
+  []
+  (json-response 200
+                 {:type :waves
+                  :timestamp (System/currentTimeMillis)
+                  :data (build-waves-snapshot)}))
+
+(defn- route-kg
+  "KG/Memory snapshot: GET /api/kg"
+  []
+  (json-response 200
+                 {:type :kg-snapshot
+                  :timestamp (System/currentTimeMillis)
+                  :data (build-kg-snapshot)}))
+
+(defn- route-project-tree
+  "Project tree snapshot: GET /api/project-tree"
+  []
+  (json-response 200
+                 {:type :project-tree
+                  :timestamp (System/currentTimeMillis)
+                  :data (build-project-tree-snapshot)}))
+
+(defn- route-stats
+  "DataScript statistics: GET /api/stats
+   Uses result/try-effect* for fallible DS query."
+  []
+  (let [r (result/try-effect* :ds/stats-failed
+                              (ds-queries/db-stats))]
+    (json-response 200
+                   {:type :stats
+                    :timestamp (System/currentTimeMillis)
+                    :data (if (result/ok? r)
+                            (:ok r)
+                            {:error (:message r)})})))
+
+(defn- route-ws
+  "Explicit WebSocket endpoint: GET /ws"
+  [req]
+  (ws-connection-handler req))
+
+(defn- route-static
+  "Static file serving with SPA fallback: GET /*
+   Serves from olympus-web-ui/resources/public/."
+  [uri]
+  (or (serve-static-file uri)
+      (serve-static-file "/index.html")
+      (json-response 404
+                     {:error "Olympus Web UI static files not found"
+                      :hint "Ensure olympus-web-ui/resources/public/ exists with built JS"
+                      :build-cmd "cd olympus-web-ui && npx shadow-cljs compile app"})))
+
+(defn- route-not-allowed
+  "Catch-all response for unsupported HTTP methods."
+  []
+  {:status 405
+   :headers {"Content-Type" "text/plain"
+             "Access-Control-Allow-Origin" "*"}
+   :body "Method not allowed"})
+
 (defn- http-handler
   "HTTP handler for Olympus WS server.
+   Thin routing dispatch to named route handler fns.
+
    Routes:
-     WebSocket upgrade  -> WebSocket handler (Upgrade: websocket header)
-     GET /health        -> Health check
-     GET /api/snapshot  -> Full state snapshot
-     GET /api/agents    -> Agents only
-     GET /api/waves     -> Waves only
-     GET /api/kg        -> KG/Memory snapshot
-     GET /api/project-tree -> Project tree snapshot
-     GET /api/stats     -> DataScript statistics
-     OPTIONS *          -> CORS preflight
-     GET /ws            -> Explicit WebSocket endpoint (alternative to upgrade)
-     GET /*             -> Static files from olympus-web-ui/resources/public/"
+     WebSocket upgrade  -> ws-connection-handler
+     OPTIONS *          -> route-cors-preflight
+     GET /health        -> route-health
+     GET /api/snapshot  -> route-snapshot
+     GET /api/agents    -> route-agents
+     GET /api/waves     -> route-waves
+     GET /api/kg        -> route-kg
+     GET /api/project-tree -> route-project-tree
+     GET /api/stats     -> route-stats
+     GET /ws            -> route-ws
+     GET /*             -> route-static
+     *                  -> route-not-allowed"
   [req]
   (let [uri (:uri req)
         method (:request-method req)]
     (cond
-      ;; WebSocket upgrade request (browser connects with Upgrade: websocket)
-      (websocket-upgrade? req)
-      (ws-connection-handler req)
-
-      ;; CORS preflight
-      (= method :options)
-      {:status 204
-       :headers {"Access-Control-Allow-Origin" "*"
-                 "Access-Control-Allow-Methods" "GET, POST, OPTIONS"
-                 "Access-Control-Allow-Headers" "Content-Type"}}
-
-      ;; Health check endpoint
-      (and (= method :get) (= uri "/health"))
-      (json-response 200
-                     {:status "healthy"
-                      :service "olympus-ws"
-                      :clients (count @clients)
-                      :timestamp (System/currentTimeMillis)})
-
-      ;; REST API: Full snapshot (same as init-snapshot)
-      (and (= method :get) (= uri "/api/snapshot"))
-      (json-response 200 (build-full-snapshot))
-
-      ;; REST API: Agents only
-      (and (= method :get) (= uri "/api/agents"))
-      (json-response 200
-                     {:type :agents
-                      :timestamp (System/currentTimeMillis)
-                      :data (build-agents-snapshot)})
-
-      ;; REST API: Waves only
-      (and (= method :get) (= uri "/api/waves"))
-      (json-response 200
-                     {:type :waves
-                      :timestamp (System/currentTimeMillis)
-                      :data (build-waves-snapshot)})
-
-      ;; REST API: KG/Memory snapshot
-      (and (= method :get) (= uri "/api/kg"))
-      (json-response 200
-                     {:type :kg-snapshot
-                      :timestamp (System/currentTimeMillis)
-                      :data (build-kg-snapshot)})
-
-      ;; REST API: Project tree (HCR Wave 5)
-      (and (= method :get) (= uri "/api/project-tree"))
-      (json-response 200
-                     {:type :project-tree
-                      :timestamp (System/currentTimeMillis)
-                      :data (build-project-tree-snapshot)})
-
-      ;; REST API: DataScript statistics
-      (and (= method :get) (= uri "/api/stats"))
-      (json-response 200
-                     {:type :stats
-                      :timestamp (System/currentTimeMillis)
-                      :data (let [r (result/try-effect* :ds/stats-failed
-                                                        (ds-queries/db-stats))]
-                              (if (result/ok? r) (:ok r) {:error (:message r)}))})
-
-      ;; Explicit WebSocket endpoint (for clients that prefer /ws path)
-      (and (= method :get) (= uri "/ws"))
-      (ws-connection-handler req)
-
-      ;; Static file serving (Olympus Web UI)
-      ;; Serves HTML, CSS, JS from olympus-web-ui/resources/public/
-      (= method :get)
-      (or (serve-static-file uri)
-          ;; SPA fallback: serve index.html for unknown paths
-          (serve-static-file "/index.html")
-          ;; No static root found - return helpful error
-          (json-response 404
-                         {:error "Olympus Web UI static files not found"
-                          :hint "Ensure olympus-web-ui/resources/public/ exists with built JS"
-                          :build-cmd "cd olympus-web-ui && npx shadow-cljs compile app"}))
-
-      ;; Catch-all: method not allowed
-      :else
-      {:status 405
-       :headers {"Content-Type" "text/plain"
-                 "Access-Control-Allow-Origin" "*"}
-       :body "Method not allowed"})))
+      (websocket-upgrade? req)                          (ws-connection-handler req)
+      (= method :options)                               (route-cors-preflight)
+      (and (= method :get) (= uri "/health"))           (route-health)
+      (and (= method :get) (= uri "/api/snapshot"))     (route-snapshot)
+      (and (= method :get) (= uri "/api/agents"))       (route-agents)
+      (and (= method :get) (= uri "/api/waves"))        (route-waves)
+      (and (= method :get) (= uri "/api/kg"))           (route-kg)
+      (and (= method :get) (= uri "/api/project-tree")) (route-project-tree)
+      (and (= method :get) (= uri "/api/stats"))        (route-stats)
+      (and (= method :get) (= uri "/ws"))               (route-ws req)
+      (= method :get)                                   (route-static uri)
+      :else                                             (route-not-allowed))))
 
 ;; =============================================================================
 ;; Public API - Server Lifecycle

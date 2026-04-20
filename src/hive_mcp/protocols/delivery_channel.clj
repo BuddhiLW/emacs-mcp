@@ -7,7 +7,7 @@
 
    Pattern: follows protocols/editor.clj pattern.
    Registry pattern: multiple channels can be active simultaneously,
-   unlike IEditor/IEventBackbone which have a single active instance.")
+   unlike IEditor/IEventBackbone which have a single active instance." (:require [hive-dsl.result :refer [rescue]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -28,6 +28,7 @@
    - CoreAsyncChannel         (delivery/channels.clj)
    - ChannelBroadcastChannel  (delivery/channels.clj)
    - OlympusChannel           (delivery/channels.clj)
+   - PiggybackChannel         (delivery/channels.clj)
    - NoopChannel              (this file, fallback)
    - [future: SlackChannel, DiscordChannel, ...]"
 
@@ -82,11 +83,8 @@
    and non-fatal — one channel failure does not block others."
   [event]
   (doseq [ch (get-channels)]
-    (try
-      (when (available? ch)
-        (deliver! ch event))
-      (catch Exception _e
-        nil))))
+    (rescue nil (when (available? ch)
+        (deliver! ch event)))))
 
 ;;; ============================================================================
 ;;; NoopChannel (Fallback)

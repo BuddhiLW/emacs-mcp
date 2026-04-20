@@ -29,20 +29,20 @@
    - `dispatch-event!`: Safe event dispatch with error handling
    - Handler functions use consistent field extraction pattern"
   (:require [hive-mcp.swarm.protocol :as proto]
+            [hive-mcp.swarm.bootstrap.factory :as bootstrap]
+            [hive-mcp.swarm.bootstrap.noop :as bootstrap-noop]
             [hive-mcp.swarm.datascript.registry :as registry]
             [hive-mcp.swarm.datascript.lings :as lings]
             [hive-mcp.swarm.datascript.connection :as conn]
             [hive-mcp.swarm.datascript.queries :as queries]
             [hive-mcp.swarm.coordinator :as coord]
             [hive-mcp.channel.core :as channel]
-            [hive-mcp.emacs.client :as ec]
             [hive-mcp.emacs.daemon-store :as daemon-store]
             [hive-mcp.hivemind.core :as hivemind]
             [hive-mcp.hooks.core :as hooks]
             [hive-mcp.tools.memory.scope :as scope]
             [clojure.core.async :as async :refer [go-loop <!]]
-            [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -60,6 +60,11 @@
 ;; ISwarmRegistry instance for protocol-based swarm operations
 (defonce ^:private swarm-registry-atom (atom nil))
 
+;; ISwarmBootstrap instance — durable projection of slave identity.
+;; Defaults to NoopBootstrap (event-stream only) until explicitly injected.
+;; The integrant init in server/init.clj injects the configured backend.
+(defonce ^:private swarm-bootstrap-atom (atom (bootstrap-noop/make-noop-bootstrap)))
+
 (defn set-swarm-registry!
   "Inject the swarm registry implementation.
    If not set, uses default DataScript registry."
@@ -72,6 +77,20 @@
   []
   (or @swarm-registry-atom (registry/get-default-registry)))
 
+(defn set-swarm-bootstrap!
+  "Inject the ISwarmBootstrap implementation. Called by server/init.clj
+   from the integrant init for :hive/swarm-sync."
+  [bs]
+  (when-let [old @swarm-bootstrap-atom]
+    (rescue nil (bootstrap/close! old)))
+  (reset! swarm-bootstrap-atom bs)
+  (log/info "Sync: swarm bootstrap injected"))
+
+(defn get-swarm-bootstrap
+  "Get the injected ISwarmBootstrap (defaults to NoopBootstrap)."
+  []
+  @swarm-bootstrap-atom)
+
 (defn set-hooks-registry!
   "Inject the hooks registry from server.clj to avoid cyclic dependency."
   [registry]
@@ -82,6 +101,27 @@
   "Get the injected hooks registry."
   []
   @hooks-registry-atom)
+
+;; =============================================================================
+;; Bootstrap Write-Through (defined here so handlers below can call them)
+;; =============================================================================
+
+(defn- snapshot-slave-write-through!
+  "Mirror an in-memory slave write to the durable bootstrap projection.
+   Failures never propagate — bootstrap is observability-grade, not
+   transactionally coupled to the in-memory registry."
+  [slave-id slave-data]
+  (try
+    (bootstrap/snapshot-slave! (get-swarm-bootstrap) slave-id slave-data)
+    (catch Exception e
+      (log/warn "Sync: bootstrap snapshot threw for" slave-id ":" (.getMessage e)))))
+
+(defn- forget-slave-write-through!
+  [slave-id]
+  (try
+    (bootstrap/forget-slave! (get-swarm-bootstrap) slave-id)
+    (catch Exception e
+      (log/warn "Sync: bootstrap forget threw for" slave-id ":" (.getMessage e)))))
 
 ;; =============================================================================
 ;; DRY Helpers (Sprint-2 Refactoring)
@@ -180,6 +220,14 @@
                      (:slave/status existing) ") — skipping add-slave! to preserve status")
           (proto/add-slave! reg slave-id {:status :initializing :name name :depth depth
                                           :parent parent-id :cwd cwd :project-id project-id}))
+        ;; Write-through to durable bootstrap projection
+        (snapshot-slave-write-through! slave-id
+                                       {:name name
+                                        :status effective-status
+                                        :depth depth
+                                        :cwd cwd
+                                        :project-id project-id
+                                        :parent-id parent-id})
         ;; IEmacsDaemon integration: bind ling to selected daemon
         (daemon-store/bind-ling! daemon-id slave-id)
         ;; Emit to Olympus Web UI (port 7911)
@@ -194,7 +242,7 @@
                       :project-id project-id
                       :daemon-id daemon-id
                       :cwd cwd}))
-          (catch Exception _ nil))
+          (catch Exception e (log/warn "Sync: Olympus emit failed for" slave-id (.getMessage e))))
         (log/debug "Sync: registered slave" slave-id "depth:" depth
                    "status:" effective-status "bound to daemon:" daemon-id
                    "(selection:" reason ")")))))
@@ -219,6 +267,7 @@
           (log/info "Sync: slave" slave-id "ready but already :working — not downgrading to :idle")
           (do
             (proto/update-slave! reg slave-id {:slave/status :idle})
+            (snapshot-slave-write-through! slave-id {:status :idle})
             (log/info "Sync: slave" slave-id "ready (preset injection complete)")))))))
 
 (defn- handle-slave-status
@@ -229,6 +278,7 @@
         reg (get-swarm-registry)]
     (when (and slave-id status)
       (proto/update-slave! reg slave-id {:slave/status status})
+      (snapshot-slave-write-through! slave-id {:status status})
       (log/debug "Sync: updated slave status" slave-id "->" status))))
 
 (defn- release-ling-resources!
@@ -239,24 +289,24 @@
   (try
     (when-let [f (requiring-resolve 'hive-mcp.hivemind.state/remove-ling-result!)]
       (f slave-id))
-    (catch Exception _ nil))
+    (catch Exception e (log/warn "Sync: failed to remove ling result for" slave-id (.getMessage e))))
   (try
     (when-let [f (requiring-resolve 'hive-mcp.hivemind.state/clear-agent-messages!)]
       (f slave-id))
-    (catch Exception _ nil))
+    (catch Exception e (log/warn "Sync: failed to clear agent messages for" slave-id (.getMessage e))))
   (try
     (when-let [f (requiring-resolve 'hive-mcp.hivemind.state/remove-swarm-prompt!)]
       (f slave-id))
-    (catch Exception _ nil))
+    (catch Exception e (log/warn "Sync: failed to remove swarm prompt for" slave-id (.getMessage e))))
   ;; stdout buffers (headless lings)
   (try
     (lings/cleanup-stdout-buffer! slave-id)
-    (catch Exception _ nil))
+    (catch Exception e (log/warn "Sync: failed to cleanup stdout buffer for" slave-id (.getMessage e))))
   ;; callbacks registered by this ling
   (try
     (when-let [f (requiring-resolve 'hive-mcp.swarm.callback/cleanup-for-agent!)]
       (f slave-id))
-    (catch Exception _ nil))
+    (catch Exception e (log/warn "Sync: failed to cleanup callbacks for" slave-id (.getMessage e))))
   (log/debug "Sync: released JVM resources for dead ling" slave-id))
 
 (defn- handle-slave-killed
@@ -281,8 +331,9 @@
       (try
         (when-let [emit-fn (requiring-resolve 'hive-mcp.transport.olympus/emit-agent-event!)]
           (emit-fn :agent-killed {:id slave-id}))
-        (catch Exception _ nil))
+        (catch Exception e (log/warn "Sync: Olympus agent-killed emit failed for" slave-id (.getMessage e))))
       (proto/remove-slave! reg slave-id)
+      (forget-slave-write-through! slave-id)
       (log/debug "Sync: removed slave" slave-id "unbound from daemon:" daemon-id))))
 
 (defn- handle-task-dispatched
@@ -419,56 +470,64 @@
     sub-ch))
 
 ;; =============================================================================
-;; Full Sync from Emacs (Bootstrap)
+;; Full Sync (Bootstrap) — backend-agnostic via ISwarmBootstrap
 ;; =============================================================================
 
 (defn- register-slave-from-status!
-  "Register a single slave from Emacs status data.
-   Derives project-id from cwd for project-scoped swarm operations."
+  "Register a single slave from a bootstrap source's slave map.
+   Derives project-id from cwd if not already supplied."
   [slave]
   (let [slave-id (:slave-id slave)
-        status (keyword (:status slave))
+        status (some-> (:status slave) keyword)
         name (or (:name slave) slave-id)
         depth (or (:depth slave) 1)
         cwd (:cwd slave)
-        project-id (when cwd (scope/get-current-project-id cwd))
+        project-id (or (:project-id slave)
+                       (when cwd (scope/get-current-project-id cwd)))
         reg (get-swarm-registry)]
     (proto/add-slave! reg slave-id {:status status :name name :depth depth
                                     :cwd cwd :project-id project-id})
     (log/debug "Sync: bootstrapped slave" slave-id status "project-id:" project-id)))
 
-(defn full-sync-from-emacs!
-  "One-time full sync from Emacs swarm state. Call on startup to bootstrap."
+(defn full-sync-from-bootstrap!
+  "One-time full sync from the configured ISwarmBootstrap source.
+   Replaces the legacy `full-sync-from-emacs!` — the backend is now
+   pluggable via `set-swarm-bootstrap!`."
   []
-  (log/info "Starting full sync from Emacs...")
-  ;; reset-conn! is connection management, not in ISwarmRegistry
+  (log/info "Starting full sync from bootstrap source...")
   (conn/reset-conn!)
-  (let [elisp "(json-encode (hive-mcp-swarm-api-status))"
-        {:keys [success result error]} (ec/eval-elisp-with-timeout elisp 5000)]
-    (if success
-      (try
-        (let [status (json/read-str result :key-fn keyword)
-              slaves (or (:slaves-detail status) [])]
-          (run! register-slave-from-status! slaves)
-          (log/info "Full sync complete:" (count slaves) "slaves"))
-        (catch Exception e
-          (log/error "Failed to parse Emacs swarm status:" (.getMessage e))))
-      (log/warn "Could not fetch Emacs swarm status:" error))))
+  (let [bs (get-swarm-bootstrap)
+        slaves (try (bootstrap/load-slaves bs)
+                    (catch Exception e
+                      (log/error "Bootstrap load failed:" (.getMessage e))
+                      []))]
+    (run! register-slave-from-status! slaves)
+    (log/info "Full sync complete:" (count slaves) "slaves")))
+
+;; Backwards-compatibility alias — keep old call sites working until they
+;; migrate. Marked deprecated to discourage new use.
+(defn ^:deprecated full-sync-from-emacs!
+  "DEPRECATED: use `full-sync-from-bootstrap!`. Retained as a thin alias."
+  []
+  (full-sync-from-bootstrap!))
 
 ;; =============================================================================
 ;; Public API
 ;; =============================================================================
 
 (defn start-sync!
-  "Start event-driven synchronization with Emacs.
-   Options: :bootstrap? - If true, do full sync from Emacs first (default: true)"
+  "Start event-driven synchronization.
+
+   Options:
+     :bootstrap? — If true, do a full sync from the configured ISwarmBootstrap
+                   source before subscribing to events. Default: true."
   ([] (start-sync! {:bootstrap? true}))
   ([{:keys [bootstrap?] :or {bootstrap? true}}]
    (if (:running @sync-state)
      (do (log/warn "Sync already running") @sync-state)
      (do
        (log/info "Starting logic database sync...")
-       (when bootstrap? (full-sync-from-emacs!))
+       (when bootstrap? (full-sync-from-bootstrap!))
        (let [subs (mapv (fn [[et h]] (subscribe-to-event! et h)) event-handlers)]
          (reset! sync-state {:running true :subscriptions subs})
          (log/info "Logic database sync started -" (count subs) "event subscriptions")

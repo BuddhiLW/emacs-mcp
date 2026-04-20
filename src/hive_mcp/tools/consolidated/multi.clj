@@ -25,6 +25,7 @@
             [hive-mcp.tools.consolidated.migration :as c-migration]
             [hive-mcp.tools.consolidated.config :as c-config]
             [hive-mcp.tools.consolidated.workflow :as c-workflow]
+            [hive-mcp.tools.consolidated.transcript :as c-transcript]
             [hive-mcp.tools.result-bridge :as rb]
             [hive-mcp.tools.core :refer [mcp-error]]
             [hive-mcp.dns.result :refer [rescue]]
@@ -51,8 +52,9 @@
    :emacs     c-emacs/handle-emacs
    :wave      c-wave/handle-wave
    :migration c-migration/handle-migration
-   :config    c-config/handle-config
-   :workflow  c-workflow/handle-workflow})
+   :config     c-config/handle-config
+   :workflow   c-workflow/handle-workflow
+   :transcript c-transcript/handle-transcript})
 
 (def ^:private tool-names
   (sort (map name (keys tool-handlers))))
@@ -298,7 +300,7 @@
                      "All additional params beyond these common ones are forwarded to the target tool. "
                      "Key tool-specific params: "
                      "kanban: status, new_status, task_id, title, include_descendants, plan_id, plan_path; "
-                     "agent: type, cwd, spawn_mode, presets, task, model, max_budget_usd, parent, kanban_task_id; "
+                     "agent: type, cwd, spawn_mode, presets, task, model, provider, max_budget_usd, parent, kanban_task_id; "
                      "memory: duration, abstraction_level, scope, exclude_tags, limit, verbosity, feedback; "
                      "kg: start_node, node_id, from, to, relation, direction, max_depth, from_node, to_node, confidence; "
                      "wave: tasks, validate, lint_level, wave_id, mode, model, seeds, ctx_refs, kg_node_ids; "

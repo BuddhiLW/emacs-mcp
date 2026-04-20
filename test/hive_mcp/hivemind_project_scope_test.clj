@@ -301,3 +301,75 @@
         (is (some #(= "agent-a" %) (:available-agents parsed)))
         ;; agent-b might still be there if they had proj-a messages, but shouldn't leak
         ))))
+
+;;; =============================================================================
+;;; Cross-Project Descendant Piggyback Tests (regression for #5720370c)
+;;; =============================================================================
+
+(deftest piggyback-includes-cross-project-descendant-shouts-test
+  (testing "Coordinator sees shouts from lings spawned into a different project"
+    (with-redefs [mem-scope/get-current-project-id
+                  (fn [dir]
+                    (cond
+                      (= dir "/projects/coordinator") "proj-coord"
+                      (= dir "/projects/worker") "proj-worker"
+                      :else "global"))]
+      ;; Register coordinator in proj-coord
+      (register-slave-with-project! "coordinator-main" "proj-coord")
+      ;; Register ling in proj-worker, parented to coordinator
+      (proto/add-slave! registry/default-registry "ling-worker-1"
+                        {:name "ling-worker-1" :status :idle :depth 1
+                         :parent "coordinator-main"
+                         :cwd "/projects/worker" :project-id "proj-worker"})
+
+      ;; Ling shouts from proj-worker
+      (hivemind/shout! "ling-worker-1" :progress
+                       {:task "cross-work" :message "working in worker project"
+                        :directory "/projects/worker"})
+
+      ;; Resolve child project-ids (the fix)
+      (let [_ (require 'hive-mcp.swarm.datascript.queries)
+            child-pids-fn (resolve 'hive-mcp.swarm.datascript.queries/get-child-project-ids)
+            child-pids (child-pids-fn "proj-coord")]
+
+        ;; With additional-project-ids, coordinator sees the cross-project shout
+        (let [msgs (piggyback/get-messages "coord-main"
+                                            :project-id "proj-coord"
+                                            :additional-project-ids child-pids)]
+          (is (some #(= "ling-worker-1" (:a %)) msgs)
+              "Coordinator should see ling's cross-project shout via descendant resolution"))
+
+        ;; Without additional-project-ids (old behavior), coordinator misses it
+        (piggyback/reset-all-cursors!)
+        (let [msgs-old (piggyback/get-messages "coord-main-old" :project-id "proj-coord")]
+          (is (not (some #(= "ling-worker-1" (:a %)) msgs-old))
+              "Without fix, coordinator should NOT see cross-project shout"))))))
+
+(deftest cross-project-descendant-isolation-test
+  (testing "SECURITY: Unrelated coordinator does NOT see another coordinator's descendants"
+    (with-redefs [mem-scope/get-current-project-id
+                  (fn [dir]
+                    (cond
+                      (= dir "/alpha") "proj-alpha"
+                      (= dir "/beta") "proj-beta"
+                      :else "global"))]
+      ;; Alpha coordinator and its cross-project ling
+      (register-slave-with-project! "alpha-coord" "proj-alpha")
+      (proto/add-slave! registry/default-registry "alpha-ling"
+                        {:name "alpha-ling" :status :idle :depth 1
+                         :parent "alpha-coord"
+                         :cwd "/beta" :project-id "proj-beta"})
+
+      ;; Alpha ling shouts from proj-beta
+      (hivemind/shout! "alpha-ling" :progress
+                       {:task "alpha-work" :message "alpha in beta" :directory "/beta"})
+
+      ;; Unrelated coordinator in proj-gamma should NOT see alpha-ling's shout
+      (let [child-pids-fn (resolve 'hive-mcp.swarm.datascript.queries/get-child-project-ids)
+            gamma-children (child-pids-fn "proj-gamma")
+            msgs (piggyback/get-messages "gamma-coord"
+                                          :project-id "proj-gamma"
+                                          :additional-project-ids gamma-children)]
+        (is (empty? gamma-children) "Unrelated project has no children")
+        (is (not (some #(= "alpha-ling" (:a %)) msgs))
+            "Gamma coordinator must NOT see alpha's cross-project ling")))))

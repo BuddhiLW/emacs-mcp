@@ -59,7 +59,7 @@
 
   (:require [hive.events.fsm :as fsm]
             [hive-mcp.workflows.sub-fsms.drone-loop-handlers :as handlers]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -322,8 +322,7 @@
   [backend & [opts]]
   (let [{:keys [session-store tools agent-id]} opts
         resolve-fn (fn [sym]
-                     (try (requiring-resolve sym)
-                          (catch Exception _ nil)))
+                     (rescue nil (requiring-resolve sym)))
         tool-schemas (when-let [get-schemas-fn (resolve-fn 'hive-mcp.agent.registry/get-schemas)]
                        (get-schemas-fn tools))
         execute-fn (when-let [exec-fn (resolve-fn 'hive-mcp.agent.executor/execute-tool-calls)]

@@ -5,12 +5,12 @@
    - handle-xpoll-promote: MCP handler for xpoll scanning
    - run-xpoll-cycle!: Hook handler for crystallize-session
    - Pure helpers: walk-tiers, build-xpoll-plan"
-  (:require [hive-mcp.tools.memory.core :refer [with-chroma]]
+  (:require [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.duration :as dur]
             [hive-mcp.tools.core :refer [mcp-json]]
             [hive-mcp.crystal.core :as crystal]
             [hive-mcp.memory.temporal :as temporal]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.protocols.memory :as mem-proto]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -60,8 +60,8 @@
   "Persist a tier promotion to Chroma. Returns result map."
   [id original-duration final-duration tiers-promoted]
   (let [expires (dur/calculate-expires final-duration)]
-    (chroma/update-entry! id {:duration final-duration
-                              :expires (or expires "")})
+    (mem-proto/update-entry! (mem-proto/get-store) id {:duration final-duration
+                                                       :expires (or expires "")})
     ;; Temporal dual-write: record duration promotion
     (temporal/record-mutation-silent!
      {:entry-id       id
@@ -98,17 +98,18 @@
   "Scan and auto-promote entries accessed across multiple projects."
   [{:keys [_directory min_projects limit dry_run]}]
   (log/info "mcp-memory-xpoll-promote: scanning for cross-project knowledge")
-  (with-chroma
+  (with-store
     (let [limit-val   (or (some-> limit int) 500)
           opts        {:min-projects (or (some-> min_projects int) 2)}
-          all-entries (chroma/query-entries :limit limit-val
-                                            :include-expired? false)
+          store (mem-proto/get-store)
+          all-entries (mem-proto/query-entries store {:limit limit-val
+                                                      :include-expired? false})
           candidates  (filter #(crystal/scope-eligible? % opts) all-entries)
           plans       (mapv build-xpoll-plan candidates)
           results     (if dry_run
                         plans
                         (vec (for [plan plans
-                                   :let [entry (chroma/get-entry-by-id (:id plan))]
+                                   :let [entry (mem-proto/get-entry store (:id plan))]
                                    :when entry]
                                (promote-entry-by-tiers! entry (:tiers_to_promote plan)))))
           promoted-ct (count (filter :promoted results))
@@ -134,11 +135,12 @@
   "Run bounded xpoll auto-promotion cycle for crystallize-session hooks."
   [{:keys [_directory limit]}]
   (try
-    (if-not (chroma/embedding-configured?)
-      {:promoted 0 :candidates 0 :total-scanned 0 :error "chroma-not-configured"}
+    (if-not (mem-proto/store-set?)
+      {:promoted 0 :candidates 0 :total-scanned 0 :error "store-not-configured"}
       (let [limit-val     (or (some-> limit int) 100)
-            all-entries   (chroma/query-entries :limit limit-val
-                                                :include-expired? false)
+            store         (mem-proto/get-store)
+            all-entries   (mem-proto/query-entries store {:limit limit-val
+                                                          :include-expired? false})
             candidates    (filter #(crystal/scope-eligible? %) all-entries)
             results       (vec (for [entry candidates
                                      :let [tiers (crystal/scope-tiers entry)]

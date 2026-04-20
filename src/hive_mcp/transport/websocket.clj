@@ -5,7 +5,7 @@
             [manifold.stream :as s]
             [clojure.core.async :as async :refer [go-loop <!]]
             [clojure.data.json :as json]
-            [taoensso.timbre :as log])
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]])
   (:import [java.io File]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -59,8 +59,7 @@
 
       ;; Incoming → input-ch
       (s/consume (fn [msg]
-                   (when-let [parsed (try (json/read-str msg :key-fn keyword)
-                                          (catch Exception _ nil))]
+                   (when-let [parsed (rescue nil (json/read-str msg :key-fn keyword))]
                      (async/>!! input-ch parsed)))
                  socket)
 

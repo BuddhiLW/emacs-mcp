@@ -118,68 +118,96 @@
                                                   :directory effective-dir})))
         nil))))
 
+(defn- spawn-and-wait!
+  "IO boundary: spawn a ling and poll for readiness.
+   Returns {:agent-id :ready? :slave :elapsed-ms :phase :spawn-mode}."
+  [{:keys [agent-name effective-dir default-presets model route spawn-mode-kw task-id]}]
+  (let [spawn-result  (spawn/handle-spawn
+                       (make-spawn-params {:agent-name      agent-name
+                                           :effective-dir   effective-dir
+                                           :default-presets default-presets
+                                           :model           model
+                                           :route           route
+                                           :spawn-mode-kw   spawn-mode-kw
+                                           :task-id         task-id}))
+        parsed        (parse-spawn-result spawn-result agent-name)
+        agent-id      (:agent-id parsed)
+        reported-mode (or (:spawn-mode parsed) spawn-mode-kw)]
+    (assoc (ready/wait-for-ling-ready agent-id reported-mode)
+           :agent-id agent-id
+           :spawn-mode spawn-mode-kw)))
+
+(defn- handle-ready-ling
+  "Pure: assemble success result map after dispatch."
+  [{:keys [agent-id title task-id route model spawn-mode best-effort?]}]
+  (cond-> {:agent-id agent-id :task-title title :task-id task-id
+           :spawned true :route route :model (or model "claude")}
+    (not= :claude route) (assoc :spawn-mode spawn-mode)
+    best-effort?         (assoc :best-effort true)))
+
+(defn- handle-timeout-ling
+  "Handle ling that timed out during readiness.
+   Slave exists → best-effort dispatch; no slave → error result."
+  [{:keys [spawn-result task effective-dir base-result title task-id route model spawn-mode]}]
+  (let [{:keys [agent-id slave elapsed-ms phase]} spawn-result]
+    (if slave
+      (do
+        (log/warn (str "SPARK[" (name route) "]: readiness timeout but slave exists — dispatching anyway")
+                  {:agent-id agent-id :elapsed-ms elapsed-ms :phase phase})
+        (let [dr (dispatch-to-ling! {:agent-id agent-id :task task
+                                     :effective-dir effective-dir})]
+          (if-let [err (:dispatch-error dr)]
+            (do (log/warn (str "SPARK[" (name route) "]: best-effort dispatch failed")
+                          {:agent agent-id :task title :error err})
+                (assoc base-result :agent-id agent-id :error err))
+            (do (log/info (str "SPARK[" (name route) "]: best-effort dispatch succeeded")
+                          {:agent agent-id :task title})
+                (handle-ready-ling {:agent-id agent-id :title title :task-id task-id
+                                    :route route :model model :spawn-mode spawn-mode
+                                    :best-effort? true})))))
+      (do
+        (log/warn (str "SPARK[" (name route) "]: ling not in DB, skipping dispatch")
+                  {:agent-id agent-id :elapsed-ms elapsed-ms :phase phase})
+        (assoc base-result :agent-id agent-id
+               :error (str "Readiness timeout (" (name (or phase :unknown)) ")"))))))
+
 (defn- spawn-one!
   "Spawn and dispatch a single ling. Unified from spawn-one-vterm! and
    spawn-one-headless! — route determined by :route parameter."
   [{:keys [task effective-dir default-presets model route spawn-mode-kw]}]
   (let [title       (or (:title task) (:id task) "untitled")
         task-id     (:id task)
-        prefix      (if (= :claude route) "forja-cl-" "forja-hl-")
-        agent-name  (str prefix (System/currentTimeMillis))
+        agent-name  (str (if (= :claude route) "forja-cl-" "forja-hl-")
+                         (System/currentTimeMillis))
         ready-mode  (or spawn-mode-kw (if (= :claude route) :claude :headless))
         base-result {:agent-id agent-name :task-title title :task-id task-id
                      :spawned false :route route}
         r (result/rescue
            base-result
-           (let [spawn-result  (spawn/handle-spawn
-                                (make-spawn-params {:agent-name      agent-name
-                                                    :effective-dir   effective-dir
-                                                    :default-presets default-presets
-                                                    :model           model
-                                                    :route           route
-                                                    :spawn-mode-kw   ready-mode
-                                                    :task-id         task-id}))
-                 parsed        (parse-spawn-result spawn-result agent-name)
-                 agent-id      (:agent-id parsed)
-                 reported-mode (or (:spawn-mode parsed) ready-mode)
-                 ready         (ready/wait-for-ling-ready agent-id reported-mode)]
-             (if (:ready? ready)
-               (let [dispatch-result (dispatch-to-ling! {:agent-id agent-id :task task
-                                                         :effective-dir effective-dir})]
-                 (if-let [dispatch-err (:dispatch-error dispatch-result)]
-                   (do
-                     (log/warn (str "SPARK[" (name route) "]: dispatch failed after spawn")
-                               {:agent agent-id :task title :error dispatch-err})
-                     (assoc base-result :agent-id agent-id :error dispatch-err))
-                   (do
-                     (log/info (str "SPARK[" (name route) "]: spawned+dispatched")
-                               {:agent agent-id :task title :model (or model "claude")})
-                     (cond-> {:agent-id agent-id :task-title title :task-id task-id
-                              :spawned true :route route :model (or model "claude")}
-                       (not= :claude route) (assoc :spawn-mode ready-mode)))))
-               (if (:slave ready)
-                 (do
-                   (log/warn (str "SPARK[" (name route) "]: readiness timeout but slave exists — dispatching anyway")
-                             {:agent-id agent-id :elapsed-ms (:elapsed-ms ready) :phase (:phase ready)})
-                   (let [dispatch-result (dispatch-to-ling! {:agent-id agent-id :task task
-                                                             :effective-dir effective-dir})]
-                     (if-let [dispatch-err (:dispatch-error dispatch-result)]
-                       (do
-                         (log/warn (str "SPARK[" (name route) "]: best-effort dispatch failed")
-                                   {:agent agent-id :task title :error dispatch-err})
-                         (assoc base-result :agent-id agent-id :error dispatch-err))
-                       (do
-                         (log/info (str "SPARK[" (name route) "]: best-effort dispatch succeeded")
-                                   {:agent agent-id :task title})
-                         (cond-> {:agent-id agent-id :task-title title :task-id task-id
-                                  :spawned true :route route :model (or model "claude")
-                                  :best-effort true}
-                           (not= :claude route) (assoc :spawn-mode ready-mode))))))
-                 (do
-                   (log/warn (str "SPARK[" (name route) "]: ling not in DB, skipping dispatch")
-                             {:agent-id agent-id :elapsed-ms (:elapsed-ms ready) :phase (:phase ready)})
-                   (assoc base-result :agent-id agent-id
-                          :error (str "Readiness timeout (" (name (or (:phase ready) :unknown)) ")")))))))]
+           (let [sw       (spawn-and-wait! {:agent-name      agent-name
+                                            :effective-dir   effective-dir
+                                            :default-presets default-presets
+                                            :model           model
+                                            :route           route
+                                            :spawn-mode-kw   ready-mode
+                                            :task-id         task-id})
+                 agent-id (:agent-id sw)]
+             (if (:ready? sw)
+               (let [dr (dispatch-to-ling! {:agent-id agent-id :task task
+                                            :effective-dir effective-dir})]
+                 (if-let [err (:dispatch-error dr)]
+                   (do (log/warn (str "SPARK[" (name route) "]: dispatch failed after spawn")
+                                 {:agent agent-id :task title :error err})
+                       (assoc base-result :agent-id agent-id :error err))
+                   (do (log/info (str "SPARK[" (name route) "]: spawned+dispatched")
+                                 {:agent agent-id :task title :model (or model "claude")})
+                       (handle-ready-ling {:agent-id agent-id :title title :task-id task-id
+                                           :route route :model model
+                                           :spawn-mode (:spawn-mode sw)}))))
+               (handle-timeout-ling {:spawn-result sw :task task :effective-dir effective-dir
+                                     :base-result base-result :title title :task-id task-id
+                                     :route route :model model
+                                     :spawn-mode (:spawn-mode sw)}))))]
     (cond-> r
       (and (not (:spawned r)) (not (:error r)) (::result/error (meta r)))
       (assoc :error (get-in (meta r) [::result/error :message] "unknown")))))

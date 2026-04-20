@@ -16,6 +16,7 @@
             [hive-mcp.tools.consolidated.session :as c-session]
             [hive-mcp.tools.consolidated.workflow.forge-ops :as forge-ops]
             [hive-mcp.tools.consolidated.workflow.forge-cycle :as forge-cycle]
+            [hive-mcp.extensions.registry :as ext]
             [hive-mcp.dns.result :as result]
             [hive-mcp.config.core :as config]
             [hive-mcp.server.guards :as guards]
@@ -128,14 +129,16 @@
                  :message "Forge quenched. Active lings will finish. No new spawns."
                  :state @forge-state}))))
 
-;; ── Multi-Front Coordinator (hive-knowledge extension) ────────────────────
+;; ── Multi-Front Coordinator (addon extension) ────────────────────────────
 
 (defn- resolve-multi-front
-  "Lazily resolve hive-knowledge.scheduler.multi-front namespace."
+  "Look up multi-front extension fn via extension registry."
   [fn-name]
-  (or (requiring-resolve (symbol "hive-knowledge.scheduler.multi-front" fn-name))
-      (throw (ex-info (str "multi-front not available: " fn-name)
-                      {:fn fn-name}))))
+  (let [ext-key (keyword "multi-front" fn-name)]
+    (or (ext/get-extension ext-key)
+        (throw (ex-info (str "multi-front extension not available: " fn-name
+                             ". Is the providing addon loaded?")
+                        {:fn fn-name :extension-key ext-key})))))
 
 (defn handle-multi-front-start
   "Start multi-front coordination: detect fronts → spawn vterm lings → monitor."

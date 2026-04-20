@@ -1,0 +1,11 @@
+;; Desktop profile — full feature set (Emacs, stdio MCP, all channels).
+;; This is the default profile for local development.
+;;
+;; Merges over system.edn via meta-merge.
+;; Keys set to nil are removed (Integrant exclusion convention).
+;;
+;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
+;; SPDX-License-Identifier: AGPL-3.0-or-later
+
+{:hive/websocket-mcp {:enabled true}
+ :hive/mcp-stdio     {:enabled true}}

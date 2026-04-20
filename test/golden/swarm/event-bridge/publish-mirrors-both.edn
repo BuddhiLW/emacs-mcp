@@ -1,0 +1,4 @@
+{:local-events [{:type :slave-spawned, :slave-id "ling-out-1"}],
+ :nats-publishes
+ [["hive.v1.slave.slave-spawned.ling-out-1"
+   {:type :slave-spawned, :slave-id "ling-out-1"}]]}

@@ -7,7 +7,7 @@
             [hive-mcp.agent.core :as agent]
             [hive-mcp.knowledge-graph.disc :as kg-disc]
             [hive-mcp.concurrency.pool :as pool]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -16,7 +16,7 @@
 (defn- build-task-str
   "Build task string with optional staleness warnings."
   [file task]
-  (let [disc-warnings (try (kg-disc/staleness-warnings [file]) (catch Exception _ nil))
+  (let [disc-warnings (rescue nil (kg-disc/staleness-warnings [file]))
         disc-notice (kg-disc/format-staleness-warnings disc-warnings)]
     (if disc-notice
       (str disc-notice "File: " file "\n\nTask: " task)

@@ -1,13 +1,14 @@
 (ns hive-mcp.tools.memory.migration
   "Migration handlers for memory project and storage transitions."
-  (:require [hive-mcp.tools.memory.core :refer [with-chroma]]
+  (:require [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.memory.temporal :as temporal]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
+            [hive-mcp.knowledge-graph.connection :as kg-conn]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.emacs.client :as ec]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.protocols.memory :as mem-proto]
             [clojure.data.json :as json]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
@@ -22,8 +23,9 @@
   "Migrate memory from one project-id to another (Chroma + KG edges)."
   [{:keys [old-project-id new-project-id update-scopes]}]
   (log/info "mcp-memory-migrate-project:" old-project-id "->" new-project-id)
-  (with-chroma
-    (let [entries (chroma/query-entries :project-id old-project-id :limit 10000)
+  (with-store
+    (let [store (mem-proto/get-store)
+          entries (mem-proto/query-entries store {:project-id old-project-id :limit 10000})
           migrated (atom 0)
           updated-scopes (atom 0)
           old-scope-tag (scope/make-scope-tag old-project-id)
@@ -37,8 +39,8 @@
                                    tag))
                                (:tags entry))
                          (:tags entry))]
-          (chroma/update-entry! (:id entry) {:project-id new-project-id
-                                             :tags new-tags})
+          (mem-proto/update-entry! store (:id entry) {:project-id new-project-id
+                                                      :tags new-tags})
           ;; Temporal dual-write: record each migration
           (temporal/record-mutation-silent!
            {:entry-id       (:id entry)
@@ -62,44 +64,164 @@
                    :old-project-id old-project-id
                    :new-project-id new-project-id})))))
 
+(defn handle-migrate-scoped
+  "Migrate specific memory entries by ID (or tag filter) from one project to another.
+   Updates project-id and scope tags per-entry. Preserves KG edges — only updates
+   edge scope for edges where BOTH endpoints are in the migrated set.
+
+   Arguments:
+     :entry-ids      - Vector of entry IDs to migrate (takes priority)
+     :tag-filter     - Tag string to match entries (e.g. 'payment-flow'); used when entry-ids is empty
+     :old-project-id - Source project-id (required for scope tag swap)
+     :new-project-id - Target project-id (required)
+     :dry-run        - Preview without modifying (default: false)
+
+   Returns:
+     {:migrated N :ids [...] :from old-project :to new-project
+      :kg-edges-migrated N :skipped-ids [...] :errors [...]}"
+  [{:keys [entry-ids tag-filter old-project-id new-project-id dry-run]}]
+  (cond
+    (str/blank? new-project-id)
+    (mcp-error "new-project-id is required")
+
+    (str/blank? old-project-id)
+    (mcp-error "old-project-id is required")
+
+    (= old-project-id new-project-id)
+    (mcp-error "old-project-id and new-project-id must be different")
+
+    (and (empty? entry-ids) (str/blank? tag-filter))
+    (mcp-error "Either entry-ids or tag-filter is required")
+
+    :else
+    (let [dry-run (boolean dry-run)]
+      (log/info "migrate-scoped:" (if (seq entry-ids)
+                                    (str (count entry-ids) " entry IDs")
+                                    (str "tag-filter=" tag-filter))
+                old-project-id "->" new-project-id
+                (when dry-run "(dry-run)"))
+      (with-store
+        (let [store          (mem-proto/get-store)
+              old-scope-tag  (scope/make-scope-tag old-project-id)
+              new-scope-tag  (scope/make-scope-tag new-project-id)
+              ;; Resolve target entries — by IDs or by tag filter
+              target-ids     (if (seq entry-ids)
+                               (vec entry-ids)
+                               (let [all-entries (mem-proto/query-entries
+                                                  store {:project-id old-project-id
+                                                         :limit 10000})]
+                                 (->> all-entries
+                                      (filter (fn [e]
+                                                (some #(= % tag-filter) (:tags e))))
+                                      (mapv :id))))
+              ;; Fetch each entry, partition into found/not-found
+              resolved       (reduce
+                              (fn [acc eid]
+                                (if-let [entry (mem-proto/get-entry store eid)]
+                                  (update acc :found conj entry)
+                                  (update acc :not-found conj eid)))
+                              {:found [] :not-found []}
+                              target-ids)
+              found-entries  (:found resolved)
+              skipped-ids    (:not-found resolved)
+              migrated-ids   (atom [])
+              errors         (atom [])]
+
+          (when-not dry-run
+            (doseq [entry found-entries]
+              (try
+                (let [new-tags (mapv (fn [tag]
+                                       (if (= tag old-scope-tag)
+                                         new-scope-tag
+                                         tag))
+                                     (:tags entry))]
+                  (mem-proto/update-entry! store (:id entry)
+                                           {:project-id new-project-id
+                                            :tags new-tags})
+                  ;; Temporal audit trail
+                  (temporal/record-mutation-silent!
+                   {:entry-id       (:id entry)
+                    :op             :migrate-scoped
+                    :data           {:old-project-id old-project-id
+                                     :new-project-id new-project-id}
+                    :previous-value {:project-id old-project-id}
+                    :project-id     new-project-id})
+                  (swap! migrated-ids conj (:id entry)))
+                (catch Exception e
+                  (log/warn "Failed to migrate entry" (:id entry) ":" (.getMessage e))
+                  (swap! errors conj {:id (:id entry) :error (.getMessage e)})))))
+
+          ;; Selectively migrate KG edge scopes for edges between migrated entries
+          (let [migrated-set    (set (if dry-run (mapv :id found-entries) @migrated-ids))
+                kg-edge-result  (if (or dry-run (< (count migrated-set) 2))
+                                  {:migrated 0}
+                                  (try
+                                    (let [edges    (kg-edges/find-edges-between migrated-set)
+                                          ;; Only migrate edges scoped to old-project-id
+                                          to-update (filter #(= old-project-id (:kg-edge/scope %))
+                                                            edges)
+                                          tx-data   (vec (for [edge to-update
+                                                               :let [eid (kg-conn/entid
+                                                                          [:kg-edge/id (:kg-edge/id edge)])]
+                                                               :when eid]
+                                                           [:db/add eid :kg-edge/scope new-project-id]))]
+                                      (when (seq tx-data)
+                                        (kg-conn/transact! tx-data))
+                                      {:migrated (count tx-data)})
+                                    (catch Exception e
+                                      (log/warn "KG edge scope migration failed (non-blocking):"
+                                                (.getMessage e))
+                                      {:migrated 0 :error (.getMessage e)})))]
+
+            (mcp-json {:migrated          (if dry-run (count found-entries) (count @migrated-ids))
+                       :ids               (if dry-run (mapv :id found-entries) @migrated-ids)
+                       :skipped-ids       skipped-ids
+                       :errors            @errors
+                       :kg-edges-migrated (:migrated kg-edge-result)
+                       :kg-error          (:error kg-edge-result)
+                       :dry-run           dry-run
+                       :from              old-project-id
+                       :to                new-project-id})))))))
+
 (defn- import-entry!
-  "Import a single entry to Chroma with content-hash deduplication."
+  "Import a single entry to memory store with content-hash deduplication."
   [entry project-id]
-  (let [entry-hash (or (:content-hash entry)
-                       (chroma/content-hash (:content entry)))
+  (let [store (mem-proto/get-store)
+        entry-hash (or (:content-hash entry)
+                       (mem-proto/content-hash (:content entry)))
         entry-type (or (:type entry) "note")]
     (cond
-      (chroma/find-duplicate entry-type entry-hash :project-id project-id)
+      (mem-proto/find-duplicate store entry-type entry-hash {:project-id project-id})
       :skipped-hash
 
-      (chroma/get-entry-by-id (:id entry))
+      (mem-proto/get-entry store (:id entry))
       :skipped-id
 
       :else
       (do
-        (chroma/index-memory-entry!
-         {:id (:id entry)
-          :type entry-type
-          :content (:content entry)
-          :tags (if (vector? (:tags entry))
-                  (vec (:tags entry))
-                  (:tags entry))
-          :content-hash entry-hash
-          :created (:created entry)
-          :updated (:updated entry)
-          :duration (or (:duration entry) "long")
-          :expires (or (:expires entry) "")
-          :access-count (or (:access-count entry) 0)
-          :helpful-count (or (:helpful-count entry) 0)
-          :unhelpful-count (or (:unhelpful-count entry) 0)
-          :project-id project-id})
+        (mem-proto/add-entry! store
+                              {:id (:id entry)
+                               :type entry-type
+                               :content (:content entry)
+                               :tags (if (vector? (:tags entry))
+                                       (vec (:tags entry))
+                                       (:tags entry))
+                               :content-hash entry-hash
+                               :created (:created entry)
+                               :updated (:updated entry)
+                               :duration (or (:duration entry) "long")
+                               :expires (or (:expires entry) "")
+                               :access-count (or (:access-count entry) 0)
+                               :helpful-count (or (:helpful-count entry) 0)
+                               :unhelpful-count (or (:unhelpful-count entry) 0)
+                               :project-id project-id})
         :imported))))
 
 (defn handle-import-json
   "Import memory entries from legacy JSON storage to Chroma."
   [{:keys [project-id dry-run]}]
   (log/info "mcp-memory-import-json:" project-id "dry-run:" dry-run)
-  (with-chroma
+  (with-store
     (let [pid (or project-id (scope/get-current-project-id))
           elisp (format "(json-encode (list :notes (hive-mcp-memory-query 'note nil %s 1000 nil t)
                                             :snippets (hive-mcp-memory-query 'snippet nil %s 1000 nil t)
@@ -151,8 +273,8 @@
 (defn handle-detect-orphaned
   "Detect orphaned hash-based scope tags in memory."
   [_args]
-  (with-chroma
-    (let [entries (chroma/query-entries :limit 5000 :include-expired? true)
+  (with-store
+    (let [entries (mem-proto/query-entries (mem-proto/get-store) {:limit 5000 :include-expired? true})
           scope-entries (->> entries
                              (mapcat (fn [entry]
                                        (->> (:tags entry)
@@ -190,9 +312,10 @@
 
     :else
     (let [dry-run (if (nil? dry_run) true dry_run)]
-      (with-chroma
-        (let [old-tag (str "scope:project:" old_scope)
-              entries (chroma/query-entries :limit 5000 :include-expired? true)
+      (with-store
+        (let [store (mem-proto/get-store)
+              old-tag (str "scope:project:" old_scope)
+              entries (mem-proto/query-entries store {:limit 5000 :include-expired? true})
               matching (->> entries
                             (filter #(some #{old-tag} (:tags %)))
                             vec)
@@ -203,7 +326,7 @@
           (when-not dry-run
             (doseq [entry matching]
               (let [new-tags (update-scope-tag (:tags entry) old_scope new_scope)]
-                (chroma/update-entry! (:id entry) {:tags new-tags})
+                (mem-proto/update-entry! store (:id entry) {:tags new-tags})
                 (log/debug "Migrated entry" (:id entry) "tags:" (:tags entry) "->" new-tags))))
 
           (mcp-json {:migrated (count matching)
@@ -263,9 +386,10 @@
 
       (if dry-run
         (let [chroma-count (rescue 0
-                                   (with-chroma
-                                     (count (chroma/query-entries :project-id old-project-id
-                                                                  :limit 10000))))
+                                   (with-store
+                                     (count (mem-proto/query-entries (mem-proto/get-store)
+                                                                     {:project-id old-project-id
+                                                                      :limit 10000}))))
               kg-count (rescue 0
                                (count (kg-edges/get-edges-by-scope old-project-id)))
               edn-config (when directory (read-hive-project-edn directory))
@@ -329,6 +453,59 @@
                      :new-project-id new-project-id
                      :directory directory}))))))
 
+;; =============================================================================
+;; Backend Migration (Chroma <-> Proximum)
+;; =============================================================================
+
+(defn migrate-backend!
+  "Migrate all entries from one IMemoryStore backend to another.
+
+   Reads entries from source-store in batches, re-indexes each into target-store
+   via add-entry! (which re-embeds via the configured EmbeddingProvider).
+
+   Arguments:
+     source-store - IMemoryStore instance to read from
+     target-store - IMemoryStore instance to write to
+     opts         - Optional map:
+       :batch-size   - Entries per query batch (default: 500)
+       :max-entries  - Total cap (default: 50000)
+       :dry-run?     - Count without writing (default: false)
+       :project-id   - Filter to specific project (default: all)
+       :on-progress  - (fn [stats]) callback per batch
+
+   Returns:
+     {:migrated int :skipped int :errors int :total-source int}"
+  [source-store target-store & [{:keys [batch-size max-entries dry-run? project-id on-progress]
+                                 :or {batch-size 500 max-entries 50000 dry-run? false}}]]
+  (log/info "migrate-backend! starting" {:dry-run? dry-run? :project-id project-id
+                                         :batch-size batch-size :max-entries max-entries})
+  (let [entry-types ["axiom" "decision" "convention" "principle" "note" "snippet"]
+        stats (atom {:migrated 0 :skipped 0 :errors 0 :total-source 0})]
+    (doseq [entry-type entry-types]
+      (let [query-opts (cond-> {:type entry-type :limit batch-size :include-expired? true}
+                         project-id (assoc :project-id project-id))
+            entries (mem-proto/query-entries source-store query-opts)]
+        (swap! stats update :total-source + (count entries))
+        (doseq [entry entries
+                :while (< (:migrated @stats) max-entries)]
+          (if dry-run?
+            (swap! stats update :migrated inc)
+            (let [result (rescue :error
+                                 (let [existing (mem-proto/get-entry target-store (:id entry))]
+                                   (if existing
+                                     :skipped
+                                     (do (mem-proto/add-entry! target-store entry)
+                                         :migrated))))]
+              (case result
+                :migrated (swap! stats update :migrated inc)
+                :skipped  (swap! stats update :skipped inc)
+                :error    (swap! stats update :errors inc)))))
+        (when on-progress
+          (on-progress @stats))))
+    (let [result @stats]
+      (log/info "migrate-backend! complete" result)
+      result)))
+
 (def tools
   [{:name "mcp_memory_migrate_project"
     :description "Migrate memory entries from one project-id to another. Updates project-id metadata and optionally scope tags."
@@ -370,4 +547,22 @@
                                          :description "Preview changes without modifying (default: true)"
                                          :default true}}
                   :required ["old_scope" "new_scope"]}
-    :handler handle-migrate-scope}])
+    :handler handle-migrate-scope}
+
+   {:name "mcp_memory_migrate_scoped"
+    :description "Migrate specific memory entries by ID or tag filter from one project to another. Updates project-id and scope tags per-entry. Preserves KG edges (only updates edge scope for edges where both endpoints are in the migrated set). Use dry-run to preview."
+    :inputSchema {:type "object"
+                  :properties {:entry-ids {:type "array"
+                                           :items {:type "string"}
+                                           :description "Specific entry IDs to migrate (takes priority over tag-filter)"}
+                               :tag-filter {:type "string"
+                                            :description "Tag to match entries for migration (e.g., 'payment-flow'). Used when entry-ids is empty."}
+                               :old-project-id {:type "string"
+                                                :description "Source project-id to migrate from"}
+                               :new-project-id {:type "string"
+                                                :description "Target project-id to migrate to"}
+                               :dry-run {:type "boolean"
+                                         :description "Preview changes without modifying (default: false)"
+                                         :default false}}
+                  :required ["old-project-id" "new-project-id"]}
+    :handler handle-migrate-scoped}])

@@ -42,7 +42,7 @@
             [hive-mcp.channel.websocket :as ws]
             [datascript.core :as d]
             [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -376,11 +376,9 @@
                    :topic (:topic (get-dialogue dialogue-id))})
 
         ;; Update turn with task-id from result (if available)
-        (when-let [task-id (try
-                             (some-> dispatch-result :result
+        (when-let [task-id (rescue nil (some-> dispatch-result :result
                                      (json/read-str :key-fn keyword)
-                                     :task-id)
-                             (catch Exception _ nil))]
+                                     :task-id))]
           (update-turn-task-id! dialogue-id (:id turn) task-id))
 
         ;; Return enriched result

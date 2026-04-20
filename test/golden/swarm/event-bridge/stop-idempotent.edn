@@ -1,0 +1,4 @@
+{:before {:running true},
+ :stop-1 :ok,
+ :stop-2 :ok,
+ :after {:running false}}

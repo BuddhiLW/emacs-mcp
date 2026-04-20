@@ -16,14 +16,15 @@
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.tools.memory.crud :as mem-crud]
             [hive-mcp.tools.memory.scope :as scope]
-            [hive-mcp.tools.memory.core :refer [with-chroma]]
+            [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.memory.temporal :as temporal]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.swarm.datascript :as ds]
+            [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.project.tree :as tree]
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [taoensso.timbre :as log])
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]])
   (:import [java.time ZonedDateTime]
            [java.time.format DateTimeFormatter]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -131,12 +132,26 @@
 ;; ============================================================
 
 (defn- query-kanban-entries [project-id include-descendants? limit]
-  (let [all-project-ids (when-let [_ include-descendants?]
+  (let [global? (= project-id "global")
+        all-project-ids (when (and include-descendants? (not global?))
                           (resolve-project-ids-with-descendants project-id))
-        multi-project? (boolean all-project-ids)
-        entries (if-let [pids all-project-ids]
-                  (chroma/query-entries :type "note" :project-ids pids :limit (max limit 500))
-                  (chroma/query-entries :type "note" :project-id project-id :limit limit))]
+        multi-project? (or global? (boolean all-project-ids))
+        effective-limit (max limit 500)
+        entries (cond
+                  ;; Global + descendants: query all kanban entries (no project filter)
+                  (and global? include-descendants?)
+                  (facade/query-entries :type "note" :tags ["kanban"]
+                                        :limit effective-limit)
+                  ;; Specific project + descendants
+                  all-project-ids
+                  (facade/query-entries :type "note" :tags ["kanban"]
+                                        :project-ids all-project-ids
+                                        :limit effective-limit)
+                  ;; Single project scope
+                  :else
+                  (facade/query-entries :type "note" :tags ["kanban"]
+                                        :project-id project-id
+                                        :limit limit))]
     {:entries entries :multi-project? multi-project?}))
 
 (defn- filter-kanban-by-tags [entries required-tags]
@@ -147,10 +162,24 @@
        (filter kanban-entry?)))
 
 ;; ============================================================
+;; Movement Tracking (session-scoped for wrap harvest)
+;; ============================================================
+
+(defn- track-movement!
+  "Record a kanban status transition in DataScript for wrap harvest.
+   Non-fatal — movement tracking failure should never block kanban ops."
+  [{:keys [task-id title from to project-id]}]
+  (try
+    (ds/register-kanban-movement!
+     {:task-id task-id :title title :from from :to to :project-id project-id})
+    (catch Exception e
+      (log/debug "track-movement! failed (non-fatal):" (.getMessage e)))))
+
+;; ============================================================
 ;; Pure Logic (return MCP response maps directly)
 ;; ============================================================
 
-(defn- create* [{:keys [title priority context directory agent_id]}]
+(defn- create* [{:keys [title description priority context directory agent_id]}]
   (when (or (nil? title) (and (string? title) (str/blank? title)))
     (throw (ex-info "Kanban task requires a non-empty title" {:type :validation-error})))
   (let [eff-dir (effective-dir directory)
@@ -159,15 +188,20 @@
                                   (System/getenv "CLAUDE_SWARM_SLAVE_ID")))
         priority (if-let [p priority] p "medium")
         project-id (scope/get-current-project-id eff-dir)
-        content {:task-type "kanban" :title title :status "todo"
-                 :priority priority :created (kanban-timestamp)
-                 :started nil :context context}
+        content (cond-> {:task-type "kanban" :title title :status "todo"
+                         :priority priority :created (kanban-timestamp)
+                         :started nil :context context}
+                  description (assoc :description description))
         tags (build-kanban-tags "todo" priority project-id)
         crud-result (mem-crud/handle-add {:type "note"
                                           :content (json/write-str content)
                                           :tags tags :directory eff-dir
                                           :agent_id eff-agent :duration "short"})]
     (log/info "kanban-create result:" crud-result)
+    (when-not (:isError crud-result)
+      (track-movement! {:task-id (or (:text crud-result) "unknown")
+                        :title title :from nil :to "todo"
+                        :project-id project-id}))
     (if-let [_ (:isError crud-result)]
       crud-result
       {:type "text" :text (:text crud-result)})))
@@ -203,9 +237,8 @@
                        :agent-id (get content :agent-id)
                        :files (get content :files)
                        :completed-at (java.util.Date.)
-                       :session-id (try (when-let [sid (requiring-resolve 'hive-mcp.crystal.core/session-id)]
-                                          (sid))
-                                        (catch Exception _ nil))
+                       :session-id (rescue nil (when-let [sid (requiring-resolve 'hive-mcp.crystal.core/session-id)]
+                                          (sid)))
                        :context (get content :context)
                        :tags (filterv #(not (str/starts-with? % "scope:"))
                                       (or (:tags entry) []))}]
@@ -215,6 +248,17 @@
       (log/debug "Done-archive extension not available (non-fatal):" (.getMessage e)))))
 
 (defn- move-to-done! [entry task-id]
+  (let [content (:content entry)
+        old-status (content-val content :status "doing")
+        title (content-val content :title nil)
+        project-id (some-> entry :tags
+                           (->> (filter #(clojure.string/starts-with? % "scope:project:"))
+                                first
+                                (clojure.string/replace "scope:project:" "")))]
+    ;; Track movement for wrap harvest
+    (track-movement! {:task-id task-id :title title
+                      :from old-status :to "done"
+                      :project-id project-id}))
   (when-let [task-data (crystal-hooks/extract-task-from-kanban-entry entry)]
     (log/info "Calling crystal hook for completed kanban task:" task-id
               "project-id:" (:project-id task-data))
@@ -232,26 +276,31 @@
                             (->> (filter #(clojure.string/starts-with? % "scope:project:"))
                                  first
                                  (clojure.string/replace "scope:project:" "")))})
-  (chroma/delete-entry! task-id)
+  (facade/delete-entry! task-id)
   (mcp-json {:deleted true :status "done" :id task-id}))
 
 (defn- move-to-status! [entry task-id new-status directory]
   (let [content (:content entry)
         old-status (content-val content :status "todo")
         priority (content-val content :priority "medium")
+        title (content-val content :title nil)
         new-content (cond-> (assoc content :status new-status)
                       (= new-status "doing") (assoc :started (kanban-timestamp)))
         eff-dir (effective-dir directory)
         project-id (scope/get-current-project-id eff-dir)
         new-tags (build-kanban-tags new-status priority project-id)
-        _ (chroma/update-entry! task-id {:content new-content :tags new-tags})
-        updated (chroma/get-entry-by-id task-id)]
+        _ (facade/update-entry! task-id {:content new-content :tags new-tags})
+        updated (facade/get-entry-by-id task-id)]
     ;; Temporal dual-write: record status transition
     (temporal/record-mutation-silent!
      {:entry-id   task-id
       :op         :kanban-move
       :data       {:old-status old-status :new-status new-status}
       :project-id project-id})
+    ;; Track movement for wrap harvest
+    (track-movement! {:task-id task-id :title title
+                      :from old-status :to new-status
+                      :project-id project-id})
     (mcp-json (task->slim updated))))
 
 (defn- move* [{:keys [task_id new_status status id directory]}]
@@ -262,7 +311,7 @@
         new_status (get status-enum->tag raw-status raw-status)
         task_id    (or task_id id)]
     (if-let [_ (valid-statuses new_status)]
-      (if-let [entry (chroma/get-entry-by-id task_id)]
+      (if-let [entry (facade/get-entry-by-id task_id)]
         (if-let [_ (kanban-task-type? (:content entry))]
           (case new_status
             "done" (move-to-done! entry task_id)
@@ -309,19 +358,19 @@
   "List kanban tasks with minimal data for token optimization.
    HCR Wave 4: Pass include_descendants=true to aggregate child project tasks."
   [params]
-  (safe-call :kanban/list-failed #(with-chroma (list-slim* params))))
+  (safe-call :kanban/list-failed #(with-store (list-slim* params))))
 
 (defn handle-mem-kanban-move
   "Move task to new status. Moving to 'done' DELETES the task from memory.
    CTX Migration: Uses request context for directory extraction."
   [params]
-  (safe-call :kanban/move-failed #(with-chroma (move* params))))
+  (safe-call :kanban/move-failed #(with-store (move* params))))
 
 (defn handle-mem-kanban-stats
   "Get kanban statistics by status.
    HCR Wave 4: Pass include_descendants=true to aggregate child project stats."
   [params]
-  (safe-call :kanban/stats-failed #(with-chroma (stats* params))))
+  (safe-call :kanban/stats-failed #(with-store (stats* params))))
 
 (defn handle-mem-kanban-quick
   "Quick add task with defaults (todo, medium priority).

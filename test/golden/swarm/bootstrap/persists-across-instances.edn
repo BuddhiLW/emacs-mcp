@@ -1,0 +1,7 @@
+[{:slave-id "persist-1",
+  :name "persisted",
+  :status :idle,
+  :depth 2,
+  :cwd "/tmp/persist",
+  :project-id "proj-persist",
+  :parent-id "root"}]

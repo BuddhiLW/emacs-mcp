@@ -19,10 +19,10 @@
   (testing "enqueue entries then drain returns them"
     (let [entries [{:id "ax-1" :type "axiom" :content "Rule one" :severity "INVIOLABLE" :tags ["axiom"]}
                    {:id "p-1" :type "convention" :content "Convention one" :tags ["catchup-priority"]}]]
-      (mp/enqueue! "agent-1" "proj-1" entries)
-      (is (mp/has-pending? "agent-1" "proj-1"))
+      (mp/enqueue! "agent-1" entries)
+      (is (mp/has-pending? "agent-1"))
 
-      (let [result (mp/drain! "agent-1" "proj-1")]
+      (let [result (mp/drain! "agent-1")]
         (is (= 2 (count (:batch result))))
         (is (= 2 (:total result)))
         (is (= 2 (:delivered result)))
@@ -39,13 +39,13 @@
           (is (= ["axiom"] (:tags first-entry)))))))
 
   (testing "drain returns nil when no entries pending"
-    (is (nil? (mp/drain! "agent-1" "proj-1"))))
+    (is (nil? (mp/drain! "agent-1"))))
 
   (testing "has-pending? returns false after full drain"
-    (mp/enqueue! "agent-2" "proj-2"
+    (mp/enqueue! "agent-2"
                  [{:id "x" :type "note" :content "test"}])
-    (mp/drain! "agent-2" "proj-2")
-    (is (not (mp/has-pending? "agent-2" "proj-2")))))
+    (mp/drain! "agent-2")
+    (is (not (mp/has-pending? "agent-2")))))
 
 ;; =============================================================================
 ;; 32K Char Budget Batching
@@ -61,32 +61,32 @@
                            :content big-content
                            :tags []})
                         (range 5))]
-      (mp/enqueue! "agent-b" "proj-b" entries)
+      (mp/enqueue! "agent-b" entries)
 
       ;; First drain should get some entries (within budget)
-      (let [r1 (mp/drain! "agent-b" "proj-b")]
+      (let [r1 (mp/drain! "agent-b")]
         (is (pos? (count (:batch r1))))
         (is (< (count (:batch r1)) 5))
         (is (pos? (:remaining r1)))
         (is (not (:done r1)))
 
         ;; Second drain should get more
-        (let [r2 (mp/drain! "agent-b" "proj-b")]
+        (let [r2 (mp/drain! "agent-b")]
           (is (pos? (count (:batch r2))))
           (is (= 2 (:seq r2)))
 
           ;; Eventually should be done
           (loop [remaining (:remaining r2)]
             (when (pos? remaining)
-              (let [r (mp/drain! "agent-b" "proj-b")]
+              (let [r (mp/drain! "agent-b")]
                 (recur (:remaining r))))))))))
 
 (deftest at-least-one-entry-per-drain-test
   (testing "drain always returns at least one entry even if over budget"
     (let [huge-content (apply str (repeat 50000 "y"))
           entries [{:id "huge-1" :type "axiom" :content huge-content :tags []}]]
-      (mp/enqueue! "agent-h" "proj-h" entries)
-      (let [result (mp/drain! "agent-h" "proj-h")]
+      (mp/enqueue! "agent-h" entries)
+      (let [result (mp/drain! "agent-h")]
         (is (= 1 (count (:batch result))))
         (is (true? (:done result)))))))
 
@@ -101,16 +101,16 @@
                            :content (apply str (repeat 12000 "a"))
                            :tags []})
                         (range 4))]
-      (mp/enqueue! "agent-c" "proj-c" entries)
+      (mp/enqueue! "agent-c" entries)
 
       ;; First drain
-      (let [r1 (mp/drain! "agent-c" "proj-c")]
+      (let [r1 (mp/drain! "agent-c")]
         (is (= 1 (:seq r1)))
         (is (pos? (:delivered r1)))
         (let [first-batch-count (count (:batch r1))]
 
           ;; Second drain picks up where first left off
-          (let [r2 (mp/drain! "agent-c" "proj-c")]
+          (let [r2 (mp/drain! "agent-c")]
             (is (= 2 (:seq r2)))
             (is (= (+ first-batch-count (count (:batch r2)))
                    (:delivered r2)))))))))
@@ -120,35 +120,35 @@
 ;; =============================================================================
 
 (deftest idempotent-enqueue-test
-  (testing "second enqueue for same agent+project is no-op"
+  (testing "second enqueue for same caller replaces buffer"
     (let [entries-1 [{:id "a1" :type "axiom" :content "First" :tags []}]
           entries-2 [{:id "a2" :type "axiom" :content "Second" :tags []}
                      {:id "a3" :type "axiom" :content "Third" :tags []}]]
-      (mp/enqueue! "agent-i" "proj-i" entries-1)
+      (mp/enqueue! "agent-i" entries-1)
       ;; Second enqueue should be ignored
-      (mp/enqueue! "agent-i" "proj-i" entries-2)
+      (mp/enqueue! "agent-i" entries-2)
 
-      (let [result (mp/drain! "agent-i" "proj-i")]
+      (let [result (mp/drain! "agent-i")]
         ;; Should only have entries from first enqueue
         (is (= 1 (count (:batch result))))
         (is (= "a1" (:id (first (:batch result)))))))))
 
 ;; =============================================================================
-;; Agent+Project Isolation
+;; Caller Isolation
 ;; =============================================================================
 
-(deftest agent-project-isolation-test
-  (testing "different agent+project combos have independent buffers"
-    (mp/enqueue! "agent-1" "proj-A"
-                 [{:id "x1" :type "note" :content "for agent-1/proj-A" :tags []}])
-    (mp/enqueue! "agent-2" "proj-A"
-                 [{:id "x2" :type "note" :content "for agent-2/proj-A" :tags []}])
-    (mp/enqueue! "agent-1" "proj-B"
-                 [{:id "x3" :type "note" :content "for agent-1/proj-B" :tags []}])
+(deftest caller-isolation-test
+  (testing "different callers have independent buffers"
+    (mp/enqueue! "agent-1"
+                 [{:id "x1" :type "note" :content "for agent-1" :tags []}])
+    (mp/enqueue! "agent-2"
+                 [{:id "x2" :type "note" :content "for agent-2" :tags []}])
+    (mp/enqueue! "agent-3"
+                 [{:id "x3" :type "note" :content "for agent-3" :tags []}])
 
-    (let [r1 (mp/drain! "agent-1" "proj-A")
-          r2 (mp/drain! "agent-2" "proj-A")
-          r3 (mp/drain! "agent-1" "proj-B")]
+    (let [r1 (mp/drain! "agent-1")
+          r2 (mp/drain! "agent-2")
+          r3 (mp/drain! "agent-3")]
       (is (= "x1" (:id (first (:batch r1)))))
       (is (= "x2" (:id (first (:batch r2)))))
       (is (= "x3" (:id (first (:batch r3))))))))
@@ -159,37 +159,37 @@
 
 (deftest reset-test
   (testing "reset! clears specific buffer"
-    (mp/enqueue! "agent-r" "proj-r"
+    (mp/enqueue! "agent-r"
                  [{:id "r1" :type "note" :content "test" :tags []}])
-    (is (mp/has-pending? "agent-r" "proj-r"))
-    (mp/clear-buffer! "agent-r" "proj-r")
-    (is (not (mp/has-pending? "agent-r" "proj-r")))
-    (is (nil? (mp/drain! "agent-r" "proj-r"))))
+    (is (mp/has-pending? "agent-r"))
+    (mp/clear-buffer! "agent-r")
+    (is (not (mp/has-pending? "agent-r")))
+    (is (nil? (mp/drain! "agent-r"))))
 
   (testing "reset-all! clears all buffers"
-    (mp/enqueue! "a1" "p1" [{:id "1" :type "note" :content "t" :tags []}])
-    (mp/enqueue! "a2" "p2" [{:id "2" :type "note" :content "t" :tags []}])
+    (mp/enqueue! "a1" [{:id "1" :type "note" :content "t" :tags []}])
+    (mp/enqueue! "a2" [{:id "2" :type "note" :content "t" :tags []}])
     (mp/reset-all!)
-    (is (not (mp/has-pending? "a1" "p1")))
-    (is (not (mp/has-pending? "a2" "p2")))))
+    (is (not (mp/has-pending? "a1")))
+    (is (not (mp/has-pending? "a2")))))
 
 ;; =============================================================================
 ;; Nil/Default Handling
 ;; =============================================================================
 
 (deftest nil-defaults-test
-  (testing "nil agent-id defaults to 'coordinator'"
-    (mp/enqueue! nil "proj-n"
+  (testing "nil caller-id defaults to 'coordinator'"
+    (mp/enqueue! nil
                  [{:id "n1" :type "note" :content "test" :tags []}])
-    (is (mp/has-pending? nil "proj-n"))
-    (let [result (mp/drain! nil "proj-n")]
+    (is (mp/has-pending? nil))
+    (let [result (mp/drain! nil)]
       (is (= 1 (count (:batch result))))))
 
-  (testing "nil project-id defaults to 'global'"
-    (mp/enqueue! "agent-n" nil
+  (testing "explicit 'coordinator' matches nil caller-id"
+    (mp/enqueue! nil
                  [{:id "n2" :type "note" :content "test" :tags []}])
-    (is (mp/has-pending? "agent-n" nil))
-    (let [result (mp/drain! "agent-n" nil)]
+    (is (mp/has-pending? "coordinator"))
+    (let [result (mp/drain! "coordinator")]
       (is (= 1 (count (:batch result)))))))
 
 ;; =============================================================================
@@ -198,9 +198,9 @@
 
 (deftest entry-format-test
   (testing "entries without severity omit :S key"
-    (mp/enqueue! "agent-f" "proj-f"
+    (mp/enqueue! "agent-f"
                  [{:id "f1" :type "convention" :content "Do X" :tags ["priority"]}])
-    (let [result (mp/drain! "agent-f" "proj-f")
+    (let [result (mp/drain! "agent-f")
           entry (first (:batch result))]
       (is (= "convention" (:T entry)))
       (is (= "Do X" (:C entry)))
@@ -208,9 +208,9 @@
       (is (not (contains? entry :S)))))
 
   (testing "entries without tags omit :tags key"
-    (mp/enqueue! "agent-g" "proj-g"
+    (mp/enqueue! "agent-g"
                  [{:id "g1" :type "note" :content "plain" :tags []}])
-    (let [result (mp/drain! "agent-g" "proj-g")
+    (let [result (mp/drain! "agent-g")
           entry (first (:batch result))]
       (is (not (contains? entry :tags))))))
 
@@ -219,27 +219,27 @@
 ;; =============================================================================
 
 (deftest enqueue-with-context-refs-test
-  (testing "3-arity enqueue (backward compat) works without context-refs"
-    (mp/enqueue! "agent-3a" "proj-3a"
+  (testing "2-arity enqueue (backward compat) works without context-refs"
+    (mp/enqueue! "agent-3a"
                  [{:id "bc-1" :type "axiom" :content "Backward compat" :tags []}])
-    (let [result (mp/drain! "agent-3a" "proj-3a")]
+    (let [result (mp/drain! "agent-3a")]
       (is (= 1 (count (:batch result))))
       (is (not (contains? result :context-refs)))))
 
-  (testing "4-arity enqueue with nil context-refs omits :context-refs from buffer"
-    (mp/enqueue! "agent-4n" "proj-4n"
+  (testing "3-arity enqueue with nil context-refs omits :context-refs from buffer"
+    (mp/enqueue! "agent-4n"
                  [{:id "nil-1" :type "axiom" :content "Nil refs" :tags []}]
                  nil)
-    (let [result (mp/drain! "agent-4n" "proj-4n")]
+    (let [result (mp/drain! "agent-4n")]
       (is (= 1 (count (:batch result))))
       (is (not (contains? result :context-refs)))))
 
-  (testing "4-arity enqueue with context-refs stores them in buffer"
+  (testing "3-arity enqueue with context-refs stores them in buffer"
     (let [refs {:axioms "ctx-123-abc" :sessions "ctx-456-def"}]
-      (mp/enqueue! "agent-4r" "proj-4r"
+      (mp/enqueue! "agent-4r"
                    [{:id "ref-1" :type "axiom" :content "With refs" :tags []}]
                    refs)
-      (is (mp/has-pending? "agent-4r" "proj-4r")))))
+      (is (mp/has-pending? "agent-4r")))))
 
 (deftest drain-context-refs-first-batch-only-test
   (testing "context-refs appear in first drain batch (seq=1) only"
@@ -250,26 +250,26 @@
                           {:id (str "mb-" i) :type "axiom"
                            :content big-content :tags []})
                         (range 4))]
-      (mp/enqueue! "agent-dr" "proj-dr" entries refs)
+      (mp/enqueue! "agent-dr" entries refs)
 
       ;; First drain: should have context-refs
-      (let [r1 (mp/drain! "agent-dr" "proj-dr")]
+      (let [r1 (mp/drain! "agent-dr")]
         (is (= 1 (:seq r1)))
         (is (contains? r1 :context-refs))
         (is (= refs (:context-refs r1))))
 
       ;; Second drain: should NOT have context-refs
-      (when (mp/has-pending? "agent-dr" "proj-dr")
-        (let [r2 (mp/drain! "agent-dr" "proj-dr")]
+      (when (mp/has-pending? "agent-dr")
+        (let [r2 (mp/drain! "agent-dr")]
           (is (> (:seq r2) 1))
           (is (not (contains? r2 :context-refs)))))))
 
   (testing "context-refs appear even when all entries fit in one batch"
     (let [refs {:snippets "ctx-ccc-333"}]
-      (mp/enqueue! "agent-s1" "proj-s1"
+      (mp/enqueue! "agent-s1"
                    [{:id "s-1" :type "note" :content "small" :tags []}]
                    refs)
-      (let [result (mp/drain! "agent-s1" "proj-s1")]
+      (let [result (mp/drain! "agent-s1")]
         (is (= 1 (:seq result)))
         (is (true? (:done result)))
         (is (= refs (:context-refs result)))))))
@@ -287,13 +287,13 @@
             refs {:axioms ax-ref :sessions sess-ref}]
 
         ;; Enqueue with refs (what catchup.clj does)
-        (mp/enqueue! "agent-int" "proj-int"
+        (mp/enqueue! "agent-int"
                      [{:id "ax-1" :type "axiom" :content "Rule 1" :tags []}
                       {:id "ax-2" :type "axiom" :content "Rule 2" :tags []}]
                      refs)
 
         ;; Drain and verify refs are present
-        (let [result (mp/drain! "agent-int" "proj-int")]
+        (let [result (mp/drain! "agent-int")]
           (is (map? (:context-refs result)))
           (is (string? (:axioms (:context-refs result))))
           (is (string? (:sessions (:context-refs result))))

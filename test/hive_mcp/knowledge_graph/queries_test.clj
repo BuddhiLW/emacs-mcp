@@ -7,10 +7,15 @@
    - Multi-hop traversal depth
    - Tool handler direction parsing"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.data.json :as json]
+            [hive-mcp.knowledge-graph.connection :as conn]
             [hive-mcp.knowledge-graph.edges :as edges]
             [hive-mcp.knowledge-graph.queries :as queries]
+            [hive-mcp.knowledge-graph.protocol :as proto]
+            [hive-mcp.knowledge-graph.schema :as schema]
             [hive-mcp.knowledge-graph.store.fixtures :as fixtures]
-            [hive-mcp.tools.kg :as kg-tools]))
+            [hive-mcp.tools.kg :as kg-tools]
+            [hive-mcp.tools.kg.queries :as kg-query-handlers]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -29,24 +34,30 @@
   "Create a directed graph for testing:
    A --implements--> B --depends-on--> C
    D --refines--> B
+   Uses with-tx-batch to ensure synchronous writes (bypasses write-coalescing queue).
    Returns node IDs map."
   []
   (let [a "node-A" b "node-B" c "node-C" d "node-D"]
-    (edges/add-edge! {:from a :to b :relation :implements})
-    (edges/add-edge! {:from b :to c :relation :depends-on})
-    (edges/add-edge! {:from d :to b :relation :refines})
+    (conn/with-tx-batch
+      (edges/add-edge! {:from a :to b :relation :implements})
+      (edges/add-edge! {:from b :to c :relation :depends-on})
+      (edges/add-edge! {:from d :to b :relation :refines}))
     {:a a :b b :c c :d d}))
 
 (defn- setup-co-accessed-graph!
   "Create co-accessed edges matching production pattern.
    record-co-access! creates from→to based on input order:
    A→B, A→C, B→C (from pairs of [A B C])
+   Uses with-tx-batch to ensure synchronous writes.
+   Registers :co-accessed relation type (normally done by hive-knowledge init).
    Returns node IDs map."
   []
+  (schema/register-relation-types! #{:co-accessed})
   (let [a "mem-alpha" b "mem-beta" c "mem-gamma"]
-    (edges/add-edge! {:from a :to b :relation :co-accessed :confidence 0.3})
-    (edges/add-edge! {:from a :to c :relation :co-accessed :confidence 0.3})
-    (edges/add-edge! {:from b :to c :relation :co-accessed :confidence 0.3})
+    (conn/with-tx-batch
+      (edges/add-edge! {:from a :to b :relation :co-accessed :confidence 0.3})
+      (edges/add-edge! {:from a :to c :relation :co-accessed :confidence 0.3})
+      (edges/add-edge! {:from b :to c :relation :co-accessed :confidence 0.3}))
     {:a a :b b :c c}))
 
 (defn- result-node-ids
@@ -234,3 +245,75 @@
           "depth=1 only finds direct neighbor B")
       (is (= 2 (count depth-2-results))
           "depth=2 finds B and C"))))
+
+;; =============================================================================
+;; Tool handler: result content validation
+;; =============================================================================
+
+(defn- parse-handler-result
+  "Parse MCP JSON handler result into a Clojure map."
+  [result]
+  (when-let [text (:text result)]
+    (json/read-str text :key-fn keyword)))
+
+(deftest tool-handler-traverse-returns-results-test
+  (testing "handler returns correct result-count and results for seeded graph"
+    (let [{:keys [a b c]} (setup-directed-graph!)
+          parsed (parse-handler-result
+                  (kg-query-handlers/handle-kg-traverse
+                   {:start_node a :direction "outgoing" :max_depth 3}))]
+      (is (:success parsed) "response should be successful")
+      (is (= 2 (:result-count parsed))
+          "A has 2 reachable nodes outgoing (B, C)")
+      (is (= 2 (count (:results parsed)))
+          "results vec matches result-count"))))
+
+(deftest tool-handler-traverse-both-returns-results-test
+  (testing "handler returns results for direction=both"
+    (let [{:keys [b]} (setup-directed-graph!)
+          parsed (parse-handler-result
+                  (kg-query-handlers/handle-kg-traverse
+                   {:start_node b :direction "both" :max_depth 3}))]
+      (is (:success parsed))
+      (is (pos? (:result-count parsed))
+          "B has edges in both directions, result-count should be > 0"))))
+
+;; =============================================================================
+;; Tool handler: diagnostic hint on empty results
+;; =============================================================================
+
+(deftest tool-handler-traverse-hint-no-edges-test
+  (testing "handler returns hint when node has no edges at all"
+    (let [parsed (parse-handler-result
+                  (kg-query-handlers/handle-kg-traverse
+                   {:start_node "orphan-node-xyz" :direction "both" :max_depth 2}))]
+      (is (:success parsed))
+      (is (zero? (:result-count parsed)))
+      (is (string? (:hint parsed))
+          "should include diagnostic hint for empty results")
+      (is (re-find #"no edges" (:hint parsed))
+          "hint should mention node has no edges"))))
+
+(deftest tool-handler-traverse-hint-filter-mismatch-test
+  (testing "handler returns filter-mismatch hint when node has edges but filters exclude them"
+    (let [{:keys [a]} (setup-directed-graph!)
+          ;; A has outgoing edges, but incoming traversal returns 0
+          parsed (parse-handler-result
+                  (kg-query-handlers/handle-kg-traverse
+                   {:start_node a :direction "incoming" :max_depth 3}))]
+      (is (:success parsed))
+      (is (zero? (:result-count parsed)))
+      (is (string? (:hint parsed))
+          "should include hint explaining why filters excluded results"))))
+
+;; =============================================================================
+;; Datahike backend: traverse cross-validation
+;; Uses proto/transact! directly (bypasses write-coalescing queue)
+;; to avoid async writer interference in test isolation.
+;; =============================================================================
+
+;; NOTE: Datahike traverse cross-validation tests need a dedicated file with
+;; (use-fixtures :each fixtures/datahike-fixture) instead of nesting inside
+;; the DataScript fixture. The nested fixture + write-coalescing queue causes
+;; the Datahike store to not reflect transacted edges in queries.
+;; Follow-up: extract to queries_datahike_test.clj

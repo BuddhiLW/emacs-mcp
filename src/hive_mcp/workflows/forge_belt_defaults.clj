@@ -116,8 +116,7 @@
         task-ids  (mapv :id tasks)
         directory (:directory resources)
         result    (try
-                    (when-let [batch-fn (requiring-resolve
-                                         'hive-knowledge.kanban.context-for-task/batch-context-for-tasks)]
+                    (when-let [batch-fn (ext/get-extension :fb/context-gather)]
                       (let [scope-fn  (:scope-fn resources)
                             scope     (when (and scope-fn directory) (scope-fn directory))]
                         (batch-fn {:tasks      tasks

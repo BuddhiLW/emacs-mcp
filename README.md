@@ -172,6 +172,45 @@ See the [Creating Addons](https://github.com/hive-agi/hive-mcp/wiki/Creating-Add
 
 ---
 
+## Carto Store (Cartography Snippets)
+
+Cartography snippets (code-chunked embeddings for `carto_callers` / `carto_definition` / `carto_callees`) live in a dedicated vector store — separate from the general `:memory-store` — so recall tuning stays independent.
+
+Default config (already wired in `docker-compose.yml` as service `qdrant-carto`):
+
+```clojure
+{:services
+ {:qdrant-carto {:mode :local
+                 :host "localhost"
+                 :port 6333
+                 :collection "carto-snippets"
+                 :embedding {:provider :ollama
+                             :model "nomic-embed-code"}}
+  :carto-store  {:backend :qdrant-carto}}}
+```
+
+**User override example** (`~/.config/hive-mcp/config.edn`):
+
+```clojure
+{:services
+ {:qdrant-carto {:host "qdrant.internal"
+                 :port 6333
+                 :collection "my-carto"
+                 :embedding {:provider :ollama
+                             :model "nomic-embed-code"}}
+  :carto-store  {:backend :qdrant-carto}}}
+```
+
+If `:carto-store` is omitted, `hive-mcp.config.resolve/resolve-carto-store` logs a warning and falls back to `:memory-store` — the system keeps booting, but cartography writes land in the shared store. Production deployments should declare `:carto-store` explicitly.
+
+Bring up the dedicated instance:
+
+```bash
+docker compose up -d qdrant-carto
+```
+
+---
+
 ## For LLMs
 
 See [`CLAUDE.md`](CLAUDE.md) for project conventions, tool patterns, and memory usage guidelines.

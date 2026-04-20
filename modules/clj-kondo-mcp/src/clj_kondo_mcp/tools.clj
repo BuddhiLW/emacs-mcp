@@ -51,11 +51,14 @@
 
 (def lint-tool
   (deftool :lint
-    "Lint Clojure code and return findings. Filter by level to show only errors or include warnings."
+    "Lint Clojure code and return findings. Filter by level to show only errors or include warnings. Respects budget (timeout in ms) to prevent indefinite hangs."
     [(defparam :path :string "Path to file or directory to lint")
-     (defparam :level :string "Filter level: 'error' (errors only) or 'warning' (all findings)" :required false)]
-    (fn [{:keys [path level]}]
-      (core/lint path :level (keyword (or level "warning"))))))
+     (defparam :level :string "Filter level: 'error' (errors only) or 'warning' (all findings)" :required false)
+     (defparam :budget :integer "Timeout in milliseconds for analysis (default: 30000)" :required false)]
+    (fn [{:keys [path level budget]}]
+      (core/lint path
+                 :level (keyword (or level "warning"))
+                 :timeout-ms (or budget core/default-timeout-ms)))))
 
 (def unused-vars-tool
   (deftool :unused_vars

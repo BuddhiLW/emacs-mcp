@@ -15,7 +15,7 @@
      * migration.clj: project migration, JSON import
 
    Supporting modules:
-   - core.clj: with-chroma, with-entry macros (error handling)
+   - core.clj: with-store, with-entry macros (error handling)
    - scope.clj: project scope utilities
    - format.clj: JSON formatting utilities
    - duration.clj: duration constants and calculations"
@@ -62,6 +62,7 @@
 
 ;; Migration Operations
 (def handle-mcp-memory-migrate-project migration/handle-migrate-project)
+(def handle-mcp-memory-migrate-scoped migration/handle-migrate-scoped)
 (def handle-mcp-memory-import-json migration/handle-import-json)
 (def handle-mcp-memory-rename-project migration/handle-rename-project)
 

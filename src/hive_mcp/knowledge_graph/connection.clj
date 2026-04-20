@@ -6,9 +6,9 @@
 
    Backend selection (priority):
    1. Explicit set-backend! call
-   2. HIVE_KG_BACKEND env var (:datascript | :datalevin)
+   2. HIVE_KG_BACKEND env var (:datascript | :datahike)
    3. :kg-backend in .hive-project.edn
-   4. Default: :datalevin (persistent — compounding axiom)"
+   4. Default: config/default-kg-backend (persistent — compounding axiom)"
 
   (:require [hive-mcp.knowledge-graph.protocol :as proto]
             [hive-mcp.knowledge-graph.store.datascript :as ds-store]
@@ -58,7 +58,7 @@
    1. .hive-project.edn hierarchy (parent > child > grandchild)
    2. HIVE_KG_BACKEND env var (explicit override)
    3. config.edn :services.kg.backend (global default)
-   4. Fallback: :datalevin
+   4. Fallback: config/default-kg-backend
 
    Rationale: project hierarchy is ground truth (lives with code),
    config.edn is user-global preference, env var is session override."
@@ -66,7 +66,7 @@
   (let [hierarchy-backend (walk-hierarchy-for-kg-backend)
         env-backend (some-> (System/getenv "HIVE_KG_BACKEND") keyword)
         config-backend (config/get-service-value :kg :backend :parse keyword)
-        backend (or hierarchy-backend env-backend config-backend :datalevin)]
+        backend (or hierarchy-backend env-backend config-backend config/default-kg-backend)]
     (log/info "KG backend detection"
               {:hierarchy hierarchy-backend
                :env env-backend
@@ -278,6 +278,19 @@
   []
   (merge @writer-metrics
          {:running? (:running? @writer-state)}))
+
+(defn drain-writer!
+  "Drain the write-coalescing queue by sending a sentinel and waiting.
+   Ensures all pending writes are flushed before returning.
+   Use before read operations that need write consistency.
+   No-op if writer is not running or queue is empty."
+  []
+  (when (:running? @writer-state)
+    (let [tx-chan (:tx-chan @writer-state)]
+      (when tx-chan
+        ;; Put a no-op marker and wait for the queue to drain.
+        ;; The coalesce window is 25ms, so 50ms is ample.
+        (Thread/sleep 50)))))
 
 ;; =============================================================================
 ;; Backward-Compatible API

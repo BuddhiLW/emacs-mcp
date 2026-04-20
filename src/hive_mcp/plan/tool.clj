@@ -11,14 +11,14 @@
   (:require [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.tools.memory-kanban :as mem-kanban]
             [hive-mcp.plan.fsm :as plan-fsm]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.plan.plans :as plans]
             [hive-mcp.knowledge-graph.connection :as kg-conn]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -72,18 +72,18 @@
 (defn- create-kanban-task!
   "Create a kanban task for a plan step.
    Returns {:ok task-id} or {:error message}"
-  [{:keys [title priority]} directory]
+  [{:keys [title description priority]} directory]
   (try
     (let [priority-str (if (keyword? priority) (name priority) (str priority))
           result (mem-kanban/handle-mem-kanban-create
-                  {:title title
-                   :priority priority-str
-                   :directory directory})]
+                  (cond-> {:title title
+                           :priority priority-str
+                           :directory directory}
+                    description (assoc :description description)))]
       (if (:isError result)
         {:error (:text result)}
         ;; Parse the result to get the task ID
-        (let [parsed (try (json/read-str (:text result) :key-fn keyword)
-                          (catch Exception _ nil))]
+        (let [parsed (rescue nil (json/read-str (:text result) :key-fn keyword))]
           (if-let [task-id (or (:id parsed) (get parsed "id"))]
             {:ok task-id}
             {:error "Failed to get task ID from kanban create response"}))))
@@ -263,7 +263,7 @@
                  (ctx/current-project-id)
                  (str "file:" plan-path)])
             (when-let [entry (or (plans/get-plan plan-memory-id)
-                                 (chroma/get-entry-by-id plan-memory-id))]
+                                 (facade/get-entry-by-id plan-memory-id))]
               [(:content entry)
                (:project-id entry)
                plan-memory-id]))]

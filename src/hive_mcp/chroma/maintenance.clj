@@ -4,6 +4,7 @@
             [hive-mcp.chroma.connection :as conn]
             [hive-mcp.chroma.crud :as crud]
             [hive-mcp.chroma.embeddings :as emb]
+            [hive-mcp.chroma.gate :as gate]
             [hive-mcp.chroma.helpers :as h]
             [taoensso.timbre :as log]))
 
@@ -38,13 +39,15 @@
                   updates (cond-> {}
                             (not= raw-dur canonical) (assoc :duration canonical)
                             expires (assoc :expires expires))]
-              (when-let [existing (first @(chroma/get coll :ids [id]
-                                                      :include #{:documents :metadatas :embeddings}))]
-                @(chroma/add coll [{:id id
-                                    :embedding (:embedding existing)
-                                    :document (:document existing)
-                                    :metadata (merge (:metadata existing) updates)}]
-                             :upsert? true)
+              (when-let [existing (first (gate/deref-read
+                                         (chroma/get coll :ids [id]
+                                                     :include #{:documents :metadatas :embeddings})))]
+                (gate/deref-write
+                  (chroma/add coll [{:id id
+                                     :embedding (:embedding existing)
+                                     :document (:document existing)
+                                     :metadata (merge (:metadata existing) updates)}]
+                              :upsert? true))
                 (log/debug "Repaired entry" id ":" raw-dur "->" canonical
                            (when expires "(set expires)"))))))
         (catch Exception e
@@ -56,20 +59,20 @@
   []
   (emb/require-embedding!)
   (let [coll (conn/get-or-create-collection)
-        all-entries @(chroma/get coll :include #{:metadatas} :limit 10000)
+        all-entries (gate/deref-read (chroma/get coll :include #{:metadatas} :limit 10000))
         repaired (try (repair-missing-expires! all-entries)
                       (catch Exception e
                         (log/warn "Repair phase failed (non-blocking):" (.getMessage e))
                         0))
         entries-to-check (if (pos? repaired)
-                           @(chroma/get coll :include #{:metadatas} :limit 10000)
+                           (gate/deref-read (chroma/get coll :include #{:metadatas} :limit 10000))
                            all-entries)
         expired-ids (->> entries-to-check
                          (filter #(h/expired? (:metadata %)))
                          (map :id)
                          vec)]
     (when (seq expired-ids)
-      @(chroma/delete coll :ids expired-ids)
+      (gate/deref-write (chroma/delete coll :ids expired-ids))
       (log/info "Cleaned up" (count expired-ids) "expired entries"))
     (when (pos? repaired)
       (log/info "Repaired" repaired "entries with missing/invalid duration or expires"))

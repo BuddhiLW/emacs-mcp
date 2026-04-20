@@ -15,7 +15,8 @@
             [clojure.data.json :as json]
             [clojure.java.io :as io]
             [hive-mcp.tools.consolidated.config :as config-tool]
-            [hive-mcp.config.core :as config]))
+            [hive-mcp.config.core :as config]
+            [hive-mcp.config.io :as config-io]))
 
 ;; =============================================================================
 ;; Helpers
@@ -136,17 +137,16 @@
 ;; =============================================================================
 
 (deftest test-set-handler-updates-value
-  (testing "set updates a value in the config and persists to disk"
-    ;; Load defaults first
+  (testing "set updates a value in the config without writing to real config"
+    ;; Load defaults first (nonexistent path → pure defaults, no disk write)
     (config/load-global-config! "/nonexistent/path/config.edn")
-    ;; Set a value - write to test path
-    (let [result (config-tool/handle-set {:key "embeddings.ollama.host"
-                                          :value "http://new-host:11434"})]
-      ;; Note: this will write to default config-path. We test the atom update here.
-      ;; Direct handler call avoids the CLI routing.
-      ;; Check atom was updated
-      (is (= "http://new-host:11434"
-             (config/get-config-value "embeddings.ollama.host"))))))
+    ;; Stub out disk writes so we never touch ~/.config/hive-mcp/config.edn
+    (with-redefs [config-io/write-config! (fn [_config _path] nil)]
+      (let [result (config-tool/handle-set {:key "embeddings.ollama.host"
+                                            :value "http://new-host:11434"})]
+        ;; Check atom was updated (in-memory only, no disk side-effect)
+        (is (= "http://new-host:11434"
+               (config/get-config-value "embeddings.ollama.host")))))))
 
 (deftest test-set-handler-no-key-param
   (testing "set without key returns error"

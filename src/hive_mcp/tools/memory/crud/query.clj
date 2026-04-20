@@ -1,12 +1,12 @@
 (ns hive-mcp.tools.memory.crud.query
   "Query operations for memory with filtered retrieval and scope hierarchy."
-  (:require [hive-mcp.tools.memory.core :refer [with-chroma]]
+  (:require [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.format :as fmt]
-            [hive-mcp.tools.core :refer [mcp-json mcp-error coerce-int!]]
+            [hive-mcp.tools.core :refer [mcp-json mcp-error coerce-int! coerce-vec!]]
             [hive-mcp.memory.domain :as domain]
             [hive-dsl.adt :refer [adt-case]]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.plan.plans :as plans]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
@@ -85,11 +85,12 @@
                          :type type
                          :limit (* limit-val over-fetch-factor)
                          :tags tags)
-      (chroma/query-entries :type type
-                            :project-ids project-ids-for-db
-                            :tags tags
-                            :exclude-tags exclude-tags
-                            :limit (* limit-val over-fetch-factor)))))
+      (mem-proto/query-entries (mem-proto/get-store)
+                               {:type type
+                                :project-ids project-ids-for-db
+                                :tags tags
+                                :exclude-tags exclude-tags
+                                :limit (* limit-val over-fetch-factor)}))))
 
 (defn- apply-scope-filter
   "Apply in-memory scope filter as safety net.
@@ -128,17 +129,19 @@
   [{:keys [type tags exclude_tags limit duration scope directory include_descendants verbosity]}]
   (let [directory (or directory (ctx/current-directory))
         include-descendants? (boolean include_descendants)
-        metadata-only? (= verbosity "metadata")]
+        metadata-only? (not= verbosity "full")
+        tags         (coerce-vec! tags :tags [])
+        exclude-tags (coerce-vec! exclude_tags :exclude_tags [])]
     (log/info "mcp-memory-query:" type "scope:" scope "directory:" directory
-              "include_descendants:" include-descendants? "verbosity:" (or verbosity "full"))
+              "include_descendants:" include-descendants? "verbosity:" (or verbosity "metadata"))
     (try
       (let [limit-val (coerce-int! limit :limit 20)]
-        (with-chroma
+        (with-store
           (let [project-id  (scope/get-current-project-id directory)
                 sf          (domain/parse-scope scope project-id)
                 project-ids (resolve-project-ids-for-db sf include-descendants?)
                 entries     (fetch-entries type project-ids tags limit-val include-descendants?
-                                           :exclude-tags exclude_tags)
+                                           :exclude-tags exclude-tags)
                 filtered    (apply-scope-filter entries sf include-descendants?)
                 results     (apply-post-filters filtered tags duration limit-val)]
             (format-query-results results project-id metadata-only?))))

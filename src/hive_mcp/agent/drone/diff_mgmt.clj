@@ -4,7 +4,7 @@
             [clojure.data.json :as json]
             [clojure.set]
             [taoensso.timbre :as log]
-            [hive-dsl.bounded-atom :refer [bget bput! bounded-swap! bkeys]]))
+            [hive-dsl.bounded-atom :refer [bget bput! bounded-swap! bkeys]] [hive-dsl.result :refer [rescue]]))
 
 (defrecord DiffResults
            [applied failed proposed])
@@ -27,8 +27,7 @@
     (let [results (for [diff-id new-diff-ids]
                     (let [diff-info (bget diff/pending-diffs diff-id)
                           response (diff/handle-apply-diff {:diff_id diff-id})
-                          parsed (try (json/read-str (:text response) :key-fn keyword)
-                                      (catch Exception _ nil))]
+                          parsed (rescue nil (json/read-str (:text response) :key-fn keyword))]
                       (if (:isError response)
                         {:status :failed :file (:file-path diff-info) :error (:error parsed)}
                         {:status :applied :file (:file-path diff-info)})))

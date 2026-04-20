@@ -30,7 +30,7 @@
         ;; Restore previous store if one was set, otherwise clear
         (if prev-store
           (mem-proto/set-store! prev-store)
-          (reset! @#'mem-proto/active-store nil))))))
+          (mem-proto/reset-registry!))))))
 
 (use-fixtures :each clean-store-fixture)
 

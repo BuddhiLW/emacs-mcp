@@ -143,7 +143,7 @@ def create_capture_exploration_hook(
             }
 
         except Exception as e:
-            logger.warning(f"[phase-hooks] capture_exploration failed: {e}")
+            logger.warning("[phase-hooks] capture_exploration failed: %s", e, exc_info=True)
             return {}
 
     return capture_exploration
@@ -220,7 +220,7 @@ def create_store_plan_hook(
             }
 
         except Exception as e:
-            logger.warning(f"[phase-hooks] store_plan failed: {e}")
+            logger.warning("[phase-hooks] store_plan failed: %s", e, exc_info=True)
             return {}
 
     return store_plan
@@ -339,7 +339,7 @@ def create_pre_compact_save_hook(
             }
 
         except Exception as e:
-            logger.warning(f"[phase-hooks] pre_compact_save failed: {e}")
+            logger.warning("[phase-hooks] pre_compact_save failed: %s", e, exc_info=True)
             return {}
 
     return pre_compact_save

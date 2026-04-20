@@ -12,7 +12,7 @@
             [hive-mcp.swarm.datascript.connection :as ds-conn]
             [hive-mcp.events.core :as ev]
             [datascript.core :as d]
-            [clojure.edn :as edn]))
+            [clojure.edn :as edn] [hive-dsl.result :refer [rescue]]))
 
 ;;; =============================================================================
 ;;; DataScript Queries
@@ -86,23 +86,15 @@
    Event format: [:olympus/layout-changed {:layout ... :positions ...}]
    Safe: catches dispatch errors if handlers not registered."
   [layout positions]
-  (try
-    (ev/dispatch [:olympus/layout-changed {:layout layout
-                                           :positions positions}])
-    (catch Exception _
-      ;; Handler not registered yet - that's OK
-      nil)))
+  (rescue nil (ev/dispatch [:olympus/layout-changed {:layout layout
+                                           :positions positions}])))
 
 (defn- emit-focus-changed!
   "Emit event when focus changes.
    Event format: [:olympus/focus-changed {:ling-id ...}]
    Safe: catches dispatch errors if handlers not registered."
   [ling-id]
-  (try
-    (ev/dispatch [:olympus/focus-changed {:ling-id ling-id}])
-    (catch Exception _
-      ;; Handler not registered yet - that's OK
-      nil)))
+  (rescue nil (ev/dispatch [:olympus/focus-changed {:ling-id ling-id}])))
 
 ;;; =============================================================================
 ;;; Tool Handlers

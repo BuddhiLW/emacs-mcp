@@ -7,7 +7,9 @@
 
    See: CURSOR IDENTITY FIX in server/routes.clj"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [hive-mcp.channel.piggyback :as pb]))
+            [hive-mcp.channel.piggyback :as pb]
+            [hive-mcp.delivery.channels :as channels]
+            [hive-mcp.protocols.delivery-channel :as dc]))
 
 ;; Reset cursor and message source state between tests
 (use-fixtures :each
@@ -234,3 +236,99 @@
       (let [rb2 (pb/get-messages coord-b :project-id "proj-X")]
         (is (= 1 (count rb2)) "coord-B sees only the new message")
         (is (= "deploying" (:m (first rb2))))))))
+
+;; =============================================================================
+;; Dual-Path Shape Dedup — PiggybackChannel must thread :shout-id
+;; =============================================================================
+;;
+;; Regression: PiggybackChannel.deliver! was destructuring the event payload
+;; without :shout-id, so buffer-backbone-event! saw shout-id=nil. The atom
+;; path kept :shout-id (uuid string); the backbone path lost it and fell
+;; back to the composite key [agent-id timestamp event-type]. The two keys
+;; never matched → both shapes survived dedup → the ---HIVEMIND--- block
+;; showed the same shout twice (once with :t, once without).
+
+(defn- with-clean-pb-state [f]
+  (let [original-source @pb/message-source-fn]
+    (pb/reset-all-cursors!)
+    (pb/clear-backbone-buffer!)
+    (try (f)
+         (finally
+           (pb/reset-all-cursors!)
+           (pb/clear-backbone-buffer!)
+           (pb/register-message-source! original-source)))))
+
+(deftest piggyback-channel-preserves-shout-id-test
+  (with-clean-pb-state
+    (fn []
+      (testing "REGRESSION: PiggybackChannel.deliver! must thread :shout-id into backbone-buffer"
+        (let [shout-id (str (random-uuid))
+              payload  {:agent-id   "ling-shape"
+                        :event-type :progress
+                        :message    "w"
+                        :task       "t"
+                        :timestamp  (System/currentTimeMillis)
+                        :project-id "proj-shape"
+                        :shout-id   shout-id}]
+          (dc/deliver! (channels/create-piggyback-channel) payload)
+          (let [[buf] @pb/backbone-buffer]
+            (is (some? buf) "buffer should receive one entry")
+            (is (= shout-id (:shout-id buf))
+                "PiggybackChannel must forward :shout-id — otherwise dedup key collapses to composite")))))))
+
+(deftest atom-and-backbone-shape-mismatch-dedups-to-one-test
+  (with-clean-pb-state
+    (fn []
+      (testing "REGRESSION: atom projection (no :task, keyword event-type) +
+                backbone projection (with :task, string event-type) +
+                same :shout-id → exactly one message after dedup"
+        (let [shout-id (str (random-uuid))
+              now      (System/currentTimeMillis)
+              ;; Atom path — mirrors all-hivemind-messages projection
+              atom-msg {:agent-id   "ling-shape"
+                        :event-type :started
+                        :message    "Add X"
+                        :task       "Add X"          ;; normalized projection now carries :task
+                        :timestamp  now
+                        :project-id "proj-shape"
+                        :shout-id   shout-id}
+              ;; Backbone path — via PiggybackChannel, string event-type after JSON roundtrip
+              backbone-payload {:agent-id   "ling-shape"
+                                :event-type "started"
+                                :message    "Add X"
+                                :task       "Add X"
+                                :timestamp  now
+                                :project-id "proj-shape"
+                                :shout-id   shout-id}]
+          (pb/register-message-source! (constantly [atom-msg]))
+          (dc/deliver! (channels/create-piggyback-channel) backbone-payload)
+          (let [msgs (pb/get-messages "coordinator-shape" :project-id "proj-shape")]
+            (is (= 1 (count msgs))
+                "shape mismatch must not defeat :shout-id dedup")
+            ;; Surviving copy must carry :t so downstream renderers see the task
+            (is (= "Add X" (:t (first msgs)))
+                "surviving projection must retain :task → :t")))))))
+
+(deftest dedup-fallback-survives-missing-shout-id-test
+  (with-clean-pb-state
+    (fn []
+      (testing "Defense in depth: if shout-id is missing, fallback composite key still dedups"
+        ;; This pins the fallback path — if a future regression drops :shout-id
+        ;; again, the composite key [agent-id timestamp event-type-name] must
+        ;; still collapse atom + backbone copies of the same shout.
+        (let [now      (System/currentTimeMillis)
+              atom-msg {:agent-id   "ling-fallback"
+                        :event-type :completed
+                        :message    "done"
+                        :timestamp  now
+                        :project-id "proj-fallback"}
+              backbone-payload {:agent-id   "ling-fallback"
+                                :event-type "completed"   ;; stringified, no shout-id
+                                :message    "done"
+                                :timestamp  now
+                                :project-id "proj-fallback"}]
+          (pb/register-message-source! (constantly [atom-msg]))
+          (dc/deliver! (channels/create-piggyback-channel) backbone-payload)
+          (let [msgs (pb/get-messages "coordinator-fallback" :project-id "proj-fallback")]
+            (is (= 1 (count msgs))
+                "composite fallback must dedup keyword vs string event-type")))))))

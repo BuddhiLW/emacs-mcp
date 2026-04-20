@@ -36,6 +36,7 @@
             [clojure.test.check.properties :as prop]
             [clojure.test.check.clojure-test :refer [defspec]]
             [hive-mcp.crystal.hooks :as hooks]
+            [hive-mcp.crystal.synthesis :as synthesis]
             [hive-mcp.crystal.core :as crystal]
             [hive-mcp.crystal.recall :as recall]
             [hive-mcp.tools.memory.scope :as scope]
@@ -54,7 +55,7 @@
 ;; =============================================================================
 
 (def parse-json-safe @#'hooks/parse-json-safe)
-(def surface-rescue-error @#'hooks/surface-rescue-error)
+(def surface-rescue-error @#'synthesis/surface-rescue-error)
 
 ;; =============================================================================
 ;; Generators

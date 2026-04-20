@@ -17,6 +17,7 @@
             [datascript.core :as d]
             [hive-mcp.dns.result :refer [rescue]]
             [hive-mcp.knowledge-graph.scope :as scope]
+            [hive-weave.parallel :as wp]
             [taoensso.timbre :as log])
   (:import [java.time Instant]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -110,46 +111,87 @@
             (.getAbsolutePath current)
             (recur (.getParentFile current))))))))
 
+(def ^:private skip-dirs
+  "Directory names to skip during scan — heavy, never contain .hive-project.edn."
+  #{"node_modules" "target" ".cpcache" ".git" ".shadow-cljs" ".clj-kondo"
+    ".lsp" ".nrepl" "dist" "build" "out" "__pycache__" ".venv" "venv"
+    ".gradle" ".m2" "classes" ".gitlibs" "data" "backups"})
+
+(def ^:private default-concurrency
+  "Scan parallelism bounded by host CPU count (min 2, max 16)."
+  (max 2 (min 16 (.. Runtime getRuntime availableProcessors))))
+
+(defn- scannable-child?
+  "Check if a directory should be scanned (not hidden, not in skip-dirs)."
+  [^java.io.File dir]
+  (let [name (.getName dir)]
+    (and (.isDirectory dir)
+         (not (str/starts-with? name "."))
+         (not (contains? skip-dirs name)))))
+
+(defn- scan-dir-shallow
+  "Scan a single directory for .hive-project.edn. Non-recursive.
+   Returns {:path ... :config ...} or nil."
+  [^java.io.File dir]
+  (when-let [config (read-hive-project-edn dir)]
+    {:path (.getAbsolutePath dir) :config config}))
+
+(defn- scan-subtree
+  "Recursively scan a subtree for .hive-project.edn files.
+   Single-threaded per subtree — parallelism is at the top level."
+  [^java.io.File dir max-depth current-depth]
+  (when (and (<= current-depth max-depth) (scannable-child? dir))
+    (let [result (scan-dir-shallow dir)
+          children (when-let [files (.listFiles dir)]
+                     (->> files
+                          (filter scannable-child?)
+                          (mapcat #(scan-subtree % max-depth (inc current-depth)))))]
+      (if result (cons result children) children))))
+
 (defn- discover-hive-projects
-  "Recursively discover .hive-project.edn files from root-path.
-   Returns seq of {:path ... :config ...} maps.
+  "Discover .hive-project.edn files from root-path using parallel scanning.
+
+   Strategy: scan root, then fan-out child directories via bounded-pmap
+   (hive-weave). Each subtree is scanned single-threaded; parallelism
+   is across sibling directories.
 
    Args:
      root-path - Starting directory for scan
      max-depth - Maximum directory depth (default 5)"
   [root-path & [{:keys [max-depth] :or {max-depth 5}}]]
-  (let [root (io/file root-path)
-        results (atom [])]
+  (let [root (io/file root-path)]
     (when (.isDirectory root)
-      (letfn [(scan-dir [dir depth]
-                (when (and (<= depth max-depth)
-                           (.isDirectory dir)
-                           (not (str/starts-with? (.getName dir) ".")))
-                  ;; Check for .hive-project.edn
-                  (when-let [config (read-hive-project-edn dir)]
-                    (swap! results conj
-                           {:path (.getAbsolutePath dir)
-                            :config config}))
-                  ;; Recurse into subdirectories
-                  (doseq [child (.listFiles dir)]
-                    (when (.isDirectory child)
-                      (scan-dir child (inc depth))))))]
-        (scan-dir root 0)))
-    @results))
+      (let [root-result (scan-dir-shallow root)
+            children (->> (.listFiles root)
+                          (filter scannable-child?)
+                          vec)
+            child-results (wp/bounded-pmap
+                            {:concurrency default-concurrency :timeout-ms 60000 :fallback []}
+                            (fn [child] (vec (scan-subtree child max-depth 1)))
+                            children)]
+        (cond-> (vec (mapcat identity child-results))
+          root-result (conj root-result))))))
 
 ;; =============================================================================
 ;; Project Entity Building
 ;; =============================================================================
 
+(defn- unrendered-template?
+  "Detects unrendered Mustache/Handlebars placeholders (e.g. {{artifact/id}})
+   leaking in from template skeletons under resources/."
+  [s]
+  (and (string? s) (str/includes? s "{{")))
+
 (defn- config->entity
   "Convert discovered project config to DataScript entity.
-   Includes hierarchy info from :parent-id."
+   Includes hierarchy info from :parent-id.
+   Skips unrendered template placeholders."
   [{:keys [path config]}]
   (let [project-id (:project-id config)
         parent-id (or (:parent-id config) (:parent config))
         project-type (or (:project-type config) :generic)
         tags (vec (or (:tags config) []))]
-    (when project-id
+    (when (and project-id (not (unrendered-template? project-id)))
       (cond-> {:project/id project-id
                :project/path path
                :project/type (if (keyword? project-type)

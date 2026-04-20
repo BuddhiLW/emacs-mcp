@@ -1,5 +1,8 @@
 (ns hive-mcp.agent.hive-agent-bridge
-  "Bridge to external agent loop extension. Returns nil when extension unavailable."
+  "DEPRECATED: Bridge to external agent loop extension (:ag/run).
+   Superseded by hive-claude Agent SDK (sdk-drone backend).
+   Kept for backward compat — will be removed in a future release."
+  {:deprecated "0.16.0"}
   (:require [hive-mcp.config.core :as config]
             [hive-mcp.extensions.registry :as ext]
             [taoensso.timbre :as log]))

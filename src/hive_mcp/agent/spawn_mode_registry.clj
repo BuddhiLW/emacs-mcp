@@ -8,8 +8,12 @@
    Adding a new spawn mode = adding one entry here. All downstream
    validation, MCP schemas, strategy dispatch, and slot limits derive automatically.
 
-   Sum type: claude | vterm | headless | agent-sdk | openrouter
-   MCP surface: claude | vterm | headless (headless is alias for agent-sdk since 0.12.0)")
+   Extensible at runtime via register-mode! for addon-contributed modes
+   (e.g. :tmux from hive-tmux). Core modes are baked in; addon modes
+   are registered during IAddon initialize! lifecycle.
+
+   Sum type: claude | vterm | headless | agent-sdk | openrouter | <addon-contributed>
+   MCP surface: claude | vterm | headless | <addon-contributed with :mcp? true>")
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -19,8 +23,8 @@
 ;; Registry
 ;; =============================================================================
 
-(def registry
-  "Spawn mode registry. array-map preserves insertion order.
+(def ^:private core-modes
+  "Core spawn modes baked in at compile time. array-map preserves insertion order.
 
    Each mode has:
    - :description     Human-readable description
@@ -74,52 +78,60 @@
                  :alias-of      nil
                  :capabilities  #{:dispatch :kill :multi-model}}))
 
+;; Addon-contributed spawn modes registered at runtime via register-mode!
+(defonce ^:private addon-modes (atom {}))
+
+(defn registry
+  "Full spawn mode registry: core + addon-contributed modes."
+  []
+  (merge core-modes @addon-modes))
+
 ;; =============================================================================
-;; Derived views (computed once at load time)
+;; Derived views (dynamic — include addon-contributed modes)
 ;; =============================================================================
 
 (def all-modes
-  "Set of all valid spawn mode keywords."
-  (set (keys registry)))
+  "Set of all valid spawn mode keywords (core only, for backward compat)."
+  (set (keys core-modes)))
 
 (def all-mode-strings
-  "Set of all valid spawn mode strings."
+  "Set of all valid spawn mode strings (core only, for backward compat)."
   (set (map name all-modes)))
 
 (def mcp-modes
-  "Ordered vector of mode strings visible in MCP tool enums."
-  (->> registry
+  "Ordered vector of core mode strings visible in MCP tool enums."
+  (->> core-modes
        (filter (fn [[_k v]] (:mcp? v)))
        (mapv (comp name key))))
 
 (def internal-modes
-  "Set of mode keywords that are internal (not MCP-visible)."
-  (->> registry
+  "Set of core mode keywords that are internal (not MCP-visible)."
+  (->> core-modes
        (remove (fn [[_k v]] (:mcp? v)))
        (map key)
        set))
 
 (def mode->slot-limit
-  "Map of mode keyword -> slot limit (nil = unlimited)."
-  (into {} (map (fn [[k v]] [k (:slot-limit v)])) registry))
+  "Map of mode keyword -> slot limit (nil = unlimited). Core only."
+  (into {} (map (fn [[k v]] [k (:slot-limit v)])) core-modes))
 
 (def emacs-modes
   "Set of modes that require an Emacs daemon."
-  (->> registry
+  (->> core-modes
        (filter (fn [[_k v]] (:requires-emacs? v)))
        (map key)
        set))
 
 (def headless-modes
   "Set of modes that do NOT require Emacs (subprocess or API)."
-  (->> registry
+  (->> core-modes
        (remove (fn [[_k v]] (:requires-emacs? v)))
        (map key)
        set))
 
 (def alias-map
   "Map of alias keyword -> canonical keyword. Only entries with :alias-of."
-  (->> registry
+  (->> core-modes
        (filter (fn [[_k v]] (:alias-of v)))
        (into {} (map (fn [[k v]] [k (:alias-of v)])))))
 
@@ -128,10 +140,12 @@
 ;; =============================================================================
 
 (defn valid-mode?
-  "Check if mode (keyword or string) is a valid spawn mode."
+  "Check if mode (keyword or string) is a valid spawn mode.
+   Checks both core and addon-contributed modes."
   [m]
   (let [kw (if (keyword? m) m (keyword m))]
-    (contains? all-modes kw)))
+    (or (contains? all-modes kw)
+        (contains? @addon-modes kw))))
 
 (defn resolve-alias
   "Resolve a mode to its canonical form. :headless -> :agent-sdk, others unchanged."
@@ -141,22 +155,23 @@
 (defn requires-emacs?
   "Does this spawn mode require an Emacs daemon?"
   [mode]
-  (get-in registry [mode :requires-emacs?] false))
+  (get-in (registry) [mode :requires-emacs?] false))
 
 (defn slot-limit
   "Get the slot limit for a mode (nil = unlimited)."
   [mode]
-  (get mode->slot-limit mode))
+  (or (get mode->slot-limit mode)
+      (get-in @addon-modes [mode :slot-limit])))
 
 (defn io-model
   "Get the I/O model for a mode (:buffer, :stdin-stdout, :api)."
   [mode]
-  (get-in registry [mode :io-model]))
+  (get-in (registry) [mode :io-model]))
 
 (defn capabilities
   "Get the capability set for a mode."
   [mode]
-  (get-in registry [mode :capabilities] #{}))
+  (get-in (registry) [mode :capabilities] #{}))
 
 (defn has-capability?
   "Check if a mode has a specific capability."
@@ -164,6 +179,33 @@
   (contains? (capabilities mode) capability))
 
 (defn mcp-enum
-  "Generate MCP JSON schema enum for spawn_mode tool definitions."
+  "Generate MCP JSON schema enum for spawn_mode tool definitions.
+   Includes both core and addon-contributed MCP-visible modes."
   []
-  mcp-modes)
+  (let [addon-mcp (->> @addon-modes
+                       (filter (fn [[_k v]] (:mcp? v)))
+                       (mapv (comp name key)))]
+    (into mcp-modes addon-mcp)))
+
+;; =============================================================================
+;; Runtime Extension (for addons)
+;; =============================================================================
+
+(defn register-mode!
+  "Register an addon-contributed spawn mode at runtime.
+   Called during IAddon initialize! lifecycle.
+   Mode-spec follows the same schema as core modes.
+   Idempotent: re-registration replaces silently.
+
+   Returns the mode keyword."
+  [mode-kw mode-spec]
+  {:pre [(keyword? mode-kw) (map? mode-spec)]}
+  (swap! addon-modes assoc mode-kw mode-spec)
+  mode-kw)
+
+(defn deregister-mode!
+  "Remove an addon-contributed spawn mode. For addon shutdown.
+   No-op if mode is a core mode or not registered."
+  [mode-kw]
+  (swap! addon-modes dissoc mode-kw)
+  mode-kw)

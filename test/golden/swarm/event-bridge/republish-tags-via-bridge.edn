@@ -1,0 +1,3 @@
+{:handler-present? true,
+ :local-events
+ [{:type :slave-spawned, :slave-id "ling-nats-1", :via :nats-bridge}]}

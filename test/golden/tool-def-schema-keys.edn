@@ -1,0 +1,29 @@
+{:name "ingest",
+ :consolidated true,
+ :has-handler true,
+ :schema-type "object",
+ :required ["command"],
+ :property-keys
+ ("backend"
+  "chunk-size"
+  "collection"
+  "command"
+  "connect-model"
+  "context-limit"
+  "context-tags"
+  "embedder"
+  "limit"
+  "model"
+  "new-entry-ids"
+  "overlap"
+  "parallelism"
+  "path"
+  "paths"
+  "project-id"
+  "query"
+  "skip-connect"
+  "strategy"
+  "summarize-model"
+  "synthesis-strategy"
+  "window-overlap"
+  "window-size")}

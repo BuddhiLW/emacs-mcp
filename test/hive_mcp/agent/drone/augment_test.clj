@@ -12,6 +12,7 @@
    Note: augment-task tests use with-redefs to mock I/O dependencies
    (Chroma, KG, registry). Only AGPL layer tested."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.test.check.generators :as gen]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [hive-mcp.agent.drone.augment :as augment]
@@ -19,7 +20,9 @@
             [hive-mcp.agent.drone.kg-context :as kg-ctx]
             [hive-mcp.agent.registry :as registry]
             [hive-mcp.context.budget :as budget]
-            [hive-mcp.tools.diff :as diff]))
+            [hive-mcp.tools.diff :as diff]
+            [hive-test.properties :as props]
+            [hive-test.generators.core :as gen-core]))
 
 ;; =============================================================================
 ;; Test Fixtures
@@ -281,6 +284,126 @@
         (is (<= (get-in result [:budget :total-tokens])
                 (get-in result [:budget :total-budget]))
             "Budget guarantee holds in full augmentation flow")))))
+
+;; =============================================================================
+;; resolve-context-str short-circuit priority tests (Tier1-B refactor)
+;; =============================================================================
+
+(def ^:private resolve-ctx #'augment/resolve-context-str)
+(def ^:private try-compressed-var #'augment/try-compressed)
+(def ^:private try-unified-var #'augment/try-unified)
+(def ^:private try-legacy-var #'augment/try-legacy)
+
+(def ^:private base-params
+  {:effective-root       "/tmp"
+   :effective-project-id "hive-mcp"
+   :seeds                nil
+   :use-unified          true
+   :token-budget         2000
+   :ctx-refs             nil
+   :kg-node-ids          nil})
+
+(deftest test-resolve-context-compressed-wins
+  (testing "When compressed path returns non-nil, unified and legacy are never evaluated"
+    (let [unified-called? (atom false)
+          legacy-called?  (atom false)]
+      (with-redefs [augment/try-compressed (fn [_] {:kg-ctx-str "COMPRESSED"
+                                                    :compressed-ctx-str "COMPRESSED"})
+                    augment/try-unified    (fn [_] (reset! unified-called? true)
+                                             {:kg-ctx-str "U" :unified-ctx-str "U"})
+                    augment/try-legacy     (fn [_] (reset! legacy-called? true)
+                                             {:kg-ctx-str "L"})]
+        (let [result (resolve-ctx "task" [] base-params)]
+          (is (= "COMPRESSED" (:kg-ctx-str result)))
+          (is (= "COMPRESSED" (:compressed-ctx-str result)))
+          (is (nil? (:unified-ctx-str result)))
+          (is (false? @unified-called?) "unified must not be called when compressed wins")
+          (is (false? @legacy-called?) "legacy must not be called when compressed wins"))))))
+
+(deftest test-resolve-context-falls-through-to-unified
+  (testing "When compressed returns nil, unified is tried and its value is used"
+    (let [legacy-called? (atom false)]
+      (with-redefs [augment/try-compressed (constantly nil)
+                    augment/try-unified    (constantly {:kg-ctx-str "UNIFIED"
+                                                        :unified-ctx-str "UNIFIED"})
+                    augment/try-legacy     (fn [_] (reset! legacy-called? true)
+                                             {:kg-ctx-str "L"})]
+        (let [result (resolve-ctx "task" [] base-params)]
+          (is (= "UNIFIED" (:kg-ctx-str result)))
+          (is (= "UNIFIED" (:unified-ctx-str result)))
+          (is (nil? (:compressed-ctx-str result)))
+          (is (false? @legacy-called?) "legacy must not be called when unified wins"))))))
+
+(deftest test-resolve-context-falls-through-to-legacy
+  (testing "When compressed and unified both return nil, legacy path result is used"
+    (with-redefs [augment/try-compressed (constantly nil)
+                  augment/try-unified    (constantly nil)
+                  augment/try-legacy     (constantly {:kg-ctx-str "LEGACY"
+                                                      :primed-ctx-str nil})]
+      (let [result (resolve-ctx "task" [] base-params)]
+        (is (= "LEGACY" (:kg-ctx-str result)))
+        (is (nil? (:compressed-ctx-str result)))
+        (is (nil? (:unified-ctx-str result)))))))
+
+(deftest test-resolve-context-final-fallback-empty-string
+  (testing "When all three paths return nil, kg-ctx-str is empty string (never throws)"
+    (with-redefs [augment/try-compressed (constantly nil)
+                  augment/try-unified    (constantly nil)
+                  augment/try-legacy     (constantly nil)]
+      (let [result (resolve-ctx "task" [] base-params)]
+        (is (= "" (:kg-ctx-str result)))
+        (is (nil? (:compressed-ctx-str result)))
+        (is (nil? (:unified-ctx-str result)))
+        (is (nil? (:primed-ctx-str result)))))))
+
+(deftest test-resolve-context-result-schema-stable
+  (testing "Result map always contains all four keys regardless of which path wins"
+    (doseq [winner [{:kg-ctx-str "C" :compressed-ctx-str "C"}
+                    {:kg-ctx-str "U" :unified-ctx-str "U"}
+                    {:kg-ctx-str "L" :primed-ctx-str "P"}
+                    nil]]
+      (with-redefs [augment/try-compressed (constantly (when (:compressed-ctx-str winner) winner))
+                    augment/try-unified    (constantly (when (:unified-ctx-str winner) winner))
+                    augment/try-legacy     (constantly (when (:primed-ctx-str winner) winner))]
+        (let [result (resolve-ctx "task" [] base-params)]
+          (is (every? #(contains? result %)
+                      [:kg-ctx-str :compressed-ctx-str :unified-ctx-str :primed-ctx-str])))))))
+
+;; -----------------------------------------------------------------------------
+;; Property test: resolve-context-str is TOTAL (never throws)
+;; -----------------------------------------------------------------------------
+
+(def ^:private gen-params
+  (gen/let [task gen-core/gen-non-blank-string
+            pid  gen-core/gen-non-blank-string
+            root gen-core/gen-non-blank-string
+            seeds (gen/vector gen-core/gen-non-blank-string 0 3)
+            use-unified gen/boolean
+            budget (gen/one-of [(gen/return nil) (gen/choose 500 8000)])
+            refs (gen/vector gen-core/gen-non-blank-string 0 3)]
+    {:task task
+     :params {:effective-root       root
+              :effective-project-id pid
+              :seeds                seeds
+              :use-unified          use-unified
+              :token-budget         budget
+              :ctx-refs             refs
+              :kg-node-ids          []}}))
+
+(defn- safe-resolve-context
+  "Totality wrapper: call resolve-context-str through all failure modes neutralised.
+   Every downstream dep is stubbed so the property is about the control-flow shell."
+  [{:keys [task params]}]
+  (with-redefs [augment/try-compressed (constantly nil)
+                augment/try-unified    (constantly nil)
+                augment/try-legacy     (constantly nil)]
+    (resolve-ctx task [] params)))
+
+(props/defprop-total resolve-context-str-total
+  safe-resolve-context
+  gen-params
+  {:num-tests 100
+   :pred map?})
 
 ;; =============================================================================
 ;; Run tests
