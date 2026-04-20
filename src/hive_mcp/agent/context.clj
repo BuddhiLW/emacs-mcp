@@ -61,6 +61,38 @@
   []
   (:directory *request-ctx*))
 
+(defn resolve-caller-directory
+  "HCR directory resolution chain used by project-scope-aware handlers.
+
+   Priority:
+   1. Explicit :directory arg (user override)
+   2. :_caller_cwd (injected by bb-mcp — per-session cwd = user cwd)
+   3. Request-ctx :directory (wrap-handler-context)
+   4. Server's user.dir (last-resort fallback — shared JVM; may be wrong)
+
+   Returns nil only if every source is blank. Centralizes the fallback
+   chain so all scope-sensitive handlers (catchup, wrap, spawn, project-id
+   derivation) stay DRY."
+  ([] (resolve-caller-directory nil))
+  ([args]
+   (let [blank? (fn [s] (or (nil? s) (and (string? s) (.isBlank ^String s))))
+         pick   (fn [v] (when-not (blank? v) v))]
+     (or (pick (:directory args))
+         (pick (:_caller_cwd args))
+         (pick (current-directory))
+         (pick (System/getProperty "user.dir"))))))
+
+(defn caller-directory-source
+  "Diagnostic: which slot in the HCR chain supplied the directory.
+   Useful for log lines so ops can see whether scope is coming from
+   explicit arg, bb-mcp injection, request ctx, or server fallback."
+  [args]
+  (cond
+    (and (:directory args)    (not (.isBlank ^String (:directory args))))    :explicit
+    (and (:_caller_cwd args)  (not (.isBlank ^String (:_caller_cwd args))))  :caller-cwd
+    (current-directory)                                                       :request-ctx
+    :else                                                                     :server-cwd))
+
 (defn current-session-id
   "Get the current session-id from execution context."
   []

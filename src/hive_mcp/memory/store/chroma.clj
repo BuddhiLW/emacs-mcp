@@ -8,6 +8,9 @@
    DDD: Repository pattern - ChromaMemoryStore is the Chroma aggregate adapter."
   (:require [hive-mcp.protocols.memory :as proto]
             [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.chroma.crud :as ccrud]
+            [hive-mcp.chroma.search :as csearch]
+            [hive-mcp.chroma.maintenance :as cmaint]
             [hive-mcp.dns.result :as result]
             [taoensso.timbre :as log]))
 
@@ -78,25 +81,25 @@
   "Probe Chroma availability and stats. Returns Result."
   []
   (result/try-effect* :chroma/probe-failed
-                      (let [available? (chroma/chroma-available?)
-                            stats      (when-let [_ available?] (chroma/collection-stats))]
-                        {:available? available? :stats stats})))
+    (let [available? (chroma/chroma-available?)
+          stats      (when-let [_ available?] (ccrud/collection-stats))]
+      {:available? available? :stats stats})))
 
 (defn- safe-entry-count
   "Get collection entry count, nil on failure."
   []
   (:ok (result/try-effect* :chroma/stats-failed
-                           (:count (chroma/collection-stats)))))
+         (:count (ccrud/collection-stats)))))
 
 (defn- propagate-to-dep!
   "Propagate staleness to a single dependency. Returns Result."
   [dep-id depth]
   (result/try-effect* :chroma/propagate-failed
-                      (let [dep-beta (or (:staleness-beta (chroma/get-entry-by-id dep-id)) 1)]
-                        (chroma/update-staleness! dep-id
-                                                  {:beta   (inc dep-beta)
-                                                   :source :transitive
-                                                   :depth  (inc depth)}))))
+    (let [dep-beta (or (:staleness-beta (ccrud/get-entry-by-id dep-id)) 1)]
+      (ccrud/update-staleness! dep-id
+                               {:beta   (inc dep-beta)
+                                :source :transitive
+                                :depth  (inc depth)}))))
 
 ;; =========================================================================
 ;; Protocol Implementation
@@ -145,16 +148,16 @@
   ;; --- CRUD Operations ---
 
   (add-entry! [_this entry]
-    (chroma/index-memory-entry! entry))
+    (ccrud/index-memory-entry! entry))
 
   (get-entry [_this id]
-    (chroma/get-entry-by-id id))
+    (ccrud/get-entry-by-id id))
 
   (update-entry! [_this id updates]
-    (chroma/update-entry! id updates))
+    (ccrud/update-entry! id updates))
 
   (delete-entry! [_this id]
-    (chroma/delete-entry! id)
+    (ccrud/delete-entry! id)
     true)
 
   (query-entries [_this opts]
@@ -163,24 +166,24 @@
                   output-fields]  ;; accepted for interface compat; chroma ignores projection
            :or {limit 100 include-expired? false}} opts]
       (if grounded-from
-        (chroma/query-grounded-from grounded-from)
-        (chroma/query-entries :type type
-                              :project-id project-id
-                              :project-ids project-ids
-                              :tags tags
-                              :exclude-tags exclude-tags
-                              :limit limit
-                              :include-expired? include-expired?))))
+        (ccrud/query-grounded-from grounded-from)
+        (ccrud/query-entries :type type
+                             :project-id project-id
+                             :project-ids project-ids
+                             :tags tags
+                             :exclude-tags exclude-tags
+                             :limit limit
+                             :include-expired? include-expired?))))
 
   ;; --- Semantic Search ---
 
   (search-similar [_this query-text opts]
     (let [{:keys [limit type project-ids exclude-tags]} opts]
-      (chroma/search-similar query-text
-                             :limit (or limit 10)
-                             :type type
-                             :project-ids project-ids
-                             :exclude-tags exclude-tags)))
+      (csearch/search-similar query-text
+                              :limit (or limit 10)
+                              :type type
+                              :project-ids project-ids
+                              :exclude-tags exclude-tags)))
 
   (supports-semantic-search? [_this]
     (chroma/embedding-configured?))
@@ -188,17 +191,17 @@
   ;; --- Expiration Management ---
 
   (cleanup-expired! [_this]
-    (chroma/cleanup-expired!))
+    (cmaint/cleanup-expired!))
 
   (entries-expiring-soon [_this days opts]
     (let [{:keys [project-id]} opts]
-      (chroma/entries-expiring-soon days :project-id project-id)))
+      (cmaint/entries-expiring-soon days :project-id project-id)))
 
   ;; --- Duplicate Detection ---
 
   (find-duplicate [_this type content-hash opts]
     (let [{:keys [project-id]} opts]
-      (chroma/find-duplicate type content-hash :project-id project-id)))
+      (ccrud/find-duplicate type content-hash :project-id project-id)))
 
   ;; --- Store Management ---
 
@@ -219,17 +222,17 @@
   proto/IMemoryStoreWithAnalytics
 
   (log-access! [_this id]
-    (when-let [entry (chroma/get-entry-by-id id)]
-      (chroma/update-entry! id {:access-count (inc (or (:access-count entry) 0))})))
+    (when-let [entry (ccrud/get-entry-by-id id)]
+      (ccrud/update-entry! id {:access-count (inc (or (:access-count entry) 0))})))
 
   (record-feedback! [_this id feedback]
-    (when-let [entry (chroma/get-entry-by-id id)]
+    (when-let [entry (ccrud/get-entry-by-id id)]
       (let [field     (feedback->field feedback)
             new-count (inc (or (get entry field) 0))]
-        (chroma/update-entry! id {field new-count}))))
+        (ccrud/update-entry! id {field new-count}))))
 
   (get-helpfulness-ratio [_this id]
-    (when-let [entry (chroma/get-entry-by-id id)]
+    (when-let [entry (ccrud/get-entry-by-id id)]
       (helpfulness-map entry)))
 
   ;; =========================================================================
@@ -238,20 +241,20 @@
   proto/IMemoryStoreWithStaleness
 
   (update-staleness! [_this id staleness-opts]
-    (chroma/update-staleness! id staleness-opts))
+    (ccrud/update-staleness! id staleness-opts))
 
   (get-stale-entries [_this threshold opts]
     (let [{:keys [project-id type]} opts
-          entries (chroma/query-entries :project-id project-id
-                                        :type type
-                                        :limit 10000)]
+          entries (ccrud/query-entries :project-id project-id
+                                       :type type
+                                       :limit 10000)]
       (->> entries
            (filter #(> (staleness-probability %) threshold))
            vec)))
 
   (propagate-staleness! [_this source-id depth]
     ;; Phase 2 feature - propagate via KG edges
-    (when-let [entry (chroma/get-entry-by-id source-id)]
+    (when-let [entry (ccrud/get-entry-by-id source-id)]
       (let [kg-outgoing (:kg-outgoing entry)]
         (reduce (fn [cnt dep-id]
                   (if-let [_ (seq dep-id)]

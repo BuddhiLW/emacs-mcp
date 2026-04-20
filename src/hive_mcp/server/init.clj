@@ -279,35 +279,61 @@
 ;; Memory Store Wiring
 ;; =============================================================================
 
-(defn- addon-memory-backend-configured?
-  "Check if config.edn declares an addon-provided memory backend.
-   Returns truthy if :services :memory-store :backend is set to anything
-   other than :chroma (the built-in default).
-   OCP: hive-mcp has no knowledge of specific addon implementations."
+(defn- resolve-memory-backend
+  "Resolve the configured memory backend id.
+
+   Reads, in order:
+     1. :services :memory-store :backend   (authoritative — user's config.edn)
+     2. :memory :default-store             (legacy key still used by routes)
+     3. \"chroma\"                         (default for green-field install)
+
+   Ensures the global config atom is populated — wire-memory-store! is
+   invoked in Phase 4, before Phase 5.5's explicit load-global-config!.
+   Returns a lowercase string (e.g. \"milvus\", \"chroma\")."
   []
-  (let [mem-cfg (global-config/get-service-config :memory-store)]
-    (when-let [backend (:backend mem-cfg)]
-      (not= backend :chroma))))
+  (result/rescue nil (global-config/load-global-config!))
+  (let [cfg (global-config/get-global-config)
+        b   (or (get-in cfg [:services :memory-store :backend])
+                (get-in cfg [:memory :default-store])
+                "chroma")]
+    (-> b name clojure.string/lower-case)))
 
 (defn wire-memory-store!
-  "Wire default IMemoryStore backend (Chroma, bundled).
+  "Wire the active IMemoryStore backend based on global config.
 
-   If config.edn declares :services :memory-store {:backend :some-addon},
-   skips Chroma wiring and defers to the addon (which will call set-store!
-   during Phase 4.5 load-extensions!). This is OCP-compliant: hive-mcp
-   core never needs to know about specific addon backends.
+   Dispatch: :services :memory-store :backend (fallback :memory :default-store).
+     - \"milvus\": defer to hive-milvus addon. Its initialize! calls set-store!
+       during Phase 4.5 (load-extensions!).
+     - anything else: wire ChromaMemoryStore immediately (legacy behavior).
 
-   Must run AFTER init-embedding-provider! since Chroma config is set there."
+   Must run AFTER init-embedding-provider! since Chroma config is set there.
+   A post-extensions fallback in `ensure-memory-store!` guarantees a live
+   store even when the selected addon fails to register."
   []
-  (if (addon-memory-backend-configured?)
-    (log/info "Addon memory backend configured — deferring store wiring to Phase 4.5")
-    (result/rescue nil
-                   (let [chroma-host (global-config/get-service-value :chroma :host :env "CHROMA_HOST" :default "localhost")
-                         chroma-port (global-config/get-service-value :chroma :port :env "CHROMA_PORT" :parse parse-long :default 8000)
-                         store (chroma-store/create-store)]
-                     (mem-proto/set-store! store)
-                     (mem-proto/connect! store {:host chroma-host :port chroma-port :collection-name "hive-mcp-memory"})
-                     (log/info "ChromaMemoryStore wired as default IMemoryStore (addons may override)")))))
+  (result/rescue nil
+                 (let [backend (resolve-memory-backend)]
+                   (case backend
+                     "milvus"
+                     (log/info "wire-memory-store!: deferring to hive-milvus addon"
+                               {:backend backend})
+
+                     (let [store (chroma-store/create-store)]
+                       (mem-proto/set-store! store)
+                       (log/info "ChromaMemoryStore wired as active IMemoryStore backend"
+                                 {:backend backend}))))))
+
+(defn ensure-memory-store!
+  "Guarantee an active IMemoryStore after addon loading.
+
+   Called in Phase 4.6 (after load-extensions!). If the configured backend's
+   addon failed to register a store, wire ChromaMemoryStore as a safety
+   fallback so memory queries don't throw 'No memory store configured'."
+  []
+  (result/rescue nil
+                 (when-not (mem-proto/store-set?)
+                   (log/warn "ensure-memory-store!: no store after extensions; wiring Chroma fallback")
+                   (let [store (chroma-store/create-store)]
+                     (mem-proto/set-store! store)))))
 
 ;; =============================================================================
 ;; Channel Bridge + Sync

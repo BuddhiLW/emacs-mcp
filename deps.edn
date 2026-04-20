@@ -216,9 +216,8 @@
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 ;; Generative testing for spec validation
                 org.clojure/test.check {:mvn/version "1.1.1"}
-                ;; hive-test: mutation, golden, property-based testing
-                io.github.hive-agi/hive-test
-                {:git/tag "v0.2.0" :git/sha "841da83"}}
+                ;; Trifecta macro: golden + property + mutation facets
+                io.github.hive-agi/hive-test {:git/tag "v0.2.0" :git/sha "841da83"}}
    :main-opts ["-m" "cognitect.test-runner"]}
 
   ;; CI-friendly: Run only unit tests (excludes tests requiring Emacs)
@@ -226,8 +225,8 @@
   {:extra-paths ["test"]
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
-                io.github.hive-agi/hive-test
-                {:git/tag "v0.2.0" :git/sha "841da83"}}
+                org.clojure/test.check {:mvn/version "1.1.1"}
+                io.github.hive-agi/hive-test {:git/tag "v0.2.0" :git/sha "841da83"}}
    :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:excludes [:integration]}}

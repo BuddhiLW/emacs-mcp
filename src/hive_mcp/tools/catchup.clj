@@ -33,6 +33,7 @@
             [hive-mcp.concurrency.pool :as pool]
             [hive-mcp.project.tree :as project-tree]
             [hive-mcp.dns.result :refer [rescue]]
+            [hive-mcp.agent.context :as ctx]
             [hive-dsl.context.identity :as ctx-id]
             [hive-ttracking.core :as tt]
             [clojure.data.json :as json]
@@ -278,7 +279,7 @@
    IMemoryStore directly. Delegates to :catchup/wrap extension
    (provided by addon) for harvesting and crystallization."
   [args]
-  (let [directory (:directory args)
+  (let [directory (ctx/resolve-caller-directory args)
         agent-id (:agent_id args)]
     (log/info "native-wrap: crystallizing to memory store" {:directory directory :agent-id agent-id})
     (if-not (mem-proto/store-set?)
