@@ -72,13 +72,14 @@
 (defn- create-kanban-task!
   "Create a kanban task for a plan step.
    Returns {:ok task-id} or {:error message}"
-  [{:keys [title priority]} directory]
+  [{:keys [title description priority]} directory]
   (try
     (let [priority-str (if (keyword? priority) (name priority) (str priority))
           result (mem-kanban/handle-mem-kanban-create
-                  {:title title
-                   :priority priority-str
-                   :directory directory})]
+                  (cond-> {:title title
+                           :priority priority-str
+                           :directory directory}
+                    description (assoc :description description)))]
       (if (:isError result)
         {:error (:text result)}
         ;; Parse the result to get the task ID

@@ -179,7 +179,7 @@
 ;; Pure Logic (return MCP response maps directly)
 ;; ============================================================
 
-(defn- create* [{:keys [title priority context directory agent_id]}]
+(defn- create* [{:keys [title description priority context directory agent_id]}]
   (when (or (nil? title) (and (string? title) (str/blank? title)))
     (throw (ex-info "Kanban task requires a non-empty title" {:type :validation-error})))
   (let [eff-dir (effective-dir directory)
@@ -188,9 +188,10 @@
                                   (System/getenv "CLAUDE_SWARM_SLAVE_ID")))
         priority (if-let [p priority] p "medium")
         project-id (scope/get-current-project-id eff-dir)
-        content {:task-type "kanban" :title title :status "todo"
-                 :priority priority :created (kanban-timestamp)
-                 :started nil :context context}
+        content (cond-> {:task-type "kanban" :title title :status "todo"
+                         :priority priority :created (kanban-timestamp)
+                         :started nil :context context}
+                  description (assoc :description description))
         tags (build-kanban-tags "todo" priority project-id)
         crud-result (mem-crud/handle-add {:type "note"
                                           :content (json/write-str content)
