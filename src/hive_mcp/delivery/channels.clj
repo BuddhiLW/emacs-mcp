@@ -120,15 +120,16 @@
   (available? [_this]
     true)  ;; Piggyback buffer is always available (atom-based, in-process)
 
-  (deliver! [_this {:keys [agent-id event-type message task timestamp project-id] :as event}]
+  (deliver! [_this {:keys [agent-id event-type message task timestamp project-id shout-id] :as event}]
     (try
       (when-let [buffer-fn (requiring-resolve 'hive-mcp.channel.piggyback/buffer-backbone-event!)]
-        (buffer-fn {:agent-id   agent-id
-                    :event-type event-type
-                    :message    message
-                    :task       task
-                    :timestamp  timestamp
-                    :project-id project-id}))
+        (buffer-fn (cond-> {:agent-id   agent-id
+                            :event-type event-type
+                            :message    message
+                            :task       task
+                            :timestamp  timestamp
+                            :project-id project-id}
+                     shout-id (assoc :shout-id shout-id))))
       (catch Exception e
         (log/debug "[PiggybackChannel] Delivery failed:" (.getMessage e))))))
 

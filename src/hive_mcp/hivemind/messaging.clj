@@ -25,7 +25,9 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defn- all-hivemind-messages
-  "Return all hivemind messages for piggyback module."
+  "Return all hivemind messages for piggyback module.
+   Projection mirrors buffer-backbone-event! normalization so dual-path dedup
+   keys remain shape-aligned (both paths carry :task and :shout-id when set)."
   []
   (mapcat (fn [[_agent-id entry]]
             (let [{:keys [messages]} (:data entry)]
@@ -35,7 +37,8 @@
                          :message (or message task "")
                          :timestamp timestamp
                          :project-id (or project-id "global")}
-                  shout-id (assoc :shout-id shout-id)))))
+                  shout-id (assoc :shout-id shout-id)
+                  task (assoc :task task)))))
           @(:atom state/agent-registry)))
 
 (piggyback/register-message-source! all-hivemind-messages)
