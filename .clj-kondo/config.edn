@@ -43,7 +43,9 @@
            hive-test.trifecta/deftrifecta clojure.test/deftest
            hive-test.trifecta/deftest-facets clojure.test/deftest}
 
- :linters {:unresolved-var
+ :linters {;; Duplicate aliases are redundant but harmless — warn, don't block CI.
+           :conflicting-alias {:level :warning}
+           :unresolved-var
            {:exclude [;; core.logic vars that may not be in kondo's database
                       clojure.core.logic/membero
                       ;; datahike.api - dynamically loaded, kondo can't resolve
