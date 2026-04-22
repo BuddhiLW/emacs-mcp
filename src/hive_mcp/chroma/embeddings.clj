@@ -1,19 +1,23 @@
 (ns hive-mcp.chroma.embeddings
-  "Embedding provider protocol and management."
-  (:require [taoensso.timbre :as log]))
+  "Embedding provider management (atom-backed registry, routing helpers).
+
+   The EmbeddingProvider protocol itself has moved to
+   hive-mcp.embeddings.protocol so that embedder implementations do not
+   need to depend on this (chroma-layer) namespace. Aliases below keep
+   backward compatibility for any existing callers that reach for
+   `chroma.embeddings/EmbeddingProvider` or its method fns."
+  (:require [hive-mcp.embeddings.protocol :as proto]
+            [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-(defprotocol EmbeddingProvider
-  "Protocol for generating text embeddings."
-  (embed-text [this text]
-    "Generate embedding vector for text.")
-  (embed-batch [this texts]
-    "Generate embeddings for multiple texts.")
-  (embedding-dimension [this]
-    "Return the dimension of embeddings produced."))
+;; --- Backward-compat re-exports for the relocated protocol ---
+(def EmbeddingProvider proto/EmbeddingProvider)
+(def embed-text proto/embed-text)
+(def embed-batch proto/embed-batch)
+(def embedding-dimension proto/embedding-dimension)
 
 (defonce ^:private embedding-provider (atom nil))
 

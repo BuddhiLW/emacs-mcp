@@ -19,9 +19,10 @@
      ;; Or specify model
      (chroma/set-embedding-provider! 
        (ollama/->provider {:model \"mxbai-embed-large\"}))"
-  (:require [hive-mcp.chroma.core :as chroma]
-            [hive-mcp.concurrency.pool :as pool]
+  (:require [hive-mcp.concurrency.pool :as pool]
+            [hive-mcp.embeddings.env-config :as env-cfg]
             [hive-mcp.embeddings.http-client :as http]
+            [hive-mcp.embeddings.protocol :as emb-proto]
             [clojure.data.json :as json]
             [taoensso.timbre :as log])
   (:import [java.net URI]
@@ -39,8 +40,14 @@
    "all-minilm" 384 ; Fastest, lower quality
    "snowflake-arctic-embed" 1024})
 
-(def ^:private default-model "nomic-embed-text")
-(def ^:private default-host "http://localhost:11434")
+(defn- resolve-config!
+  "Resolve Ollama host + model via hive-di (env → overrides → defaults).
+   Throws ex-info on :config/invalid; callers expect a plain map."
+  [overrides]
+  (let [result (env-cfg/resolve-OllamaConfig overrides)]
+    (or (:ok result)
+        (throw (ex-info "Invalid Ollama config"
+                        {:type :invalid-config :result result})))))
 
 (defonce ^:private http-client
   ;; Self-healing HttpClient cache. Rebuilds on fatal selector/shutdown errors
@@ -110,7 +117,7 @@
     (mapv deref futures)))
 
 (defrecord OllamaEmbedder [host model dimension]
-  chroma/EmbeddingProvider
+  emb-proto/EmbeddingProvider
   (embed-text [_ text]
     (get-embedding host model text))
   (embed-batch [_ texts]
@@ -130,8 +137,9 @@
      - all-minilm (384 dims, fastest)
      - snowflake-arctic-embed (1024 dims)"
   ([] (->provider {}))
-  ([{:keys [host model] :or {host default-host model default-model}}]
-   (let [dimension (get models model)]
+  ([overrides]
+   (let [{:keys [host model]} (resolve-config! (select-keys overrides [:host :model]))
+         dimension (get models model)]
      (when-not dimension
        (throw (ex-info (str "Unknown model: " model ". Supported: " (keys models)
                             "\nYou can also add custom models to the `models` map.")
@@ -150,7 +158,7 @@
 
 (defn list-models
   "List available models on the Ollama server."
-  ([] (list-models default-host))
+  ([] (list-models (:host (resolve-config! {}))))
   ([host]
    (let [response (make-request host "/api/tags" nil)]
      (mapv :name (:models response)))))
@@ -158,7 +166,7 @@
 (defn pull-model
   "Pull a model from Ollama (downloads if not present).
    This is a convenience wrapper - you can also run `ollama pull <model>` in terminal."
-  ([model] (pull-model default-host model))
+  ([model] (pull-model (:host (resolve-config! {})) model))
   ([host model]
    (log/info "Pulling model:" model "(this may take a while...)")
    (make-request host "/api/pull" {:name model :stream false})))

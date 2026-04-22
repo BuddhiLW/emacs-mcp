@@ -114,6 +114,10 @@
         io.github.hive-agi/hive-dsl
         {:git/tag "v0.4.1" :git/sha "07ab02a"}
 
+        ;; hive-di — declarative typed config resolution (defconfig/env/literal)
+        ;; Used by hive-mcp.embeddings.env-config and downstream addons.
+        io.github.hive-agi/hive-di {:git/tag "v0.2.0" :git/sha "6ff3e60"}
+
         ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
         ;; Overrides default Chroma store when Milvus is reachable.
