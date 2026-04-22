@@ -154,7 +154,10 @@
                     :last-scan-ts  (:last-scan-ts carto-status)
                     :scan-status   (:scan-status carto-status)
                     :scan-result   (:scan-result carto-status)
-                    :hint "Carto readiness at-a-glance. lsp-up?=false means structural-edit tasks will fail. indexed-forms=0 means scan needed before carto queries."}))])))
+                    :readiness     (:readiness carto-status)
+                    :warnings      (or (:warnings carto-status) [])
+                    :hint          (or (:hint carto-status)
+                                       "Carto readiness at-a-glance.")}))])))
 
 (defn store-not-configured-error
   "Return error response when no IMemoryStore is registered."

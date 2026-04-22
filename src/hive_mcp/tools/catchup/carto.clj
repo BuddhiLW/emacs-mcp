@@ -72,6 +72,56 @@
         nil))
     nil))
 
+(defn- derive-readiness
+  "Derive a readiness keyword + action-oriented hint + warnings vector from
+   raw carto fields. Keys on actual state so callers don't have to parse
+   prose.
+
+   Readiness values:
+     :lsp-down   — sidecar not up; structural-edit tasks will fail
+     :error      — last scan errored
+     :scanning   — scan currently running; forms may be partial
+     :empty      — store reachable but indexed-forms=0 (scan required)
+     :stale      — ambiguous: forms=0 + no scan-status at all (never scanned)
+     :ready      — store populated and (if known) last scan succeeded"
+  [{:keys [lsp-up? carto-store? indexed-forms scan-status scan-error]}]
+  (let [status-kw (some-> scan-status keyword)
+        empty?    (or (nil? indexed-forms) (zero? indexed-forms))]
+    (cond
+      (not lsp-up?)
+      {:readiness :lsp-down
+       :warnings  ["lsp-down — LSP sidecar not running; structural-edit tasks will fail. Start the sidecar or run `hive_mcp lsp up`."]
+       :hint      "LSP sidecar down — structural-edit tasks will fail until it is started."}
+
+      (not carto-store?)
+      {:readiness :store-unavailable
+       :warnings  ["carto-store unavailable — :carto memory store backend is not registered."]
+       :hint      "Carto store backend not registered — no structural queries available."}
+
+      (or (= status-kw :error) scan-error)
+      {:readiness :error
+       :warnings  [(str "carto scan error"
+                        (when scan-error (str " — " scan-error))
+                        " — fix the underlying issue, then re-run codebase-map scan :scope <dir>.")]
+       :hint      "Last carto scan errored — re-run codebase-map scan :scope <dir> after resolving the error."}
+
+      (= status-kw :running)
+      {:readiness :scanning
+       :warnings  (if empty?
+                    ["carto scan in progress — indexed-forms=0 until the scan finishes. Defer structural queries or wait for completion."]
+                    [])
+       :hint      "Carto scan in progress — structural queries may return partial results until it finishes."}
+
+      empty?
+      {:readiness :empty
+       :warnings  ["carto empty — run codebase-map scan :scope <dir> before structural queries (carto_refs, carto_deps, etc.)."]
+       :hint      "Carto store empty — run codebase-map scan :scope <dir> before any carto_* query."}
+
+      :else
+      {:readiness :ready
+       :warnings  []
+       :hint      "Carto store populated — structural queries should return results."})))
+
 (defn get-status
   "Gather carto health status for catchup block.
 
@@ -81,12 +131,21 @@
       :indexed-forms     int
       :last-scan-ts      long or nil
       :scan-status       str or nil
-      :scan-result       map or nil}
+      :scan-result       map or nil
+      :readiness         keyword (:ready :empty :scanning :error :lsp-down :store-unavailable)
+      :warnings          vector of strings — prominent, action-oriented
+      :hint              action-oriented message keyed to actual state}
 
-   All fields are best-effort — failures degrade to safe defaults."
+   All fields are best-effort — failures degrade to safe defaults.
+
+   The `:warnings` and state-keyed `:hint` replace the previous generic
+   hint prose so callers can branch on `:readiness` / inspect `:warnings`
+   without NLP."
   [project-id]
-  (let [scan-info (last-scan-info project-id)]
-    (cond-> {:lsp-up?       (lsp-up?)
-             :carto-store?  (carto-store-available?)
-             :indexed-forms (indexed-forms-count project-id)}
-      scan-info (merge scan-info))))
+  (let [scan-info (last-scan-info project-id)
+        base      (cond-> {:lsp-up?       (lsp-up?)
+                           :carto-store?  (carto-store-available?)
+                           :indexed-forms (indexed-forms-count project-id)}
+                    scan-info (merge scan-info))
+        readiness (derive-readiness base)]
+    (merge base readiness)))
