@@ -18,6 +18,7 @@
                                :model \"qwen/qwen3-embedding-8b\"}))"
   (:require [hive-mcp.chroma.core :as chroma]
             [hive-mcp.config.core :as global-config]
+            [hive-mcp.embeddings.http-client :as http]
             [clojure.data.json :as json]
             [taoensso.timbre :as log])
   (:import [java.net URI]
@@ -42,10 +43,12 @@
 
 
 (defonce ^:private http-client
-  (delay
-    (-> (HttpClient/newBuilder)
-        (.connectTimeout (Duration/ofSeconds 30))
-        (.build))))
+  ;; Self-healing HttpClient cache. See hive-mcp.embeddings.http-client.
+  (http/mk-client
+   (fn []
+     (-> (HttpClient/newBuilder)
+         (.connectTimeout (Duration/ofSeconds 30))
+         (.build)))))
 
 (defn- make-request
   "Make HTTP POST request to OpenRouter API."
@@ -59,7 +62,7 @@
                     (.POST (HttpRequest$BodyPublishers/ofString (json/write-str body)))
                     (.timeout (Duration/ofSeconds 120)) ; Embeddings can be slow
                     (.build))
-        response (.send @http-client request (HttpResponse$BodyHandlers/ofString))
+        response (http/send-with-retry http-client request (HttpResponse$BodyHandlers/ofString))
         status (.statusCode response)
         body-str (.body response)]
     (if (= status 200)

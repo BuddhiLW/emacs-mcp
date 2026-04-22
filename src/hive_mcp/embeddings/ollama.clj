@@ -21,6 +21,7 @@
        (ollama/->provider {:model \"mxbai-embed-large\"}))"
   (:require [hive-mcp.chroma.core :as chroma]
             [hive-mcp.concurrency.pool :as pool]
+            [hive-mcp.embeddings.http-client :as http]
             [clojure.data.json :as json]
             [taoensso.timbre :as log])
   (:import [java.net URI]
@@ -42,10 +43,13 @@
 (def ^:private default-host "http://localhost:11434")
 
 (defonce ^:private http-client
-  (delay
-    (-> (HttpClient/newBuilder)
-        (.connectTimeout (Duration/ofSeconds 30))
-        (.build))))
+  ;; Self-healing HttpClient cache. Rebuilds on fatal selector/shutdown errors
+  ;; instead of leaving a dead client wedged for the rest of the JVM lifetime.
+  (http/mk-client
+   (fn []
+     (-> (HttpClient/newBuilder)
+         (.connectTimeout (Duration/ofSeconds 30))
+         (.build)))))
 
 (defn- make-request
   "Make HTTP POST request to Ollama API."
@@ -57,7 +61,7 @@
                     (.POST (HttpRequest$BodyPublishers/ofString (json/write-str body)))
                     (.timeout (Duration/ofSeconds 120)) ; Embeddings can be slow on first run
                     (.build))
-        response (.send @http-client request (HttpResponse$BodyHandlers/ofString))
+        response (http/send-with-retry http-client request (HttpResponse$BodyHandlers/ofString))
         status (.statusCode response)
         body-str (.body response)]
     (if (= status 200)
