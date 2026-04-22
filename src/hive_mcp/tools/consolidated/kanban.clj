@@ -16,6 +16,7 @@
   {:list           mem-kanban/handle-mem-kanban-list-slim
    :create         mem-kanban/handle-mem-kanban-create
    :update         mem-kanban/handle-mem-kanban-move
+   :delete         mem-kanban/handle-mem-kanban-delete
    :status         mem-kanban/handle-mem-kanban-stats
    :sync           (fn [_] {:success true :message "Memory kanban is single-backend, no sync needed"})
    :plan-to-kanban plan-tool/handle-plan-to-kanban
@@ -52,10 +53,10 @@
 (def tool-def
   {:name "kanban"
    :consolidated true
-   :description "Kanban task management: list (all/filtered tasks), create (new task), update (change status/modify task), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks, supports plan_id or plan_path), batch-update (bulk status changes). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all. HCR: use include_descendants=true to aggregate descendant project tasks."
+   :description "Kanban task management: list (all/filtered tasks), create (new task), update (change status/modify task), delete (hard-remove task by id; no archival, no completion — use for duplicates/cancellations), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks, supports plan_id or plan_path), batch-update (bulk status changes). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all. HCR: use include_descendants=true to aggregate descendant project tasks."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["list" "create" "move" "status" "update" "roadmap" "my-tasks" "sync" "plan-to-kanban" "batch-update" "help"]
+                                         :enum ["list" "create" "move" "status" "update" "delete" "roadmap" "my-tasks" "sync" "plan-to-kanban" "batch-update" "help"]
                                          :description "Kanban operation to perform"}
                               "status" {:type "string"
                                         :enum ["todo" "inprogress" "inreview" "done"]

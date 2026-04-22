@@ -320,6 +320,37 @@
         (mcp-error (str "Task not found: " task_id)))
       (mcp-error (str "Invalid status: " new_status ". Valid: todo, doing, review, done")))))
 
+(defn- delete!
+  "Hard-delete a kanban entry without archival or completion semantics.
+   Use for removing duplicates, cancellations, or erroneously created tasks."
+  [entry task-id]
+  (let [content    (:content entry)
+        old-status (content-val content :status "todo")
+        title      (content-val content :title nil)
+        project-id (some-> entry :tags
+                           (->> (filter #(str/starts-with? % "scope:project:"))
+                                first
+                                (str/replace "scope:project:" "")))]
+    (temporal/record-mutation-silent!
+     {:entry-id       task-id
+      :op             :kanban-delete
+      :data           {:deleted true :previous-status old-status}
+      :previous-value (select-keys entry [:content :tags :duration])
+      :project-id     project-id})
+    (track-movement! {:task-id task-id :title title
+                      :from old-status :to "deleted"
+                      :project-id project-id})
+    (facade/delete-entry! task-id)
+    (mcp-json {:deleted true :id task-id :previous-status old-status})))
+
+(defn- delete* [{:keys [task_id id]}]
+  (let [task-id (or task_id id)]
+    (if-let [entry (facade/get-entry-by-id task-id)]
+      (if-let [_ (kanban-task-type? (:content entry))]
+        (delete! entry task-id)
+        (mcp-error (str "Entry is not a kanban task: " task-id)))
+      (mcp-error (str "Task not found: " task-id)))))
+
 (defn- stats* [{:keys [directory include_descendants]
                 :or {include_descendants true}}]
   (let [eff-dir (effective-dir directory)
@@ -365,6 +396,13 @@
    CTX Migration: Uses request context for directory extraction."
   [params]
   (safe-call :kanban/move-failed #(with-store (move* params))))
+
+(defn handle-mem-kanban-delete
+  "Hard-delete a kanban task by task_id. No archival, no completion semantics.
+   Records :kanban-delete temporal mutation with previous-value snapshot for audit.
+   Use for duplicates, cancellations, or erroneously created tasks."
+  [params]
+  (safe-call :kanban/delete-failed #(with-store (delete* params))))
 
 (defn handle-mem-kanban-stats
   "Get kanban statistics by status.

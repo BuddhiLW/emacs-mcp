@@ -126,7 +126,7 @@
                               ;; Kanban params
                               "title" {:type "string" :description "[kanban create] Task title"}
                               "description" {:type "string" :description "[kanban create] Task description"}
-                              "task_id" {:type "string" :description "[kanban update] Task ID"}
+                              "task_id" {:type "string" :description "[kanban update|delete] Task ID"}
                               "new_status" {:type "string"
                                             :enum ["todo" "inprogress" "inreview" "done"]
                                             :description "[kanban update] Target status"}
