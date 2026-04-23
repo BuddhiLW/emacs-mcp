@@ -166,11 +166,17 @@
       (log/debug "No extensions found on classpath — all capabilities will use defaults"))
 
     ;; Step 5: Core overrides — must run AFTER addon self-registration so
-    ;; hive-mcp-owned handlers win via contribute-commands! merge semantics.
-    ;; Currently: enriched `analysis bridge-status` (kanban 20260423132050-0b5d09a6).
+    ;; hive-mcp-owned handlers win via contribute-commands! / tool-registry
+    ;; merge semantics.
+    ;;   - `analysis bridge-status`   kanban 20260423132050-0b5d09a6
+    ;;   - `clojure discover` fallback kanban 20260423132055-27af713a
     (rescue nil
             (require 'hive-mcp.tools.analysis-bridge)
             (when-let [install! (resolve 'hive-mcp.tools.analysis-bridge/install!)]
+              (install!)))
+    (rescue nil
+            (require 'hive-mcp.tools.clojure-discover)
+            (when-let [install! (resolve 'hive-mcp.tools.clojure-discover/install!)]
               (install!)))
 
     ;; Build composite tools from addon command contributions
