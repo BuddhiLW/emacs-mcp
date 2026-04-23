@@ -11,7 +11,8 @@
             [hive-mcp.crystal.core :as crystal]
             [hive-mcp.memory.temporal :as temporal]
             [hive-mcp.protocols.memory :as mem-proto]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

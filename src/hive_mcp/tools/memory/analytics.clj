@@ -7,7 +7,8 @@
             [hive-mcp.memory.temporal :as temporal]
             [hive-mcp.protocols.memory :as mem-proto]
             [clojure.string :as str]
-            [taoensso.timbre :as log])
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]])
   (:import [java.time ZonedDateTime]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -38,78 +39,81 @@
   [{:keys [id directory]}]
   (log/info "mcp-memory-log-access:" id "directory:" directory)
   (with-store
-    (let [store (mem-proto/get-store)]
-      (if-let [entry (mem-proto/get-entry store id)]
-        (let [new-count (inc (or (:access-count entry) 0))
-              accessing-project (when directory
-                                  (scope/get-current-project-id directory))
-              cross-project-id (detect-cross-project-access entry accessing-project)
-              base-updates {:access-count new-count
-                            :last-accessed (str (ZonedDateTime/now))}
-              updates (if (and cross-project-id
-                               (not (has-xpoll-tag? entry cross-project-id)))
-                        (let [new-tags (conj (vec (or (:tags entry) []))
-                                             (xpoll-tag cross-project-id))
-                              tag-str (str/join "," new-tags)]
-                          (log/info "Scope transfer detected: entry" id
-                                    "accessed from project" cross-project-id
-                                    "(origin:" (:project-id entry) ")")
-                          (assoc base-updates :tags tag-str))
-                        base-updates)
-              updated (mem-proto/update-entry! store id updates)]
-        ;; Temporal dual-write: record access pattern
-          (temporal/record-mutation-silent!
-           {:entry-id   id
-            :op         :log-access
-            :data       {:access-count new-count
-                         :cross-project cross-project-id}
-            :project-id (or (:project-id entry) accessing-project)})
-          (mcp-json (merge (fmt/entry->json-alist updated)
-                           (when cross-project-id
-                             {:xpoll {:detected true
-                                      :accessing_project cross-project-id
-                                      :origin_project (:project-id entry)}}))))
-        (mcp-json {:error "Entry not found"})))))
+    (with-resilience
+      (let [store (mem-proto/get-store)]
+        (if-let [entry (mem-proto/get-entry store id)]
+          (let [new-count (inc (or (:access-count entry) 0))
+                accessing-project (when directory
+                                    (scope/get-current-project-id directory))
+                cross-project-id (detect-cross-project-access entry accessing-project)
+                base-updates {:access-count new-count
+                              :last-accessed (str (ZonedDateTime/now))}
+                updates (if (and cross-project-id
+                                 (not (has-xpoll-tag? entry cross-project-id)))
+                          (let [new-tags (conj (vec (or (:tags entry) []))
+                                               (xpoll-tag cross-project-id))
+                                tag-str (str/join "," new-tags)]
+                            (log/info "Scope transfer detected: entry" id
+                                      "accessed from project" cross-project-id
+                                      "(origin:" (:project-id entry) ")")
+                            (assoc base-updates :tags tag-str))
+                          base-updates)
+                updated (mem-proto/update-entry! store id updates)]
+          ;; Temporal dual-write: record access pattern
+            (temporal/record-mutation-silent!
+             {:entry-id   id
+              :op         :log-access
+              :data       {:access-count new-count
+                           :cross-project cross-project-id}
+              :project-id (or (:project-id entry) accessing-project)})
+            (mcp-json (merge (fmt/entry->json-alist updated)
+                             (when cross-project-id
+                               {:xpoll {:detected true
+                                        :accessing_project cross-project-id
+                                        :origin_project (:project-id entry)}}))))
+          (mcp-json {:error "Entry not found"}))))))
 
 (defn handle-feedback
   "Submit helpfulness feedback for a memory entry."
   [{:keys [id feedback]}]
   (log/info "mcp-memory-feedback:" id feedback)
   (with-store
-    (let [store (mem-proto/get-store)]
-      (if-let [entry (mem-proto/get-entry store id)]
-        (let [prev-helpful (or (:helpful-count entry) 0)
-              prev-unhelpful (or (:unhelpful-count entry) 0)
-              updates (case feedback
-                        "helpful" {:helpful-count (inc prev-helpful)}
-                        "unhelpful" {:unhelpful-count (inc prev-unhelpful)}
-                        (throw (ex-info "Invalid feedback type" {:feedback feedback})))
-              updated (mem-proto/update-entry! store id updates)]
-        ;; Temporal dual-write: record feedback event
-          (temporal/record-mutation-silent!
-           {:entry-id       id
-            :op             :feedback
-            :data           {:feedback feedback
-                             :new-helpful (:helpful-count updates)
-                             :new-unhelpful (:unhelpful-count updates)}
-            :previous-value {:helpful-count prev-helpful
-                             :unhelpful-count prev-unhelpful}
-            :project-id     (:project-id entry)})
-          (mcp-json (fmt/entry->json-alist updated)))
-        (mcp-json {:error "Entry not found"})))))
+    (with-resilience
+      (let [store (mem-proto/get-store)]
+        (if-let [entry (mem-proto/get-entry store id)]
+          (let [prev-helpful (or (:helpful-count entry) 0)
+                prev-unhelpful (or (:unhelpful-count entry) 0)
+                updates (case feedback
+                          "helpful" {:helpful-count (inc prev-helpful)}
+                          "unhelpful" {:unhelpful-count (inc prev-unhelpful)}
+                          (throw (ex-info "Invalid feedback type" {:feedback feedback})))
+                updated (mem-proto/update-entry! store id updates)]
+          ;; Temporal dual-write: record feedback event
+            (temporal/record-mutation-silent!
+             {:entry-id       id
+              :op             :feedback
+              :data           {:feedback feedback
+                               :new-helpful (:helpful-count updates)
+                               :new-unhelpful (:unhelpful-count updates)}
+              :previous-value {:helpful-count prev-helpful
+                               :unhelpful-count prev-unhelpful}
+              :project-id     (:project-id entry)})
+            (mcp-json (fmt/entry->json-alist updated)))
+          (mcp-json {:error "Entry not found"}))))))
 
 (defn handle-helpfulness-ratio
   "Get helpfulness ratio for a memory entry."
   [{:keys [id]}]
   (log/info "mcp-memory-helpfulness-ratio:" id)
   (with-store
-    (let [store (mem-proto/get-store)]
-      (if-let [entry (mem-proto/get-entry store id)]
-        (let [helpful (or (:helpful-count entry) 0)
-              unhelpful (or (:unhelpful-count entry) 0)
-              total (+ helpful unhelpful)
-              ratio (when (pos? total) (/ (double helpful) total))]
-          (mcp-json {:ratio ratio
-                     :helpful helpful
-                     :unhelpful unhelpful}))
-        (mcp-json {:error "Entry not found"})))))
+    (with-resilience
+      (let [store (mem-proto/get-store)]
+        (if-let [entry (mem-proto/get-entry store id)]
+          (let [helpful (or (:helpful-count entry) 0)
+                unhelpful (or (:unhelpful-count entry) 0)
+                total (+ helpful unhelpful)
+                ratio (when (pos? total) (/ (double helpful) total))]
+            (mcp-json {:ratio ratio
+                       :helpful helpful
+                       :unhelpful unhelpful}))
+          (mcp-json {:error "Entry not found"}))))))
