@@ -111,6 +111,7 @@
    2. Merge discovered init-ns with hardcoded extension-namespaces (dedup)
    3. Try extension self-registration (init! functions) — preferred path
    4. For manifests whose init-ns failed, try init-from-manifest! (constructor)
+   5. Core overrides — hive-mcp-owned handlers that must win over addons
 
    Addons self-register all capabilities via their init! functions.
    No fallback manifest gap-fill — core has zero knowledge of addon internals.
@@ -163,6 +164,14 @@
                 ", classpath-manifests:" (count ordered)
                 ", manifest-fallback:" @manifest-init-count ")")
       (log/debug "No extensions found on classpath — all capabilities will use defaults"))
+
+    ;; Step 5: Core overrides — must run AFTER addon self-registration so
+    ;; hive-mcp-owned handlers win via contribute-commands! merge semantics.
+    ;; Currently: enriched `analysis bridge-status` (kanban 20260423132050-0b5d09a6).
+    (rescue nil
+            (require 'hive-mcp.tools.analysis-bridge)
+            (when-let [install! (resolve 'hive-mcp.tools.analysis-bridge/install!)]
+              (install!)))
 
     ;; Build composite tools from addon command contributions
     (let [composite-tools (composite/build-all-composite-tools
