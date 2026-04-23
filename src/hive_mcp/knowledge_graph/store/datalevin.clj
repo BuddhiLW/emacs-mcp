@@ -107,6 +107,15 @@
   (pull-entity [this pattern eid]
     (dtlv/pull (dtlv/db (kg/ensure-conn! this)) pattern eid))
 
+  (eids-by-attr [this attr]
+    ;; Datalevin exposes two Datalog indexes, :eav and :ave. For enumerating
+    ;; all entities that have a given attribute, :ave (attribute, value, entity)
+    ;; is the right one — it iterates attribute-first over LMDB and returns a
+    ;; seq of datoms without loading values into memory eagerly.
+    ;; `dtlv/datoms` returns a sequence over the index (LMDB cursor under the
+    ;; hood); consuming it lazily is what keeps memory bounded.
+    (map :e (dtlv/datoms (dtlv/db (kg/ensure-conn! this)) :ave attr)))
+
   (db-snapshot [this]
     (dtlv/db (kg/ensure-conn! this)))
 

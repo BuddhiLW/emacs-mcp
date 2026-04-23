@@ -10,6 +10,7 @@
      (use-fixtures :each fixtures/dual-backend-fixture)"
   (:require [hive-mcp.knowledge-graph.protocol :as proto]
             [hive-mcp.knowledge-graph.store.datascript :as ds-store]
+            [hive-mcp.knowledge-graph.edges :as edges]
             [clojure.java.io :as io]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -26,10 +27,12 @@
   (let [store (ds-store/create-store)]
     (proto/set-store! store)
     (proto/ensure-conn! store)
+    (edges/reset-stats-cache!)
     (try
       (f)
       (finally
-        (proto/reset-conn! store)))))
+        (proto/reset-conn! store)
+        (edges/reset-stats-cache!)))))
 
 (defn datalevin-fixture
   "Fixture that runs test f with a fresh Datalevin store in a temp dir.
@@ -45,10 +48,12 @@
             store (create-fn {:db-path db-path})]
         (proto/set-store! store)
         (proto/ensure-conn! store)
+        (edges/reset-stats-cache!)
         (try
           (f)
           (finally
             (proto/close! store)
+            (edges/reset-stats-cache!)
             ;; Clean up temp directory
             (when (.exists tmp-dir)
               (doseq [file (reverse (file-seq tmp-dir))]
@@ -70,10 +75,12 @@
             store (create-fn {:db-path db-path})]
         (proto/set-store! store)
         (proto/ensure-conn! store)
+        (edges/reset-stats-cache!)
         (try
           (f)
           (finally
             (proto/close! store)
+            (edges/reset-stats-cache!)
             ;; Clean up temp directory
             (when (.exists tmp-dir)
               (doseq [file (reverse (file-seq tmp-dir))]

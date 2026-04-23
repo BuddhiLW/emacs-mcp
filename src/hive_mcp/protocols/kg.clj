@@ -30,6 +30,13 @@
   (pull-entity [this pattern eid]
     "Pull an entity with a pull pattern.")
 
+  (eids-by-attr [this attr]
+    "Return a lazy sequence of entity IDs for all entities that have the
+     given attribute. Backed by the attribute-first index on each backend
+     (DataScript `:aevt`, Datalevin `:ave`, Datahike `:aevt`). Cheap to
+     enumerate — does not materialize full entities. Used to drive
+     batched pulls over large attribute sets without OOM.")
+
   (db-snapshot [this]
     "Get the current database snapshot value.")
 
@@ -122,6 +129,7 @@
   (entity [_this _eid] nil)
   (entid [_this _lookup-ref] nil)
   (pull-entity [_this _pattern _eid] nil)
+  (eids-by-attr [_this _attr] ())
   (db-snapshot [_this] nil)
   (reset-conn! [_this] nil)
   (close! [_this] nil))

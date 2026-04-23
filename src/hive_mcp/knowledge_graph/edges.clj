@@ -5,6 +5,7 @@
    between knowledge nodes (memory entries) via the IGraphStore protocol."
   (:require [hive-mcp.knowledge-graph.connection :as conn]
             [hive-mcp.knowledge-graph.edge-cycle :as edge-cycle]
+            [hive-mcp.knowledge-graph.protocols :as p]
             [hive-mcp.knowledge-graph.schema :as schema]
             [taoensso.timbre :as log]))
 
@@ -12,6 +13,92 @@
   "Generate a unique edge ID."
   []
   (str (random-uuid)))
+
+;; =============================================================================
+;; Edge Stats Cache (P0 pre-aggregation — avoids O(N) full-scan per edge-stats)
+;; =============================================================================
+;;
+;; Maintained incrementally by add-edge!, remove-edge!, migrate-edge-scopes!.
+;; Lazy-initialized on first read via full DB scan. Callers that mutate edges
+;; outside these helpers should call refresh-stats! to restore accuracy.
+
+(defonce ^:private stats-cache
+  (atom {:initialized? false
+         :total-edges 0
+         :by-relation {}
+         :by-scope {}}))
+
+(defn- compute-stats-from-db!
+  "Full scan of the KG to compute edge aggregates. Expensive on large graphs;
+   only used for cold start and explicit refresh."
+  []
+  (let [total (or (conn/query '[:find (count ?e) . :where [?e :kg-edge/id]]) 0)
+        by-relation-q '[:find ?rel (count ?e)
+                        :where
+                        [?e :kg-edge/id]
+                        [?e :kg-edge/relation ?rel]]
+        by-scope-q '[:find ?scope (count ?e)
+                     :where
+                     [?e :kg-edge/id]
+                     [?e :kg-edge/scope ?scope]]]
+    {:initialized? true
+     :total-edges total
+     :by-relation (into {} (conn/query by-relation-q))
+     :by-scope (into {} (conn/query by-scope-q))}))
+
+(defn refresh-stats!
+  "Rebuild the edge-stats cache from a full DB scan.
+   Call on startup or after bulk operations that bypass CRUD helpers."
+  []
+  (reset! stats-cache (compute-stats-from-db!))
+  nil)
+
+(defn reset-stats-cache!
+  "Reset the cache to its uninitialized state. Used by test fixtures
+   when the underlying store is swapped mid-process."
+  []
+  (reset! stats-cache {:initialized? false
+                       :total-edges 0
+                       :by-relation {}
+                       :by-scope {}})
+  nil)
+
+(defn- ensure-stats! []
+  (when-not (:initialized? @stats-cache)
+    (refresh-stats!)))
+
+(defn- bump
+  "Adjust key k in map m by delta. Drops the key when the result is non-positive."
+  [m k delta]
+  (if (nil? k)
+    m
+    (let [n (+ (get m k 0) delta)]
+      (if (pos? n) (assoc m k n) (dissoc m k)))))
+
+(defn- stats-apply-delta!
+  "Update the cache for a single edge add (+1) or remove (-1).
+   Flips :initialized? to true — incremental maintenance is authoritative
+   from this point on, so ensure-stats! stops triggering a full refresh."
+  [relation scope delta]
+  (swap! stats-cache
+         (fn [s]
+           (-> s
+               (assoc :initialized? true)
+               (update :total-edges #(max 0 (+ (or % 0) delta)))
+               (update :by-relation bump relation delta)
+               (update :by-scope bump scope delta)))))
+
+(defn- stats-migrate-scope!
+  "Move n edges from old-scope bucket to new-scope bucket in the cache.
+   Like stats-apply-delta!, flips :initialized? so the cache stays authoritative."
+  [old-scope new-scope n]
+  (when (pos? n)
+    (swap! stats-cache
+           (fn [s]
+             (-> s
+                 (assoc :initialized? true)
+                 (update :by-scope bump old-scope (- n))
+                 (update :by-scope bump new-scope n))))))
 
 (defn add-edge!
   "Create a new edge between two knowledge nodes.
@@ -60,6 +147,7 @@
                     created-by (assoc :kg-edge/created-by created-by)
                     source-type (assoc :kg-edge/source-type source-type))]
     (conn/transact! [edge-data])
+    (stats-apply-delta! relation scope 1)
     edge-id))
 
 (defn get-edge
@@ -252,8 +340,9 @@
    Returns true if edge was removed, false if not found."
   [edge-id]
   (if-let [eid (conn/entid [:kg-edge/id edge-id])]
-    (do
+    (let [edge (conn/pull-entity '[*] eid)]
       (conn/transact! [[:db/retractEntity eid]])
+      (stats-apply-delta! (:kg-edge/relation edge) (:kg-edge/scope edge) -1)
       true)
     false))
 
@@ -271,22 +360,78 @@
         (remove-edge! eid))
       (count edge-ids))))
 
+(def ^:private edge-pull-pattern
+  "Narrow pull pattern for edge rows.
+   Enumerates every attribute callers of get-all-edges actually read, so we
+   never fall back to `(pull ?e [*])` — that was the 4GB OOM trigger on 1.2M
+   edges (noted 2026-04-23)."
+  [:kg-edge/id
+   :kg-edge/from
+   :kg-edge/to
+   :kg-edge/relation
+   :kg-edge/scope
+   :kg-edge/confidence
+   :kg-edge/last-verified
+   :kg-edge/created-at
+   :kg-edge/source-type
+   :kg-edge/created-by])
+
+(def ^:const default-edge-batch-size
+  "Edges pulled per batch in the streaming get-all-edges path.
+   500 keeps per-batch allocations well under the OOM threshold
+   even at 1.2M edges, while amortizing per-call overhead."
+  500)
+
+(defn- pull-edge-batch
+  "Pull `edge-pull-pattern` for a batch of entity IDs.
+   Drops nils (e.g. if an edge was retracted between enumeration and pull)
+   and strips :db/id so callers see the same shape as the old query path."
+  [eids]
+  (into []
+        (keep (fn [eid]
+                (when-let [pulled (conn/pull-entity edge-pull-pattern eid)]
+                  ;; Datahike returns an empty map on retracted eids; treat
+                  ;; missing :kg-edge/id as "not an edge anymore".
+                  (when (:kg-edge/id pulled)
+                    (dissoc pulled :db/id)))))
+        eids))
+
 (defn get-all-edges
-  "Get all edges in the KG. Use with caution on large graphs.
-   Optional scope filter."
+  "Get all edges in the KG, streamed via batched narrow pulls.
+
+   Iterates the attribute-first index on :kg-edge/id to enumerate edge
+   entity IDs without materializing values, then pulls a fixed set of
+   edge attributes in batches of `:batch-size` entities. Avoids the OOM
+   that `(pull ?e [*])` on 1.2M edges hit against a 4GB heap.
+
+   Returns a lazy sequence of edge maps with :kg-edge/* keys. Callers that
+   need realized collections (counting, sort-by, seq-into-vec) will naturally
+   force the sequence — that's fine and expected; the savings come from
+   per-batch allocation, not from deferring the whole walk.
+
+   Options:
+     :batch-size - Edges pulled per batch (default 500)
+
+   Arities:
+     (get-all-edges)                => all edges
+     (get-all-edges scope)          => edges with :kg-edge/scope = scope
+     (get-all-edges scope opts-map) => scope + options"
   ([]
-   (get-all-edges nil))
+   (get-all-edges nil nil))
   ([scope]
-   (let [base-query '[:find [(pull ?e [*]) ...]
-                      :where [?e :kg-edge/id]]
-         scoped-query '[:find [(pull ?e [*]) ...]
-                        :in $ ?scope
-                        :where
-                        [?e :kg-edge/id]
-                        [?e :kg-edge/scope ?scope]]]
+   (get-all-edges scope nil))
+  ([scope {:keys [batch-size] :or {batch-size default-edge-batch-size}}]
+   (let [batch (max 1 (long batch-size))
+         eids (conn/eids-by-attr :kg-edge/id)
+         batches (partition-all batch eids)
+         ;; mapcat over batches keeps the outer seq lazy — one batch at
+         ;; a time is materialized. Callers that do (doall all-edges) will
+         ;; walk everything; callers that do (take 1000 all-edges) only
+         ;; pay for 2 batches.
+         all (mapcat pull-edge-batch batches)]
      (if scope
-       (conn/query scoped-query scope)
-       (conn/query base-query)))))
+       (filter #(= scope (:kg-edge/scope %)) all)
+       all))))
 
 (defn count-edges
   "Count total edges, optionally filtered by scope.
@@ -315,31 +460,51 @@
    Uses DataScript/Datalevin/Datahike collection binding `[?from ...]` for a
    single query instead of N individual queries.
 
+   Optional scope filter limits to edges whose :kg-edge/scope matches.
+
    Returns a map of {node-id -> [edges]}."
-  [node-ids]
-  (if (empty? node-ids)
-    {}
-    (let [ids-vec (vec (distinct node-ids))
-          q '[:find [(pull ?e [*]) ...]
-              :in $ [?from ...]
-              :where [?e :kg-edge/from ?from]]
-          all-edges (conn/query q ids-vec)]
-      (group-by :kg-edge/from all-edges))))
+  ([node-ids] (batch-get-edges-from node-ids nil))
+  ([node-ids scope]
+   (if (empty? node-ids)
+     {}
+     (let [ids-vec (vec (distinct node-ids))
+           base-q '[:find [(pull ?e [*]) ...]
+                    :in $ [?from ...]
+                    :where [?e :kg-edge/from ?from]]
+           scoped-q '[:find [(pull ?e [*]) ...]
+                      :in $ [?from ...] ?scope
+                      :where
+                      [?e :kg-edge/from ?from]
+                      [?e :kg-edge/scope ?scope]]
+           all-edges (if scope
+                       (conn/query scoped-q ids-vec scope)
+                       (conn/query base-q ids-vec))]
+       (group-by :kg-edge/from all-edges)))))
 
 (defn batch-get-edges-to
   "Batch query: get all incoming edges to a collection of target node IDs.
    Uses collection binding `[?to ...]` for a single query.
 
+   Optional scope filter limits to edges whose :kg-edge/scope matches.
+
    Returns a map of {node-id -> [edges]}."
-  [node-ids]
-  (if (empty? node-ids)
-    {}
-    (let [ids-vec (vec (distinct node-ids))
-          q '[:find [(pull ?e [*]) ...]
-              :in $ [?to ...]
-              :where [?e :kg-edge/to ?to]]
-          all-edges (conn/query q ids-vec)]
-      (group-by :kg-edge/to all-edges))))
+  ([node-ids] (batch-get-edges-to node-ids nil))
+  ([node-ids scope]
+   (if (empty? node-ids)
+     {}
+     (let [ids-vec (vec (distinct node-ids))
+           base-q '[:find [(pull ?e [*]) ...]
+                    :in $ [?to ...]
+                    :where [?e :kg-edge/to ?to]]
+           scoped-q '[:find [(pull ?e [*]) ...]
+                      :in $ [?to ...] ?scope
+                      :where
+                      [?e :kg-edge/to ?to]
+                      [?e :kg-edge/scope ?scope]]
+           all-edges (if scope
+                       (conn/query scoped-q ids-vec scope)
+                       (conn/query base-q ids-vec))]
+       (group-by :kg-edge/to all-edges)))))
 
 (defn batch-get-co-accessed
   "Batch query: get co-accessed entries for a collection of entry IDs.
@@ -459,27 +624,21 @@
 
 (defn edge-stats
   "Get statistics about edges in the Knowledge Graph.
-   Uses aggregate queries — does not load all edges into memory.
+
+   Reads from the in-memory stats-cache maintained by add-edge!/remove-edge!/
+   migrate-edge-scopes!. Lazy-initialized on first call via full DB scan.
+   Call refresh-stats! to rebuild after bulk operations that bypass CRUD.
 
    Returns:
      {:total-edges  <n>
       :by-relation  {<relation-kw> <count>}
       :by-scope     {<scope-string> <count>}}"
   []
-  (let [total (count-edges)
-        by-relation-q '[:find ?rel (count ?e)
-                         :where
-                         [?e :kg-edge/id]
-                         [?e :kg-edge/relation ?rel]]
-        by-scope-q '[:find ?scope (count ?e)
-                      :where
-                      [?e :kg-edge/id]
-                      [?e :kg-edge/scope ?scope]]
-        by-relation (into {} (conn/query by-relation-q))
-        by-scope (into {} (conn/query by-scope-q))]
-    {:total-edges total
-     :by-relation by-relation
-     :by-scope by-scope}))
+  (ensure-stats!)
+  (let [s @stats-cache]
+    {:total-edges (:total-edges s)
+     :by-relation (:by-relation s)
+     :by-scope (:by-scope s)}))
 
 ;; =============================================================================
 ;; Edge Scope Migration
@@ -516,6 +675,7 @@
                        [:db/add eid :kg-edge/scope new-scope]))]
     (when (seq tx-data)
       (conn/transact! tx-data)
+      (stats-migrate-scope! old-scope new-scope (count tx-data))
       (log/info "Migrated" (count tx-data) "KG edge scopes from" old-scope "to" new-scope))
     {:migrated (count tx-data)
      :old-scope old-scope
@@ -747,3 +907,23 @@
                           (log/info "Edge decay:" (:decayed tally) "decayed,"
                                     (:pruned tally) "pruned"
                                     (when created-by (str " by:" created-by)))))}))))
+
+;; =============================================================================
+;; IEdgeReader default implementation (ISP read-side)
+;; =============================================================================
+;;
+;; Purely additive: delegates every protocol arity to the plain fns defined
+;; above. Callers that want the contractual read-side interface can depend on
+;; `p/IEdgeReader` and inject this `default-reader` (or a stub in tests).
+
+(def default-reader
+  "Process-wide IEdgeReader delegating to the plain fns in this ns."
+  (reify p/IEdgeReader
+    (get-edges-from [_ id] (get-edges-from id))
+    (get-edges-from [_ id scope] (get-edges-from id scope))
+    (get-edges-to [_ id] (get-edges-to id))
+    (get-edges-to [_ id scope] (get-edges-to id scope))
+    (batch-get-edges-from [_ ids] (batch-get-edges-from ids))
+    (batch-get-edges-from [_ ids scope] (batch-get-edges-from ids scope))
+    (batch-get-edges-to [_ ids] (batch-get-edges-to ids))
+    (batch-get-edges-to [_ ids scope] (batch-get-edges-to ids scope))))

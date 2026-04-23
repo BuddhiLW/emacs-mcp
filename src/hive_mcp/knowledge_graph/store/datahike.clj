@@ -148,6 +148,13 @@
   (pull-entity [this pattern eid]
     (d/pull (d/db (kg/ensure-conn! this)) pattern eid))
 
+  (eids-by-attr [this attr]
+    ;; Datahike supports the same :aevt / :avet / :eavt index taxonomy as
+    ;; Datomic/DataScript. `(d/datoms db :aevt attr)` walks the attribute-first
+    ;; persistent index without materializing datoms eagerly. We pull :e out
+    ;; of each datom and let the caller batch pulls.
+    (map :e (d/datoms (d/db (kg/ensure-conn! this)) :aevt attr)))
+
   (db-snapshot [this]
     (d/db (kg/ensure-conn! this)))
 

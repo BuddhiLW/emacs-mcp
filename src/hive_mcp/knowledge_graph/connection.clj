@@ -14,6 +14,7 @@
             [hive-mcp.knowledge-graph.store.datascript :as ds-store]
             [hive-mcp.knowledge-graph.scope :as scope]
             [hive-mcp.config.core :as config]
+            [hive-mcp.protocols.kg :as pkg]
             [hive-dsl.result :as r]
             [hive-dsl.batch :as dsl-batch]
             [clojure.core.async :as async]
@@ -97,10 +98,27 @@
                 (log/info "KG writer config detected" {:writer writer-cfg})
                 writer-cfg))))
 
-(defn- ensure-store!
-  "Ensure a store is configured. Auto-detects backend from config."
+(defn- store-live?
+  "True iff a store is configured AND still satisfies the current
+   IKGStore protocol object. Guards against a common live-REPL hazard:
+   the protocol ns gets reloaded after the store was constructed, leaving
+   a reify/defrecord instance that no longer satisfies the new protocol.
+   `satisfies?` then returns false at every write call site, and the
+   downstream `r/rescue nil` swallows the resulting AssertionError —
+   producing silent transaction drops."
   []
-  (when-not (proto/store-set?)
+  (and (proto/store-set?)
+       (satisfies? pkg/IKGStore (proto/get-store))))
+
+(defn- ensure-store!
+  "Ensure a store is configured. Auto-detects backend from config.
+   Re-initializes when the current store is stale (see `store-live?`)."
+  []
+  (when-not (store-live?)
+    (when (proto/store-set?)
+      (log/warn "Active KG store failed satisfies? IKGStore — recreating"
+                "(likely stale protocol reference after ns reload)")
+      (proto/clear-store!))
     (let [backend (detect-backend)]
       (log/info "Auto-initializing KG backend" {:backend backend})
       (case backend
