@@ -35,22 +35,34 @@
     false))
 
 (defn- indexed-forms-count
-  "Count carto snippets in the :carto store. Returns 0 on failure.
+  "Count carto snippets in the :carto store.
 
    Routes through hive-mcp.vectordb.carto-facade (the :carto slot) — the
-   same backend scan.clj writes to. Previously queried hive-mcp.chroma.crud
-   directly, which reads :default (Chroma) and missed Milvus-backed carto
-   snippets, always returning 0."
+   same backend scan.clj writes to.
+
+   Returns:
+     {:count int}                      on success
+     {:count nil :error str}           when query-entries throws (e.g.
+                                       gRPC overflow on large stores, a
+                                       backend timeout, or any other
+                                       transport failure)
+     {:count 0  :unavailable? true}    when carto-facade/query-entries
+                                       cannot be resolved at all
+
+   Previously this returned a bare 0 and swallowed exceptions to log/debug,
+   which collapsed three different states (store unavailable, query failed,
+   store truly empty) into a single readiness=:empty verdict. Callers now
+   get enough signal to distinguish error from empty."
   [project-id]
   (if-let [query-fn (try-resolve 'hive-mcp.vectordb.carto-facade/query-entries)]
     (try
-      (count (query-fn :tags       ["carto"]
-                       :limit      10000
-                       :project-id (or project-id "hive-mcp")))
+      {:count (count (query-fn :tags       ["carto"]
+                               :limit      10000
+                               :project-id (or project-id "hive-mcp")))}
       (catch Exception e
-        (log/debug "carto indexed-forms-count failed:" (ex-message e))
-        0))
-    0))
+        (log/warn "carto indexed-forms-count query failed:" (ex-message e))
+        {:count nil :error (ex-message e)}))
+    {:count 0 :unavailable? true}))
 
 (defn- last-scan-info
   "Extract last scan timestamp via :carto/scan-state-snapshot extension.
@@ -78,13 +90,17 @@
    prose.
 
    Readiness values:
-     :lsp-down   — sidecar not up; structural-edit tasks will fail
-     :error      — last scan errored
-     :scanning   — scan currently running; forms may be partial
-     :empty      — store reachable but indexed-forms=0 (scan required)
-     :stale      — ambiguous: forms=0 + no scan-status at all (never scanned)
-     :ready      — store populated and (if known) last scan succeeded"
-  [{:keys [lsp-up? carto-store? indexed-forms scan-status scan-error]}]
+     :lsp-down          — sidecar not up; structural-edit tasks will fail
+     :store-unavailable — :carto backend not registered
+     :query-error       — store registered but count-query threw (gRPC
+                          overflow, backend timeout, etc.) — distinct
+                          from :empty so callers can retry vs scan
+     :error             — last scan errored
+     :scanning          — scan currently running; forms may be partial
+     :empty             — store reachable but indexed-forms=0 (scan required)
+     :ready             — store populated and (if known) last scan succeeded"
+  [{:keys [lsp-up? carto-store? indexed-forms indexed-forms-error
+           scan-status scan-error]}]
   (let [status-kw (some-> scan-status keyword)
         empty?    (or (nil? indexed-forms) (zero? indexed-forms))]
     (cond
@@ -97,6 +113,12 @@
       {:readiness :store-unavailable
        :warnings  ["carto-store unavailable — :carto memory store backend is not registered."]
        :hint      "Carto store backend not registered — no structural queries available."}
+
+      indexed-forms-error
+      {:readiness :query-error
+       :warnings  [(str "carto query-entries failed — " indexed-forms-error
+                        " — readiness unknown. Common causes: gRPC frame overflow on large stores (raise max-message-size), backend timeout, transport fault. Retry the query or inspect the backend before scanning.")]
+       :hint      "Carto count query errored — indexed-forms unknown. Check the backend and retry; do NOT assume :empty."}
 
       (or (= status-kw :error) scan-error)
       {:readiness :error
@@ -126,26 +148,34 @@
   "Gather carto health status for catchup block.
 
    Returns:
-     {:lsp-up?           bool
-      :carto-store?      bool
-      :indexed-forms     int
-      :last-scan-ts      long or nil
-      :scan-status       str or nil
-      :scan-result       map or nil
-      :readiness         keyword (:ready :empty :scanning :error :lsp-down :store-unavailable)
-      :warnings          vector of strings — prominent, action-oriented
-      :hint              action-oriented message keyed to actual state}
+     {:lsp-up?             bool
+      :carto-store?        bool
+      :indexed-forms       int or nil (nil when the count query errored)
+      :indexed-forms-error str or nil (message when the count query errored)
+      :last-scan-ts        long or nil
+      :scan-status         str or nil
+      :scan-result         map or nil
+      :readiness           keyword (:ready :empty :scanning :error
+                                    :lsp-down :store-unavailable :query-error)
+      :warnings            vector of strings — prominent, action-oriented
+      :hint                action-oriented message keyed to actual state}
 
-   All fields are best-effort — failures degrade to safe defaults.
+   All fields are best-effort — failures degrade to safe defaults, except
+   the indexed-forms count: when that query throws (e.g. gRPC overflow on
+   large stores), `:indexed-forms` is nil and `:indexed-forms-error`
+   carries the message so readiness can distinguish :query-error from
+   :empty.
 
    The `:warnings` and state-keyed `:hint` replace the previous generic
    hint prose so callers can branch on `:readiness` / inspect `:warnings`
    without NLP."
   [project-id]
-  (let [scan-info (last-scan-info project-id)
-        base      (cond-> {:lsp-up?       (lsp-up?)
-                           :carto-store?  (carto-store-available?)
-                           :indexed-forms (indexed-forms-count project-id)}
-                    scan-info (merge scan-info))
-        readiness (derive-readiness base)]
+  (let [scan-info         (last-scan-info project-id)
+        {:keys [count error]} (indexed-forms-count project-id)
+        base              (cond-> {:lsp-up?       (lsp-up?)
+                                   :carto-store?  (carto-store-available?)
+                                   :indexed-forms count}
+                            error     (assoc :indexed-forms-error error)
+                            scan-info (merge scan-info))
+        readiness         (derive-readiness base)]
     (merge base readiness)))
