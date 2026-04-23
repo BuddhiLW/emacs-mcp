@@ -198,11 +198,14 @@
                      :default "devstral-small:24b"))
 
 (defn default-drone-backend
-  "Resolve default drone backend from config, env, or hardcoded fallback."
+  "Resolve default drone backend from config, env, or hardcoded fallback.
+   Falls back to :openrouter when no config/env value is set so that
+   downstream dispatch always has a usable backend keyword."
   []
   (get-service-value :drone :default-backend
                      :env "DRONE_DEFAULT_BACKEND"
-                     :default nil))
+                     :parse keyword
+                     :default :openrouter))
 
 ;; =============================================================================
 ;; Dotted Key Path Access
