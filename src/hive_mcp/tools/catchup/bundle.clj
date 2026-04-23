@@ -19,7 +19,8 @@
             [hive-mcp.tools.catchup.hydration :as hydr]
             [hive-weave.parallel :as wpar]
             [clojure.tools.logging :as log]
-            [clojure.set :as set]))
+            [clojure.set :as set]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -106,20 +107,22 @@
           over-fetch-factor (if hierarchy-ids 3 4)
           tasks (cond-> [[:hierarchy
                           (timed-query "query-scoped/hierarchy"
-                                       #(mem-proto/query-entries
-                                          store
-                                          {:type entry-type
-                                           :project-ids hierarchy-ids
-                                           :limit (min (* limit-val over-fetch-factor) 500)}))
+                                       #(with-resilience
+                                          (mem-proto/query-entries
+                                            store
+                                            {:type entry-type
+                                             :project-ids hierarchy-ids
+                                             :limit (min (* limit-val over-fetch-factor) 500)})))
                           []]]
                   in-project?
                   (conj [:global
                          (timed-query "query-scoped/global"
-                                      #(mem-proto/query-entries
-                                         store
-                                         {:type entry-type
-                                          :project-id "global"
-                                          :limit 100}))
+                                      #(with-resilience
+                                         (mem-proto/query-entries
+                                           store
+                                           {:type entry-type
+                                            :project-id "global"
+                                            :limit 100})))
                          []]))
           {:keys [hierarchy global]} (apply wpar/fork-join
                                             {:budget-ms scoped-branch-budget-ms}
@@ -144,15 +147,17 @@
         store (mem-proto/get-store)
         hierarchy-ids (hier/compute-hierarchy-project-ids project-id)
         entries ((timed-query "expiring/hierarchy"
-                              #(mem-proto/query-entries store {:project-ids hierarchy-ids
-                                                               :limit 200})))
+                              #(with-resilience
+                                 (mem-proto/query-entries store {:project-ids hierarchy-ids
+                                                                 :limit 200}))))
         full-scope-tags (sf/compute-full-scope-tags project-id)
         all-visible-ids (set (or hierarchy-ids ["global"]))
         scoped (sf/scope-filter-entries entries full-scope-tags all-visible-ids)
         scope-piercing (when in-project?
                          (let [global-entries ((timed-query "expiring/global"
-                                                            #(mem-proto/query-entries store {:project-id "global"
-                                                                                             :limit 100})))]
+                                                            #(with-resilience
+                                                               (mem-proto/query-entries store {:project-id "global"
+                                                                                               :limit 100}))))]
                            (sf/scope-pierce-entries global-entries project-id)))
         scoped (sf/distinct-by :id (concat scoped scope-piercing))]
     (->> scoped
@@ -197,28 +202,31 @@
                           []]
                          [:axioms-global
                           (timed-query "axioms-global"
-                                       #(mem-proto/query-entries
-                                          store
-                                          {:type "axiom"
-                                           :limit bundle-axioms-limit
-                                           :output-fields hier/metadata-projection}))
+                                       #(with-resilience
+                                          (mem-proto/query-entries
+                                            store
+                                            {:type "axiom"
+                                             :limit bundle-axioms-limit
+                                             :output-fields hier/metadata-projection})))
                           []]
                          [:principles-global
                           (timed-query "principles-global"
-                                       #(mem-proto/query-entries
-                                          store
-                                          {:type "principle"
-                                           :limit bundle-principles-limit
-                                           :output-fields hier/metadata-projection}))
+                                       #(with-resilience
+                                          (mem-proto/query-entries
+                                            store
+                                            {:type "principle"
+                                             :limit bundle-principles-limit
+                                             :output-fields hier/metadata-projection})))
                           []]]
                   in-project?
                   (conj [:global
                          (timed-query "global-pierce"
-                                      #(mem-proto/query-entries
-                                         store
-                                         {:project-id "global"
-                                          :limit bundle-global-limit
-                                          :output-fields hier/metadata-projection}))
+                                      #(with-resilience
+                                         (mem-proto/query-entries
+                                           store
+                                           {:project-id "global"
+                                            :limit bundle-global-limit
+                                            :output-fields hier/metadata-projection})))
                          []]))
           {:keys [hierarchy global axioms-global principles-global]}
           (apply wpar/fork-join {:budget-ms scoped-branch-budget-ms} tasks)

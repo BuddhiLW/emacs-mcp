@@ -6,7 +6,8 @@
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.tools.memory.migration.helpers :as helpers]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -15,7 +16,8 @@
   "Detect orphaned hash-based scope tags in memory."
   [_args]
   (with-store
-    (let [entries (mem-proto/query-entries (mem-proto/get-store) {:limit 5000 :include-expired? true})
+    (let [entries (with-resilience
+                    (mem-proto/query-entries (mem-proto/get-store) {:limit 5000 :include-expired? true}))
           scope-entries (->> entries
                              (mapcat (fn [entry]
                                        (->> (:tags entry)
@@ -49,7 +51,8 @@
       (with-store
         (let [store (mem-proto/get-store)
               old-tag (str "scope:project:" old_scope)
-              entries (mem-proto/query-entries store {:limit 5000 :include-expired? true})
+              entries (with-resilience
+                        (mem-proto/query-entries store {:limit 5000 :include-expired? true}))
               matching (->> entries
                             (filter #(some #{old-tag} (:tags %)))
                             vec)
@@ -60,7 +63,8 @@
           (when-not dry-run
             (doseq [entry matching]
               (let [new-tags (helpers/update-scope-tag (:tags entry) old_scope new_scope)]
-                (mem-proto/update-entry! store (:id entry) {:tags new-tags})
+                (with-resilience
+                  (mem-proto/update-entry! store (:id entry) {:tags new-tags}))
                 (log/debug "Migrated entry" (:id entry) "tags:" (:tags entry) "->" new-tags))))
 
           (mcp-json {:migrated (count matching)

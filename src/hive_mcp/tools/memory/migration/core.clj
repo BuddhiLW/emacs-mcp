@@ -14,7 +14,8 @@
             [clojure.data.json :as json]
             [clojure.string :as str]
             [hive-mcp.dns.result :refer [rescue]]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -25,7 +26,8 @@
   (log/info "mcp-memory-migrate-project:" old-project-id "->" new-project-id)
   (with-store
     (let [store (mem-proto/get-store)
-          entries (mem-proto/query-entries store {:project-id old-project-id :limit 10000})
+          entries (with-resilience
+                    (mem-proto/query-entries store {:project-id old-project-id :limit 10000}))
           migrated (atom 0)
           updated-scopes (atom 0)
           old-scope-tag (scope/make-scope-tag old-project-id)
@@ -39,8 +41,9 @@
                                    tag))
                                (:tags entry))
                          (:tags entry))]
-          (mem-proto/update-entry! store (:id entry) {:project-id new-project-id
-                                                      :tags new-tags})
+          (with-resilience
+            (mem-proto/update-entry! store (:id entry) {:project-id new-project-id
+                                                        :tags new-tags}))
           ;; Temporal dual-write: record each migration
           (temporal/record-mutation-silent!
            {:entry-id       (:id entry)
@@ -107,9 +110,10 @@
               ;; Resolve target entries — by IDs or by tag filter
               target-ids     (if (seq entry-ids)
                                (vec entry-ids)
-                               (let [all-entries (mem-proto/query-entries
-                                                  store {:project-id old-project-id
-                                                         :limit 10000})]
+                               (let [all-entries (with-resilience
+                                                   (mem-proto/query-entries
+                                                    store {:project-id old-project-id
+                                                           :limit 10000}))]
                                  (->> all-entries
                                       (filter (fn [e]
                                                 (some #(= % tag-filter) (:tags e))))
@@ -117,7 +121,8 @@
               ;; Fetch each entry, partition into found/not-found
               resolved       (reduce
                               (fn [acc eid]
-                                (if-let [entry (mem-proto/get-entry store eid)]
+                                (if-let [entry (with-resilience
+                                                 (mem-proto/get-entry store eid))]
                                   (update acc :found conj entry)
                                   (update acc :not-found conj eid)))
                               {:found [] :not-found []}
@@ -135,9 +140,10 @@
                                          new-scope-tag
                                          tag))
                                      (:tags entry))]
-                  (mem-proto/update-entry! store (:id entry)
-                                           {:project-id new-project-id
-                                            :tags new-tags})
+                  (with-resilience
+                    (mem-proto/update-entry! store (:id entry)
+                                             {:project-id new-project-id
+                                              :tags new-tags}))
                   ;; Temporal audit trail
                   (temporal/record-mutation-silent!
                    {:entry-id       (:id entry)
@@ -204,9 +210,10 @@
       (if dry-run
         (let [chroma-count (rescue 0
                                    (with-store
-                                     (count (mem-proto/query-entries (mem-proto/get-store)
-                                                                     {:project-id old-project-id
-                                                                      :limit 10000}))))
+                                     (with-resilience
+                                       (count (mem-proto/query-entries (mem-proto/get-store)
+                                                                       {:project-id old-project-id
+                                                                        :limit 10000})))))
               kg-count (rescue 0
                                (count (kg-edges/get-edges-by-scope old-project-id)))
               edn-config (when directory (helpers/read-hive-project-edn directory))

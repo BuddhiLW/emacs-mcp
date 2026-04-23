@@ -3,7 +3,8 @@
    Reads entries from a source IMemoryStore and re-indexes into a target."
   (:require [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.dns.result :refer [rescue]]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -35,17 +36,20 @@
     (doseq [entry-type entry-types]
       (let [query-opts (cond-> {:type entry-type :limit batch-size :include-expired? true}
                          project-id (assoc :project-id project-id))
-            entries (mem-proto/query-entries source-store query-opts)]
+            entries (with-resilience
+                      (mem-proto/query-entries source-store query-opts))]
         (swap! stats update :total-source + (count entries))
         (doseq [entry entries
                 :while (< (:migrated @stats) max-entries)]
           (if dry-run?
             (swap! stats update :migrated inc)
             (let [result (rescue :error
-                                 (let [existing (mem-proto/get-entry target-store (:id entry))]
+                                 (let [existing (with-resilience
+                                                  (mem-proto/get-entry target-store (:id entry)))]
                                    (if existing
                                      :skipped
-                                     (do (mem-proto/add-entry! target-store entry)
+                                     (do (with-resilience
+                                           (mem-proto/add-entry! target-store entry))
                                          :migrated))))]
               (case result
                 :migrated (swap! stats update :migrated inc)

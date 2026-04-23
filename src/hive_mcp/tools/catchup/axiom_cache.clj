@@ -11,7 +11,8 @@
             [hive-mcp.concurrency.pool :as pool]
             [hive-mcp.dns.result :refer [rescue rescue-interrupt rescue-log]]
             [hive-mcp.tools.catchup.hierarchy :as hier]
-            [clojure.tools.logging :as log])
+            [clojure.tools.logging :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]])
   (:import [java.util.concurrent Future TimeUnit TimeoutException]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -99,11 +100,12 @@
         f-formal (pool/with-catchup
                    (rescue-interrupt "catchup/query-axioms" []
                      (->> ((timed-query "axioms/formal"
-                                        #(mem-proto/query-entries
-                                           store
-                                           {:type "axiom"
-                                            :limit 200
-                                            :output-fields hier/metadata-projection})))
+                                        #(with-resilience
+                                           (mem-proto/query-entries
+                                             store
+                                             {:type "axiom"
+                                              :limit 200
+                                              :output-fields hier/metadata-projection}))))
                           (sort-by :created #(compare %2 %1))
                           (take 100)
                           vec)))

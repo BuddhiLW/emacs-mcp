@@ -6,7 +6,8 @@
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.emacs.client :as ec]
             [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -19,30 +20,33 @@
                        (mem-proto/content-hash (:content entry)))
         entry-type (or (:type entry) "note")]
     (cond
-      (mem-proto/find-duplicate store entry-type entry-hash {:project-id project-id})
+      (with-resilience
+        (mem-proto/find-duplicate store entry-type entry-hash {:project-id project-id}))
       :skipped-hash
 
-      (mem-proto/get-entry store (:id entry))
+      (with-resilience
+        (mem-proto/get-entry store (:id entry)))
       :skipped-id
 
       :else
       (do
-        (mem-proto/add-entry! store
-                              {:id (:id entry)
-                               :type entry-type
-                               :content (:content entry)
-                               :tags (if (vector? (:tags entry))
-                                       (vec (:tags entry))
-                                       (:tags entry))
-                               :content-hash entry-hash
-                               :created (:created entry)
-                               :updated (:updated entry)
-                               :duration (or (:duration entry) "long")
-                               :expires (or (:expires entry) "")
-                               :access-count (or (:access-count entry) 0)
-                               :helpful-count (or (:helpful-count entry) 0)
-                               :unhelpful-count (or (:unhelpful-count entry) 0)
-                               :project-id project-id})
+        (with-resilience
+          (mem-proto/add-entry! store
+                                {:id (:id entry)
+                                 :type entry-type
+                                 :content (:content entry)
+                                 :tags (if (vector? (:tags entry))
+                                         (vec (:tags entry))
+                                         (:tags entry))
+                                 :content-hash entry-hash
+                                 :created (:created entry)
+                                 :updated (:updated entry)
+                                 :duration (or (:duration entry) "long")
+                                 :expires (or (:expires entry) "")
+                                 :access-count (or (:access-count entry) 0)
+                                 :helpful-count (or (:helpful-count entry) 0)
+                                 :unhelpful-count (or (:unhelpful-count entry) 0)
+                                 :project-id project-id}))
         :imported))))
 
 (defn handle-import-json

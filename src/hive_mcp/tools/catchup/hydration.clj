@@ -10,7 +10,8 @@
             [hive-mcp.dns.result :refer [rescue]]
             [hive-mcp.tools.catchup.scope-filter :as sf]
             [hive-weave.parallel :as wpar]
-            [clojure.tools.logging :as log]))
+            [clojure.tools.logging :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -81,12 +82,14 @@
 
       (<= (count ids) hydrate-chunk-size)
       (rescue [] ((timed-query "hydrate/single-shot"
-                               #(mem-proto/get-entries store ids))))
+                               #(with-resilience
+                                  (mem-proto/get-entries store ids)))))
 
       :else
       (let [chunks (mapv vec (partition-all hydrate-chunk-size ids))
             fetch  (fn [c] ((timed-query "hydrate/chunk"
-                                         #(mem-proto/get-entries store c))))]
+                                         #(with-resilience
+                                            (mem-proto/get-entries store c)))))]
         (vec (mapcat identity
                      (wpar/bounded-pmap
                        {:concurrency (count chunks)
