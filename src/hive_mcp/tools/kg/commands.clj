@@ -2,6 +2,7 @@
   "KG write/mutate command handlers for edge creation, promotion, and grounding."
   (:require [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.tools.kg.queries :as q]
+            [hive-mcp.tools.kg.synthetics :as synthetics]
             [hive-mcp.knowledge-graph.edges :as edges]
             [hive-mcp.knowledge-graph.grounding :as grounding]
             [hive-mcp.knowledge-graph.schema :as schema]
@@ -108,6 +109,11 @@
       (log/error e "kg_reground failed")
       (mcp-error (str "Re-grounding failed: " (.getMessage e))))))
 
+(def handle-kg-cleanup-synthetics
+  "Delete or demote synthetic-pattern nodes whose targets are mostly
+   expired/missing memory entries. See `synthetics/cleanup-synthetics!`."
+  synthetics/handle-kg-cleanup-synthetics)
+
 (defn handle-kg-backfill-grounding
   "Batch-discover and ground all Chroma entries with source-file metadata."
   [{:keys [project_id limit force max_age_days]}]
@@ -186,4 +192,6 @@
                                "max_age_days" {:type "integer"
                                                :description "Only re-ground entries older than N days (optional, default: 7)"}}
                   :required []}
-    :handler handle-kg-backfill-grounding}])
+    :handler handle-kg-backfill-grounding}
+
+   synthetics/tool-def])

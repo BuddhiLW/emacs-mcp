@@ -36,10 +36,11 @@
 (def handle-kg-stats           kg-queries/handle-kg-stats)
 
 ;; Command handlers
-(def handle-kg-add-edge           kg-commands/handle-kg-add-edge)
-(def handle-kg-promote            kg-commands/handle-kg-promote)
-(def handle-kg-reground           kg-commands/handle-kg-reground)
-(def handle-kg-backfill-grounding kg-commands/handle-kg-backfill-grounding)
+(def handle-kg-add-edge            kg-commands/handle-kg-add-edge)
+(def handle-kg-promote             kg-commands/handle-kg-promote)
+(def handle-kg-reground            kg-commands/handle-kg-reground)
+(def handle-kg-backfill-grounding  kg-commands/handle-kg-backfill-grounding)
+(def handle-kg-cleanup-synthetics  kg-commands/handle-kg-cleanup-synthetics)
 
 ;;; =============================================================================
 ;;; Tool Definitions (merged from sub-namespaces)
