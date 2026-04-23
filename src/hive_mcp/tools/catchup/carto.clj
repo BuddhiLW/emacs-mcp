@@ -65,24 +65,30 @@
     {:count 0 :unavailable? true}))
 
 (defn- last-scan-info
-  "Extract last scan timestamp via :carto/scan-state-snapshot extension.
+  "Extract last scan timestamp via the :carto/scan-state-snapshot extension.
+   Falls back to direct `requiring-resolve` of
+   `hive-knowledge.cartography.handlers.core/scan-state-snapshot` when the
+   extension is not registered — that path matches how `lsp-up?` and
+   `carto-store-available?` probe their sidecars, and keeps catchup green
+   on REPLs where no one has called `ext/register-extension` yet.
    Returns {:last-scan-ts long :scan-status keyword} or nil."
   [project-id]
-  (if-let [snapshot-fn (ext/get-extension :carto/scan-state-snapshot)]
-    (try
-      (let [state (snapshot-fn (or project-id "hive-mcp"))]
-        (when state
-          (cond-> {:scan-status (name (:status state))}
-            (:finished-at state) (assoc :last-scan-ts (:finished-at state))
-            (:started-at state)  (assoc :started-at (:started-at state))
-            (:result state)      (assoc :scan-result
-                                        (select-keys (:result state)
-                                                     [:snippets :files :edges]))
-            (:error state)       (assoc :scan-error (:error state)))))
-      (catch Exception e
-        (log/debug "carto last-scan-info failed:" (ex-message e))
-        nil))
-    nil))
+  (let [snapshot-fn (or (ext/get-extension :carto/scan-state-snapshot)
+                        (try-resolve 'hive-knowledge.cartography.handlers.core/scan-state-snapshot))]
+    (when snapshot-fn
+      (try
+        (let [state (snapshot-fn (or project-id "hive-mcp"))]
+          (when state
+            (cond-> {:scan-status (name (:status state))}
+              (:finished-at state) (assoc :last-scan-ts (:finished-at state))
+              (:started-at state)  (assoc :started-at (:started-at state))
+              (:result state)      (assoc :scan-result
+                                          (select-keys (:result state)
+                                                       [:snippets :files :edges]))
+              (:error state)       (assoc :scan-error (:error state)))))
+        (catch Exception e
+          (log/debug "carto last-scan-info failed:" (ex-message e))
+          nil)))))
 
 (defn- derive-readiness
   "Derive a readiness keyword + action-oriented hint + warnings vector from

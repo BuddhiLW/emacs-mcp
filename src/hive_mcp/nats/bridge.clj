@@ -18,6 +18,7 @@
             [hive-mcp.protocols.delivery-channel :as dc]
             [hive-mcp.tools.swarm.channel :as channel]
             [hive-mcp.channel.core :as channel-core]
+            [hive-mcp.agent.drone.error-summary :as es]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -217,8 +218,15 @@
 ;; =============================================================================
 ;; Error summarization — cap drone error payloads before shouting
 ;; =============================================================================
+;;
+;; Throwable case delegates to hive-mcp.agent.drone.error-summary to keep the
+;; top-level exception class + ex-message (≤512 chars), first 5 stack frames
+;; and top cause — then renders as a bounded single line. The rest of the
+;; cases (string / map / coll / fallback) retain the existing 300-char cap to
+;; avoid breaking in-flight drones echoing whole JSON payloads as :error.
 
 (def ^:private ^:const max-summary-len 300)
+(def ^:private ^:const throwable-line-budget 512)
 
 (defn- truncate-str
   "Truncate s to max-summary-len, appending ellipsis if trimmed."
@@ -229,17 +237,19 @@
       (str (subs s 0 max-summary-len) "…"))))
 
 (defn- summarize-drone-error
-  "Summarize a drone error payload for shouting — never emit >~300 chars.
+  "Summarize a drone error payload for shouting — never emit > throwable-line-budget
+   chars for Throwables (stack trace + cause chain bounded) or >~300 chars otherwise.
 
    Rules:
-   - string       → first 300 chars + '…' (if longer)
-   - ex-info/Throwable → type + ex-message (truncated)
-   - map          → prefer (:error/type), (:message), (ex-message); drop rest
-   - collection > 5 items → '<N items, first: <truncated>>'
-   - fallback     → truncated (pr-str x)
+   - string             → first 300 chars + '…' (if longer)
+   - ex-info/Throwable  → class + ex-message + frame count + top cause
+                          via `error-summary/summary->line` (≤512 chars)
+   - map                → prefer (:error/type), (:message), (ex-message); drop rest
+   - collection > 5     → '<N items, first: <truncated>>'
+   - fallback           → truncated (pr-str x)
 
-   Guards against drones echoing whole JSON arrays (e.g. kanban-list response)
-   as their error — that floods piggyback blocks and wastes coordinator context."
+   Guards against drones echoing whole JSON arrays or raw stack traces as their
+   error — that floods piggyback blocks and wastes coordinator context."
   [error]
   (cond
     (nil? error)
@@ -249,15 +259,8 @@
     (truncate-str error)
 
     (instance? Throwable error)
-    (let [msg (ex-message error)
-          data (ex-data error)
-          etype (some-> data :error/type)]
-      (truncate-str
-       (cond
-         (and etype msg) (str etype " " msg)
-         etype (str etype)
-         msg msg
-         :else (.getName (class error)))))
+    (es/summary->line (es/summarize-error error)
+                      {:budget throwable-line-budget})
 
     (map? error)
     (let [etype (:error/type error)

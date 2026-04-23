@@ -99,21 +99,71 @@
 ;; ── Unit tests ───────────────────────────────────────────────────────────────
 
 (deftest test-try-result-catches-ex-info
-  (testing "try-result catches ExceptionInfo and returns err with data"
+  (testing "try-result catches ExceptionInfo and returns err with data + :class"
     (let [r (rb/try-result :test/ex-info
                            #(throw (ex-info "boom" {:detail 42})))]
       (is (result/err? r))
       (is (= :test/ex-info (:error r)))
       (is (= "boom" (:message r)))
-      (is (= {:detail 42} (:data r))))))
+      (is (= {:detail 42} (:data r)))
+      (is (= "clojure.lang.ExceptionInfo" (:class r))
+          "ExceptionInfo path also populates :class for downstream discrimination"))))
 
-(deftest test-try-result-catches-generic-exception
-  (testing "try-result catches generic Exception"
+(deftest test-try-result-npe-fallback-includes-class
+  (testing "NPE fallback returns map containing :class \"java.lang.NullPointerException\""
     (let [r (rb/try-result :test/generic
                            #(throw (NullPointerException. "npe")))]
       (is (result/err? r))
       (is (= "npe" (:message r)))
-      (is (string? (:class r))))))
+      (is (= "java.lang.NullPointerException" (:class r))
+          ":class must be the fully-qualified class name (no \"class \" prefix)")))
+  (testing "NPE with nil message still produces :class"
+    (let [r (rb/try-result :test/generic
+                           #(throw (NullPointerException.)))]
+      (is (result/err? r))
+      (is (= "java.lang.NullPointerException" (:class r))))))
+
+(deftest test-try-result-non-npe-errors-retain-class
+  (testing "non-NPE generic exceptions also get :class populated"
+    (let [r (rb/try-result :test/generic
+                           #(throw (IllegalArgumentException. "bad arg")))]
+      (is (result/err? r))
+      (is (= "bad arg" (:message r)))
+      (is (= "java.lang.IllegalArgumentException" (:class r)))))
+  (testing "RuntimeException class name is captured"
+    (let [r (rb/try-result :test/generic
+                           #(throw (RuntimeException. "boom")))]
+      (is (= "java.lang.RuntimeException" (:class r)))))
+  (testing "ArithmeticException from real division gets :class"
+    (let [r (rb/try-result :test/generic #(/ 1 0))]
+      (is (result/err? r))
+      (is (= "java.lang.ArithmeticException" (:class r))))))
+
+;; ── P8: :class is always populated for any throwable ────────────────────────
+
+(def gen-throwable-thunk
+  "Generate a thunk that throws a JVM exception of various types. Using thunks
+   (not pre-built throwables) avoids stale stack traces across generator runs."
+  (gen/elements
+    [#(throw (NullPointerException. "npe"))
+     #(throw (NullPointerException.)) ;; nil message
+     #(throw (IllegalArgumentException. "bad arg"))
+     #(throw (IllegalStateException. "bad state"))
+     #(throw (RuntimeException. "runtime"))
+     #(throw (ArithmeticException. "arithmetic"))
+     #(throw (ClassCastException. "cast"))
+     #(throw (IndexOutOfBoundsException. "oob"))
+     #(throw (UnsupportedOperationException. "unsupported"))
+     #(throw (Exception. "generic"))
+     #(throw (ex-info "ex-info" {:k 1}))
+     #(throw (ex-info "ex-info-empty" {}))]))
+
+(defspec try-result-always-populates-class 200
+  (prop/for-all [thunk gen-throwable-thunk]
+                (let [r (rb/try-result :test/any thunk)]
+                  (and (result/err? r)
+                       (string? (:class r))
+                       (pos? (count (:class r)))))))
 
 (deftest test-keywordize-map-empty
   (testing "keywordize-map on empty map returns empty map"

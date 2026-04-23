@@ -49,29 +49,47 @@
   [event-type]
   (event-registry/slave-status event-type))
 
-(def ^:const ^:private shout-message-cap
-  "Hard ceiling on the :message and :task strings carried in a shout.
-   Bounded to keep one bad shout from flooding every consumer's context window
-   (per-agent ring × backbone fanout × N subscribers). Sources that need more
-   should write to memory and reference the entry-id in the shout."
-  800)
+(def ^:const default-shout-message-cap
+  "Fallback cap when config is unloaded or missing :hivemind/:shout-message-cap.
+   One bad shout fans out across (per-agent ring × backbone × subscribers), so
+   bound it aggressively. Override via config path [:hivemind :shout-message-cap]."
+  2048)
 
-(def ^:const ^:private shout-message-head
-  "Head bytes preserved when a shout payload exceeds shout-message-cap."
-  600)
+(def ^:const ^:private ellipsis "…")
 
-(defn- truncate-shout-string
-  "Cap any shout payload at shout-message-cap. Keeps the head, appends a marker
-   noting how many chars were dropped. nil → nil. Non-strings are pr-str'd
-   first so accidental coll/map :message values are still bounded."
-  [v]
-  (when (some? v)
-    (let [s (if (string? v) v (pr-str v))]
-      (if (<= (count s) shout-message-cap)
-        s
-        (let [dropped (- (count s) shout-message-head)]
-          (str (subs s 0 shout-message-head)
-               " … [truncated, dropped " dropped " chars]"))))))
+(defn- resolve-shout-cap
+  "Pull :shout-message-cap from loaded config, fall back to default.
+   Lazy requiring-resolve avoids circular dep at hivemind bootstrap."
+  []
+  (or (try
+        (when-let [f (requiring-resolve 'hive-mcp.config.core/get-in-config)]
+          (f [:hivemind :shout-message-cap]))
+        (catch Exception _ nil))
+      default-shout-message-cap))
+
+(defn cap-message
+  "Cap a shout payload string at `cap` characters. Pure helper.
+
+   Behavior:
+   - nil             → nil
+   - \"\"              → \"\" (empty passes through)
+   - (count s) ≤ cap → s  (under-cap passes through verbatim)
+   - else            → (subs s 0 (- cap 3)) + \"…\"  (ellipsis suffix)
+
+   Non-strings are `pr-str`'d first so accidental coll/map payloads are still
+   bounded. Invariant: (count (cap-message s cap)) ≤ cap for any input when
+   cap ≥ 3."
+  ([v] (cap-message v (resolve-shout-cap)))
+  ([v cap]
+   (cond
+     (nil? v) nil
+     (and (string? v) (zero? (count v))) v
+     :else
+     (let [s (if (string? v) v (pr-str v))]
+       (if (<= (count s) cap)
+         s
+         (let [head-n (max 0 (- cap 3))]
+           (str (subs s 0 head-n) ellipsis)))))))
 
 (defn- publish-shout-to-backbone!
   "Publish shout via IEventBackbone. Subscribers handle fanout.
@@ -117,8 +135,8 @@
                        "global")
         ;; Cap message/task at canonical ingestion. One bad shout can otherwise
         ;; pollute the per-agent 10-message ring AND every backbone subscriber.
-        capped-message (truncate-shout-string (:message data))
-        capped-task (truncate-shout-string (:task data))
+        capped-message (cap-message (:message data))
+        capped-task (cap-message (:task data))
         message (cond-> {:event-type event-type
                          :timestamp now
                          :project-id project-id

@@ -155,13 +155,18 @@
                   (recur (inc attempt)))))))
 
 (defn- finalize-entry!
-  "Wire KG edges, fetch created entry, notify channel, and format response."
+  "Wire KG edges, fetch created entry, notify channel, and format response.
+
+   The KG outgoing-edge update is wrapped in `with-resilience` so a
+   transient Milvus transport drop during the edge-link write kicks
+   the heal loop instead of poisoning KG edges."
   [entry-id openrouter? kg-params project-id agent-id
    {:keys [tags-with-scope type knowledge-gaps]}]
   (let [store (mem-proto/get-store)
         edge-ids (create-kg-edges! entry-id kg-params project-id agent-id)
         _ (when (and (seq edge-ids) (not openrouter?))
-            (mem-proto/update-entry! store entry-id {:kg-outgoing edge-ids}))
+            (with-resilience
+              (mem-proto/update-entry! store entry-id {:kg-outgoing edge-ids})))
         created (fetch-with-retry store entry-id openrouter?)]
     (when-not created
       (log/error "Failed to retrieve entry after indexing:" entry-id
@@ -181,7 +186,13 @@
 
 (defn- do-add!
   "Inner core of handle-add. Runs the memory-store/KG/plan IO path.
-   Intended to be submitted to the memory pool for isolation."
+   Intended to be submitted to the memory pool for isolation.
+
+   Both the duplicate-detection read and the duplicate-tag-merge write
+   are wrapped in `with-resilience`: if the Milvus HTTP transport drops
+   between the find-duplicate call and the dedup update, the heal loop
+   fires and the call retries once — otherwise transient failures here
+   would leak through `with-store`'s generic try/catch as errors."
   [{:keys [type content tags duration directory agent_id
            kg_implements kg_supersedes kg_depends_on kg_refines abstraction_level]}]
   (let [tags-vec (coerce-vec! tags :tags [])
@@ -203,10 +214,12 @@
             content-hash (mem-proto/content-hash content)
             duration-str (or duration "long")
             expires (dur/calculate-expires duration-str)
-            existing (mem-proto/find-duplicate store type content-hash {:project-id project-id})]
+            existing (with-resilience
+                       (mem-proto/find-duplicate store type content-hash {:project-id project-id}))]
         (if existing
           (let [merged-tags (distinct (concat (:tags existing) tags-with-scope))
-                updated (mem-proto/update-entry! store (:id existing) {:tags merged-tags})]
+                updated (with-resilience
+                          (mem-proto/update-entry! store (:id existing) {:tags merged-tags}))]
             (log/info "Duplicate found, merged tags:" (:id existing))
             (mcp-json (fmt/entry->json-alist updated)))
           (let [openrouter? (plans/high-abstraction-type? type)

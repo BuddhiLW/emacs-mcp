@@ -14,14 +14,19 @@
 
 (defn try-result
   "Execute f in try/catch, returning Result. f must return a Result ({:ok ...}).
-   Exceptions -> (result/err category {:message ...})."
+   Exceptions -> (result/err category {:message ... :class ...}).
+   :class is always populated with the fully-qualified exception class name
+   (e.g. \"java.lang.NullPointerException\") so downstream consumers can
+   distinguish error types."
   [category f]
   (try (f)
        (catch clojure.lang.ExceptionInfo e
-         (result/err category {:message (ex-message e) :data (ex-data e)}))
+         (result/err category {:message (ex-message e)
+                               :data    (ex-data e)
+                               :class   (.getName (class e))}))
        (catch Exception e
-         (result/err category {:message (or (ex-message e) (str (class e)))
-                               :class   (str (class e))}))))
+         (result/err category {:message (or (ex-message e) (.getName (class e)))
+                               :class   (.getName (class e))}))))
 
 ;; ── Result -> MCP Conversions ─────────────────────────────────────────────────
 

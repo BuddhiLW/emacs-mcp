@@ -2,7 +2,8 @@
   "CRUD facade for memory operations, re-exporting handlers from focused submodules."
   (:require [hive-mcp.tools.memory.crud.write :as write]
             [hive-mcp.tools.memory.crud.query :as query]
-            [hive-mcp.tools.memory.crud.retrieve :as retrieve]))
+            [hive-mcp.tools.memory.crud.retrieve :as retrieve]
+            [hive-mcp.tools.memory.crud.edit :as edit]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -38,3 +39,11 @@
 (def handle-update-tags
   "Update tags on an existing memory entry."
   retrieve/handle-update-tags)
+
+(def handle-edit
+  "Edit a memory entry in place. Preserves ID → preserves KG edges."
+  edit/handle-edit)
+
+(def handle-batch-edit
+  "Apply a batch of edits sequentially. Per-op results + summary tally."
+  edit/handle-batch-edit)

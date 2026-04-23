@@ -203,11 +203,32 @@
     id))
 
 (defn find-duplicate
-  "Find entry with matching content-hash in the given type."
+  "Find entry with matching content-hash in the given type.
+   Pushes content-hash into the Chroma metadata filter so large stores
+   (>1000 entries per type) still dedupe correctly instead of silently
+   falling off the query window."
   [type content-hash & {:keys [project-id]}]
   (emb/require-embedding!)
-  (let [entries (query-entries :type type :project-id project-id :limit 1000)]
-    (first (filter #(= (:content-hash %) content-hash) entries))))
+  (let [colls (try (let [coll-names (embedding-service/type->collection-names type)]
+                     (mapv (fn [cn]
+                             (let [resolved (rescue nil (embedding-service/resolve-provider-for-type
+                                                         (or type "note")))]
+                               (if (and resolved (= cn (:collection-name resolved)))
+                                 (conn/get-or-create-named-collection cn (:dimension resolved))
+                                 (conn/get-or-create-collection))))
+                           coll-names))
+                   (catch Exception _ [(conn/get-or-create-collection)]))
+        base-clause (cond-> {:content-hash content-hash}
+                      type       (assoc :type type)
+                      project-id (assoc :project-id project-id))
+        results (mapcat (fn [coll]
+                          (try (gate/deref-read (chroma/get coll
+                                                            :where base-clause
+                                                            :include #{:metadatas}
+                                                            :limit 1))
+                               (catch Exception _ [])))
+                        colls)]
+    (first (map h/metadata->entry results))))
 
 (defn collection-stats
   "Get statistics about the Chroma collection."

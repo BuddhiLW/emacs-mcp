@@ -51,7 +51,9 @@
    :decay             mem/handle-mcp-memory-decay
    :xpoll             mem/handle-mcp-memory-xpoll-promote
    :rename            mem/handle-mcp-memory-rename-project
-   :batch-get         mem/handle-mcp-memory-batch-get})
+   :batch-get         mem/handle-mcp-memory-batch-get
+   :edit              mem/handle-mcp-memory-edit
+   :batch-edit        mem/handle-mcp-memory-batch-edit})
 
 (defn- make-single-command-batch
   "Wrap make-batch-handler for batch ops targeting one command."
@@ -81,7 +83,8 @@
     :log_access :feedback :helpfulness :tags
     :cleanup :expire :decay :xpoll
     :migrate :migrate-scoped :import :rename
-    :batch-feedback})
+    :batch-feedback
+    :edit :batch-edit})
 
 (def handle-memory
   (composite/build-merged-handler "memory" canonical-handlers))
@@ -94,7 +97,7 @@
   {:name "memory"
    :consolidated true
    :default-async-commands write-commands
-   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, migrate-scoped, import, decay, xpoll, rename, batch-add, batch-feedback, batch-get. Use 'help' command to list all.\n\nWrites default to async: they return {:queued true :task-id ...} immediately and deliver the real result via ---TOOLRESULT--- on the caller's next tool call. Pass async:false to force sync. Reads (query/metadata/get/search/expiring/batch-get) stay synchronous by default; pass async:true to queue them."
+   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, migrate-scoped, import, decay, xpoll, rename, edit, batch-add, batch-edit, batch-feedback, batch-get. Use 'help' command to list all.\n\nEdit: 'edit' mutates an entry in place (id preserved → KG edges preserved). Params: id (required), type, content, tags, duration, abstraction_level, reason. Content change triggers re-embed. 'batch-edit' takes operations:[...] and optional dry-run:true for validation preview.\n\nWrites default to async: they return {:queued true :task-id ...} immediately and deliver the real result via ---TOOLRESULT--- on the caller's next tool call. Pass async:false to force sync. Reads (query/metadata/get/search/expiring/batch-get) stay synchronous by default; pass async:true to queue them."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :description "Command to execute. Memory commands are flat (add, query, etc.). Subdomains: 'kg edge', 'kg traverse', 'migration backup', 'ingest file', 'enrich enrich'. Use command='help' to list all."}

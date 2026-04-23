@@ -148,6 +148,10 @@
                                    :secret-key    nil
                                    :default-model "devstral-small:24b"
                                    :available-models ["devstral-small:24b"]}}
+   :hivemind {;; Max chars preserved in a shout :message / :task before truncation.
+              ;; One bad shout fans out (per-agent ring × backbone × subscribers),
+              ;; so aggressive bound protects every downstream context window.
+              :shout-message-cap 2048}
    :agent-defaults {:ling       {:provider :openrouter :model "moonshotai/kimi-k2.5"}
                     :drone      {:provider :openrouter :model "minimax/minimax-m2.7"}
                     :compressor {:provider :venice     :model "venice-uncensored"}}
