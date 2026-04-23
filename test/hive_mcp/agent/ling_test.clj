@@ -59,7 +59,7 @@
                             {:cwd "/tmp/project"
                              :presets ["tdd"]
                              :project-id "my-project"})]
-      (is (instance? hive_mcp.agent.ling.Ling ling)
+      (is (instance? hive_mcp.agent.ling.spawn.Ling ling)
           "Should create a Ling record")
       (is (= "test-ling-001" (:id ling)))
       (is (= "/tmp/project" (:cwd ling)))
@@ -443,7 +443,7 @@
 
     (let [ling (ling/get-ling "query-ling")]
       (is (some? ling) "Should return a ling")
-      (is (instance? hive_mcp.agent.ling.Ling ling))
+      (is (instance? hive_mcp.agent.ling.spawn.Ling ling))
       (is (= "query-ling" (:id ling)))
       (is (= "/home/user/project" (:cwd ling)))
       (is (= "my-project" (:project-id ling))))))
@@ -462,7 +462,7 @@
 
     (let [lings (ling/list-lings)]
       (is (= 2 (count lings)) "Should return only lings (depth 1)")
-      (is (every? #(instance? hive_mcp.agent.ling.Ling %) lings)
+      (is (every? #(instance? hive_mcp.agent.ling.spawn.Ling %) lings)
           "All results should be Ling records"))))
 
 (deftest list-lings-filters-by-project
