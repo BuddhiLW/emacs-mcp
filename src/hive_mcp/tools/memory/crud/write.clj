@@ -18,7 +18,8 @@
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.crystal.recall :as recall]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 
 (def ^:const ^:private memory-write-timeout-ms
   "Timeout budget for a single memory write (Chroma add + KG tx + fetch).
@@ -29,13 +30,16 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defn- update-target-incoming!
-  "Append edge-id to target entry's kg-incoming field."
+  "Append edge-id to target entry's kg-incoming field.
+   Wraps the store read+write pair in `with-resilience` so the KG
+   back-edge bookkeeping survives a transient Milvus transport drop."
   [target-id edge-id]
   (let [store (mem-proto/get-store)]
-    (when-let [target-entry (mem-proto/get-entry store target-id)]
+    (when-let [target-entry (with-resilience (mem-proto/get-entry store target-id))]
       (let [existing-incoming (or (:kg-incoming target-entry) [])
             updated-incoming (conj existing-incoming edge-id)]
-        (mem-proto/update-entry! store target-id {:kg-incoming updated-incoming})))))
+        (with-resilience
+          (mem-proto/update-entry! store target-id {:kg-incoming updated-incoming}))))))
 
 (defn- create-kg-edges!
   "Create KG edges for the given relationships and update target entries.
@@ -100,7 +104,12 @@
 (defn- index-entry!
   "Index entry in appropriate collection.
    Plans → OpenRouter-backed plans collection.
-   Everything else → Ollama-backed memory collection."
+   Everything else → Ollama-backed memory collection.
+
+   Wraps the Milvus-store add-entry! in `with-resilience` so a dropped
+   HTTP transport (selector-manager-closed IOException surfaced as
+   ExecutionException) kicks the heal loop and retries once before
+   surfacing the failure to the caller."
   [openrouter? {:keys [type content tags-with-scope content-hash duration-str
                        expires project-id abstraction-level knowledge-gaps agent-id]}]
   (if openrouter?
@@ -110,12 +119,13 @@
       :expires (or expires "") :project-id project-id
       :abstraction-level abstraction-level
       :knowledge-gaps knowledge-gaps :agent-id agent-id})
-    (mem-proto/add-entry! (mem-proto/get-store)
-                          {:type type :content content :tags tags-with-scope
-                           :content-hash content-hash :duration duration-str
-                           :expires (or expires "") :project-id project-id
-                           :abstraction-level abstraction-level
-                           :knowledge-gaps knowledge-gaps})))
+    (with-resilience
+      (mem-proto/add-entry! (mem-proto/get-store)
+                            {:type type :content content :tags tags-with-scope
+                             :content-hash content-hash :duration duration-str
+                             :expires (or expires "") :project-id project-id
+                             :abstraction-level abstraction-level
+                             :knowledge-gaps knowledge-gaps}))))
 
 (def ^:private ^:const read-after-write-attempts 6)
 (def ^:private ^:const read-after-write-base-ms 40)
@@ -129,12 +139,15 @@
    Attempts: `read-after-write-attempts`, waits grow linearly from
    `read-after-write-base-ms`. Total worst-case budget ≈ 40+80+120+160+200
    = 600 ms, which stays well under the 30 s memory-write-timeout-ms
-   and is invisible to callers when the first read already succeeds."
+   and is invisible to callers when the first read already succeeds.
+
+   Each store read is wrapped in `with-resilience` so a transport drop
+   during the read-after-write window triggers a heal-and-retry."
   [store entry-id openrouter?]
   (loop [attempt 1]
     (let [fetched (if openrouter?
                     (plans/get-plan entry-id)
-                    (mem-proto/get-entry store entry-id))]
+                    (with-resilience (mem-proto/get-entry store entry-id)))]
       (cond
         (some? fetched) fetched
         (>= attempt read-after-write-attempts) nil

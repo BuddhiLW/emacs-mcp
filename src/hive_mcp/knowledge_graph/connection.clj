@@ -407,6 +407,13 @@
   [pattern eid]
   (proto/pull-entity (ensure-store!) pattern eid))
 
+(defn eids-by-attr
+  "Return a lazy sequence of entity IDs having the given attribute.
+   Backed by the attribute-first index on each store — enumerates without
+   materializing entity values. Delegates to the active store."
+  [attr]
+  (proto/eids-by-attr (ensure-store!) attr))
+
 (defn db-snapshot
   "Get the current database snapshot.
    Delegates to the active store."
