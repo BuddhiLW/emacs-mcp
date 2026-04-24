@@ -25,7 +25,7 @@
             [hive-mcp.plan.tool :as tool]
             [hive-mcp.plan.schema :as schema]
             [hive-mcp.plan.parser :as parser]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.vectordb.facade :as memory]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.connection :as kg-conn]
             [hive-mcp.tools.memory-kanban :as mem-kanban]))
@@ -52,10 +52,11 @@
 (defn cleanup-test-data!
   "Clean up memory entries and tasks created during tests."
   []
-  ;; Clean up memories
+  ;; Clean up memories via the IMemoryStore-backed facade — backend-agnostic,
+  ;; same call works against Chroma, Proximum, or any future store impl.
   (doseq [id @*test-memory-ids*]
     (try
-      (chroma/delete-entry! id)
+      (memory/delete-entry! id)
       (catch Exception _ nil)))
   (reset! *test-memory-ids* [])
 
@@ -84,13 +85,16 @@
 
 (defn create-test-memory!
   "Create a memory entry for testing. Returns the entry ID.
-   Automatically tracked for cleanup."
+   Automatically tracked for cleanup.
+
+   Routes through hive-mcp.vectordb.facade so the active IMemoryStore
+   backend (Chroma / Proximum / future) is transparent to the test."
   [content & {:keys [type tags project-id]
               :or {type "decision"
                    tags ["test" "plan"]
                    project-id "hive-mcp-test"}}]
   (let [entry-id (str (random-uuid))]
-    (chroma/index-memory-entry! {:id entry-id
+    (memory/index-memory-entry! {:id entry-id
                                  :content content
                                  :type type
                                  :tags tags
