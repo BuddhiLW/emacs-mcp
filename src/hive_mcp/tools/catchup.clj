@@ -100,19 +100,34 @@
    If an enrichment addon is registered via :cu/a, it runs
    fire-and-forget. Results arrive via piggyback on subsequent calls."
   [args]
-  (let [directory (or (:directory args)
-                      (ctx/current-directory)
-                      (:_caller_cwd args))]
-    (log/info "native-catchup: querying memory store with project scope" {:directory directory})
+  ;; HCR directory resolution: explicit :directory > :_caller_cwd (bb-mcp) >
+  ;; request-ctx :directory > server user.dir. Matches handle-native-wrap so
+  ;; catchup auto-resolves scope from caller's bash pwd when :directory absent.
+  (let [directory (ctx/resolve-caller-directory args)
+        dir-source (ctx/caller-directory-source args)]
+    (log/info "native-catchup: querying memory store with project scope"
+              {:directory directory :source dir-source})
     ;; Guard: early return if no store registered
     (if-not (mem-proto/store-set?)
       (fmt/store-not-configured-error)
       (try
-        ;; Prefer the project-id already resolved by wrap-handler-context
-        ;; (which considers :_caller_cwd / user.dir fallbacks). Only recompute
-        ;; from directory when ctx is unbound (e.g. direct repl call).
-        (let [project-id (or (ctx/current-project-id)
-                             (scope/get-current-project-id directory))
+        ;; Project-id resolution priority:
+        ;;   1. request-ctx project-id (pre-resolved by wrap-handler-context)
+        ;;   2. :project-id from .hive-project.edn in the exact dir
+        ;;   3. Walk up the path finding the nearest .hive-project.edn
+        ;;      (covers calls from deep subdirs of a hive project — without
+        ;;      this, scope/get-current-project-id returns the last path
+        ;;      segment, producing a bogus project scope like "catchup".)
+        ;;   4. Legacy fallback: last-path-segment / "global"
+        (let [ctx-pid          (ctx/current-project-id)
+              direct-cfg-pid   (when directory
+                                 (rescue nil (:project-id (kg-scope/read-direct-project-config directory))))
+              walked-pid       (when (and directory (not direct-cfg-pid))
+                                 (rescue nil (kg-scope/infer-scope-from-path directory)))
+              project-id       (or ctx-pid
+                                   direct-cfg-pid
+                                   (when (and walked-pid (not= walked-pid "global")) walked-pid)
+                                   (scope/get-current-project-id directory))
               project-name (catchup-scope/get-current-project-name directory)
               scopes (fmt/build-scopes project-name project-id)
 
