@@ -241,6 +241,39 @@ Implement the parser.
 
 Add test coverage.")
 
+(def markdown-plan-edn-overlay
+  "Hybrid markdown plan — each H2 carries per-step EDN metadata overlay.
+   Exercises the canonical format documented in axiom 20260221220712-28079dbe."
+  "# Hybrid Plan: Parser refactor
+
+Goal: split parser into subdomains. Per-step metadata via EDN overlay,
+not the legacy `[key: value]` annotation grammar.
+
+## Extract EDN helpers
+{:id \"step-1\" :priority :high :estimate :small
+ :files [\"src/hive_mcp/plan/parser/edn.clj\"] :depends-on []}
+
+Pull brace-matching + phase-block logic into its own namespace.
+
+## Extract markdown helpers
+{:id \"step-2\" :priority :high :estimate :small
+ :files [\"src/hive_mcp/plan/parser/markdown.clj\"] :depends-on []}
+
+Move H2 + annotation extraction into parser.markdown.
+
+## Wire facade
+{:id \"step-3\" :priority :medium :estimate :small
+ :files [\"src/hive_mcp/plan/parser.clj\"] :depends-on [\"step-1\" \"step-2\"]}
+
+Re-export public API from the facade ns so callers keep working.
+
+## Add property tests
+{:id \"step-4\" :priority :high :estimate :medium
+ :files [\"test/hive_mcp/plan/parser_property_test.clj\"]
+ :depends-on [\"step-3\"]}
+
+Roundtrip EDN and markdown forms through parse-plan.")
+
 ;; =============================================================================
 ;; Test Data: SAA-Style EDN Plans (keyword IDs, extra fields)
 ;; =============================================================================
@@ -400,6 +433,47 @@ Please review and approve before implementation begins.")
         (is (contains? mapping "schema"))
         (is (contains? mapping "parser"))
         (is (contains? mapping "tests"))))))
+
+;; =============================================================================
+;; Test b.2) Hybrid Markdown + EDN Overlay (canonical format)
+;; =============================================================================
+
+(deftest markdown-plan-edn-overlay-to-kanban-test
+  (testing "Hybrid markdown + per-step EDN overlay creates kanban tasks
+            with overlay-provided ids, priorities, files, and deps"
+    (let [memory-id (create-test-memory! markdown-plan-edn-overlay)
+          result    (tool/handle-plan-to-kanban {:plan_id memory-id
+                                                 :directory project-root})
+          parsed    (parse-json-result result)]
+
+      ;; Tool succeeds
+      (is (not (:isError result)) "Should not return error")
+
+      ;; One task per H2 — overlay does NOT duplicate steps.
+      (is (= 4 (:task-count parsed)) "Should create 4 tasks from hybrid plan")
+
+      ;; Overlay :id values win over slug-generated ids.
+      (let [mapping (:step-mapping parsed)]
+        (is (= #{"step-1" "step-2" "step-3" "step-4"}
+               (set (keys mapping)))
+            "step-mapping keys must match overlay :id values, not slug ids"))
+
+      ;; KG edges: 4 plan->task + dependency edges.
+      ;; Expected deps: step-3 -> step-1, step-3 -> step-2, step-4 -> step-3.
+      (is (>= (:edge-count parsed) 7)
+          "Should have 4 plan->task edges + 3 dep edges minimum")))
+
+  (testing "Overlay-provided :files surface on the parsed plan (property-
+            test invariant reified at integration level — parser is the
+            same code path the tool invokes internally)"
+    (let [{:keys [success plan]} (parser/parse-plan markdown-plan-edn-overlay
+                                                    {:prefer-format :markdown})]
+      (is success)
+      (is (= [["src/hive_mcp/plan/parser/edn.clj"]
+              ["src/hive_mcp/plan/parser/markdown.clj"]
+              ["src/hive_mcp/plan/parser.clj"]
+              ["test/hive_mcp/plan/parser_property_test.clj"]]
+             (mapv :files (:steps plan)))))))
 
 ;; =============================================================================
 ;; Test c) Dependency Cycle Detection
