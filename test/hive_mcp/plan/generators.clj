@@ -190,3 +190,34 @@
   "gen-plan filtered through the schema validator. Expensive — prefer
    gen-plan unless you're specifically hardening against schema drift."
   (gen/such-that schema/valid-plan? gen-plan 25))
+
+;; =============================================================================
+;; Rendered-form generators (plan + rendered string paired)
+;; =============================================================================
+
+(defn- render-step-edn-overlay
+  "Render a step's metadata as a leading EDN map for markdown hybrid mode."
+  [step]
+  (pr-str (select-keys step [:id :priority :estimate :depends-on
+                             :files :tags])))
+
+(defn- render-plan-md-hybrid
+  "Render plan: `# Title` + per-step `## Title` followed by inline EDN map
+   `{:id ... :priority ... :depends-on [...] :files [...]}` carrying
+   metadata, then prose `:description`."
+  [plan]
+  (str "# " (:title plan) "\n\n"
+       (->> (:steps plan)
+            (map (fn [step]
+                   (str "## " (:title step) "\n"
+                        (render-step-edn-overlay step) "\n"
+                        (when (:description step)
+                          (str (:description step) "\n")))))
+            (str/join "\n"))))
+
+(def gen-plan-md-with-edn-overlay
+  "Pair of [plan rendered-markdown]. The markdown renders each step as an
+   H2 header followed by an inline EDN metadata map, then prose description.
+   Feeds the hybrid-mode parser property tests."
+  (gen/fmap (fn [plan] [plan (render-plan-md-hybrid plan)])
+            gen-plan))

@@ -80,13 +80,13 @@
 
 (defspec prop-edn-roundtrip-preserves-dependencies 50
   (prop/for-all [plan gen-plan/gen-plan]
-    (let [rendered (render-edn-block plan)
-          {:keys [success plan]} (parser/parse-plan rendered)]
+    (let [rendered    (render-edn-block plan)
+          {:keys [success] parsed-plan :plan} (parser/parse-plan rendered)]
       (and success
-           (every? (fn [step]
-                     (= (:depends-on step)
-                        (:depends-on (step-by-id plan (:id step)))))
-                   (:steps plan))))))
+           (every? (fn [parsed-step]
+                     (= (:depends-on parsed-step)
+                        (:depends-on (step-by-id plan (:id parsed-step)))))
+                   (:steps parsed-plan))))))
 
 ;; =============================================================================
 ;; Properties: Markdown roundtrip (structural — description is lossy)
@@ -110,26 +110,26 @@
 
 (defspec prop-md-roundtrip-preserves-dependencies 50
   (prop/for-all [plan gen-plan/gen-plan]
-    (let [rendered (render-markdown plan)
-          {:keys [success plan]} (parser/parse-plan rendered
-                                                    {:prefer-format :markdown})]
+    (let [rendered    (render-markdown plan)
+          {:keys [success] parsed-plan :plan}
+          (parser/parse-plan rendered {:prefer-format :markdown})]
       (and success
-           (every? (fn [step]
-                     (let [orig (step-by-id plan (:id step))]
-                       (= (set (:depends-on step))
+           (every? (fn [parsed-step]
+                     (let [orig (step-by-id plan (:id parsed-step))]
+                       (= (set (:depends-on parsed-step))
                           (set (:depends-on orig)))))
-                   (:steps plan))))))
+                   (:steps parsed-plan))))))
 
 (defspec prop-md-roundtrip-preserves-priority 50
   (prop/for-all [plan gen-plan/gen-plan]
-    (let [rendered (render-markdown plan)
-          {:keys [success plan]} (parser/parse-plan rendered
-                                                    {:prefer-format :markdown})]
+    (let [rendered    (render-markdown plan)
+          {:keys [success] parsed-plan :plan}
+          (parser/parse-plan rendered {:prefer-format :markdown})]
       (and success
-           (every? (fn [step]
-                     (= (:priority step)
-                        (:priority (step-by-id plan (:id step)))))
-                   (:steps plan))))))
+           (every? (fn [parsed-step]
+                     (= (:priority parsed-step)
+                        (:priority (step-by-id plan (:id parsed-step)))))
+                   (:steps parsed-plan))))))
 
 ;; =============================================================================
 ;; Properties: plan->task-specs invariants
@@ -169,27 +169,74 @@
     (= p (schema/normalize-priority p))))
 
 ;; =============================================================================
-;; Known limitation: per-step EDN maps embedded in markdown are NOT parsed
+;; Hybrid mode: per-step EDN overlay maps in markdown
 ;;
-;; Reproduces the "7 H2 entries" UX bug — when a plan.md has per-step EDN
-;; metadata maps {:file ... :status ...} instead of the [key: value]
-;; annotation grammar, markdown parsing silently drops the metadata.
-;;
-;; This test pins the current behaviour; flip the is/is-not when we either
-;; extend the markdown parser to recognise EDN maps, or deprecate markdown
-;; mode in favour of EDN.
+;; Canonical plan shape — `## Step Title` header followed by a `{...}` EDN
+;; map with :id, :priority, :depends-on, :files, etc., then prose. Fixes
+;; the "7 H2 entries" UX bug where metadata was silently dropped.
 ;; =============================================================================
 
-(deftest markdown-with-inline-edn-maps-drops-metadata
-  (testing "current parser ignores per-step {:file ...} EDN maps in markdown"
+(defspec prop-md-edn-overlay-preserves-step-count 50
+  (prop/for-all [[plan rendered] gen-plan/gen-plan-md-with-edn-overlay]
+    (let [result (parser/parse-plan rendered {:prefer-format :markdown})]
+      (and (:success result)
+           (= (count (:steps plan))
+              (count (:steps (:plan result))))))))
+
+(defspec prop-md-edn-overlay-preserves-step-ids 50
+  (prop/for-all [[plan rendered] gen-plan/gen-plan-md-with-edn-overlay]
+    (let [result (parser/parse-plan rendered {:prefer-format :markdown})]
+      (and (:success result)
+           (= (mapv :id (:steps plan))
+              (mapv :id (:steps (:plan result))))))))
+
+(defspec prop-md-edn-overlay-preserves-priority 50
+  (prop/for-all [[plan rendered] gen-plan/gen-plan-md-with-edn-overlay]
+    (let [{:keys [success] parsed-plan :plan}
+          (parser/parse-plan rendered {:prefer-format :markdown})]
+      (and success
+           (every? (fn [parsed-step]
+                     (= (:priority parsed-step)
+                        (:priority (step-by-id plan (:id parsed-step)))))
+                   (:steps parsed-plan))))))
+
+(defspec prop-md-edn-overlay-preserves-files 50
+  (prop/for-all [[plan rendered] gen-plan/gen-plan-md-with-edn-overlay]
+    (let [{:keys [success] parsed-plan :plan}
+          (parser/parse-plan rendered {:prefer-format :markdown})]
+      (and success
+           (every? (fn [parsed-step]
+                     (= (:files parsed-step)
+                        (:files (step-by-id plan (:id parsed-step)))))
+                   (:steps parsed-plan))))))
+
+(defspec prop-md-edn-overlay-preserves-dependencies 50
+  (prop/for-all [[plan rendered] gen-plan/gen-plan-md-with-edn-overlay]
+    (let [{:keys [success] parsed-plan :plan}
+          (parser/parse-plan rendered {:prefer-format :markdown})]
+      (and success
+           (every? (fn [parsed-step]
+                     (= (set (:depends-on parsed-step))
+                        (set (:depends-on (step-by-id plan (:id parsed-step))))))
+                   (:steps parsed-plan))))))
+
+(deftest md-edn-overlay-literal
+  (testing "per-step EDN overlay lifts :files into first-class field"
     (let [content (str "# Plan\n\n"
-                       "## Add schema\n{:file \"src/schema.clj\" :status :todo}\n\n"
-                       "## Add handler\n{:file \"src/handler.clj\" :status :todo}\n")
+                       "## Add schema\n"
+                       "{:id \"step-1\" :priority :high "
+                       ":files [\"src/schema.clj\"] :depends-on []}\n"
+                       "Extend schema with new entities.\n\n"
+                       "## Add handler\n"
+                       "{:id \"step-2\" :priority :medium "
+                       ":files [\"src/handler.clj\"] :depends-on [\"step-1\"]}\n"
+                       "Wire handler into routes.\n")
           {:keys [success plan]} (parser/parse-plan content
                                                     {:prefer-format :markdown})]
       (is success)
       (is (= 2 (count (:steps plan))))
-      ;; Neither the :file nor the :status leak into the parsed step — they
-      ;; end up in the description blob at best, never as first-class fields.
-      (is (every? #(= [] (:files %)) (:steps plan))
-          "parser does not recognise {:file ...} as a step-level field"))))
+      (is (= ["step-1" "step-2"] (mapv :id (:steps plan))))
+      (is (= [:high :medium] (mapv :priority (:steps plan))))
+      (is (= [["src/schema.clj"] ["src/handler.clj"]]
+             (mapv :files (:steps plan))))
+      (is (= [[] ["step-1"]] (mapv :depends-on (:steps plan)))))))

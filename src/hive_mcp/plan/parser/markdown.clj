@@ -1,20 +1,30 @@
 (ns hive-mcp.plan.parser.markdown
   "Markdown plan parser — extracts plan steps from ## headers.
 
-   Supports annotations in header text:
-   - [id: step-1]            Explicit step ID
-   - [depends: step-1, s2]   Dependencies
-   - [priority: high]        Priority level
-   - [estimate: small]       Effort estimate
-   - [files: src/a.clj]      Affected files
+   Supports two annotation styles. Inline EDN map takes precedence over the
+   [key: value] grammar whenever both are present.
+
+   Inline EDN map (canonical — hybrid markdown + EDN):
+     ## Add validation
+     {:id \"step-1\" :priority :high :files [\"src/a.clj\"]}
+     Prose description here...
+
+   [key: value] annotations (legacy, still honored for back-compat):
+     [id: step-1]            Explicit step ID
+     [depends: step-1, s2]   Dependencies
+     [priority: high]        Priority level
+     [estimate: small]       Effort estimate
+     [files: src/a.clj]      Affected files
 
    Example:
      # My Plan
-     ## Add validation [id: t1] [priority: high]
+     ## Add validation
+     {:id \"t1\" :priority :high :files [\"src/a.clj\"]}
      Implementation details...
      ## Write tests [depends: t1] [estimate: small]"
 
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [hive-mcp.plan.schema :as schema]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -162,21 +172,62 @@
           :else
           (recur (rest remaining) nil sections))))))
 
+(defn- try-read-leading-edn-map
+  "If `s` starts (after leading whitespace) with `{`, attempt to read one EDN
+   value and return `[value remaining-string]`. Returns nil on anything else
+   or on parse failure."
+  [s]
+  (let [trimmed (str/triml s)]
+    (when (and (seq trimmed) (= \{ (first trimmed)))
+      (try
+        (let [reader (java.io.PushbackReader. (java.io.StringReader. trimmed))
+              value  (edn/read reader)]
+          (when (map? value)
+            (let [sw (java.io.StringWriter.)
+                  buf (char-array 4096)]
+              (loop []
+                (let [n (.read reader buf)]
+                  (when (pos? n)
+                    (.write sw buf 0 n)
+                    (recur))))
+              [value (str/triml (.toString sw))])))
+        (catch Exception _ nil)))))
+
+(defn- extract-edn-overlay
+  "Split a section's content lines into [overlay-map remaining-description].
+   The overlay is the first EDN map at the top of the section (after any
+   leading blank lines). Returns [nil content-str] when no overlay."
+  [content-lines]
+  (let [content (str/join "\n" content-lines)]
+    (if-let [[value rest-content] (try-read-leading-edn-map content)]
+      [value (when-not (str/blank? rest-content) rest-content)]
+      [nil  (when-not (str/blank? content) content)])))
+
 (defn- section->step
-  "Convert a markdown section to a plan step."
+  "Convert a markdown section to a plan step. Precedence for each field:
+     inline EDN overlay > [key: value] annotation > inferred default."
   [section index]
-  (let [title-text (:header section)
-        content-lines (:content-lines section)
-        content-str (str/join "\n" content-lines)]
-    (schema/normalize-step
-     {:id (or (extract-id title-text)
-              (generate-step-id title-text index))
-      :title (clean-title title-text)
-      :description (when-not (str/blank? content-str) content-str)
-      :depends-on (or (extract-depends title-text) [])
-      :priority (or (extract-priority title-text) :medium)
-      :estimate (or (extract-estimate title-text) :medium)
-      :files (or (extract-files title-text) [])})))
+  (let [title-text  (:header section)
+        [overlay description] (extract-edn-overlay (:content-lines section))
+        base {:id          (or (:id overlay)
+                               (extract-id title-text)
+                               (generate-step-id title-text index))
+              :title       (clean-title title-text)
+              :description (or (:description overlay) description)
+              :depends-on  (or (:depends-on overlay)
+                               (extract-depends title-text)
+                               [])
+              :priority    (or (:priority overlay)
+                               (extract-priority title-text)
+                               :medium)
+              :estimate    (or (:estimate overlay)
+                               (extract-estimate title-text)
+                               :medium)
+              :files       (or (:files overlay)
+                               (extract-files title-text)
+                               [])
+              :tags        (or (:tags overlay) [])}]
+    (schema/normalize-step base)))
 
 (defn- extract-plan-title
   "Extract plan title from first # header or return default."
