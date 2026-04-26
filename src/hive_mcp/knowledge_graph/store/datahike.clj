@@ -125,7 +125,13 @@
     @conn-atom)
 
   (transact! [this tx-data]
-    (d/transact! (kg/ensure-conn! this) tx-data))
+    ;; NOTE: In Datahike 0.8+, `d/transact!` is ASYNC — it returns a
+    ;; throwable-promise that must be deref'd for the write to block until
+    ;; committed. Without the deref, subsequent queries on the same connection
+    ;; see a pre-transact db snapshot (root cause of "KG traverse not
+    ;; returning results" — edges were enqueued but not yet committed).
+    ;; The sync variant in Datahike is the bangless `d/transact`.
+    @(d/transact! (kg/ensure-conn! this) tx-data))
 
   (query [this q]
     (d/q q (d/db (kg/ensure-conn! this))))
