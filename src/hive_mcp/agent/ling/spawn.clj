@@ -6,6 +6,8 @@
             [hive-mcp.agent.ling.strategy :as strategy]
             [hive-mcp.agent.ling.headless-registry :as headless-reg]
             [hive-mcp.agent.ling.lifecycle :as lifecycle]
+            ;; LingResources concretion lives in hive-agent (task c1):
+            ;; resolved lazily below to keep hive-mcp → hive-agent dep inverted.
             [hive-mcp.workflows.catchup-ling :as catchup-ling]
             [hive-mcp.swarm.datascript.lings :as ds-lings]
             [hive-mcp.swarm.datascript.queries :as ds-queries]
@@ -190,6 +192,19 @@
                                          headless?
                                          (assoc :ling/process-alive? true)))
 
+      ;; Per-ling IResourceOwner: register empty channel/cache atoms now;
+      ;; task c6 populates them at actual channel/cache call sites.
+      ;; claims-fn reads DataScript via queries for live claims.
+      ;; Task c1: LingResources lives in hive-agent — lazy resolve preserves
+      ;; the inverted layering (hive-mcp MUST NOT compile-time depend on it).
+      (r/rescue nil
+        (when-let [make (requiring-resolve 'hive-agent.lifecycle.resources/make-ling-resources)]
+          (make slave-id
+                (fn [] (->> (ds-queries/get-all-claims)
+                            (filter #(= slave-id (:slave-id %)))
+                            (map :file)
+                            vec)))))
+
       ;; Publish agent-spawn event via NATS backbone (non-fatal).
       ;; Uses requiring-resolve to avoid circular dep on nats.bridge.
       (r/rescue nil
@@ -271,7 +286,14 @@
                                                :context-type (when ctx
                                                                (dispatch-ctx/context-type ctx))})
           task-id
-          (catch Exception e
+          ;; Hive axiom: `catch Throwable` on supervision boundaries so
+          ;; AssertionError (from :pre/:post in DS helpers, e.g. lings/
+          ;; {enter,exit}-critical-op!) surfaces to the task-failed path
+          ;; instead of being silently swallowed and leaving the dispatch
+          ;; caller parked. This is the ling/vterm dispatch hot-path —
+          ;; an Error here used to propagate past the MCP handler and leave
+          ;; :dispatched tasks wedged with no :task-failed event fired.
+          (catch Throwable e
             (log/error "Failed to dispatch to ling"
                        {:ling-id id :task-id task-id :mode mode :error (ex-message e)})
             (ds-lings/update-task! task-id {:status :failed
@@ -304,6 +326,12 @@
                    :claude)]
       (if can-kill?
         (do
+          ;; Release per-ling owned resources (channels, caches) + unregister.
+          ;; Additive: existing .release-claims! path retained until c6 migrates.
+          ;; Task c1: release fn lives in hive-agent — lazy resolve (no-op if addon absent).
+          (r/rescue nil
+            (when-let [release (requiring-resolve 'hive-agent.lifecycle.resources/release-ling-resources!)]
+              (release id)))
           (.release-claims! this)
           (r/rescue nil
                     (when-let [deregister-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/deregister-budget!)]

@@ -144,7 +144,7 @@
                       :turn turn
                       :usage (:usage response)})
           (assoc data :raw-response response))
-        (catch Exception e
+        (catch Throwable e
           (log/error e "LLM-call: backend exception" {:turn turn})
           (assoc data
                  :raw-response nil

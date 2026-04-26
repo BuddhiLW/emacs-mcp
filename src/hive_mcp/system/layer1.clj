@@ -56,6 +56,17 @@
     ;; 3. Registers crystal hooks (auto-wrap)
     ;; 4. Registers JVM shutdown hook
     (lifecycle/init-hooks! hooks-registry-atom shutdown-hook-registered? coordinator-id-atom)
+    ;; Register the three in-core IShutdownHook impls (migrated from the
+    ;; transitional tail of run-shutdown-sequence! in task a4). Late-resolved
+    ;; to keep the compile-time dep direction from system → addons thin.
+    (require 'hive-mcp.system.shutdown.in-core)
+    ((resolve 'hive-mcp.system.shutdown.in-core/register-in-core-shutdown!)
+     coordinator-id-atom hooks-registry-atom)
+    ;; Task c1 DONE: `hive-mcp.system.shutdown.kill-all-lings` moved into
+    ;; `hive-agent.lifecycle.kill-all-lings`; hive-agent.init/init! now loads
+    ;; that ns which self-registers into the shutdown registry via defonce.
+    ;; TRANSITIONAL — task c3 moves this ns into a hive-nats addon and registers via IAddon.init!
+    (require 'hive-mcp.nats.lifecycle)
     {:hooks-registry-atom      hooks-registry-atom
      :shutdown-hook-registered? shutdown-hook-registered?
      :coordinator-id-atom      coordinator-id-atom

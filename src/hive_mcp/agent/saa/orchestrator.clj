@@ -219,7 +219,7 @@
                         :saa-phase :silence
                         :observations observations
                         :observation-count (count observations)}))
-          (catch Exception e
+          (catch Throwable e
             (handle-phase-error! config agent-id :silence out-ch e))
           (finally
             (close! out-ch))))
@@ -247,7 +247,7 @@
             (>! out-ch {:type :phase-complete
                         :saa-phase :abstract
                         :plan final-plan}))
-          (catch Exception e
+          (catch Throwable e
             (handle-phase-error! config agent-id :abstract out-ch e))
           (finally
             (close! out-ch))))
@@ -275,7 +275,7 @@
                         :saa-phase :act
                         :result {:messages result-content
                                  :message-count (count messages)}}))
-          (catch Exception e
+          (catch Throwable e
             (handle-phase-error! config agent-id :act out-ch e))
           (finally
             (close! out-ch))))
@@ -321,7 +321,7 @@
                           :phase-history (:phase-history final-state)
                           :elapsed-ms (- (System/currentTimeMillis)
                                          (:started-at final-state))})))
-          (catch Exception e
+          (catch Throwable e
             (handle-phase-error! config agent-id :error out-ch e))
           (finally
             (close! out-ch))))
