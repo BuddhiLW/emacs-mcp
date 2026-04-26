@@ -40,7 +40,7 @@
     (pool/with-event
       (try
         (ev/dispatch event)
-        (catch Exception e
+        (catch Throwable e
           (log/error "[EVENT] Dispatch chain failed:" (.getMessage e)))))))
 
 ;; =============================================================================
@@ -69,7 +69,7 @@
         (pool/with-event
           (try
             (ev/dispatch event)
-            (catch Exception e
+            (catch Throwable e
               (log/error "[EVENT] Dispatch-n chain failed for" (first event) ":" (.getMessage e)))))))))
 
 ;; =============================================================================

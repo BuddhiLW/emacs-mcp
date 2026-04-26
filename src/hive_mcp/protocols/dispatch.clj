@@ -46,7 +46,7 @@
     (let [reconstructed (when reconstruct-fn
                           (try
                             (reconstruct-fn ctx-refs kg-node-ids scope)
-                            (catch Exception e
+                            (catch Throwable e
                               (str "Context reconstruction failed: " (.getMessage e)))))]
       (cond-> {:prompt prompt}
         (seq ctx-refs)      (assoc :refs (vec (vals ctx-refs)))
