@@ -51,6 +51,8 @@
    authored entries the hierarchy + global-pierce branches would drop."
   100)
 
+(def ^:private bundle-sessions-fresh-limit 25)
+
 ;; =============================================================================
 ;; Telemetry wrapper — DI via hive-ttracking when present
 ;; =============================================================================
@@ -217,6 +219,16 @@
                                             {:type "principle"
                                              :limit bundle-principles-limit
                                              :output-fields hier/metadata-projection})))
+                          []]
+                         [:sessions-fresh
+                          (timed-query "sessions-fresh"
+                                       #(with-resilience
+                                          (mem-proto/query-entries
+                                            store
+                                            {:type "note"
+                                             :tags ["session-summary"]
+                                             :limit bundle-sessions-fresh-limit
+                                             :output-fields hier/metadata-projection})))
                           []]]
                   in-project?
                   (conj [:global
@@ -228,20 +240,17 @@
                                             :limit bundle-global-limit
                                             :output-fields hier/metadata-projection})))
                          []]))
-          {:keys [hierarchy global axioms-global principles-global]}
+          {:keys [hierarchy global axioms-global principles-global sessions-fresh]}
           (apply wpar/fork-join {:budget-ms scoped-branch-budget-ms} tasks)
           full-scope-tags (sf/compute-full-scope-tags project-id)
           all-visible-ids (set (or hierarchy-ids ["global"]))
           scoped (sf/scope-filter-entries (or hierarchy []) full-scope-tags all-visible-ids)
           pierced (when in-project?
                     (sf/scope-pierce-entries (or global []) project-id))
-          ;; Axioms and principles are global by definition — include every
-          ;; `type=axiom` and `type=principle` entry regardless of authoring
-          ;; project, so sibling-scoped entries aren't dropped by the
-          ;; hierarchy + global-pierce filters.
           axioms-all (or axioms-global [])
           principles-all (or principles-global [])
-          merged (sf/distinct-by :id (concat scoped pierced axioms-all principles-all))
+          sessions-fresh-all (or sessions-fresh [])
+          merged (sf/distinct-by :id (concat scoped pierced axioms-all principles-all sessions-fresh-all))
           sorted (sf/newest-first merged)]
       {:by-type (group-by #(some-> (:type %) name) sorted)
        :all     sorted})))
@@ -256,7 +265,7 @@
     {:axioms               (take-type "axiom" 100)
      :principles           (take-type "principle" 50)
      :priority-conventions (tagged    "convention" "catchup-priority" 50)
-     :sessions             (tagged    "note" "session-summary" 10)
+     :sessions             (tagged    "note" "session-summary" 25)
      :decisions            (take-type "decision" 50)
      :conventions          (vec (take 50
                                       (remove #(hydr/has-tag? % "catchup-priority")
