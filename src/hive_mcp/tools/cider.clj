@@ -246,15 +246,17 @@
   "Spawn a new named CIDER session with its own nREPL server.
    Useful for parallel agent work where each agent needs isolated REPL.
    Uses plist-based boundary crossing (ADT) to prevent positional arg bugs."
-  [{:keys [name project_dir agent_id repl_type]}]
-  (log/info "cider-spawn-session" {:name name :repl_type repl_type :agent_id agent_id})
-  (handle-elisp :cider/spawn-failed
-                (el/require-and-call-plist-json
-                  'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
-                  {:name      name
-                   :repl-type (when repl_type (symbol repl_type))
-                   :project-dir project_dir
-                   :agent-id  agent_id})))
+  [{:keys [name project_dir agent_id repl_type port]}]
+  (log/info "cider-spawn-session" {:name name :repl_type repl_type :agent_id agent_id :port port})
+  (let [port (cond-> port (string? port) parse-long)]
+    (handle-elisp :cider/spawn-failed
+                  (el/require-and-call-plist-json
+                    'hive-mcp-cider 'hive-mcp-cider-spawn-session-from-plist
+                    {:name      name
+                     :repl-type (when repl_type (symbol repl_type))
+                     :port      port
+                     :project-dir project_dir
+                     :agent-id  agent_id}))))
 
 (defn handle-cider-connect-session
   "Connect to an existing nREPL server as a named session.

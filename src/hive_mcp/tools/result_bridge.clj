@@ -31,22 +31,28 @@
 ;; ── Result -> MCP Conversions ─────────────────────────────────────────────────
 
 (defn result->mcp
-  "Convert a Result to MCP JSON response: ok -> mcp-json, err -> mcp-error."
+  "Convert a Result to MCP JSON response: ok -> mcp-json, err -> mcp-error.
+   Always appends `:class` (when present) so NPE-style errors carry the
+   fully-qualified exception class name even when `:message` is populated."
   [r]
   (if (result/ok? r)
     (mcp-json (:ok r))
-    (mcp-error (or (:message r)
-                   (str (:error r)
-                        (when-let [c (:class r)] (str " (" c ")")))))))
+    (mcp-error (if-let [m (:message r)]
+                 (str m (when-let [c (:class r)] (str " (" c ")")))
+                 (str (:error r)
+                      (when-let [c (:class r)] (str " (" c ")")))))))
 
 (defn result->mcp-text
-  "Convert a Result to MCP text response: ok -> mcp-success, err -> mcp-error."
+  "Convert a Result to MCP text response: ok -> mcp-success, err -> mcp-error.
+   Always appends `:class` (when present) so NPE-style errors carry the
+   fully-qualified exception class name even when `:message` is populated."
   [r]
   (if (result/ok? r)
     (mcp-success (:ok r))
-    (mcp-error (or (:message r)
-                   (str (:error r)
-                        (when-let [c (:class r)] (str " (" c ")")))))))
+    (mcp-error (if-let [m (:message r)]
+                 (str m (when-let [c (:class r)] (str " (" c ")")))
+                 (str (:error r)
+                      (when-let [c (:class r)] (str " (" c ")")))))))
 
 ;; ── Map Normalization ─────────────────────────────────────────────────────────
 

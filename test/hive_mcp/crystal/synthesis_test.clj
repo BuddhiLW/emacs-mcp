@@ -11,6 +11,7 @@
             [clojure.test.check.clojure-test :refer [defspec]]
             [hive-mcp.crystal.synthesis :as synthesis]
             [hive-mcp.crystal.core :as crystal]
+            [hive-mcp.crystal.hooks]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.duration :as dur]
             [hive-mcp.extensions.registry :as ext]
@@ -537,3 +538,164 @@
                     (fn [_] {:summary-id "entry-002" :error "lifecycle-timeout" :session "test"})]
         (let [r (crystallize-session-result {} "test-project")]
           (is (result/ok? r) "When :summary-id present, :error should not cause failure"))))))
+
+;; =============================================================================
+;; Scope grouping: pure helpers
+;; =============================================================================
+
+(deftest extract-project-scopes-finds-distinct-pids
+  (testing "extract-project-scopes returns set of project-ids from scope:project:* tags"
+    (let [harvested {:progress-notes [{:content "a" :tags ["scope:project:foo"]}
+                                      {:content "b" :tags ["scope:project:bar"]}]
+                     :completed-tasks [{:title "t" :tags ["scope:project:foo"]}]
+                     :memory-ids-created [{:id "m1" :tags ["scope:project:baz"]}]
+                     :memory-ids-accessed []}]
+      (is (= #{"foo" "bar" "baz"} (synthesis/extract-project-scopes harvested))))))
+
+(deftest extract-project-scopes-empty-when-untagged
+  (testing "extract-project-scopes returns empty set when no scope:project:* tags"
+    (let [harvested {:progress-notes [{:content "a" :tags ["other"]}]
+                     :completed-tasks []
+                     :memory-ids-created []
+                     :memory-ids-accessed []}]
+      (is (= #{} (synthesis/extract-project-scopes harvested))))))
+
+(deftest group-harvested-by-scope-partitions-entries
+  (testing "group-harvested-by-scope buckets entries by project-id tag"
+    (let [harvested {:progress-notes [{:content "a" :tags ["scope:project:foo"]}
+                                      {:content "b" :tags ["scope:project:bar"]}
+                                      {:content "c" :tags ["scope:project:foo"]}]
+                     :completed-tasks [{:title "t" :tags ["scope:project:bar"]}]
+                     :git-commits ["abc123 fix"]
+                     :memory-ids-created []
+                     :memory-ids-accessed []
+                     :summary {}}
+          grouped (synthesis/group-harvested-by-scope harvested "fallback")]
+      (is (= #{"foo" "bar"} (set (keys grouped))))
+      (is (= 2 (count (:progress-notes (get grouped "foo")))))
+      (is (= 1 (count (:progress-notes (get grouped "bar")))))
+      (is (= 1 (count (:completed-tasks (get grouped "bar")))))
+      (is (= 0 (count (:completed-tasks (get grouped "foo")))))
+      ;; git-commits are session-global and attached to every bucket.
+      (is (= ["abc123 fix"] (:git-commits (get grouped "foo"))))
+      (is (= ["abc123 fix"] (:git-commits (get grouped "bar")))))))
+
+;; =============================================================================
+;; Multi-project synthesize: N+1 summaries with correct scopes
+;; =============================================================================
+
+(defmacro ^:private with-capturing-synthesis-mocks
+  "Like with-synthesis-mocks but captures every facade/index-memory-entry! call
+   into `entries-atom` and assigns unique ids per call."
+  [entries-atom & body]
+  `(let [counter# (atom 0)
+         entries# ~entries-atom]
+     (ext/register! :ch/a (fn [_#] {:promoted 0 :skipped 0 :below 0 :evaluated 0}))
+     (ext/register! :ch/b (fn [_#] {:decayed 0 :pruned 0 :fresh 0 :evaluated 0}))
+     (ext/register! :ch/c (fn [_#] {:promoted 0 :candidates 0 :total-scanned 0}))
+     (ext/register! :ch/d (fn [_#] {:decayed 0 :expired 0 :total-scanned 0}))
+     (ext/register! :ch/e (fn [_#] {:files-captured 0}))
+     (try
+       (with-redefs
+         [crystal/summarize-session-progress
+          (fn [& _#] {:content "## Summary" :tags ["wrap"]})
+
+          crystal/summarize-memory-activity
+          (fn [& _#] nil)
+
+          crystal/session-id
+          (fn [] "test-session-multi")
+
+          crystal/session-timing-metadata
+          (fn [_s# _e#] {:session-start "2026-04-24T10:00:00Z"
+                          :session-end   "2026-04-24T12:00:00Z"
+                          :duration-minutes 120})
+
+          scope/get-current-project-id
+          (fn [_#] "cwd-project")
+
+          scope/inject-project-scope
+          (fn [tags# _#] tags#)
+
+          dur/calculate-expires
+          (fn [_#] "2026-06-24T00:00:00Z")
+
+          ctx/current-directory
+          (fn [] "/tmp/multi-test")
+
+          facade/index-memory-entry!
+          (fn [entry#]
+            (let [id# (str "entry-multi-" (swap! counter# inc))]
+              (swap! entries# conj (assoc entry# ::id id#))
+              id#))
+
+          facade/content-hash
+          (fn [c#] (str (hash c#)))]
+         ~@body)
+       (finally
+         (ext/deregister! :ch/a)
+         (ext/deregister! :ch/b)
+         (ext/deregister! :ch/c)
+         (ext/deregister! :ch/d)
+         (ext/deregister! :ch/e)))))
+
+(deftest multi-project-session-yields-n-plus-1-summaries
+  (testing "Session spanning N projects produces N per-project summaries + 1 umbrella"
+    (let [entries (atom [])
+          ;; 2 projects → expect 3 summaries (foo, bar, global umbrella)
+          multi-harvested (merge base-harvested
+                                 {:progress-notes
+                                  [{:content "work in foo" :tags ["scope:project:foo"]}
+                                   {:content "work in bar" :tags ["scope:project:bar"]}
+                                   {:content "more foo"    :tags ["scope:project:foo"]}]
+                                  :completed-tasks
+                                  [{:title "finish bar task" :tags ["scope:project:bar"]}]
+                                  :git-commits ["abc123 fix: cross-project"]})]
+      (with-capturing-synthesis-mocks entries
+        (let [result (synthesis/synthesize multi-harvested)]
+          ;; N+1 summaries persisted (foo + bar + umbrella).
+          (is (= 3 (count @entries))
+              "Multi-project session must persist N+1 summaries (got N per-project + 1 umbrella)")
+          (let [tag-sets (map (comp set :tags) @entries)
+                scope-tags (map (fn [ts] (first (filter #(.startsWith ^String % "scope:") ts)))
+                                tag-sets)]
+            ;; Each summary must carry exactly one scope tag.
+            (is (every? some? scope-tags)
+                "Every emitted summary must carry a scope tag")
+            ;; Scopes present: scope:project:foo, scope:project:bar, scope:global
+            (is (= #{"scope:project:foo" "scope:project:bar" "scope:global"}
+                   (set scope-tags))
+                "Scopes must be: one per project + global umbrella")
+            ;; The umbrella entry is tagged with "umbrella".
+            (let [umbrella-entries (filter #(contains? (set (:tags %)) "umbrella") @entries)]
+              (is (= 1 (count umbrella-entries))
+                  "Exactly one umbrella summary")
+              (is (= "scope:global"
+                     (first (filter #(.startsWith ^String % "scope:")
+                                    (:tags (first umbrella-entries)))))
+                  "Umbrella must be tagged scope:global (HCR top-down: parent sees all)")))
+          ;; Public result exposes umbrella as the primary :summary-id and
+          ;; a :sub-summaries vector of length N+1.
+          (is (string? (:summary-id result)))
+          (is (true? (:umbrella? result))
+              "Primary result returned from multi-project path is the umbrella")
+          (is (= "global" (:project-id result)))
+          (is (= 3 (count (:sub-summaries result)))
+              ":sub-summaries must enumerate all N+1 emitted summaries"))))))
+
+(deftest single-project-session-preserves-legacy-shape
+  (testing "Single-project session still emits one summary (no umbrella noise)"
+    (let [entries (atom [])
+          ;; Only one project scope present → back-compat path, single summary.
+          single-harvested (merge base-harvested
+                                  {:progress-notes
+                                   [{:content "work" :tags ["scope:project:foo"]}]})]
+      (with-capturing-synthesis-mocks entries
+        (let [result (synthesis/synthesize single-harvested)]
+          (is (= 1 (count @entries))
+              "Single-project session must emit exactly one summary (no umbrella)")
+          (is (= "foo" (:project-id result)))
+          (is (not (contains? result :umbrella?))
+              "Single-project path must not leak :umbrella? into public shape")
+          (is (not (contains? result :scope-tag))
+              "Single-project path must not leak :scope-tag into public shape"))))))

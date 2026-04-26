@@ -1,0 +1,8 @@
+{:decision-full {:id "d-1", :T "decision", :P "Chose React over Vue"},
+ :long-preview
+ {:id "l-1",
+  :T "snippet",
+  :P "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"},
+ :nil-preview {:id "p-1", :T "axiom", :P "Short"},
+ :note-nil-type {:id "n-1", :T "note", :P "Quick observation"},
+ :numeric-body {:id "x-1", :T "note", :P "42"}}

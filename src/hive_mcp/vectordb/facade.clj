@@ -172,6 +172,18 @@
   (with-resilience
     (proto/cleanup-expired! (proto/get-store))))
 
+(defn get-store
+  "Return the active memory store from the registry.
+   Thin facade over hive-mcp.protocols.memory/get-store.
+
+   0-arity: returns the :default store, throws if none registered.
+   1-arity: returns the store registered under `key`, throws if absent.
+
+   Callers (hive-knowledge init.clj, provenance/core.clj) prefer this
+   facade over the protocols ns so the boundary seam stays single-source."
+  ([] (proto/get-store))
+  ([key] (proto/get-store key)))
+
 (defn available?
   "Check if a memory store backend is configured and ready."
   []

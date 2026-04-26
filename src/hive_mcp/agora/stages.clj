@@ -166,7 +166,7 @@
                                              :to-stage :debate
                                              :evidence-pool evidence-pool
                                              :topic topic}])
-      (catch Exception e
+      (catch Throwable e
         (log/warn "Event dispatch failed for stage-transition:" (.getMessage e))))
     (log/info "Stage transition:" dialogue-id "research -> debate"
               "with" (count evidence-pool) "evidence items")
@@ -303,7 +303,7 @@
               (when (#{:no-change :defer} sig)
                 (mark-research-complete! dialogue-id id))
               {:success true :evidence evidence :signal sig :participant-id id})
-            (catch Exception e
+            (catch Throwable e
               (log/warn "Failed to parse research response from" id ":" (.getMessage e))
               ;; Mark as complete even on parse failure (don't block transition)
               (mark-research-complete! dialogue-id id)
@@ -313,7 +313,7 @@
             (log/warn "Research drone" id "failed:" (:message result))
             (mark-research-complete! dialogue-id id)
             {:success false :error (or (:message result) "Drone failed") :participant-id id})))
-      (catch Exception e
+      (catch Throwable e
         (log/error e "Research turn failed for" id)
         (mark-research-complete! dialogue-id id)
         {:success false :error (.getMessage e) :participant-id id}))))

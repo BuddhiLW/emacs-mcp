@@ -143,7 +143,7 @@
   (try
     (require '[hive-mcp.events.core :as ev])
     ((resolve 'hive-mcp.events.core/dispatch) event-vec)
-    (catch Exception e
+    (catch Throwable e
       (log/warn "Event dispatch failed:" (.getMessage e)))))
 
 ;; =============================================================================
@@ -464,7 +464,7 @@
       (when-let [event (<! sub-ch)]
         (try
           (handler event)
-          (catch Exception e
+          (catch Throwable e
             (log/error "Sync handler error for" event-type ":" (.getMessage e))))
         (recur)))
     sub-ch))

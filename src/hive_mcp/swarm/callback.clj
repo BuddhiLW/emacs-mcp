@@ -121,7 +121,7 @@
           (do
             (log/warn "Callback ling not found, discarding" {:task-id task-id :ling-id ling-id})
             (unregister! task-id))))
-      (catch Exception e
+      (catch Throwable e
         (log/error "Callback dispatch failed" {:task-id task-id :ling-id ling-id
                                                :error (ex-message e)})
         ;; Don't unregister on transient errors — allow retry on next event
@@ -174,7 +174,7 @@
           (when event
             (try
               (handle-event! event)
-              (catch Exception e
+              (catch Throwable e
                 (log/debug "Callback listener error:" (.getMessage e))))
             (when @listener-active?
               (recur)))))

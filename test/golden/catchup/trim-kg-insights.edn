@@ -1,0 +1,10 @@
+{:empty-map {},
+ :nil-input nil,
+ :only-stale {:stale-files-count 5},
+ :only-warnings {:stale-entries-count 10},
+ :oversized
+ {:stale-files-count 5,
+  :contradictions-count 5,
+  :superseded-count 5,
+  :stale-entries-count 10},
+ :small-lists {:stale-files-count 2, :contradictions-count 1}}
