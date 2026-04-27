@@ -53,6 +53,16 @@
 
 (def ^:private bundle-sessions-fresh-limit 25)
 
+(def ^:private bundle-recent-wraps-limit
+  "Cap on cross-project wrap-generated note pull. Surfaces the last N
+   persisted wrap syntheses (LLM-authored session summaries) so the
+   ---RECENT-WRAPS--- block carries prior-session insight forward without
+   re-running synthesis. Notes tagged 'wrap-generated' are sparse and
+   project-scoped; a dedicated branch with no project filter catches
+   sibling/parent authored entries the hierarchy + global-pierce branches
+   would miss."
+  10)
+
 ;; =============================================================================
 ;; Telemetry wrapper — DI via hive-ttracking when present
 ;; =============================================================================
@@ -229,6 +239,16 @@
                                              :tags ["session-summary"]
                                              :limit bundle-sessions-fresh-limit
                                              :output-fields hier/metadata-projection})))
+                          []]
+                         [:recent-wraps-global
+                          (timed-query "recent-wraps-global"
+                                       #(with-resilience
+                                          (mem-proto/query-entries
+                                            store
+                                            {:type "note"
+                                             :tags ["wrap-generated"]
+                                             :limit bundle-recent-wraps-limit
+                                             :output-fields hier/metadata-projection})))
                           []]]
                   in-project?
                   (conj [:global
@@ -240,7 +260,7 @@
                                             :limit bundle-global-limit
                                             :output-fields hier/metadata-projection})))
                          []]))
-          {:keys [hierarchy global axioms-global principles-global sessions-fresh]}
+          {:keys [hierarchy global axioms-global principles-global sessions-fresh recent-wraps-global]}
           (apply wpar/fork-join {:budget-ms scoped-branch-budget-ms} tasks)
           full-scope-tags (sf/compute-full-scope-tags project-id)
           all-visible-ids (set (or hierarchy-ids ["global"]))
@@ -250,7 +270,8 @@
           axioms-all (or axioms-global [])
           principles-all (or principles-global [])
           sessions-fresh-all (or sessions-fresh [])
-          merged (sf/distinct-by :id (concat scoped pierced axioms-all principles-all sessions-fresh-all))
+          recent-wraps-all (or recent-wraps-global [])
+          merged (sf/distinct-by :id (concat scoped pierced axioms-all principles-all sessions-fresh-all recent-wraps-all))
           sorted (sf/newest-first merged)]
       {:by-type (group-by #(some-> (:type %) name) sorted)
        :all     sorted})))
@@ -266,6 +287,7 @@
      :principles           (take-type "principle" 50)
      :priority-conventions (tagged    "convention" "catchup-priority" 50)
      :sessions             (tagged    "note" "session-summary" 25)
+     :recent-wraps         (tagged    "note" "wrap-generated"   10)
      :decisions            (take-type "decision" 50)
      :conventions          (vec (take 50
                                       (remove #(hydr/has-tag? % "catchup-priority")

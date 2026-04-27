@@ -107,7 +107,7 @@
    Includes header, context, kg-insights, meta, and (when available) carto-status."
   [{:keys [project-name project-id scopes git-info permeation
            axioms-meta principles-meta priority-meta sessions-meta decisions-meta
-           conventions-meta snippets-meta expiring-meta kg-insights
+           conventions-meta snippets-meta expiring-meta recent-wraps kg-insights
            project-tree-scan disc-decay carto-status context-refs]}]
   (let [total-enqueued (+ (count axioms-meta) (count principles-meta) (count priority-meta))]
     (filterv some?
@@ -122,6 +122,7 @@
                            :principles (count principles-meta)
                            :priority-conventions (count priority-meta)
                            :sessions (count sessions-meta)
+                           :recent-wraps (count recent-wraps)
                            :decisions (count decisions-meta)
                            :conventions (count conventions-meta)
                            :snippets (count snippets-meta)
@@ -137,6 +138,11 @@
                   :context {:sessions sessions-meta}
                   :via-piggyback "Axioms, principles, priority conventions drain via ---MEMORY--- blocks on subsequent tool calls."
                   :via-context-refs "Decisions, conventions, snippets, expiring available via context-refs in header. Use context_get to deep-dive by necessity."})
+     (when (seq recent-wraps)
+       (make-block "recent-wraps"
+                   {:_block "recent-wraps"
+                    :recent-wraps recent-wraps
+                    :hint "Last 10 persisted wrap-generated session syntheses (full content). Read these to recover prior-session insights without re-running synthesis."}))
      (make-block "kg-insights"
                  {:_block "kg-insights"
                   :kg-insights (trim-kg-insights kg-insights)})

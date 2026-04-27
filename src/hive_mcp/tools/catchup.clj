@@ -155,6 +155,7 @@
               principles           (:principles bundle [])
               priority-conventions (:priority-conventions bundle [])
               sessions             (:sessions bundle [])
+              recent-wraps-raw     (:recent-wraps bundle [])
               decisions            (:decisions bundle [])
               snippets             (:snippets bundle [])
               expiring             (:expiring bundle [])
@@ -165,6 +166,7 @@
               principles-meta (mapv #(fmt/entry->catchup-meta % 80) principles)
               priority-meta (mapv fmt/entry->priority-meta priority-conventions)
               sessions-meta (mapv #(fmt/entry->catchup-meta % 80) sessions)
+              recent-wraps (mapv #(select-keys % [:id :created :tags :content]) recent-wraps-raw)
               decisions-base (mapv #(fmt/entry->catchup-meta % 80) decisions)
               conventions-base (mapv #(fmt/entry->catchup-meta % 80) conventions)
               snippets-meta (mapv #(fmt/entry->catchup-meta % 60) snippets)
@@ -281,6 +283,7 @@
             :sessions-meta sessions-meta :decisions-meta decisions-base
             :conventions-meta conventions-base :snippets-meta snippets-meta
             :expiring-meta expiring-meta
+            :recent-wraps recent-wraps
             :carto-status carto-status
             :context-refs context-refs}))
         (catch Exception e
