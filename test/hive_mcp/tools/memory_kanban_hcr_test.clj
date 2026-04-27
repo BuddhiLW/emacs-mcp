@@ -12,6 +12,8 @@
    without requiring a live Chroma connection."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.project.tree :as tree]
+            [hive-mcp.tools.kanban.predicates :as kp]
+            [hive-mcp.tools.kanban.transitions :as kt]
             [hive-mcp.tools.memory-kanban]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -20,18 +22,16 @@
 ;; =============================================================================
 ;; Private fn accessors
 ;; =============================================================================
+;; Helpers extracted to hive-mcp.tools.kanban.{predicates,transitions} as part
+;; of the event-driven kanban refactor; resolve-project-ids-with-descendants
+;; remains a private query helper inside memory-kanban.
 
 (def ^:private resolve-project-ids
   @(resolve 'hive-mcp.tools.memory-kanban/resolve-project-ids-with-descendants))
 
-(def ^:private extract-project-id
-  @(resolve 'hive-mcp.tools.memory-kanban/extract-project-id-from-tags))
-
-(def ^:private task->slim
-  @(resolve 'hive-mcp.tools.memory-kanban/task->slim))
-
-(def ^:private kanban-entry?
-  @(resolve 'hive-mcp.tools.memory-kanban/kanban-entry?))
+(def ^:private extract-project-id kt/extract-project-id-from-tags)
+(def ^:private task->slim         kt/task->slim)
+(def ^:private kanban-entry?      kp/kanban-entry?)
 
 ;; =============================================================================
 ;; Test Fixtures: Inject mock tree cache
