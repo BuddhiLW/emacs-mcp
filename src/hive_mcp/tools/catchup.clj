@@ -180,6 +180,7 @@
                               :conventions conventions-base
                               :conventions-raw conventions
                               :sessions sessions-meta
+                              :sessions-raw sessions
                               :axioms axioms
                               :principles principles
                               :priority-conventions priority-conventions}))
