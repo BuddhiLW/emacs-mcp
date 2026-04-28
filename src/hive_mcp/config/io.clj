@@ -1,9 +1,8 @@
 (ns hive-mcp.config.io
-  "Config file IO — reads and writes EDN config files.
-   Effect boundary: all file-system operations isolated here.
-   Returns Result values instead of swallowing errors."
-  (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
+  "Config file IO — thin shim over hive-di.file.
+   Project-local constants (paths) stay here; primitive IO + perm-hardening
+   live in hive-di.file. Effect boundary preserved: this ns only forwards."
+  (:require [hive-di.file :as di-file]
             [hive-dsl.result :as result]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -29,27 +28,22 @@
 (defn read-config-file
   "Read and parse an EDN config file.
    Returns Result: (ok map) on success, (ok nil) if file missing or not a map,
-   (err :io/config-read ...) on parse/IO exception."
+   (err :io/config-read ...) on parse/IO exception.
+   Delegates to hive-di.file/read-edn."
   [path]
-  (let [f (io/file path)]
-    (if-not (.exists f)
-      (result/ok nil)
-      (result/try-effect* :io/config-read
-        (let [content (slurp f)
-              parsed  (edn/read-string content)]
-          (when (map? parsed)
-            parsed))))))
+  (let [r (di-file/read-edn path)]
+    (cond
+      (and (result/ok? r) (map? (:ok r))) r
+      (result/ok? r)                      (result/ok nil)
+      :else                               r)))
 
 (defn write-config!
   "Write config map to disk as EDN. Creates parent dirs if needed.
+   Perms hardened to 0600 — config holds secrets.
    Returns Result: (ok config) on success, (err :io/config-write ...) on failure."
   ([config] (write-config! config config-path))
   ([config path]
-   (result/try-effect* :io/config-write
-     (let [f      (io/file path)
-           parent (.getParentFile f)]
-       (when (and parent (not (.exists parent)))
-         (.mkdirs parent))
-       (spit f (pr-str config))
-       (log/info "Config written to" path)
-       config))))
+   (let [r (di-file/write-edn! path config {:secret? true})]
+     (when (result/ok? r)
+       (log/info "Config written to" path))
+     r)))
