@@ -6,6 +6,7 @@
             [hive-mcp.agent.ling.strategy :as strategy]
             [hive-mcp.agent.ling.headless-registry :as headless-reg]
             [hive-mcp.agent.ling.lifecycle :as lifecycle]
+            [hive-mcp.agent.ling.spawn-store :as spawn-store]
             ;; LingResources concretion lives in hive-agent (task c1):
             ;; resolved lazily below to keep hive-mcp → hive-agent dep inverted.
             [hive-mcp.workflows.catchup-ling :as catchup-ling]
@@ -125,125 +126,155 @@
         (log/error t "Spawn-dispatch: unexpected error"
                    {:ling-id slave-id})))))
 
+(defn- headless-mode?
+  [mode]
+  (contains? (headless-reg/registered-headless) mode))
+
+(defn- enrich-task
+  [{:keys [task cwd kanban-task-id]}]
+  (when task
+    (let [ling-context-str (r/rescue nil
+                             (catchup-ling/ling-catchup
+                              {:directory cwd
+                               :task task
+                               :kanban-task-id kanban-task-id}))]
+      (if ling-context-str
+        (str ling-context-str "\n\n---\n\n" task)
+        task))))
+
+(defn- resolve-headless-inputs
+  [{:keys [mode ctx presets]}]
+  (let [headless? (headless-mode? mode)]
+    {:headless? headless?
+     :preset-content (when (and headless? (seq presets))
+                       (load-presets-content presets))
+     :api-key (when headless?
+                (lifecycle/resolve-api-key-for-provider
+                 (or (:provider ctx) :openrouter)))}))
+
+(defn- spawn-opts
+  [opts enriched-task {:keys [preset-content api-key]}]
+  (cond-> (if enriched-task
+            (assoc opts :task enriched-task)
+            opts)
+    (seq preset-content)
+    (assoc :preset-content preset-content)
+    api-key
+    (assoc :api-key api-key)))
+
+(defn- initial-slave-attrs
+  [{:keys [depth parent presets cwd project-id kanban-task-id]} enriched-task]
+  {:status (if enriched-task :working :idle)
+   :depth depth
+   :parent parent
+   :presets presets
+   :cwd cwd
+   :project-id project-id
+   :kanban-task-id kanban-task-id})
+
+(defn- register-requested-slave!
+  [{:keys [ling-id] :as plan} enriched-task]
+  (spawn-store/add-slave! (spawn-store/get-store)
+                          ling-id
+                          (initial-slave-attrs plan enriched-task)))
+
+(defn- reconcile-spawned-slave!
+  [{:keys [ling-id] :as plan} slave-id enriched-task]
+  (when (not= slave-id ling-id)
+    (let [store (spawn-store/get-store)]
+      (spawn-store/remove-slave! store ling-id)
+      (spawn-store/add-slave! store
+                              slave-id
+                              (assoc (initial-slave-attrs plan enriched-task)
+                                     :requested-id ling-id)))))
+
+(defn- stamp-spawn-metadata!
+  [{:keys [mode effective-model]} slave-id headless?]
+  (let [now (System/currentTimeMillis)]
+    (spawn-store/update-slave! (spawn-store/get-store)
+                               slave-id
+                               (cond-> {:ling/spawn-mode mode
+                                         :ling/model (or effective-model "claude")
+                                         :slave/alive? true
+                                         :slave/spawned-at now
+                                         :slave/last-active-at now}
+                                 headless?
+                                 (assoc :ling/process-alive? true)))))
+
+(defn- register-ling-resources!
+  [slave-id]
+  (r/rescue nil
+    (when-let [make (requiring-resolve 'hive-agent.lifecycle.resources/make-ling-resources)]
+      (make slave-id
+            (fn [] (spawn-store/claims-for-slave (spawn-store/get-store)
+                                                 slave-id))))))
+
+(defn- publish-agent-spawn!
+  [{:keys [cwd mode project-id effective-model]} slave-id headless?]
+  (r/rescue nil
+    (when-let [publish! (requiring-resolve 'hive-mcp.nats.bridge/publish-event!)]
+      (publish! {:type       :agent-spawn
+                 :agent-id   slave-id
+                 :timestamp  (System/currentTimeMillis)
+                 :data       {:cwd cwd
+                              :mode mode
+                              :project-id project-id
+                              :headless? headless?
+                              :model (or effective-model "claude")}}))))
+
+(defn- publish-slave-spawned!
+  [{:keys [depth parent cwd project-id]} slave-id]
+  (r/rescue nil
+    (when-let [publish-slave! (requiring-resolve 'hive-mcp.swarm.event-bridge/publish-slave-event!)]
+      (publish-slave! {:type       :slave-spawned
+                       :slave-id   slave-id
+                       :name       slave-id
+                       :depth      depth
+                       :parent-id  parent
+                       :cwd        cwd
+                       :project-id project-id
+                       :timestamp (System/currentTimeMillis)}))))
+
+(defn- register-budget!
+  [{:keys [max-budget-usd effective-model]} slave-id]
+  (when (and max-budget-usd (pos? max-budget-usd))
+    (r/rescue nil
+      (when-let [register-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/register-budget!)]
+        (register-fn slave-id max-budget-usd {:model (or effective-model "claude")})
+        (log/info "Budget guardrail registered for ling"
+                  {:ling-id slave-id :max-budget-usd max-budget-usd})))))
+
+(defn- dispatch-when-ready!
+  [{:keys [mode cwd presets project-id effective-model]} slave-id enriched-task headless?]
+  (when (and enriched-task (not headless?))
+    (dispatch-after-ready! {:slave-id slave-id :mode mode :cwd cwd
+                            :presets presets :project-id project-id
+                            :effective-model effective-model
+                            :enriched-task enriched-task})))
+
 (defn- execute-spawn-plan!
-  "Execute spawn effects: catchup enrichment, DS pre-registration, strategy
-   spawn, DS reconciliation, budget registration, and readiness-based dispatch.
+  "Execute spawn effects: catchup enrichment, store pre-registration, strategy
+   spawn, store reconciliation, budget registration, and readiness-based dispatch.
 
    CRITICAL: For headless backends, strategy-spawn! triggers start! which fires
-   the agentic loop immediately. The ling MUST exist in DataScript before that
-   happens, otherwise completion handlers hit a deregistration race (H2 fix)."
+   the agentic loop immediately. The ling MUST exist in the spawn store before
+   that happens, otherwise completion handlers hit a deregistration race (H2
+   fix)."
   [plan opts]
-  (let [{:keys [mode strat ctx cwd presets project-id ling-id
-                effective-model depth parent kanban-task-id
-                max-budget-usd task]} plan
-        headless? (contains? (headless-reg/registered-headless) mode)
-        ling-context-str (when task
-                           (r/rescue nil
-                                     (catchup-ling/ling-catchup
-                                      {:directory cwd
-                                       :task task
-                                       :kanban-task-id kanban-task-id})))
-        enriched-task (when task
-                        (if ling-context-str
-                          (str ling-context-str "\n\n---\n\n" task)
-                          task))
-        ;; Headless backends need explicit preset injection via :preset-content
-        ;; (Claude CLI loads from .claude/agents/ automatically).
-        preset-content (when (and headless? (seq presets))
-                         (load-presets-content presets))
-        ;; Bridge config.edn secrets -> headless spawn (hive-agent reads env).
-        resolved-api-key (when headless?
-                           (lifecycle/resolve-api-key-for-provider
-                            (or (:provider ctx) :openrouter)))
-        spawn-opts (cond-> (if enriched-task
-                             (assoc opts :task enriched-task)
-                             opts)
-                     (seq preset-content)
-                     (assoc :preset-content preset-content)
-                     resolved-api-key
-                     (assoc :api-key resolved-api-key))]
-
-    ;; PRE-REGISTER in DataScript BEFORE strategy-spawn! (H2 race fix).
-    ;; Status :working when task provided avoids :slave-ready -> :idle reset.
-    (ds-lings/add-slave! ling-id {:status (if enriched-task :working :idle)
-                                  :depth depth
-                                  :parent parent
-                                  :presets presets
-                                  :cwd cwd
-                                  :project-id project-id
-                                  :kanban-task-id kanban-task-id})
-
+  (let [{:keys [strat ctx]} plan
+        enriched-task (enrich-task plan)
+        headless-inputs (resolve-headless-inputs plan)
+        headless? (:headless? headless-inputs)
+        spawn-opts (spawn-opts opts enriched-task headless-inputs)]
+    (register-requested-slave! plan enriched-task)
     (let [slave-id (strategy/strategy-spawn! strat ctx spawn-opts)]
-
-      ;; Reconcile: re-register under backend-returned id if different.
-      (when (not= slave-id ling-id)
-        (ds-lings/remove-slave! ling-id)
-        (ds-lings/add-slave! slave-id {:status (if enriched-task :working :idle)
-                                       :depth depth
-                                       :parent parent
-                                       :presets presets
-                                       :cwd cwd
-                                       :project-id project-id
-                                       :kanban-task-id kanban-task-id
-                                       :requested-id ling-id}))
-
-      (ds-lings/update-slave! slave-id (cond-> {:ling/spawn-mode mode
-                                                :ling/model (or effective-model "claude")}
-                                         headless?
-                                         (assoc :ling/process-alive? true)))
-
-      ;; Per-ling IResourceOwner: register empty channel/cache atoms now;
-      ;; task c6 populates them at actual channel/cache call sites.
-      ;; claims-fn reads DataScript via queries for live claims.
-      ;; Task c1: LingResources lives in hive-agent — lazy resolve preserves
-      ;; the inverted layering (hive-mcp MUST NOT compile-time depend on it).
-      (r/rescue nil
-        (when-let [make (requiring-resolve 'hive-agent.lifecycle.resources/make-ling-resources)]
-          (make slave-id
-                (fn [] (->> (ds-queries/get-all-claims)
-                            (filter #(= slave-id (:slave-id %)))
-                            (map :file)
-                            vec)))))
-
-      ;; Publish agent-spawn event via NATS backbone (non-fatal).
-      ;; Uses requiring-resolve to avoid circular dep on nats.bridge.
-      (r/rescue nil
-        (when-let [publish! (requiring-resolve 'hive-mcp.nats.bridge/publish-event!)]
-          (publish! {:type       :agent-spawn
-                     :agent-id   slave-id
-                     :timestamp  (System/currentTimeMillis)
-                     :data       {:cwd cwd
-                                  :mode mode
-                                  :project-id project-id
-                                  :headless? headless?
-                                  :model (or effective-model "claude")}})))
-
-      ;; :slave-spawned -> channel.core + NATS via swarm.event-bridge; fires
-      ;; swarm/sync handlers for non-Emacs spawn modes.
-      (r/rescue nil
-        (when-let [publish-slave! (requiring-resolve 'hive-mcp.swarm.event-bridge/publish-slave-event!)]
-          (publish-slave! {:type       :slave-spawned
-                           :slave-id   slave-id
-                           :name       slave-id
-                           :depth      depth
-                           :parent-id  parent
-                           :cwd        cwd
-                           :project-id project-id
-                           :timestamp (System/currentTimeMillis)})))
-
-      (when (and max-budget-usd (pos? max-budget-usd))
-        (r/rescue nil
-                  (when-let [register-fn (requiring-resolve 'hive-mcp.agent.hooks.budget/register-budget!)]
-                    (register-fn slave-id max-budget-usd {:model (or effective-model "claude")})
-                    (log/info "Budget guardrail registered for ling"
-                              {:ling-id slave-id :max-budget-usd max-budget-usd}))))
-
-      (when (and enriched-task (not headless?))
-        (dispatch-after-ready! {:slave-id slave-id :mode mode :cwd cwd
-                                :presets presets :project-id project-id
-                                :effective-model effective-model
-                                :enriched-task enriched-task}))
-
+      (reconcile-spawned-slave! plan slave-id enriched-task)
+      (stamp-spawn-metadata! plan slave-id headless?)
+      (register-ling-resources! slave-id)
+      (publish-agent-spawn! plan slave-id headless?)
+      (publish-slave-spawned! plan slave-id)
+      (register-budget! plan slave-id)
+      (dispatch-when-ready! plan slave-id enriched-task headless?)
       slave-id)))
 
 (defrecord Ling [id cwd presets project-id spawn-mode model provider kg-compress? sliding-window-size agents max-budget-usd]

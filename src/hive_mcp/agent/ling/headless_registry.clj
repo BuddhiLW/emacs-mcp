@@ -9,7 +9,9 @@
      ;; => HeadlessAddonStrategy wrapping the backend (implements ILingStrategy)
 
    Thread-safety: atom + swap! (all operations atomic).
-   Idempotent: Re-registering the same key replaces silently (last-write-wins).
+   Idempotent: Re-registering the same key replaces silently. Backend selection
+   is explicit; classpath discovery of an addon must not make that addon
+   override the normal agentic backend by priority alone.
 
    See also:
    - hive-mcp.agent.ling.terminal-registry        -- Analogous pattern for terminals
@@ -93,15 +95,17 @@
 
 (defn best-headless-for-provider
   "Return the best headless-id for a provider keyword (:claude, :openai, etc.).
-   Preference order for :claude: :hive-agent > :claude-sdk > :claude-process.
+   Preference order for :claude: :claude-sdk > :claude-process > :hive-agent.
+   :hive-agent stays available for explicit selection; automatic META-INF addon
+   discovery must not silently override the transparent Claude agentic path.
    Returns nil if no backend available for the provider."
   [provider-kw]
   (let [registered (registered-headless)]
     (case provider-kw
       :claude (cond
-                (contains? registered :hive-agent) :hive-agent
                 (contains? registered :claude-sdk) :claude-sdk
                 (contains? registered :claude-process) :claude-process
+                (contains? registered :hive-agent) :hive-agent
                 :else nil)
       ;; Future providers can add their own preference logic here
       (first (filter #(= provider-kw (namespace %)) registered)))))
