@@ -89,6 +89,50 @@
    until the Milvus batch-get path is itself optimized."
   300000)
 
+(defn- gather-kanban-summary
+  "Direct memory query for kanban summary scoped to project-id.
+   Returns {:counts {:todo n :inprogress n :inreview n :done n}
+            :recent-todos [{:id :title} ...] (top 10 by updated desc)}.
+   Catchup's bundle path doesn't surface kanban notes (hierarchy fairness
+   cap drops them in favor of session-summaries). This is a dedicated
+   query mirroring the kanban-tag scope-filter pattern."
+  [project-id]
+  (rescue {:counts {} :recent-todos [] :scope-tag nil}
+          (let [store (mem-proto/get-store)
+                scope-tag (when project-id (str "scope:project:" project-id))
+                base-tags (cond-> ["kanban"] scope-tag (conj scope-tag))
+                count-status (fn [status]
+                               (count (mem-proto/query-entries
+                                       store
+                                       {:type "note"
+                                        :tags (conj base-tags status)
+                                        :limit 200
+                                        :output-fields ["id"]})))
+                recent-todos (->> (mem-proto/query-entries
+                                   store
+                                   {:type "note"
+                                    :tags (conj base-tags "todo")
+                                    :limit 10
+                                    :order-by [:updated :desc]
+                                    :output-fields ["id" "content" "tags"]})
+                                  (mapv (fn [e]
+                                          {:id    (:id e)
+                                           :title (or (get-in e [:content :title])
+                                                      (when (string? (:content e))
+                                                        (first (clojure.string/split-lines (:content e))))
+                                                      "(no title)")
+                                           :tags  (:tags e)})))]
+            ;; Internal status tags are 'todo' / 'doing' / 'review' / 'done'
+            ;; (see hive-mcp.tools.kanban.predicates/status-enum->tag).
+            ;; Counts are exposed under their MCP-facing names so the catchup
+            ;; block matches what users would pass to `kanban list status=…`.
+            {:counts {:todo       (count-status "todo")
+                      :inprogress (count-status "doing")
+                      :inreview   (count-status "review")
+                      :done       (count-status "done")}
+             :recent-todos recent-todos
+             :scope-tag scope-tag})))
+
 ;; =============================================================================
 ;; Main Catchup Handler
 ;; =============================================================================
@@ -147,10 +191,15 @@
                                                       #(catchup-git/gather-git-info directory))))
               f-carto  (pool/with-io ((tt/timed-query "catchup/carto-total"
                                                       #(catchup-carto/get-status project-id))))
+              f-kanban (pool/with-io ((tt/timed-query "catchup/kanban-summary-total"
+                                                      #(gather-kanban-summary project-id))))
 
               bundle        (safe-deref f-bundle query-timeout-ms {} "bundle")
               git-info      (safe-deref f-git query-timeout-ms {} "git-info")
               carto-status  (safe-deref f-carto query-timeout-ms nil "carto-status")
+              kanban-summary (safe-deref f-kanban query-timeout-ms
+                                          {:counts {} :recent-todos []}
+                                          "kanban-summary")
 
               axioms               (:axioms bundle [])
               principles           (:principles bundle [])
@@ -300,6 +349,7 @@
             :expiring-meta expiring-meta
             :recent-wraps recent-wraps
             :carto-status carto-status
+            :kanban-summary kanban-summary
             :context-refs context-refs}))
         (catch Exception e
           (fmt/catchup-error e))))))

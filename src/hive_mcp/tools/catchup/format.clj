@@ -108,7 +108,7 @@
   [{:keys [project-name project-id scopes git-info permeation
            axioms-meta principles-meta priority-meta sessions-meta decisions-meta
            conventions-meta snippets-meta expiring-meta recent-wraps kg-insights
-           project-tree-scan disc-decay carto-status context-refs]}]
+           project-tree-scan disc-decay carto-status kanban-summary context-refs]}]
   (let [total-enqueued (+ (count axioms-meta) (count principles-meta) (count priority-meta))]
     (filterv some?
     [(make-block "header"
@@ -151,6 +151,15 @@
                   :project-tree project-tree-scan
                   :disc-decay disc-decay
                   :hint "Axioms and priority conventions are being delivered via ---MEMORY--- piggyback blocks. AXIOMS are INVIOLABLE - follow them word-for-word. Entries with :kg key have Knowledge Graph relationships."})
+     (when (and kanban-summary
+                (or (pos? (apply + (vals (:counts kanban-summary {}))))
+                    (seq (:recent-todos kanban-summary))))
+       (make-block "kanban"
+                   {:_block       "kanban"
+                    :counts       (:counts kanban-summary)
+                    :recent-todos (:recent-todos kanban-summary)
+                    :scope-tag    (:scope-tag kanban-summary)
+                    :hint         "Kanban summary for current project scope. Use mcp__hive__project kanban list status=todo|inprogress for full rows."}))
      (when carto-status
        (make-block "carto-status"
                    {:_block "carto-status"
