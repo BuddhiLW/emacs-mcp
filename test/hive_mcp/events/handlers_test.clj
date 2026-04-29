@@ -57,34 +57,35 @@
 ;; P5-3: :session/wrap handler tests
 ;; =============================================================================
 
-(deftest test-handle-session-wrap-produces-run-workflow-effect
-  (testing ":session/wrap produces :run-workflow effect"
+(deftest test-handle-session-wrap-produces-wrap-crystallize-effect
+  (testing ":session/wrap produces :wrap-crystallize effect (per FIX comment session.clj:66-67 — :run-workflow was never registered)"
     (let [event [:session/wrap {:session-id "session-abc"
                                 :project "hive-mcp"}]
           coeffects {}
           result (session/handle-session-wrap coeffects event)]
-      (is (contains? result :run-workflow) "Should produce :run-workflow effect")
-      (is (= :wrap (get-in result [:run-workflow :workflow]))
-          "Workflow should be :wrap"))))
+      (is (contains? result :wrap-crystallize) "Should produce :wrap-crystallize effect")
+      (is (= "session-abc" (get-in result [:wrap-crystallize :session-id])))
+      (is (= "hive-mcp" (get-in result [:wrap-crystallize :project]))))))
 
 (deftest test-handle-session-wrap-includes-params
-  (testing ":session/wrap passes params to workflow"
+  (testing ":session/wrap passes params into :wrap-crystallize effect"
     (let [event [:session/wrap {:session-id "sess-123"
                                 :project "test-project"
                                 :start-time "2024-01-01T10:00:00Z"}]
           result (session/handle-session-wrap {} event)]
-      (is (= "sess-123" (get-in result [:run-workflow :params :session-id])))
-      (is (= "test-project" (get-in result [:run-workflow :params :project])))
-      (is (= "2024-01-01T10:00:00Z" (get-in result [:run-workflow :params :start-time]))))))
+      (is (= "sess-123" (get-in result [:wrap-crystallize :session-id])))
+      (is (= "test-project" (get-in result [:wrap-crystallize :project]))))))
 
 (deftest test-handle-session-wrap-generates-session-id-if-missing
-  (testing ":session/wrap generates session-id from coeffects if missing"
+  (testing ":session/wrap synthesizes effective-session-id when none provided"
     (let [event [:session/wrap {:project "my-project"}]
           coeffects {:agent-context {:agent-id "ling-123"}}
           result (session/handle-session-wrap coeffects event)]
-      (is (contains? result :run-workflow))
-      (is (string? (get-in result [:run-workflow :params :session-id]))
-          "Should generate a session-id"))))
+      (is (contains? result :wrap-crystallize))
+      (is (string? (get-in result [:wrap-crystallize :session-id]))
+          "Should synthesize a session-id from agent-id and date")
+      (is (clojure.string/includes? (get-in result [:wrap-crystallize :session-id]) "ling-123")
+          "synthesized session-id must include the resolved agent-id"))))
 
 (deftest test-handle-session-wrap-produces-log-effect
   (testing ":session/wrap logs the wrap trigger"
@@ -202,7 +203,8 @@
       (is (contains? result :wrap-notify) "Should produce :wrap-notify effect")
       (is (contains? result :shout) "Should produce :shout effect")
       (is (= "ling-123" (get-in result [:shout :agent-id])) "Should use passed agent-id")
-      (is (= "wrap_notify" (get-in result [:shout :event-type])) "Should use wrap_notify event type")
+      (is (= :wrap_notify (get-in result [:shout :event-type]))
+          "Shout :event-type is the :wrap_notify keyword (intentional — see crystal.clj:193)")
       (is (re-find #"3 decisions" (get-in result [:shout :data :message]))
           "Message should include decision count"))))
 
