@@ -24,8 +24,11 @@
 
 (defn- project-id-cofx [coeffects]
   (let [{:keys [directory]} (event-payload coeffects)
-        eff-dir (kt/effective-dir directory ctx/current-directory)]
-    (assoc coeffects :kanban/project-id (scope/get-current-project-id eff-dir))))
+        entry (:kanban/entry coeffects)
+        eff-dir (kt/effective-dir directory ctx/current-directory)
+        project-id (or (some-> entry kt/extract-project-id-from-tags)
+                       (scope/get-current-project-id eff-dir))]
+    (assoc coeffects :kanban/project-id project-id)))
 
 (defn register-all!
   "Idempotent registration of every kanban coeffect."

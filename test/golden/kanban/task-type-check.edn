@@ -1,0 +1,6 @@
+{:empty-map false,
+ :map-keyword true,
+ :map-string true,
+ :nil-content false,
+ :not-kanban false,
+ :plain-string false}

@@ -17,24 +17,13 @@
             [hive-mcp.hivemind.core :as hivemind]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.tools.swarm.registry :as swarm-registry]
-            [hive-dsl.bounded-atom :refer [bclear!]]))
+            [hive-dsl.bounded-atom :refer [bclear!]]
+            [hive-test.isolation :as iso]
+            hive-mcp.isolation-methods))
 
 ;;; Test fixtures
 
-(defn reset-all-registries
-  "Fixture to ensure clean state between tests.
-   ADR-002: Reset DataScript as primary registry."
-  [f]
-  ;; ADR-002: Reset DataScript (primary registry)
-  (ds/reset-conn!)
-  ;; Reset hivemind agent-registry
-  (bclear! @(resolve 'hive-mcp.hivemind.core/agent-registry))
-  ;; Note: lings-registry removed in ADR-002 migration - DataScript is primary
-  (f)
-  (ds/reset-conn!)
-  (bclear! @(resolve 'hive-mcp.hivemind.core/agent-registry)))
-
-(use-fixtures :each reset-all-registries)
+(use-fixtures :each (iso/with-isolations :swarm-ds :agent-registry))
 
 ;;; Helper to get the handler
 

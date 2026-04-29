@@ -38,6 +38,10 @@
 (def reset-conn! kg/reset-conn!)
 (def close! kg/close!)
 
+;; IPersistentKGStore (optional — backends with on-disk state)
+(def delete-database! kg/delete-database!)
+(def persistent-store? kg/persistent-store?)
+
 ;; Temporal protocol methods
 (def history-db kg/history-db)
 (def as-of-db kg/as-of-db)

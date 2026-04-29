@@ -74,7 +74,8 @@
   "Parameters for agent status."
   [:map
    [:directory {:optional true} OptionalString]
-   [:include_details {:optional true} [:maybe :boolean]]])
+   [:include_details {:optional true} [:maybe :boolean]]
+   [:include_stale {:optional true} [:maybe :boolean]]])
 
 (def AgentCollectParams
   "Parameters for agent collect."

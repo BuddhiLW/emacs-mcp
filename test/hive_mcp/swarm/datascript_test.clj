@@ -11,14 +11,11 @@
             [hive-mcp.swarm.datascript.connection :as conn]
             [hive-mcp.swarm.datascript.lings :as lings]
             [hive-mcp.swarm.datascript.queries :as queries]
-            [hive-mcp.swarm.datascript.coordination :as coordination]))
+            [hive-mcp.swarm.datascript.coordination :as coordination]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
-;; Fixture - reset global conn before each test
-(defn with-fresh-conn [f]
-  (conn/reset-conn!)
-  (f))
-
-(use-fixtures :each with-fresh-conn)
+(use-fixtures :each (iso/with-isolations :swarm-ds))
 
 (defn gen-slave-id []
   (str "test-slave-" (java.util.UUID/randomUUID)))
@@ -557,7 +554,9 @@
   (f)
   (lings/reset-stdout-buffers!))
 
-(use-fixtures :each with-fresh-conn with-fresh-buffers)
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  with-fresh-buffers)
 
 (deftest stdout-init-buffer-test
   (testing "Initializing stdout buffer creates empty buffer"

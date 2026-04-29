@@ -8,18 +8,16 @@
    
    CLARITY: TDD approach - tests written first."
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
-            [hive-mcp.swarm.datascript :as ds]))
+            [hive-mcp.swarm.datascript :as ds]
+            [hive-mcp.test-fixtures :as tf]
+            [hive-test.isolation :as iso]
+            hive-mcp.isolation-methods))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn reset-db-fixture [f]
-  (ds/reset-conn!)
-  (f)
-  (ds/reset-conn!))
-
-(use-fixtures :each reset-db-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds))
 
 ;; =============================================================================
 ;; register-completed-task! Tests
@@ -35,7 +33,7 @@
       (is (map? result) "should be a map")))
 
   (testing "registers task with minimal fields"
-    (ds/reset-conn!)
+    (tf/reset-isolated-swarm!)
     (let [result (ds/register-completed-task! "task-456" {})]
       (is (some? result) "should allow minimal registration"))))
 

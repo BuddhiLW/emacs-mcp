@@ -87,6 +87,11 @@
          'hive-mcp.gc.bounded-atom/sweep-all!
          #(%) {:total-evicted 0 :atom-count 0 :duration-ms 0})
 
+        terminal-liveness-result
+        (resolve-and-call
+         'hive-mcp.swarm.lifecycle.terminal-sweep/sweep-once!
+         #(%) {:checked 0 :zombified 0 :alive 0 :errors []})
+
         ;; 6. JVM GC hint — nudge G1GC to collect old gen.
         ;; G1GC with MaxGCPauseMillis=200 avoids full GC cycles, so old gen
         ;; fills with long-lived garbage. Periodic hint prevents 97%+ old gen.
@@ -106,6 +111,7 @@
                 :event-journal journal-result
                 :saa-states saa-result
                 :gc-sweep gc-sweep-result
+                :terminal-liveness terminal-liveness-result
                 :gc-hint gc-hint-result
                 :sweep-number sweep-num
                 :duration-ms elapsed-ms

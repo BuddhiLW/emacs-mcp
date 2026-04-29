@@ -12,26 +12,15 @@
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.emacs.client :as ec]
             [hive-mcp.hivemind.core :as hivemind]
-            [hive-dsl.bounded-atom :refer [bput! bget bclear!]]))
+            [hive-dsl.bounded-atom :refer [bput! bget bclear!]]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn reset-registry-fixture
-  "Reset DataScript and hivemind agent-registry before each test.
-   ADR-002: DataScript is now the primary registry."
-  [f]
-  ;; Reset DataScript (primary - ADR-002)
-  (ds/reset-conn!)
-  ;; Reset hivemind agent-registry (message history)
-  (bclear! hivemind/agent-registry)
-  (f)
-  ;; Cleanup after test
-  (ds/reset-conn!)
-  (bclear! hivemind/agent-registry))
-
-(use-fixtures :each reset-registry-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds :agent-registry))
 
 ;; =============================================================================
 ;; Bug 1: handle-lings-available Elisp Fallback

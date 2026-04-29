@@ -60,8 +60,16 @@
    re-running synthesis. Notes tagged 'wrap-generated' are sparse and
    project-scoped; a dedicated branch with no project filter catches
    sibling/parent authored entries the hierarchy + global-pierce branches
-   would miss."
-  10)
+   would miss.
+
+   Sized to over-fetch by ~20× the display cap (10 wraps shown in the
+   ---recent-wraps--- block). Backends like Milvus query-scalar lack
+   server-side ORDER BY, so we pair this with `:order-by [:created :desc]`
+   in the query opts: the impl sorts the returned set in-memory, then
+   `split-by-type` trims to the display cap. Without this over-fetch + sort
+   pair, scan-order results froze the visible wraps to whatever segment
+   Milvus happened to scan first."
+  200)
 
 ;; =============================================================================
 ;; Telemetry wrapper — DI via hive-ttracking when present
@@ -238,6 +246,7 @@
                                             {:type "note"
                                              :tags ["session-summary"]
                                              :limit bundle-sessions-fresh-limit
+                                             :order-by [:created :desc]
                                              :output-fields hier/metadata-projection})))
                           []]
                          [:recent-wraps-global
@@ -248,6 +257,7 @@
                                             {:type "note"
                                              :tags ["wrap-generated"]
                                              :limit bundle-recent-wraps-limit
+                                             :order-by [:created :desc]
                                              :output-fields hier/metadata-projection})))
                           []]]
                   in-project?
@@ -269,8 +279,15 @@
                     (sf/scope-pierce-entries (or global []) project-id))
           axioms-all (or axioms-global [])
           principles-all (or principles-global [])
-          sessions-fresh-all (or sessions-fresh [])
-          recent-wraps-all (or recent-wraps-global [])
+          ;; Sessions and wraps are project-scoped — their dedicated branches
+          ;; query without project filter to dodge the per-descendant fairness
+          ;; cap (see sessions_freshness_regression_test). The result MUST
+          ;; then be scope-filtered to hierarchy-ids (self + descendants) +
+          ;; global. Without this filter, sibling-project sessions leak through
+          ;; (e.g. funeraria sessions surfacing in hive catchup). HCR is
+          ;; strictly top-down — never include siblings.
+          sessions-fresh-all (sf/scope-filter-entries (or sessions-fresh []) full-scope-tags all-visible-ids)
+          recent-wraps-all   (sf/scope-filter-entries (or recent-wraps-global []) full-scope-tags all-visible-ids)
           merged (sf/distinct-by :id (concat scoped pierced axioms-all principles-all sessions-fresh-all recent-wraps-all))
           sorted (sf/newest-first merged)]
       {:by-type (group-by #(some-> (:type %) name) sorted)

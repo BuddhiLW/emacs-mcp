@@ -16,7 +16,10 @@
             [hive-mcp.emacs.daemon-ds :as daemon-ds]
             [hive-mcp.swarm.datascript.connection :as conn]
             [hive-mcp.swarm.datascript.lings :as lings]
-            [datascript.core :as d]))
+            [datascript.core :as d]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]
+            [hive-mcp.emacs.daemon-scoring :as scoring]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
@@ -24,13 +27,7 @@
 
 (def ^:private store (daemon-ds/create-store))
 
-(defn reset-db-fixture
-  "Reset DataScript database before each test."
-  [f]
-  (conn/reset-conn!)
-  (f))
-
-(use-fixtures :each reset-db-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds))
 
 ;;; =============================================================================
 ;;; Health Classification Tests
@@ -331,23 +328,23 @@
 
 (deftest latency-score-delta-fast-test
   (testing "latency-score-delta returns 0 for fast responses"
-    (is (= 0 (selection/latency-score-delta 100)))
-    (is (= 0 (selection/latency-score-delta 0)))
-    (is (= 0 (selection/latency-score-delta 500)))))
+    (is (= 0 (scoring/latency-score-delta 100)))
+    (is (= 0 (scoring/latency-score-delta 0)))
+    (is (= 0 (scoring/latency-score-delta 500)))))
 
 (deftest latency-score-delta-slow-test
   (testing "latency-score-delta penalizes slow responses"
     ;; Midpoint: 1250ms = half of range = ~-20
-    (let [mid-penalty (selection/latency-score-delta 1250)]
+    (let [mid-penalty (scoring/latency-score-delta 1250)]
       (is (neg? mid-penalty))
       (is (> mid-penalty -30) "Should be between 0 and -40"))
     ;; Very slow: 2000ms+ = max penalty
-    (is (= (- selection/latency-max-penalty) (selection/latency-score-delta 2000)))
-    (is (= (- selection/latency-max-penalty) (selection/latency-score-delta 5000)))))
+    (is (= (- scoring/latency-max-penalty) (scoring/latency-score-delta 2000)))
+    (is (= (- scoring/latency-max-penalty) (scoring/latency-score-delta 5000)))))
 
 (deftest latency-score-delta-nil-test
   (testing "latency-score-delta treats nil as max penalty (failed ping)"
-    (is (= (- selection/latency-max-penalty) (selection/latency-score-delta nil)))))
+    (is (= (- scoring/latency-max-penalty) (scoring/latency-score-delta nil)))))
 
 ;;; =============================================================================
 ;;; W2: Error Score Delta Tests
@@ -355,19 +352,19 @@
 
 (deftest error-score-delta-zero-test
   (testing "error-score-delta returns 0 for no errors"
-    (is (= 0 (selection/error-score-delta 0)))
-    (is (= 0 (selection/error-score-delta nil)))))
+    (is (= 0 (scoring/error-score-delta 0)))
+    (is (= 0 (scoring/error-score-delta nil)))))
 
 (deftest error-score-delta-scaling-test
   (testing "error-score-delta scales with consecutive errors"
-    (is (= -15 (selection/error-score-delta 1)))
-    (is (= -30 (selection/error-score-delta 2)))
-    (is (= -45 (selection/error-score-delta 3)))))
+    (is (= -15 (scoring/error-score-delta 1)))
+    (is (= -30 (scoring/error-score-delta 2)))
+    (is (= -45 (scoring/error-score-delta 3)))))
 
 (deftest error-score-delta-caps-test
   (testing "error-score-delta caps at error-penalty-max"
-    (is (= (- selection/error-penalty-max) (selection/error-score-delta 10)))
-    (is (= (- selection/error-penalty-max) (selection/error-score-delta 100)))))
+    (is (= (- scoring/error-penalty-max) (scoring/error-score-delta 10)))
+    (is (= (- scoring/error-penalty-max) (scoring/error-score-delta 100)))))
 
 ;;; =============================================================================
 ;;; W2: Ling Load Delta Tests
@@ -375,15 +372,15 @@
 
 (deftest ling-load-delta-empty-test
   (testing "ling-load-delta returns 0 for 0 or 1 lings"
-    (is (= 0 (selection/ling-load-delta 0)))
-    (is (= 0 (selection/ling-load-delta 1)))
-    (is (= 0 (selection/ling-load-delta nil)))))
+    (is (= 0 (scoring/ling-load-delta 0)))
+    (is (= 0 (scoring/ling-load-delta 1)))
+    (is (= 0 (scoring/ling-load-delta nil)))))
 
 (deftest ling-load-delta-scaling-test
   (testing "ling-load-delta scales with lings beyond first"
-    (is (= -2 (selection/ling-load-delta 2)))
-    (is (= -4 (selection/ling-load-delta 3)))
-    (is (= -8 (selection/ling-load-delta 5)))))
+    (is (= -2 (scoring/ling-load-delta 2)))
+    (is (= -4 (scoring/ling-load-delta 3)))
+    (is (= -8 (scoring/ling-load-delta 5)))))
 
 ;;; =============================================================================
 ;;; W2: Compute Health Score (EWMA) Tests
@@ -391,7 +388,7 @@
 
 (deftest compute-health-score-perfect-test
   (testing "compute-health-score for perfect conditions (fast, no errors, no lings)"
-    (let [score (selection/compute-health-score 100 100 0 0)]
+    (let [score (scoring/compute-health-score 100 100 0 0)]
       (is (>= score 95) "Should stay near 100 with perfect conditions")
       (is (<= score 100)))))
 
@@ -399,47 +396,47 @@
   (testing "compute-health-score degrades with slow latency"
     ;; From prev=100 with 3s latency: raw=60, EWMA=0.3*60+0.7*100=88
     ;; EWMA smoothing keeps it high on first bad reading
-    (let [score (selection/compute-health-score 100 3000 0 0)]
+    (let [score (scoring/compute-health-score 100 3000 0 0)]
       (is (< score 95) "Should show some degradation with 3s latency")
       (is (> score 30) "But not critically low with just latency"))
     ;; Sustained slow latency from already degraded score drops further
-    (let [score (selection/compute-health-score 70 3000 0 0)]
+    (let [score (scoring/compute-health-score 70 3000 0 0)]
       (is (< score 70) "Should degrade further from degraded state"))))
 
 (deftest compute-health-score-errors-test
   (testing "compute-health-score degrades with consecutive errors"
     ;; From prev=100 with 1 error: raw = 100 - 40(nil latency) - 15(1 err) = 45
     ;; EWMA: 0.3*45 + 0.7*100 = 83.5 → 83
-    (let [score-1err (selection/compute-health-score 100 nil 1 0)
-          score-3err (selection/compute-health-score 100 nil 3 0)]
+    (let [score-1err (scoring/compute-health-score 100 nil 1 0)
+          score-3err (scoring/compute-health-score 100 nil 3 0)]
       (is (< score-1err 90) "1 error should degrade from 100")
       (is (< score-3err score-1err) "3 errors should be worse than 1"))))
 
 (deftest compute-health-score-ewma-smoothing-test
   (testing "compute-health-score blends with previous score (EWMA)"
     ;; From score=80, perfect measurement should move toward 100 slowly
-    (let [score (selection/compute-health-score 80 100 0 0)]
+    (let [score (scoring/compute-health-score 80 100 0 0)]
       (is (> score 80) "Should increase from 80 toward 100")
       (is (< score 100) "But not jump to 100 immediately"))
     ;; From score=80, terrible measurement should not crash to 0
-    (let [score (selection/compute-health-score 80 nil 3 5)]
+    (let [score (scoring/compute-health-score 80 nil 3 5)]
       (is (< score 80) "Should decrease from 80")
       (is (> score 10) "But EWMA smoothing prevents crash to 0"))))
 
 (deftest compute-health-score-load-pressure-test
   (testing "compute-health-score accounts for ling load"
-    (let [score-0 (selection/compute-health-score 100 200 0 0)
-          score-5 (selection/compute-health-score 100 200 0 5)]
+    (let [score-0 (scoring/compute-health-score 100 200 0 0)
+          score-5 (scoring/compute-health-score 100 200 0 5)]
       (is (> score-0 score-5) "More lings should produce lower score"))))
 
 (deftest compute-health-score-clamps-test
   (testing "compute-health-score clamps to 0-100 range"
     ;; Even with worst conditions, stays >= 0
-    (let [score (selection/compute-health-score 0 nil 10 5)]
+    (let [score (scoring/compute-health-score 0 nil 10 5)]
       (is (>= score 0))
       (is (<= score 100)))
     ;; Even with best conditions from high prev, stays <= 100
-    (let [score (selection/compute-health-score 100 50 0 0)]
+    (let [score (scoring/compute-health-score 100 50 0 0)]
       (is (>= score 0))
       (is (<= score 100)))))
 

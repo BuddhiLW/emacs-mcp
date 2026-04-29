@@ -29,6 +29,8 @@
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.swarm.sync :as sync]
             [hive-mcp.swarm.bootstrap.factory :as bootstrap-factory]
+            [hive-mcp.swarm.datalevin.connection :as dl-conn]
+            [hive-mcp.swarm.lifecycle.sweep :as lifecycle-sweep]
             [hive-mcp.swarm.event-bridge :as swarm-event-bridge]
             [hive-mcp.channel.piggyback :as piggyback]
             [hive-mcp.channel.instruction-store :as instruction-store]
@@ -390,6 +392,9 @@
                   (let [bs (build-swarm-bootstrap opts)]
                     (sync/set-swarm-bootstrap! bs))
                   (sync/start-sync!)
+                  ;; Liveness sweep: reconcile registry against OS process
+                  ;; state. Marks dead+stale slaves :zombie + :alive? false.
+                  (rescue nil (lifecycle-sweep/sweep-on-boot! (dl-conn/ensure-conn)))
                   (let [eb (resolve-event-backbone opts)]
                     (when (= :nats eb)
                       (let [started? (swarm-event-bridge/start-nats-bridge!)]

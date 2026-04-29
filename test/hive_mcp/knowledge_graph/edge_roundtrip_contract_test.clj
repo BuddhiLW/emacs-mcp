@@ -26,7 +26,13 @@
 
      (require '[clojure.test :as t])
      (load-file \"test/hive_mcp/knowledge_graph/edge_roundtrip_contract_test.clj\")
-     (t/run-tests 'hive-mcp.knowledge-graph.edge-roundtrip-contract-test)"
+     (t/run-tests 'hive-mcp.knowledge-graph.edge-roundtrip-contract-test)
+
+   Determinism note: the legacy `settle!` polled `batch-get-edges-to` with
+   25ms sleeps to wait for the coalescing queue. That was the source of
+   intermittent flakes (kanban 20260404134936-1b481a86). The current
+   implementation calls `conn/flush-pending!` once — the writer's own
+   sentinel — instead of guessing a polling interval."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.knowledge-graph.connection :as conn]
             [hive-mcp.knowledge-graph.edges :as edges]
@@ -67,21 +73,21 @@
 (use-fixtures :each cleanup-fixture)
 
 ;; =============================================================================
-;; Settle helper — coalescing queue is async, reads need a short window
+;; Settle helper — drains the coalescing queue deterministically
 ;; =============================================================================
 
 (defn- settle!
-  "Give the 25ms write-coalescing queue time to flush. Polls batch-get
-   until the written edge appears or the budget runs out."
-  [to-id scope timeout-ms]
-  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
-    (loop []
-      (let [by-id (edges/batch-get-edges-to [to-id] scope)
-            hit?  (seq (get by-id to-id))]
-        (if (or hit? (>= (System/currentTimeMillis) deadline))
-          by-id
-          (do (Thread/sleep 25)
-              (recur)))))))
+  "Drain the coalescing queue deterministically and return the read result.
+
+   Replaces the legacy 25ms polling loop. `conn/flush-pending!` is the
+   sentinel the writer owns — it busy-waits on the in-flight counter
+   reaching zero (or a 5s deadline) so we never assert against a half-
+   drained queue. The `_timeout-ms` arg is retained for backwards
+   compatibility with callers that already pass an explicit budget,
+   but flush-pending! has its own deadline so we ignore it here."
+  [to-id scope _timeout-ms]
+  (conn/flush-pending!)
+  (edges/batch-get-edges-to [to-id] scope))
 
 ;; =============================================================================
 ;; A. Pure roundtrip — storage-level contract

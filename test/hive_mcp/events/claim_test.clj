@@ -10,7 +10,9 @@
             [hive-mcp.events.core :as ev]
             [hive-mcp.events.effects :as effects]
             [hive-mcp.events.handlers.claim :as claim]
-            [hive-mcp.swarm.datascript :as ds]))
+            [hive-mcp.swarm.datascript :as ds]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -19,17 +21,17 @@
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn clean-state-fixture [f]
-  "Reset all state before each test."
-  (ev/reset-all!)
-  (ds/reset-conn!)
-  (effects/reset-registration!)  ;; Also reset effects registration
-  (ev/init!)
+(defn- claim-handlers-fixture
+  "Reset effects + register claim handlers."
+  [f]
+  (effects/reset-registration!)
   (effects/register-effects!)
   (claim/register-handlers!)
   (f))
 
-(use-fixtures :each clean-state-fixture)
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds :events)
+  claim-handlers-fixture)
 
 ;; =============================================================================
 ;; Test: :targeted-shout Effect

@@ -107,16 +107,43 @@
   [payload]
   (dc/fanout! payload))
 
-(defn shout!
-  "Broadcast a message to the hivemind coordinator.
+(defn- blank-payload-value?
+  "True iff `v` carries no signal: nil, empty string, or empty coll."
+  [v]
+  (cond
+    (nil? v) true
+    (string? v) (zero? (count v))
+    (coll? v) (empty? v)
+    :else false))
 
-   M1 Architecture (protocol-first):
-   - Local state (atom + DataScript) updated synchronously
-   - If backbone connected: single publish → backbone subscribers handle fanout
-   - If backbone disconnected: direct fanout via IDeliveryChannel registry
-   - Domain events (:ling/completed) are NOT dispatched here — callers
-     that need domain side-effects dispatch them explicitly. This avoids
-     a feedback loop: shout! → :ling/completed handler → :shout effect → shout!"
+(defn empty-shout?
+  "Predicate: would this shout carry a zero-information payload?
+
+   A shout is considered empty when *all* of the following hold:
+     1. `:task` is missing/nil/blank-string/empty-coll
+     2. `:message` is missing/nil/blank-string/empty-coll
+     3. The remainder of `data` (after stripping :task :message :directory
+        :project-id) has no entries with meaningful values.
+
+   Such shouts get rendered as `[] ()`-shaped no-ops in piggyback HIVEMIND
+   blocks during high-throughput batch ops (kanban hygiene, wave dispatch
+   side-effects, FSM phase shouts that race past payload assembly).
+
+   `data` may be anything callers pass through — non-map values are treated
+   as opaque (so non-nil, non-blank, non-empty data → not empty)."
+  [data]
+  (cond
+    (nil? data) true
+    (not (map? data)) (blank-payload-value? data)
+    :else
+    (let [residual (dissoc data :task :message :directory :project-id)]
+      (and (blank-payload-value? (:task data))
+           (blank-payload-value? (:message data))
+           (every? blank-payload-value? (vals residual))))))
+
+(defn- shout!*
+  "Internal shout implementation — assumes payload has been validated
+   non-empty by `shout!`."
   [agent-id event-type data]
   (let [now (System/currentTimeMillis)
         shout-id (str (random-uuid))
@@ -173,6 +200,31 @@
     ;; 4. Log
     (log/info "Hivemind shout:" agent-id event-type "project:" project-id)
     true))
+
+(defn shout!
+  "Broadcast a message to the hivemind coordinator.
+
+   M1 Architecture (protocol-first):
+   - Local state (atom + DataScript) updated synchronously
+   - If backbone connected: single publish → backbone subscribers handle fanout
+   - If backbone disconnected: direct fanout via IDeliveryChannel registry
+   - Domain events (:ling/completed) are NOT dispatched here — callers
+     that need domain side-effects dispatch them explicitly. This avoids
+     a feedback loop: shout! → :ling/completed handler → :shout effect → shout!
+
+   Empty-payload guard (kanban-hygiene-2026-04-27):
+   - If the shout carries no task/message/data signal (`empty-shout?` true),
+     it is suppressed with a debug log and `false` is returned. This prevents
+     the `[] ()` no-op shouts observed during bulk-close cascades where
+     side-effect chains race past payload assembly. Callers wanting telemetry
+     for the no-op transition should pass at minimum a non-blank :message."
+  [agent-id event-type data]
+  (if (empty-shout? data)
+    (do
+      (log/debug "Hivemind shout suppressed (empty payload):"
+                 agent-id event-type)
+      false)
+    (shout!* agent-id event-type data)))
 
 (defn ask!
   "Request a decision from the human coordinator, blocking until response or timeout."

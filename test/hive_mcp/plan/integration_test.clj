@@ -28,7 +28,9 @@
             [hive-mcp.vectordb.facade :as memory]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.connection :as kg-conn]
-            [hive-mcp.tools.memory-kanban :as mem-kanban]))
+            [hive-mcp.tools.memory-kanban :as mem-kanban]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -64,20 +66,19 @@
   (reset! *test-task-ids* []))
 
 (defn integration-fixture
-  "Reset state before/after each test."
+  "Reset cleanup-tracking atoms around each test. KG isolation
+   handled by :kg-conn (compose in use-fixtures)."
   [f]
-  ;; Reset KG DataScript connection
-  (kg-conn/reset-conn!)
   (reset! *test-memory-ids* [])
   (reset! *test-task-ids* [])
+  (try
+    (f)
+    (finally
+      (cleanup-test-data!))))
 
-  (f)
-
-  ;; Cleanup
-  (cleanup-test-data!)
-  (kg-conn/reset-conn!))
-
-(use-fixtures :each integration-fixture)
+(use-fixtures :each
+  (iso/with-isolations :kg-conn)
+  integration-fixture)
 
 ;; =============================================================================
 ;; Helper Functions

@@ -37,7 +37,8 @@
             [hive-dsl.context.identity :as ctx-id]
             [hive-ttracking.core :as tt]
             [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.tools.catchup.relevance :as relevance]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -210,9 +211,22 @@
                           (memory-piggyback/adopt-buffer! raw-caller-id)))
 
               ;; Scope-filter piggyback: keep entries relevant to this agent's
-              ;; project hierarchy. Axioms pierce scope (always included).
+              ;; project hierarchy. Axioms used to ALWAYS pierce scope which
+              ;; flooded sessions with off-topic axioms (windows-ntlm,
+              ;; bufferbloat, JMM, typography). Now axioms must also pass a
+              ;; tag-overlap relevance score against the project's vocabulary
+              ;; — `catchup-priority` and `scope:project:<current>` still
+              ;; pierce. See `hive-mcp.tools.catchup.relevance`.
               ;; Entries without scope tags pass through (global by convention).
-              piggyback-raw (into (into (vec axioms) principles) priority-conventions)
+              relevance-ctx
+              (relevance/build-context
+               {:project-id project-id
+                :co-loaded-entries (concat priority-conventions
+                                           decisions
+                                           sessions)})
+              relevant-axioms
+              (relevance/filter-by-relevance (vec axioms) relevance-ctx)
+              piggyback-raw (into (into (vec relevant-axioms) principles) priority-conventions)
               piggyback-entries
               (let [in-project? (and project-id (not= project-id "global"))]
                 (if-not in-project?
@@ -225,7 +239,8 @@
                                (let [tags (set (or (:tags entry) []))
                                      entry-type (str (or (:type entry) ""))]
                                  (or
-                                  ;; Axioms always pierce scope
+                                  ;; Axioms already filtered above by relevance —
+                                  ;; survivors continue to pierce the scope filter.
                                   (= entry-type "axiom")
                                   ;; catchup-priority entries pierce scope
                                   (contains? tags "catchup-priority")

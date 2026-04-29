@@ -10,7 +10,9 @@
   (:require [clojure.test :refer [deftest testing is are use-fixtures]]
             [hive-mcp.tools.olympus :as olympus-tools]
             [hive-mcp.swarm.datascript.lings :as ds-lings]
-            [hive-mcp.swarm.datascript.connection :as ds-conn]))
+            [hive-mcp.swarm.datascript.connection :as ds-conn]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;;; =============================================================================
 ;;; Test Helpers
@@ -29,13 +31,7 @@
 ;;; Test Fixtures
 ;;; =============================================================================
 
-(defn test-fixture [f]
-  ;; Reset DataScript to clean empty state before each test.
-  ;; No coordinator guard in test context — reset-conn! works.
-  (ds-conn/reset-conn!)
-  (f))
-
-(use-fixtures :each test-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds))
 
 ;;; =============================================================================
 ;;; olympus_status Tests

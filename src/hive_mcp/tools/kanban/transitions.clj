@@ -6,7 +6,8 @@
 
    No side effects. Safe to property-test."
   (:require [hive-mcp.tools.kanban.predicates :as pred]
-            [hive-mcp.tools.memory.scope :as scope])
+            [hive-mcp.tools.memory.scope :as scope]
+            [clojure.string :as str])
   (:import [java.time ZonedDateTime]
            [java.time.format DateTimeFormatter]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -110,3 +111,97 @@
   "Resolve directory: explicit > current request context."
   [directory current-directory-fn]
   (or directory (current-directory-fn)))
+
+;; ============================================================
+;; List filter predicates (token-budget filters for list-slim*)
+;; ============================================================
+
+(defn substring-ci?
+  "Case-insensitive substring match. Nil-safe."
+  [needle haystack]
+  (boolean (and needle haystack
+                (str/includes? (str/lower-case (str haystack))
+                               (str/lower-case (str needle))))))
+
+(defn entry-matches-query?
+  "True iff `q` (case-insensitive substring) appears in entry's title or
+   description. Blank/nil query => match all."
+  [entry q]
+  (or (nil? q) (and (string? q) (str/blank? q))
+      (let [content (:content entry)
+            title   (content-val content :title "")
+            desc    (content-val content :description "")]
+        (or (substring-ci? q title)
+            (substring-ci? q desc)))))
+
+(defn entry-tags-match?
+  "True iff entry's tags satisfy `extra-tags` under `mode`.
+   mode = :all (every tag present, AND) | :any (at least one, OR).
+   Empty/nil extra-tags => match all."
+  [entry extra-tags mode]
+  (if (empty? extra-tags)
+    true
+    (let [entry-tags (set (:tags entry))]
+      (case mode
+        :any (boolean (some #(contains? entry-tags %) extra-tags))
+        ;; default :all
+        (every? #(contains? entry-tags %) extra-tags)))))
+
+(defn entry-priority?
+  "True iff entry's priority equals `priority`. Nil priority => match all."
+  [entry priority]
+  (or (nil? priority)
+      (= priority (content-val (:content entry) :priority nil))))
+
+(defn entry-after-ts?
+  "True iff the entry's timestamp for `kind` (:created or :updated) is
+   strictly greater than `threshold` (ISO-8601 string compare).
+   Nil threshold => match all.
+
+   Source order:
+   - :created  → content :created, then top-level :created
+   - :updated  → top-level :updated, content :updated, content :started, content :completed"
+  [entry kind threshold]
+  (or (nil? threshold)
+      (let [content (:content entry)
+            ts (case kind
+                 :created (or (content-val content :created nil)
+                              (:created entry))
+                 :updated (or (:updated entry)
+                              (content-val content :updated nil)
+                              (content-val content :started nil)
+                              (content-val content :completed nil))
+                 nil)]
+        (boolean (and ts
+                      (pos? (compare (str ts) (str threshold))))))))
+
+(defn paginate
+  "Skip `offset` then take `limit`. Both optional, both positive numbers
+   when provided."
+  [coll offset limit]
+  (cond->> coll
+    (and (number? offset) (pos? offset)) (drop offset)
+    (and (number? limit)  (pos? limit))  (take limit)))
+
+(defn project-fields
+  "Project a task map down to a subset of fields. `fields` is a seq of
+   strings or keywords; nil/empty returns the task untouched."
+  [task fields]
+  (if (or (nil? fields) (empty? fields))
+    task
+    (select-keys task (mapv #(if (keyword? %) % (keyword (name %))) fields))))
+
+(defn post-filters?
+  "True iff any clojure-side filter (post-store-fetch) is in play. Used
+   to bump the store fetch window so narrow matches aren't truncated by
+   the default active-task cap."
+  [{:keys [query priority created_after updated_after
+           tags tag_match offset limit fields]}]
+  (boolean (or (and (string? query) (not (str/blank? query)))
+               priority
+               created_after
+               updated_after
+               (and (or (= tag_match "any") (= tag_match :any)) (seq tags))
+               offset
+               limit
+               (seq fields))))

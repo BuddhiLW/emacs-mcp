@@ -52,7 +52,12 @@
     @(kg/ensure-conn! this))
 
   (reset-conn! [_this]
-    (log/debug "Resetting DataScript KG store")
+    ;; Ephemeral store — no persistent backing. "Reset" creates a fresh
+    ;; conn by definition; nothing to delete because nothing was ever
+    ;; persisted. DataScript intentionally does NOT extend
+    ;; IPersistentKGStore — `delete-database!` is meaningless here and
+    ;; callers must gate on `(satisfies? IPersistentKGStore store)` first.
+    (log/debug "Resetting DataScript KG store (ephemeral)")
     (reset! conn-atom (d/create-conn (schema/full-schema)))
     @conn-atom)
 

@@ -63,7 +63,23 @@
     "Delete an entry from the store.")
 
   (query-entries [this opts]
-    "Query entries with filtering.")
+    "Query entries with filtering.
+
+     Opts (map):
+       :type             — entry type filter (e.g. \"note\", \"axiom\")
+       :project-id       — single project scope
+       :project-ids      — collection of project scopes (OR)
+       :tags             — required tags (AND)
+       :exclude-tags     — excluded tags
+       :limit            — max rows returned
+       :include-expired? — include expired entries (default false)
+       :output-fields    — projection of field names
+       :order-by         — [field direction] e.g. [:created :desc] | [:created :asc].
+                           When set, returned rows are sorted by `field` in
+                           `direction`. Backends without server-side ordering
+                           (e.g. Milvus query-scalar) sort post-fetch — caller
+                           MUST set `:limit` high enough to cover the desired
+                           top-N. Unspecified ⇒ backend-native scan order.")
 
   ;;; =========================================================================
   ;;; Semantic Search (Vector-based)

@@ -4,7 +4,8 @@
    The crucial property: moving a task to `done` MUST NOT emit any
    facade-delete effect. The transition is soft — the entry remains in
    memory with its KG edges intact."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.set]
+            [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
@@ -77,3 +78,25 @@
           done? (= "done" s)]
       (and (= done? (contains? fx :kanban/notify-done))
            (= done? (contains? fx :kanban/archive-external))))))
+
+;; ---------------------------------------------------------------------------
+;; Regression: status tags must be REPLACED on move, not unioned.
+;; A previous resurface bug let entries appear under both `todo` and `done`
+;; status filters because some downstream paths additively merged tags.
+;; The contract for move-fx is that the new tag vector contains EXACTLY the
+;; new status keyword and none of the others.
+;; ---------------------------------------------------------------------------
+
+(def ^:private status-tags #{"todo" "doing" "review" "done"})
+
+(defspec move-tags-replace-not-union 200
+  (prop/for-all [from gen-status
+                 to   gen-status]
+    (let [entry (assoc-in fixture-entry [:tags] ["kanban" from "priority-high" "scope:project:hive-mcp"])
+          fx    (events/move-fx
+                 {:kanban/entry entry :kanban/project-id "hive-mcp"}
+                 [:kanban/move {:task-id (:id entry) :new-status to}])
+          new-tags (set (get-in fx [:kanban/facade-update :payload :tags]))
+          tag-statuses (clojure.set/intersection new-tags status-tags)]
+      (and (= 1 (count tag-statuses))
+           (contains? tag-statuses to)))))

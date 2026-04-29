@@ -15,7 +15,9 @@
             [hive-mcp.swarm.datascript.connection :as conn]
             [hive-mcp.swarm.datascript.lings :as lings]
             [hive-mcp.swarm.datascript.queries :as queries]
-            [datascript.core :as d]))
+            [datascript.core :as d]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
@@ -23,13 +25,7 @@
 
 (def ^:private store (daemon-ds/create-store))
 
-(defn reset-db-fixture
-  "Reset DataScript database before each test."
-  [f]
-  (conn/reset-conn!)
-  (f))
-
-(use-fixtures :each reset-db-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds))
 
 ;;; =============================================================================
 ;;; Helper Functions

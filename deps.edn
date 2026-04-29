@@ -132,11 +132,18 @@
         ;; hive-proximum — temporal/bitemporal memory backend (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/hive-proximum.edn manifest.
         ;; Stub store until backend impl lands (task 486248c0).
-        io.github.hive-agi/hive-proximum {:git/tag "v0.1.1" :git/sha "7103bdd"}
+        io.github.hive-agi/hive-proximum {:git/tag "v0.1.2" :git/sha "f9ba8b3"}
 
         ;; hive-ttracking — telemetry/timing (timed-query, track*, bench*).
         ;; Consumed by catchup.clj and siblings (bundle/hydration/hierarchy).
         io.github.hive-agi/hive-ttracking {:git/tag "v0.1.2" :git/sha "9ede26f"}
+
+        ;; hive-system — system-level abstractions (IProcess, INetwork,
+        ;; process liveness, secrets, shell, redaction). Single source of
+        ;; truth for "is this pid alive?", `kill -0` semantics, etc.
+        ;; NOTE: process.liveness ns is post-v0.2.1 — when the next tag is
+        ;; cut, bump :git/sha here and drop the deps.local.edn override.
+        io.github.hive-agi/hive-system {:git/tag "v0.2.1" :git/sha "61c6e34"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging

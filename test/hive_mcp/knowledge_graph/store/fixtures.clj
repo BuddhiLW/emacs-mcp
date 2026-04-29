@@ -22,17 +22,24 @@
 ;; =============================================================================
 
 (defn datascript-fixture
-  "Fixture that runs test f with a fresh DataScript store."
+  "Fixture that runs test f against a per-thread fresh DataScript store.
+
+   Binds `hive-mcp.knowledge-graph.connection/*test-store*` so the
+   override-aware ensure-store! returns the test store, leaving the
+   global proto store untouched (test isolation)."
   [f]
-  (let [store (ds-store/create-store)]
-    (proto/set-store! store)
+  (let [store          (ds-store/create-store)
+        test-store-var (requiring-resolve
+                         'hive-mcp.knowledge-graph.connection/*test-store*)]
     (proto/ensure-conn! store)
     (edges/reset-stats-cache!)
-    (try
-      (f)
-      (finally
-        (proto/reset-conn! store)
-        (edges/reset-stats-cache!)))))
+    (with-bindings* {test-store-var store}
+      (fn []
+        (try
+          (f)
+          (finally
+            (proto/reset-conn! store)
+            (edges/reset-stats-cache!)))))))
 
 (defn datalevin-fixture
   "Fixture that runs test f with a fresh Datalevin store in a temp dir.

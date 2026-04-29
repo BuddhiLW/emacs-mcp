@@ -389,9 +389,26 @@
 ;; Watchdog — periodic dead-process cleanup
 ;; ===========================================================================
 
+(defn- mark-slave-zombie!
+  "Best-effort DataScript stamp: :slave/alive? false, status :zombie.
+   Resolved via requiring-resolve to avoid a hard load-order coupling
+   (datascript layer is loaded later in some boot paths)."
+  [ling-id]
+  (result/guard Throwable nil
+                (when-let [update-fn (requiring-resolve
+                                      'hive-mcp.swarm.datascript.lings/update-slave!)]
+                  (update-fn ling-id {:slave/alive? false
+                                      :slave/status :zombie
+                                      :slave/status-changed-at (System/currentTimeMillis)}))))
+
 (defn- watchdog-sweep!
   "Scan process-registry for dead processes and clean them up.
-   Invoked by sweep-coordinator via the HeadlessWatchdog ISweepable impl."
+   Invoked by sweep-coordinator via the HeadlessWatchdog ISweepable impl.
+
+   Also transacts :slave/alive? false on the DataScript registry so the
+   default `agent_status` view hides ghosts. Without this stamp, dead
+   headless lings linger as alive in the registry forever — only the
+   process-registry side was being cleaned previously."
   []
   (try
     (let [dead-ids (reduce-kv
@@ -407,7 +424,8 @@
                   {:ling-id ling-id
                    :pid (:pid (.get process-registry ling-id))})
         (result/guard Exception nil
-                      (kill-headless!* ling-id {:force? true})))
+                      (kill-headless!* ling-id {:force? true}))
+        (mark-slave-zombie! ling-id))
       (swap! watchdog-state
              (fn [s]
                (-> s

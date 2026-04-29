@@ -61,25 +61,34 @@
   "Attempt to initialize an extension namespace.
    Strategy: try init-as-addon! first (new multiplexer protocol),
    then fall back to init! (legacy self-registration).
-   Returns result map or nil."
+
+   On exception inside the init fn, logs at :error level with stacktrace
+   + ns + strategy name, then returns nil. Previously these failures were
+   silently swallowed by `rescue nil`, masking macroexpansion errors and
+   broken `:require` lines so whole addon tool surfaces would just
+   disappear from the registry without trace (kanban 20260428113129).
+
+   Returns init result map on success, nil on failure."
   [ns-sym]
-  (let [addon-sym (symbol (str ns-sym) "init-as-addon!")
-        legacy-sym (symbol (str ns-sym) "init!")]
-    (or
-     ;; Strategy 1: New multiplexer protocol (IAddon from addons.protocol)
-     (rescue nil
-             (when-let [addon-fn (try-resolve addon-sym)]
-               (let [result (addon-fn)]
-                 (log/info "Extension" ns-sym "initialized via IAddon (multiplexer):"
-                           (:total result 0) "capabilities")
-                 result)))
-     ;; Strategy 2: Legacy self-registration
-     (rescue nil
-             (when-let [init-fn (try-resolve legacy-sym)]
-               (let [result (init-fn)]
-                 (log/info "Extension initializer" legacy-sym "registered"
-                           (:total result 0) "capabilities")
-                 result))))))
+  (let [addon-sym  (symbol (str ns-sym) "init-as-addon!")
+        legacy-sym (symbol (str ns-sym) "init!")
+        try-call   (fn [strategy-name init-sym]
+                     (try
+                       (when-let [init-fn (try-resolve init-sym)]
+                         (let [result (init-fn)]
+                           (log/info "Extension" ns-sym
+                                     "initialized via" strategy-name ":"
+                                     (:total result 0) "capabilities")
+                           result))
+                       (catch Throwable t
+                         (log/error t
+                                    "Extension init FAILED for" ns-sym
+                                    "via" strategy-name
+                                    "— addon will be SKIPPED. Cause:"
+                                    (.getMessage t))
+                         nil)))]
+    (or (try-call "IAddon (multiplexer)" addon-sym)
+        (try-call "init! (legacy)" legacy-sym))))
 
 ;; =============================================================================
 ;; Public API

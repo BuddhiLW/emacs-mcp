@@ -53,7 +53,7 @@
 (def tool-def
   {:name "kanban"
    :consolidated true
-   :description "Kanban task management: list (all/filtered tasks), create (new task), update (change status/modify task), delete (hard-remove task by id; no archival, no completion — use for duplicates/cancellations), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks, supports plan_id or plan_path), batch-update (bulk status changes). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all. HCR: use include_descendants=true to aggregate descendant project tasks."
+   :description "Kanban task management: list (all/filtered tasks), create (new task), update (change status/modify task), delete (hard-remove task by id; no archival, no completion — use for duplicates/cancellations), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks, supports plan_id or plan_path), batch-update (bulk status changes). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all. HCR: use include_descendants=true to aggregate descendant project tasks. List filters: query (substring), tags (extra required tags), tag_match (any|all), created_after / updated_after (ISO-8601), limit / offset (pagination), fields (projection)."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :enum ["list" "create" "move" "status" "update" "delete" "roadmap" "my-tasks" "sync" "plan-to-kanban" "batch-update" "help"]
@@ -86,6 +86,28 @@
                                            :description "Working directory for project scope (auto-detected if not provided)"}
                               "include_descendants" {:type "boolean"
                                                      :description "Include child project tasks in results (HCR Wave 4). Default true — set false to restrict to current project only."}
+                              "project_id" {:type "string"
+                                            :description "[list] Exact-match project filter (overrides directory-derived scope)"}
+                              "query" {:type "string"
+                                       :description "[list] Case-insensitive substring match on title + description"}
+                              "tags" {:type "array" :items {:type "string"}
+                                      :description "[list] Extra required tags beyond ['kanban' status]"}
+                              "tag_match" {:type "string"
+                                           :enum ["any" "all"]
+                                           :description "[list] Tag match semantics for `tags` (default 'all')"}
+                              "priority" {:type "string"
+                                          :enum ["high" "medium" "low"]
+                                          :description "[list] Filter by exact priority"}
+                              "created_after" {:type "string"
+                                               :description "[list] ISO-8601 timestamp; only entries with content :created >= this"}
+                              "updated_after" {:type "string"
+                                               :description "[list] ISO-8601 timestamp; only entries with :updated >= this"}
+                              "limit" {:type "integer"
+                                       :description "[list] Cap result count after sort"}
+                              "offset" {:type "integer"
+                                        :description "[list] Skip first N results after sort"}
+                              "fields" {:type "array" :items {:type "string"}
+                                        :description "[list] Project each result to a subset of fields (e.g. ['id' 'title'])"}
                               "parallel" {:type "boolean"
                                           :description "Run batch operations in parallel (default: false)"}}
                  :required ["command"]}

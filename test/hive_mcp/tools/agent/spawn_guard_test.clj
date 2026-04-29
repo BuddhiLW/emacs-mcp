@@ -18,28 +18,24 @@
             [hive-mcp.emacs.client :as ec]
             [hive-mcp.swarm.datascript.connection :as conn]
             [hive-mcp.swarm.logic :as logic]
-            [hive-mcp.tools.swarm.core :as swarm-core]))
+            [hive-mcp.tools.swarm.core :as swarm-core]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn reset-state-fixture
-  "Reset DataScript state for clean tests."
+(defn- logic-and-redefs-fixture
+  "Reset logic db and stub swarm-addon-available? for each test."
   [f]
-  (let [was-running? (guards/coordinator-running?)]
-    (when was-running? (guards/mark-coordinator-stopped!))
-    (try
-      (conn/reset-conn!)
-      (logic/reset-db!)
-      (with-redefs [swarm-core/swarm-addon-available? (constantly false)]
-        (f))
-      (conn/reset-conn!)
-      (logic/reset-db!)
-      (finally
-        (when was-running? (guards/mark-coordinator-running!))))))
+  (logic/reset-db!)
+  (with-redefs [swarm-core/swarm-addon-available? (constantly false)]
+    (try (f) (finally (logic/reset-db!)))))
 
-(use-fixtures :each reset-state-fixture)
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  logic-and-redefs-fixture)
 
 ;; =============================================================================
 ;; Helper Functions

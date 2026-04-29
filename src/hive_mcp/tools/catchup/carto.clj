@@ -19,6 +19,14 @@
   [sym]
   (rescue nil (requiring-resolve sym)))
 
+(defn- default-project-id
+  "Lazy-resolve hive-knowledge.cartography.config/default-project-id.
+   Falls back to literal \"hive-knowledge\" when hive-knowledge is absent
+   (FOSS-only deployments)."
+  []
+  (or (some-> (try-resolve 'hive-knowledge.cartography.config/default-project-id) deref)
+      "hive-knowledge"))
+
 (defn- lsp-up?
   "Check if LSP sidecar Docker container is running.
    Returns false on any failure (missing dep, Docker down, etc.)."
@@ -58,11 +66,24 @@
     (try
       {:count (count (query-fn :tags       ["carto"]
                                :limit      10000
-                               :project-id (or project-id "hive-mcp")))}
+                               :project-id (or project-id (default-project-id))))}
       (catch Exception e
         (log/warn "carto indexed-forms-count query failed:" (ex-message e))
         {:count nil :error (ex-message e)}))
     {:count 0 :unavailable? true}))
+
+(defn- mismatch-info
+  "Sentinel + active :carto backend via try-resolve. Nil when hive-knowledge absent."
+  []
+  (when-let [cfg-fn (try-resolve 'hive-knowledge.cartography.config/resolve-cartography-config)]
+    (when-let [read-fn (try-resolve 'hive-knowledge.cartography.sentinel/read!)]
+      (rescue nil
+        (let [path    (some-> (cfg-fn) :ok :sentinel-path)
+              sent    (when path (read-fn path))
+              statusf (try-resolve 'hive-mcp.protocols.memory/store-status)
+              store   (when-let [f (try-resolve 'hive-mcp.protocols.memory/registered-stores)] (:carto (f)))
+              active  (when (and store statusf) (rescue nil (:backend (statusf store))))]
+          {:sentinel-result sent :path path :active active})))))
 
 (defn- last-scan-info
   "Extract last scan timestamp via the :carto/scan-state-snapshot extension.
@@ -77,7 +98,7 @@
                         (try-resolve 'hive-knowledge.cartography.handlers.core/scan-state-snapshot))]
     (when snapshot-fn
       (try
-        (let [state (snapshot-fn (or project-id "hive-mcp"))]
+        (let [state (snapshot-fn (or project-id (default-project-id)))]
           (when state
             (cond-> {:scan-status (name (:status state))}
               (:finished-at state) (assoc :last-scan-ts (:finished-at state))
@@ -106,9 +127,11 @@
      :empty             — store reachable but indexed-forms=0 (scan required)
      :ready             — store populated and (if known) last scan succeeded"
   [{:keys [lsp-up? carto-store? indexed-forms indexed-forms-error
-           scan-status scan-error]}]
+           scan-status scan-error mismatch-info]}]
   (let [status-kw (some-> scan-status keyword)
-        empty?    (or (nil? indexed-forms) (zero? indexed-forms))]
+        empty?    (or (nil? indexed-forms) (zero? indexed-forms))
+        sent-bk   (some-> mismatch-info :sentinel-result :ok :backend)
+        active-bk (:active mismatch-info)]
     (cond
       (not lsp-up?)
       {:readiness :lsp-down
@@ -139,6 +162,16 @@
                     ["carto scan in progress — indexed-forms=0 until the scan finishes. Defer structural queries or wait for completion."]
                     [])
        :hint      "Carto scan in progress — structural queries may return partial results until it finishes."}
+
+      (= :sentinel-corrupt (some-> mismatch-info :sentinel-result :error))
+      {:readiness :store-unavailable
+       :warnings  [(str "carto sentinel corrupt at " (:path mismatch-info) "; clear and rescan")]
+       :hint      "Carto sentinel corrupt — clear-sentinel and rescan."}
+
+      (and sent-bk active-bk (not= (name sent-bk) (name active-bk)))
+      {:readiness :backend-mismatch
+       :warnings  [(format "carto backend mismatch: sentinel=%s active=%s. Run `clear-sentinel` operator command or bring backend %s up." (name sent-bk) (name active-bk) (name sent-bk))]
+       :hint      "Carto backend mismatch — sentinel pins different backend; clear-sentinel or bring pinned backend up."}
 
       empty?
       {:readiness :empty
@@ -178,9 +211,11 @@
   [project-id]
   (let [scan-info         (last-scan-info project-id)
         {:keys [count error]} (indexed-forms-count project-id)
+        mi                (mismatch-info)
         base              (cond-> {:lsp-up?       (lsp-up?)
                                    :carto-store?  (carto-store-available?)
-                                   :indexed-forms count}
+                                   :indexed-forms count
+                                   :mismatch-info mi}
                             error     (assoc :indexed-forms-error error)
                             scan-info (merge scan-info))
         readiness         (derive-readiness base)]

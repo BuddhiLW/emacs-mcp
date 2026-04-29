@@ -38,31 +38,132 @@
   (->> (re-seq edn-block-pattern content)
        (mapv second)))
 
-(def ^:private edn-plan-pattern
-  "Regex to detect {:steps [...] or {:plan/steps [...] in content."
-  #"\{[^}]*:(?:plan/)?steps\s*\[")
-
-(def ^:private edn-phase-pattern
-  "Regex to detect {:phase N :tasks [...] blocks."
-  #"\{[^}]*:(?:phase/)?(?:phase|id)\s+\d+[^}]*:(?:phase/)?tasks\s*\[")
-
 ;; =============================================================================
 ;; Detection Predicates
 ;; =============================================================================
+;;
+;; Detection is AST-based, not regex-based. Regex on EDN is fragile —
+;; nested maps before :steps, multi-line forms with reader macros, and
+;; namespaced map literals all defeat naïve patterns. Instead we extract
+;; candidate substrings, parse each with clojure.edn/read-string, and walk
+;; the resulting AST looking for plan-shape (:steps / :plan/steps) or
+;; phase-shape (:phase + :tasks) maps.
+;;
+;; References:
+;;   - clojure.edn API:  https://clojure.github.io/clojure/clojure.edn-api.html
+;;   - EDN spec:         https://edn-format.dev/
 
 (defn contains-edn-block?
   "Check if content contains any ```edn ... ``` blocks."
   [content]
   (boolean (re-find edn-block-pattern content)))
 
-(defn contains-edn-plan?
-  "Check if content contains EDN plan (raw or in blocks).
+(def ^:private edn-read-opts
+  "Pass-through opts for clojure.edn reads. `:default` swallows unknown
+   reader tags (returning their value) so user-tagged literals like
+   `#myapp/Foo {...}` do not abort parsing during detection."
+  {:default (fn [_tag v] v)})
 
-   Detects ```edn blocks, raw :steps structures, and phase-based blocks."
+(defn- safe-read-edn
+  "Parse a string as a single EDN form. Returns the value or nil on error."
+  [s]
+  (try
+    (edn/read-string edn-read-opts s)
+    (catch Exception _ nil)))
+
+(defn- read-all-forms
+  "Sequentially read every top-level EDN form from `content` using
+   clojure.edn/read against a PushbackReader. The EDN reader natively
+   handles every spec feature — commas as whitespace, `;` line comments,
+   `#_` discard, character literals (`\\}`), tagged elements (`#inst`,
+   `#uuid`, user `#ns/tag`), namespaced maps (`#:ns{...}`), sets
+   (`#{...}`), lists, and nested collections. Stops on EOF or first
+   parse failure (read advances past whitespace/comments between forms)."
   [content]
-  (boolean
-   (when-let [s (and (string? content) content)]
-     (some #(re-find % s) [edn-block-pattern edn-plan-pattern edn-phase-pattern]))))
+  (when (string? content)
+    (let [rdr (java.io.PushbackReader. (java.io.StringReader. content))
+          eof ::eof]
+      (loop [acc []]
+        (let [form (try
+                     (edn/read (assoc edn-read-opts :eof eof) rdr)
+                     (catch Exception _ eof))]
+          (if (= form eof)
+            acc
+            (recur (conj acc form))))))))
+
+;; Forward declaration — implementation below in the Balanced Brace section.
+;; Needed here because candidate-parsed-forms uses balanced extraction as a
+;; fallback when prose-prefixed EDN (e.g. memory-stored plans wrapped with
+;; "Plan Entry [draft]\nType: plan\n...\n\n{:plan/steps [...]}") trips up the
+;; top-level reader on non-EDN preamble tokens.
+(declare find-balanced-edn)
+
+(defn- balanced-edn-substrings
+  "Yield every balanced `{...}` substring found in `content`, in left-to-right
+   order. For each `{` position, attempt `find-balanced-edn` and skip past it
+   on success; otherwise advance one char. Returns a vector of substrings."
+  [content]
+  (when (string? content)
+    (let [len (count content)]
+      (loop [idx 0
+             acc (transient [])]
+        (if (>= idx len)
+          (persistent! acc)
+          (if (= \{ (.charAt ^String content idx))
+            (if-let [edn-str (find-balanced-edn content idx)]
+              (recur (+ idx (count edn-str))
+                     (conj! acc edn-str))
+              (recur (inc idx) acc))
+            (recur (inc idx) acc)))))))
+
+(defn- candidate-parsed-forms
+  "Return all parseable EDN forms found anywhere in `content`:
+     - top-level forms (sequential reads against the whole content);
+     - the body of every ```edn fenced block (parsed independently);
+     - every balanced `{...}` substring (handles prose-wrapped EDN — e.g.
+       memory-stored plans with a `Plan Entry [draft]\\n…` preamble that
+       would otherwise abort the top-level reader before it reaches the
+       map literal).
+   Returns empty seq for non-strings."
+  [content]
+  (when (string? content)
+    (concat (read-all-forms content)
+            (mapcat read-all-forms (extract-edn-blocks content))
+            (keep safe-read-edn (balanced-edn-substrings content)))))
+
+(defn- is-plan-shape?
+  "True iff `x` is a map carrying :steps or :plan/steps with a vector value."
+  [x]
+  (and (map? x)
+       (let [steps (or (:steps x) (:plan/steps x))]
+         (vector? steps))))
+
+(defn- is-phase-shape?
+  "True iff `x` is a map carrying both a phase identifier and a :tasks vector."
+  [x]
+  (and (map? x)
+       (or (contains? x :phase) (contains? x :phase/id))
+       (or (vector? (:tasks x)) (vector? (:phase/tasks x)))))
+
+(defn- plan-or-phase-anywhere?
+  "Walk the parsed AST and return true if any subform is plan- or phase-shaped."
+  [parsed]
+  (some (some-fn is-plan-shape? is-phase-shape?)
+        (tree-seq coll? seq parsed)))
+
+(defn contains-edn-plan?
+  "Check if content contains an EDN plan or phase block.
+
+   AST-based: read every parseable EDN form from the content (top-level
+   forms + bodies of ```edn fenced blocks) using `clojure.edn/read`, then
+   walk each AST via `tree-seq` looking for a plan-shape map (:steps or
+   :plan/steps with vector value) or a phase-shape map (:phase + :tasks).
+
+   The EDN reader handles all spec features for us — comments, `#_`
+   discard, namespaced maps, sets, tagged literals (unknown tags are
+   passed through via `:default`). Returns false on non-strings."
+  [content]
+  (boolean (some plan-or-phase-anywhere? (candidate-parsed-forms content))))
 
 ;; =============================================================================
 ;; Safe EDN Parsing

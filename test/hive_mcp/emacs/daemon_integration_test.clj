@@ -9,21 +9,23 @@
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [hive-mcp.emacs.daemon :as proto]
             [hive-mcp.emacs.daemon-store :as daemon-store]
-            [hive-mcp.swarm.datascript.connection :as conn]))
+            [hive-mcp.swarm.datascript.connection :as conn]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
 ;;; =============================================================================
 
-(defn reset-db-fixture
-  "Reset DataScript database before each test."
+(defn- heartbeat-stop-fixture
+  "Stop heartbeat loop if running before each test."
   [f]
-  (conn/reset-conn!)
-  ;; Stop heartbeat loop if running
   (daemon-store/stop-heartbeat-loop!)
   (f))
 
-(use-fixtures :each reset-db-fixture)
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  heartbeat-stop-fixture)
 
 ;;; =============================================================================
 ;;; Singleton Tests

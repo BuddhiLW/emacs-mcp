@@ -27,8 +27,11 @@
    :working      - Executing a task
    :blocked      - Waiting on external resource
    :error        - In error state
-   :terminated   - Killed/stopped"
-  #{:idle :spawning :starting :initializing :working :blocked :error :terminated})
+   :terminated   - Killed/stopped
+   :zombie       - Stale-sweep-marked: registry row outlived process (no
+                   activity past stale threshold AND :alive? false). Kept
+                   for audit; agent_status default-filters these out."
+  #{:idle :spawning :starting :initializing :working :blocked :error :terminated :zombie})
 
 (def task-statuses
   "Valid task status values.
@@ -224,10 +227,38 @@
     :db/index true}
 
    :ling/process-pid
-   {:db/doc "Operating system process ID for headless lings (nil for vterm lings)"}
+   {:db/doc "Operating system process ID for headless lings (nil for vterm lings).
+            DEPRECATED in favor of :slave/process-pid (universal across spawn modes).
+            Retained for backward compat with existing rows."}
 
    :ling/process-alive?
-   {:db/doc "Whether the headless ling OS process is still running (heartbeat-derived)"}
+   {:db/doc "Whether the headless ling OS process is still running (heartbeat-derived).
+            DEPRECATED in favor of :slave/alive? (universal). Retained for back-compat."}
+
+   ;; Universal lifecycle metadata — covers vterm, headless, openrouter, agent-sdk.
+   ;; Added 2026-04-27 to fix registry-ghost accumulation: every prior session's
+   ;; rows lingered in datalevin because there was no liveness or activity signal.
+   ;; agent_status default query now filters by :alive? AND last-active-at recency.
+   :slave/spawned-at
+   {:db/doc "Epoch ms set on register-slave!. Immutable. Distinguishes from :slave/created-at (legacy, not always set)."}
+
+   :slave/last-active-at
+   {:db/doc "Epoch ms bumped on every dispatch / shout / status update. Indexed.
+            Stale-sweep marks slaves with last-active-at < now - threshold as :zombie + :alive? false."
+    :db/index true}
+
+   :slave/status-changed-at
+   {:db/doc "Epoch ms bumped only on :slave/status transitions. Pairs with status for audit trail."}
+
+   :slave/process-pid
+   {:db/doc "OS process pid. Universal across spawn modes (vterm = emacs subprocess pid;
+            headless = direct claude subprocess; openrouter/agent-sdk = nil if no local proc).
+            Used by liveness sweep: kill -0 <pid> on registry load."}
+
+   :slave/alive?
+   {:db/doc "Liveness flag. true = registered + heartbeat OK. false = stale-sweep marked dead.
+            Indexed. agent_status default-filters :alive? true unless :include-stale? opt."
+    :db/index true}
 
    :ling/model
    {:db/doc "Model identifier for multi-model lings. Default 'claude' uses Claude Code CLI.

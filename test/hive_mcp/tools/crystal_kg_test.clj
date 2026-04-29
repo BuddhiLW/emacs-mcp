@@ -5,13 +5,12 @@
    dependency chain (which needs Emacs/nrepl)."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.knowledge-graph.connection :as kg-conn]
-            [hive-mcp.knowledge-graph.edges :as kg-edges]))
+            [hive-mcp.knowledge-graph.edges :as kg-edges]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;; Reset KG before each test
-(use-fixtures :each
-  (fn [f]
-    (kg-conn/reset-conn!)
-    (f)))
+(use-fixtures :each (iso/with-isolations :kg-conn))
 
 ;; ============================================================================
 ;; Simulated extract-source-ids (mirrors crystal.clj implementation)

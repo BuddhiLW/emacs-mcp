@@ -1,0 +1,7 @@
+{:no-args       [:a :b :c :d :e]
+ :limit-only    [:a :b]
+ :offset-only   [:c :d :e]
+ :both          [:b :c]
+ :over-offset   []
+ :over-limit    [:a :b :c :d :e]
+ :empty-coll    []}

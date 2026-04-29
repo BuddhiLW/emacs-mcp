@@ -1,6 +1,9 @@
 {;; hive-dsl defadt macro hook — expands to 4 def forms so generated
  ;; type/ctor/pred/coercer symbols resolve.
- :hooks {:analyze-call {hive-dsl.adt/defadt hive-dsl.hooks.defadt/defadt}}
+ ;; hive-di defconfig macro hook — expands to <Name>-fields / -schema /
+ ;; resolve-<Name> defs so generated symbols resolve.
+ :hooks {:analyze-call {hive-dsl.adt/defadt hive-dsl.hooks.defadt/defadt
+                        hive-di.core/defconfig hive-di.hooks.defconfig/defconfig}}
 
  :lint-as {;; multi_dsl_e2e_test when-resolved macro binds a single symbol like if-let
            hive-mcp.tools.multi-dsl-e2e-test/when-resolved clojure.core/if-let

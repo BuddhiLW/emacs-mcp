@@ -138,17 +138,35 @@
 ;;; =============================================================================
 
 (defn clear-db!
-  "Destroy and recreate the LMDB database.
-   WARNING: Permanently deletes all swarm state."
-  []
+  "DESTRUCTIVE — destroy and recreate the LMDB database.
+   Requires `confirm` to be the keyword `:i-mean-it`; any other value throws.
+
+   See AXIOM \"Never NUKE Data — Destruction Requires Explicit, Loud,
+   Guarded Consent\". WARNING: permanently deletes all swarm state at the
+   configured path.
+
+   Test code that needs a fresh swarm DB MUST create a temp directory and
+   call this only against that temp path, never the production data path."
+  [confirm]
+  (when-not (= confirm :i-mean-it)
+    (throw (ex-info "swarm clear-db! requires confirm=:i-mean-it"
+                    {:passed-confirm confirm
+                     :hint "This call deletes the swarm Datalevin directory from disk. Pass :i-mean-it explicitly."
+                     :backend :datalevin
+                     :db-path (get-db-path)})))
   (guards/when-not-coordinator
    "dl/clear-db! blocked"
-   (close!)
-   (let [path (get-db-path)
-         dir (java.io.File. path)]
-     (when (.exists dir)
-       (doseq [f (reverse (file-seq dir))]
-         (.delete f))
-       (log/warn "Destroyed Datalevin DB at:" path)))
-   (reset! conn (create-conn))
-   (log/info "Recreated empty Datalevin DB")))
+   (let [path (get-db-path)]
+     (log/error "[storage/destruction-fired] swarm clear-db! invoked"
+                {:backend :datalevin
+                 :db-path path
+                 :stacktrace (mapv str (.getStackTrace (Throwable.)))})
+     (close!)
+     (let [dir (java.io.File. path)]
+       (when (.exists dir)
+         (doseq [f (reverse (file-seq dir))]
+           (.delete f))
+         (log/error "[storage/destruction-completed] swarm Datalevin destroyed"
+                    {:backend :datalevin :db-path path})))
+     (reset! conn (create-conn))
+     (log/info "Recreated empty Datalevin DB"))))

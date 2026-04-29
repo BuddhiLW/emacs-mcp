@@ -106,6 +106,9 @@
                              :embedding {:provider :ollama
                                          :model "nomic-embed-code"}}
               :carto-store {:backend :qdrant-carto}}
+   :cartography {:sentinel-path (str (System/getProperty "user.home")
+                                     "/.config/hive-mcp/data/carto/preferred-backend.edn")
+                 :strict-mode?  true}
    :secrets {:openrouter-api-key nil
              :openai-api-key nil
              :anthropic-api-key nil
@@ -115,14 +118,15 @@
              :fireworks-api-key nil}
    :llm-providers {:openrouter {:api-url       "https://openrouter.ai/api/v1/chat/completions"
                                 :secret-key    :openrouter-api-key
-                                :default-model "anthropic/claude-sonnet-4-6"
+                                :default-model "anthropic/claude-opus-4-7"
                                 :available-models ["moonshotai/kimi-k2.5"
                                                    "minimax/minimax-m2.7"
                                                    "qwen/qwen3.6-plus"
                                                    "z-ai/glm-5.1"
                                                    "xiaomi/mimo-v2-pro"
-                                                   "anthropic/claude-sonnet-4-6"
-                                                   "anthropic/claude-opus-4-6"]}
+                                                   "anthropic/claude-opus-4-7"
+                                                   "anthropic/claude-opus-4-6"
+                                                   "anthropic/claude-sonnet-4-6"]}
                    :venice     {:api-url       "https://api.venice.ai/api/v1/chat/completions"
                                 :secret-key    :venice-api-key
                                 :default-model "venice-uncensored"
@@ -152,7 +156,14 @@
               ;; One bad shout fans out (per-agent ring × backbone × subscribers),
               ;; so aggressive bound protects every downstream context window.
               :shout-message-cap 2048}
-   :agent-defaults {:ling       {:provider :openrouter :model "moonshotai/kimi-k2.5"}
+   :headless {;; Default concrete backend keyword for the abstract :headless
+              ;; spawn-mode. :auto = registry-driven preference per provider.
+              ;; Concrete keys (e.g. :hive-agent) come from addons that register
+              ;; via META-INF/hive-addons/*.edn + register-headless!.
+              ;; hive-mcp source MUST NOT name concrete backends — keywords here
+              ;; are inert operator data.
+              :default-backend :auto}
+   :agent-defaults {:ling       {:provider :openrouter :model "anthropic/claude-opus-4-7"}
                     :drone      {:provider :openrouter :model "minimax/minimax-m2.7"}
                     :compressor {:provider :venice     :model "venice-uncensored"}}
    :models {:task-models {:coding     "moonshotai/kimi-k2.5"

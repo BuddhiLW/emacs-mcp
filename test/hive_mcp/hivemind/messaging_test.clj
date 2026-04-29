@@ -81,3 +81,71 @@
           last-msg (last (:messages entry))]
       (is (nil? (:message last-msg)))
       (is (= "task only" (:task last-msg))))))
+
+;; ---------------------------------------------------------------------------
+;; Empty-shout suppression (kanban-hygiene-2026-04-27 regression)
+;;
+;; During a bulk-close pass (69 review→done in ~8 min) 11 hivemind shouts
+;; were emitted with empty content `[] ()` — zero-payload broadcasts. Root
+;; cause: side-effect chains in batch ops occasionally invoke shout! with
+;; nil/blank :task + :message + no residual :data.
+;;
+;; Fix: shout! short-circuits when `empty-shout?` is true, returns false,
+;; logs at debug level, and persists nothing to the per-agent ring.
+;; ---------------------------------------------------------------------------
+
+(deftest empty-shout-predicate
+  (testing "empty-shout? identifies zero-information payloads"
+    (is (msg/empty-shout? nil)
+        "nil data is empty")
+    (is (msg/empty-shout? {})
+        "empty map is empty")
+    (is (msg/empty-shout? {:task ""})
+        "blank :task only is empty")
+    (is (msg/empty-shout? {:task "" :message ""})
+        "blank :task + :message is empty")
+    (is (msg/empty-shout? {:task [] :message ()})
+        "empty-vec :task + empty-list :message is empty")
+    (is (msg/empty-shout? {:task nil :message nil :directory nil})
+        "nil values across reserved keys is empty")
+    (is (msg/empty-shout? {:task "" :message "" :extra nil})
+        "blank reserved + nil residual is empty"))
+  (testing "empty-shout? recognizes any non-blank signal"
+    (is (not (msg/empty-shout? {:task "real"}))
+        "non-blank :task is not empty")
+    (is (not (msg/empty-shout? {:message "hi"}))
+        "non-blank :message is not empty")
+    (is (not (msg/empty-shout? {:percent 50}))
+        "residual :data with value is not empty")
+    (is (not (msg/empty-shout? "non-map non-blank"))
+        "non-map opaque payload is not empty")))
+
+(deftest bulk-op-empty-shout-suppressed
+  (testing "shout! with empty payload returns false and persists nothing"
+    (let [agent-id (str "test-empty-shout-" (random-uuid))]
+      (is (false? (msg/shout! agent-id :progress nil))
+          "nil data -> false")
+      (is (false? (msg/shout! agent-id :progress {}))
+          "empty map -> false")
+      (is (false? (msg/shout! agent-id :progress {:task "" :message ""}))
+          "blank task+message -> false")
+      (is (false? (msg/shout! agent-id :completed {:task [] :message ()}))
+          "the literal `[] ()` payload shape from the kanban-hygiene incident -> false")
+      (is (nil? (bget state/agent-registry agent-id))
+          "no per-agent ring entry created for any of the suppressed shouts"))))
+
+(deftest non-empty-shout-still-persists
+  (testing "shout! with any signal is still persisted"
+    (let [agent-id (str "test-real-shout-" (random-uuid))]
+      (is (true? (msg/shout! agent-id :progress {:task "do something"})))
+      (is (= ["do something"]
+             (mapv :task (:messages (bget state/agent-registry agent-id))))
+          "real-task shout reaches the per-agent ring"))))
+
+(deftest bulk-close-suppression-cap
+  (testing "Bulk emission of empty shouts leaves agent ring empty"
+    (let [agent-id (str "test-bulk-empty-" (random-uuid))]
+      (dotimes [_ 11]
+        (msg/shout! agent-id :completed {:task "" :message "" :data nil}))
+      (is (nil? (bget state/agent-registry agent-id))
+          "11 empty shouts (matching the observed 2026-04-27 incident count) -> no ring entries"))))

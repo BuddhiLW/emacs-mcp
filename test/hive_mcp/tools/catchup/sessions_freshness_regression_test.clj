@@ -246,3 +246,99 @@
                (->> sessions
                     (remove session-summary?)
                     (mapv (juxt :id :type :tags))))))))
+
+;; =============================================================================
+;; RED — Sibling-scope leak: sessions/wraps tagged with a SIBLING project must
+;; NOT appear in another project's catchup bundle. HCR is strictly top-down —
+;; only self + descendants + global are visible. Without scope-filtering the
+;; sessions-fresh + recent-wraps-global branches in `query-all-scoped`, sibling
+;; sessions leak (e.g. funeraria session-summaries surfacing in hive catchup).
+;; =============================================================================
+
+(def ^:private sibling-pid
+  "Sibling project of `hive` — NOT under hive's descendants. Mirrors the
+   real-world funeraria/hive split where two unrelated workspace roots
+   coexist on disk."
+  "funeraria")
+
+(defn- sibling-session-entries
+  "Fresh session-summary notes tagged with a SIBLING scope. Designed to
+   bypass the hierarchy + global-pierce branches and slip through the
+   un-filtered sessions-fresh / recent-wraps-global branches."
+  []
+  (let [stag (scope-tag sibling-pid)]
+    (vec
+      (for [i (range 5)
+            :let [ts (iso-instant (- 10 i))]]
+        {:id         (str "ss-sibling-" i)
+         :type       "note"
+         :project-id sibling-pid
+         :tags       [stag "session-summary"]
+         :content    (str "Sibling Session Summary " i " for " sibling-pid)
+         :created    ts}))))
+
+(defn- sibling-wrap-entries
+  "Fresh wrap-generated notes tagged with the SIBLING scope."
+  []
+  (let [stag (scope-tag sibling-pid)]
+    (vec
+      (for [i (range 3)
+            :let [ts (iso-instant (- 5 i))]]
+        {:id         (str "wrap-sibling-" i)
+         :type       "note"
+         :project-id sibling-pid
+         :tags       [stag "wrap-generated"]
+         :content    (str "Sibling Wrap " i)
+         :created    ts}))))
+
+(defn- with-sibling-leak-store [t]
+  (reset! entries-state (into (build-seed)
+                              (concat (sibling-session-entries)
+                                      (sibling-wrap-entries))))
+  (let [store (make-insertion-order-store entries-state)
+        scope-tags (into #{(scope-tag parent-pid) "scope:global"}
+                         (map scope-tag descendant-pids))]
+    (with-redefs [mem-proto/store-set?         (constantly true)
+                  mem-proto/get-store          (constantly store)
+                  ;; `funeraria` is intentionally OMITTED from descendants.
+                  kg-scope/visible-scopes      (fn [pid]
+                                                 (if (= pid parent-pid)
+                                                   [parent-pid "global"]
+                                                   [pid parent-pid "global"]))
+                  kg-scope/descendant-scopes   (fn [pid]
+                                                 (if (= pid parent-pid)
+                                                   descendant-pids
+                                                   []))
+                  kg-scope/full-hierarchy-scope-tags (fn [_pid] scope-tags)]
+      (t))))
+
+(deftest ^:regression catchup-bundle-excludes-sibling-sessions-test
+  (with-sibling-leak-store
+    (fn []
+      (testing "sibling-scoped session-summaries do NOT leak into parent's bundle"
+        (let [bundle   (bundle/query-catchup-bundle parent-pid)
+              sessions (:sessions bundle)
+              leaked   (filter (fn [e]
+                                 (or (= sibling-pid (:project-id e))
+                                     (contains? (set (:tags e))
+                                                (scope-tag sibling-pid))))
+                               sessions)]
+          (is (empty? leaked)
+              (str "sibling-project sessions leaked into :sessions — HCR is "
+                   "strictly top-down, siblings must NEVER appear: "
+                   (mapv (juxt :id :project-id :tags) leaked))))))))
+
+(deftest ^:regression catchup-bundle-excludes-sibling-wraps-test
+  (with-sibling-leak-store
+    (fn []
+      (testing "sibling-scoped wrap-generated notes do NOT leak into parent's bundle"
+        (let [bundle (bundle/query-catchup-bundle parent-pid)
+              wraps  (:recent-wraps bundle)
+              leaked (filter (fn [e]
+                               (or (= sibling-pid (:project-id e))
+                                   (contains? (set (:tags e))
+                                              (scope-tag sibling-pid))))
+                             wraps)]
+          (is (empty? leaked)
+              (str "sibling-project wraps leaked into :recent-wraps: "
+                   (mapv (juxt :id :project-id :tags) leaked))))))))

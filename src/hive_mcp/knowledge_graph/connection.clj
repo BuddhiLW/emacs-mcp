@@ -110,55 +110,72 @@
   (and (proto/store-set?)
        (satisfies? pkg/IKGStore (proto/get-store))))
 
+(def ^:dynamic *test-store*
+  "Per-thread override for the active KG store.
+   When non-nil, `ensure-store!` returns this directly without
+   touching the global proto/store atom. Bound by the :kg-conn
+   isolation fixture (hive-mcp.isolation-methods) so KG tests run
+   against a fresh ephemeral store without polluting prod state.
+   Honors axiom 20260122235103-7151cc29 (Test Isolation Silent Server Death)."
+  nil)
+
 (defn- ensure-store!
   "Ensure a store is configured. Auto-detects backend from config.
-   Re-initializes when the current store is stale (see `store-live?`)."
+   Re-initializes when the current store is stale (see `store-live?`).
+   Returns *test-store* directly when bound (test-isolation override)."
   []
-  (when-not (store-live?)
-    (when (proto/store-set?)
-      (log/warn "Active KG store failed satisfies? IKGStore — recreating"
-                "(likely stale protocol reference after ns reload)")
-      (proto/clear-store!))
-    (let [backend (detect-backend)]
-      (log/info "Auto-initializing KG backend" {:backend backend})
-      (case backend
-        :datalevin
-        (let [store (r/guard Exception nil
-                             (require 'hive-mcp.knowledge-graph.store.datalevin)
-                             (let [create-fn (resolve 'hive-mcp.knowledge-graph.store.datalevin/create-store)]
-                               (create-fn)))]
-          (if store
-            (proto/set-store! store)
-            (do
-              (log/error "CRITICAL: Failed to initialize Datalevin, falling back to ephemeral DataScript. KG data on disk will NOT be accessible.")
-              (proto/set-store! (ds-store/create-store)))))
+  (or *test-store*
+      (do
+        (when-not (store-live?)
+          (when (proto/store-set?)
+            (log/warn "Active KG store failed satisfies? IKGStore — recreating"
+                      "(likely stale protocol reference after ns reload)")
+            (proto/clear-store!))
+          (let [backend (detect-backend)]
+            (log/info "Auto-initializing KG backend" {:backend backend})
+            (case backend
+              :datalevin
+              (let [store (r/guard Exception nil
+                                   (require 'hive-mcp.knowledge-graph.store.datalevin)
+                                   (let [create-fn (resolve 'hive-mcp.knowledge-graph.store.datalevin/create-store)]
+                                     (create-fn)))]
+                (if store
+                  (proto/set-store! store)
+                  (do
+                    (log/error "CRITICAL: Failed to initialize Datalevin, falling back to ephemeral DataScript. KG data on disk will NOT be accessible.")
+                    (proto/set-store! (ds-store/create-store)))))
 
-        :datahike
-        (let [writer-cfg (detect-writer-config)
-              store (r/guard Exception nil
-                             ;; Pre-load konserve namespaces in correct order before datahike.
-                             ;; konserve.impl.defaults requires konserve.impl.storage-layout
-                             ;; which defines -atomic-move. If storage-layout is partially
-                             ;; loaded (e.g. from a concurrent require), method vars don't
-                             ;; get interned and defaults.cljc fails with
-                             ;; "-atomic-move does not exist". Loading the full chain here
-                             ;; prevents the race.
-                             (require 'konserve.protocols)
-                             (require 'konserve.impl.storage-layout)
-                             (require 'konserve.impl.defaults)
-                             (require 'konserve.cache)
-                             (require 'hive-mcp.knowledge-graph.store.datahike)
-                             (let [create-fn (resolve 'hive-mcp.knowledge-graph.store.datahike/create-store)]
-                               (create-fn (when writer-cfg {:writer writer-cfg}))))]
-          (if store
-            (proto/set-store! store)
-            (do
-              (log/error "CRITICAL: Failed to initialize Datahike, falling back to ephemeral DataScript. KG data on disk will NOT be accessible.")
-              (proto/set-store! (ds-store/create-store)))))
+              :datahike
+              (let [writer-cfg (detect-writer-config)
+                    store (r/guard Exception nil
+                                   ;; Pre-load konserve namespaces in correct order before datahike.
+                                   ;; konserve.impl.defaults requires konserve.impl.storage-layout
+                                   ;; which defines -atomic-move. If storage-layout is partially
+                                   ;; loaded (e.g. from a concurrent require), method vars don't
+                                   ;; get interned and defaults.cljc fails with
+                                   ;; "-atomic-move does not exist". Loading the full chain here
+                                   ;; prevents the race.
+                                   (require 'konserve.protocols)
+                                   (require 'konserve.impl.storage-layout)
+                                   (require 'konserve.impl.defaults)
+                                   (require 'konserve.cache)
+                                   (require 'hive-mcp.knowledge-graph.store.datahike)
+                                   (let [create-fn (resolve 'hive-mcp.knowledge-graph.store.datahike/create-store)]
+                                     (create-fn (when writer-cfg {:writer writer-cfg}))))]
+                (if (and store
+                         (r/ok? (r/try-effect*
+                                 :datahike/ensure-conn-failed
+                                 (pkg/ensure-conn! store))))
+                  (proto/set-store! store)
+                  (do
+                    (log/error "CRITICAL: Failed to initialize Datahike. Refusing to substitute another KG backend because :kg-backend requested :datahike.")
+                    (throw (ex-info "Datahike KG backend unavailable"
+                                    {:backend :datahike
+                                     :hint "Check :services.datahike.path / HIVE_KG_DB_PATH. The configured path must be a Datahike database, not a container directory."})))))
 
-        ;; Default: DataScript
-        (proto/set-store! (ds-store/create-store)))))
-  (proto/get-store))
+              ;; Default: DataScript
+              (proto/set-store! (ds-store/create-store)))))
+        (proto/get-store))))
 
 ;; =============================================================================
 ;; Transaction Batching (Dynamic Var)
@@ -364,10 +381,37 @@
 (def ensure-conn ensure-conn!)
 
 (defn reset-conn!
-  "Reset the connection to a fresh database.
-   Useful for testing or clearing state."
+  "Close and reopen the active KG connection. NON-DESTRUCTIVE — does NOT
+   delete data on disk. The same on-disk DB is re-attached for persistent
+   stores (Datahike, Datalevin); in-memory stores (DataScript) get a fresh
+   empty conn since there is no persistent backing.
+
+   For destructive wipe, use `delete-database!` with `:i-mean-it`.
+
+   Renamed semantics 2026-04-28 — see AXIOM 'Never NUKE Data'."
   []
   (proto/reset-conn! (ensure-store!)))
+
+(defn delete-database!
+  "DESTRUCTIVE — delete the active KG database from disk. Requires
+   `confirm` to be `:i-mean-it`; any other value throws.
+
+   Only persistent backends (`(satisfies? IPersistentKGStore store)`)
+   support deletion. Calling against an ephemeral backend (DataScript)
+   throws — destruction has no meaning when there is no persistent state.
+
+   Test code that needs a fresh persistent store MUST create a temp
+   directory (e.g. via `(System/getProperty \"java.io.tmpdir\")`) and
+   call this only against that temp path, never the production data path.
+
+   Emits high-severity telemetry events before and after deletion."
+  [confirm]
+  (let [store (ensure-store!)]
+    (when-not (proto/persistent-store? store)
+      (throw (ex-info "delete-database! not supported on ephemeral backend"
+                      {:store-class (str (class store))
+                       :hint "Ephemeral backends (DataScript) have no persistent state. Use reset-conn! for a fresh in-memory conn."})))
+    (proto/delete-database! store confirm)))
 
 (defn transact!
   "Transact data to the KG database.

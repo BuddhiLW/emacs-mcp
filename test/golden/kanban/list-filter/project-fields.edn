@@ -1,0 +1,6 @@
+{:nil-fields    {:id "x" :title "T" :status "todo" :priority "high"}
+ :empty-fields  {:id "x" :title "T" :status "todo" :priority "high"}
+ :id-only       {:id "x"}
+ :id-title      {:id "x" :title "T"}
+ :keyword-form  {:id "x" :status "todo"}
+ :missing-key   {:id "x"}}

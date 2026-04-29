@@ -116,14 +116,27 @@
 (defn handle-execute
   "Execute state: create kanban tasks from plan steps.
    Side-effectful — uses resources for kanban/KG operations.
-   Returns data with all execute-fn result fields merged."
+   Returns data with all execute-fn result fields merged.
+
+   Catches executor exceptions to record :error/:errors on data so the
+   FSM ::fsm/error transition can surface them — without this catch,
+   exceptions bubble out of fsm/run as a generic 'handler error'."
   [resources data]
   (let [execute-fn (:execute-fn resources)]
     (if execute-fn
-      ;; Delegate to injected executor (plan-to-kanban)
-      (let [result (execute-fn data)]
-        (merge data result {:status :executing}))
-      ;; No executor — just transition status
+      (try
+        (let [result (execute-fn data)]
+          (merge data result {:status :executing}))
+        (catch clojure.lang.ExceptionInfo e
+          (assoc data
+                 :status :execute-failed
+                 :error  (.getMessage e)
+                 :errors (or (:errors (ex-data e)) [(.getMessage e)])))
+        (catch Throwable t
+          (assoc data
+                 :status :execute-failed
+                 :error  (.getMessage t)
+                 :errors [(.getMessage t)])))
       (assoc data :status :executing))))
 
 (defn handle-complete
@@ -161,9 +174,10 @@
 
          ::fsm/error {:handler (fn [_r fsm]
                                  (log/error "Plan FSM error" {:state (:current-state-id fsm)
-                                                              :error (get-in fsm [:data :error])})
-                                 (throw (ex-info "Plan FSM failed"
-                                                 (select-keys (:data fsm) [:error :status :validation]))))}}
+                                                              :error (get-in fsm [:data :error])
+                                                              :errors (get-in fsm [:data :errors])})
+                                 (throw (ex-info (or (get-in fsm [:data :error]) "Plan FSM failed")
+                                                 (select-keys (:data fsm) [:error :errors :status :validation]))))}}
 
    :opts {:max-trace 20
           :pre (fn [fsm _r]

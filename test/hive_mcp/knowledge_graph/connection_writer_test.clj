@@ -2,7 +2,14 @@
   "Tests for the write-coalescing queue lifecycle and integration.
 
    Uses DataScript backend for speed. Each test gets a fresh store
-   and a stopped writer to avoid cross-test interference."
+   and a stopped writer to avoid cross-test interference.
+
+   Determinism note: every place that previously used `(Thread/sleep N)`
+   to wait on the async coalescing queue now calls `conn/flush-pending!`,
+   the sentinel that busy-waits until in-flight=0 (or a 5s deadline). This
+   eliminates the test flake source documented in kanban
+   20260404134936-1b481a86 — see also the docstring on
+   `hive-mcp.knowledge-graph.connection/flush-pending!`."
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [clojure.string :as string]
             [clojure.core.async :as async]
@@ -61,8 +68,8 @@
                       :kg-edge/confidence 1.0}])
     (is (:running? (conn/writer-stats)))
 
-    ;; Give queue time to flush
-    (Thread/sleep 100)
+    ;; Drain the coalescing queue deterministically (replaces Thread/sleep 100).
+    (conn/flush-pending!)
 
     ;; Both writes should have landed
     (let [results (conn/query '[:find ?id
@@ -84,7 +91,8 @@
                         :kg-edge/to "b"
                         :kg-edge/relation :implements
                         :kg-edge/confidence 1.0}])
-      (Thread/sleep 100)
+      ;; Drain deterministically (replaces Thread/sleep 100).
+      (conn/flush-pending!)
 
       (let [stats-after (conn/writer-stats)]
         (is (:running? stats-after))
@@ -102,8 +110,8 @@
                       :kg-edge/to "y"
                       :kg-edge/relation :implements
                       :kg-edge/confidence 0.9}])
-    ;; Wait for async flush
-    (Thread/sleep 100)
+    ;; Drain deterministically (replaces Thread/sleep 100).
+    (conn/flush-pending!)
 
     (let [results (conn/query '[:find ?id
                                 :where [?e :kg-edge/id ?id]])]
@@ -132,8 +140,8 @@
                           :kg-edge/to (str "to-" i)
                           :kg-edge/relation :implements
                           :kg-edge/confidence 0.5}]))
-      ;; Wait for all flushes
-      (Thread/sleep 200)
+      ;; Drain deterministically (replaces Thread/sleep 200).
+      (conn/flush-pending!)
 
       (let [after-batches (:batches-flushed (conn/writer-stats))
             batch-count (- after-batches before-batches)]
@@ -178,7 +186,8 @@
                                     :where [?e :kg-edge/id "norm-target"]]))]
       ;; Send a vector datum through the queue
       (conn/transact! [:db/add eid :kg-edge/confidence 0.99])
-      (Thread/sleep 100)
+      ;; Drain deterministically (replaces Thread/sleep 100).
+      (conn/flush-pending!)
 
       (let [updated (conn/query '[:find ?c
                                   :where
@@ -195,7 +204,8 @@
     (let [n-threads 10
           writes-per-thread 5
           latch (CountDownLatch. n-threads)
-          errors (atom [])]
+          errors (atom [])
+          done   (CountDownLatch. n-threads)]
       ;; Launch threads
       (dotimes [t n-threads]
         (.start
@@ -210,11 +220,15 @@
                                   :kg-edge/relation :implements
                                   :kg-edge/confidence 0.5}]))
               (catch Exception e
-                (swap! errors conj (.getMessage e)))))))
+                (swap! errors conj (.getMessage e)))
+              (finally
+                (.countDown done))))))
         (.countDown latch))
 
-      ;; Wait for all threads to complete
-      (Thread/sleep 500)
+      ;; Wait for all threads to finish ENQUEUEING (deterministic, no sleep).
+      (.await done 10 TimeUnit/SECONDS)
+      ;; Then drain the coalescing queue (replaces Thread/sleep 500).
+      (conn/flush-pending!)
 
       (is (empty? @errors) (str "Errors during concurrent writes: " @errors))
 

@@ -1,0 +1,7 @@
+{:title-hit       true
+ :title-hit-ci    true
+ :description-hit true
+ :no-match        false
+ :nil-query       true
+ :blank-query     true
+ :empty-content   false}

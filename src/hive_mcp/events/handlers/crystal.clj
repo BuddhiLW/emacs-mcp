@@ -46,6 +46,46 @@
 ;; Handler: :crystal/wrap-request (Option A - Unified wrap path)
 ;; =============================================================================
 
+(defn- format-bucket-message
+  "Format a session-wrap shout message from a stats-like map.
+
+   Decisions and conventions always appear (count or 0). Other bucket
+   types — notes, principles, axioms, snippets, plans, accomplishments,
+   kanban-closures — are appended only when non-zero so the line stays
+   tight on lean sessions while surfacing the full picture on rich ones.
+
+   Accepts both `:decisions N` and `:decision-count N` shapes (legacy
+   producer compat — strips trailing s and tries `<singular>-count`).
+   Reason for existence: the bare 'N decisions, M conventions' format
+   under-reported productive sessions where most work landed as
+   conventions/principles/axioms (kanban 20260423144824)."
+  [stats]
+  (let [m     (or stats {})
+        get-n (fn [k]
+                (let [n (name k)
+                      singular (if (str/ends-with? n "s")
+                                 (subs n 0 (dec (count n)))
+                                 n)]
+                  (or (get m k)
+                      (get m (keyword (str singular "-count")))
+                      0)))
+        decisions   (get-n :decisions)
+        conventions (get-n :conventions)
+        extras      (->> [[:notes "notes"]
+                          [:principles "principles"]
+                          [:axioms "axioms"]
+                          [:snippets "snippets"]
+                          [:plans "plans"]
+                          [:accomplishments "accomplishments"]
+                          [:kanban-closures "kanban→done"]]
+                         (keep (fn [[k label]]
+                                 (let [n (get-n k)]
+                                   (when (pos? n)
+                                     (str n " " label)))))
+                         seq)]
+    (str "Session wrapped: " decisions " decisions, " conventions " conventions"
+         (when extras (str ", " (str/join ", " extras))))))
+
 (defn handle-crystal-wrap-request
   "Handler for :crystal/wrap-request events.
 
@@ -56,6 +96,10 @@
    {:accomplishments  [\"Task 1\" \"Task 2\"]     ; list of completed tasks
     :decisions        [\"Decision 1\"]           ; list of decisions made
     :conventions      [\"Convention 1\"]         ; list of conventions
+    :principles       [\"Principle 1\"]          ; list of principles (optional)
+    :axioms           [\"Axiom 1\"]              ; list of axioms (optional)
+    :snippets         [\"Snippet 1\"]            ; list of snippets (optional)
+    :plans            [\"Plan 1\"]               ; list of plans (optional)
     :in-progress      [\"WIP task\"]             ; list of in-progress items
     :next-actions     [\"Next 1\"]               ; list of next session priorities
     :completed-tasks  [\"kanban-id-1\"]          ; kanban task IDs to mark done
@@ -66,14 +110,24 @@
    - :memory-write - Store session summary as note
    - :wrap-notify  - Queue for coordinator permeation
    - :shout        - Broadcast completion to hivemind"
-  [coeffects [_ {:keys [accomplishments decisions conventions _in-progress
-                        _next-actions _completed-tasks project] :as data}]]
+  [coeffects [_ {:keys [accomplishments decisions conventions
+                        principles axioms snippets plans
+                        _in-progress _next-actions completed-tasks project]
+                 :as data}]]
   (let [agent-id (or (get-in coeffects [:agent-context :agent-id])
                      (System/getenv "CLAUDE_SWARM_SLAVE_ID")
                      "unknown-agent")
         session-id (str "session:" (java.time.LocalDate/now) ":" agent-id)
         date-str (str (java.time.LocalDate/now))
         summary-content (format-session-summary (assoc data :date date-str))
+        stats {:accomplishments (count accomplishments)
+               :decisions       (count decisions)
+               :conventions     (count conventions)
+               :principles      (count principles)
+               :axioms          (count axioms)
+               :snippets        (count snippets)
+               :plans           (count plans)
+               :kanban-closures (count completed-tasks)}
         ;; Build effects map
         base-effects {:log {:level :info
                             :message (str "Wrap request from " agent-id
@@ -89,14 +143,12 @@
         ;; Add wrap-notify effect for Crystal Convergence
         notify-effect {:wrap-notify {:agent-id agent-id
                                      :session-id session-id
-                                     :stats {:accomplishments (count accomplishments)
-                                             :decisions (count decisions)
-                                             :conventions (count conventions)}}}
-        ;; Add shout effect
+                                     :stats stats}}
+        ;; Add shout effect — full bucket breakdown so productive sessions
+        ;; with no :decision-typed entries don't read "0 decisions, 0 conventions"
         shout-effect {:shout {:agent-id agent-id
                               :event-type :completed
-                              :message (str "Session wrapped: " (count decisions) " decisions, "
-                                            (count conventions) " conventions")}}]
+                              :message (format-bucket-message stats)}}]
     ;; Merge all effects
     (merge base-effects summary-effect notify-effect shout-effect)))
 
@@ -115,7 +167,9 @@
     :session-id  \"session:2026-01-15:ling-123\"
     :project-id  \"hive-mcp\"              ; project ID for scoped permeation
     :created-ids [\"note-id-1\" \"note-id-2\"]
-    :stats       {:notes 2 :decisions 1 :conventions 0}}
+    :stats       {:notes 2 :decisions 1 :conventions 0
+                  :principles 0 :axioms 0 :snippets 0 :plans 0
+                  :kanban-closures 0}}
 
    Produces effects:
    - :log         - Log wrap notification
@@ -127,13 +181,7 @@
         ;; Defensive: ensure stats is a map before accessing keys
         ;; This prevents "Key must be integer" error if stats is a vector/nil
         safe-stats (if (map? stats) stats {})
-        decisions (if (map? safe-stats)
-                    (get safe-stats :decisions (get safe-stats :decision-count 0))
-                    0)
-        conventions (if (map? safe-stats)
-                      (get safe-stats :conventions (get safe-stats :convention-count 0))
-                      0)
-        message (str "Session wrapped: " decisions " decisions, " conventions " conventions")]
+        message (format-bucket-message safe-stats)]
     {:log {:level :info
            :message (str "Wrap notify from " agent-id " (project: " project-id "): " note-count " entries")}
      :wrap-notify {:agent-id agent-id

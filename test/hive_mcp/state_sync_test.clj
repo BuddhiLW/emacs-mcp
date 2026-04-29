@@ -11,22 +11,15 @@
             [hive-mcp.hivemind.core :as hivemind]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.tools.swarm :as swarm]
-            [hive-dsl.bounded-atom :refer [bget bclear!]]))
+            [hive-dsl.bounded-atom :refer [bget bclear!]]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;; =============================================================================
 ;; Test Fixtures - Reset state between tests
 ;; =============================================================================
 
-(defn reset-state-fixture [f]
-  ;; ADR-002: Reset DataScript as primary registry
-  (ds/reset-conn!)
-  (bclear! hivemind/agent-registry)
-  ;; Note: lings-registry moved to DataScript, no separate atom
-  (f)
-  (ds/reset-conn!)
-  (bclear! hivemind/agent-registry))
-
-(use-fixtures :each reset-state-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds :agent-registry))
 
 ;; =============================================================================
 ;; Core Requirement: Agent-ID to Slave-ID Mapping

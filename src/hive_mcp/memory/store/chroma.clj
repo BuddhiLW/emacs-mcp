@@ -53,6 +53,18 @@
      :total           total
      :ratio           (if-let [_ (pos? total)] (double (/ helpful total)) 0.0)}))
 
+(defn- apply-order-by
+  "Sort `entries` by `order-by` tuple `[field direction]`. `field` is a
+   keyword on the entry map (e.g. :created). `direction` is :asc or :desc.
+   No-op when `order-by` is nil."
+  [entries order-by]
+  (if-let [[field direction] order-by]
+    (let [cmp (if (= direction :desc)
+                #(compare %2 %1)
+                compare)]
+      (vec (sort-by field cmp entries)))
+    entries))
+
 (defn- build-health-map
   "Build health-check response from probe result and latency.
    probe-result is a Result (ok/err from probe-chroma)."
@@ -162,18 +174,19 @@
 
   (query-entries [_this opts]
     (let [{:keys [type project-id project-ids tags exclude-tags
-                  limit include-expired? grounded-from
+                  limit include-expired? grounded-from order-by
                   output-fields]  ;; accepted for interface compat; chroma ignores projection
-           :or {limit 100 include-expired? false}} opts]
-      (if grounded-from
-        (ccrud/query-grounded-from grounded-from)
-        (ccrud/query-entries :type type
-                             :project-id project-id
-                             :project-ids project-ids
-                             :tags tags
-                             :exclude-tags exclude-tags
-                             :limit limit
-                             :include-expired? include-expired?))))
+           :or {limit 100 include-expired? false}} opts
+          entries (if grounded-from
+                    (ccrud/query-grounded-from grounded-from)
+                    (ccrud/query-entries :type type
+                                         :project-id project-id
+                                         :project-ids project-ids
+                                         :tags tags
+                                         :exclude-tags exclude-tags
+                                         :limit limit
+                                         :include-expired? include-expired?))]
+      (apply-order-by entries order-by)))
 
   ;; --- Semantic Search ---
 

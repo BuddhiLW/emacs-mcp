@@ -15,20 +15,15 @@
             [hive-mcp.agent.ling :as ling]
             [hive-mcp.agent.drone :as drone]
             [hive-mcp.swarm.datascript :as ds]
-            [hive-mcp.swarm.datascript.connection :as conn]))
+            [hive-mcp.swarm.datascript.connection :as conn]
+            [hive-test.isolation :as iso]
+            hive-mcp.isolation-methods))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn reset-datascript-fixture
-  "Reset DataScript state before and after each test."
-  [f]
-  (ds/reset-conn!)
-  (f)
-  (ds/reset-conn!))
-
-(use-fixtures :each reset-datascript-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds))
 
 ;; =============================================================================
 ;; Section 1: Protocol Satisfaction Tests

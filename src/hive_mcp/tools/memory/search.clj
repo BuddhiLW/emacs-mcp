@@ -115,6 +115,19 @@
      :distance distance
      :title    (extract-title document metadata)}))
 
+(defn- content->text
+  "Coerce a stored :content value into a string for downstream string ops.
+   Kanban (and other structured) entries persist :content as a map (the
+   Milvus read path JSON-decodes the round-tripped JSON string back into
+   a map per try-parse-json contract); prefer the :title key when present,
+   otherwise pr-str so format-search-result's string ops never see a map."
+  [c]
+  (cond
+    (nil? c)    ""
+    (string? c) c
+    (map? c)    (or (:title c) (pr-str c))
+    :else       (str c)))
+
 (defn- store-entry->normalized
   "Map a store-protocol search entry (Milvus flat shape) into the
    common {:id :document :metadata :distance} shape consumed by
@@ -125,13 +138,14 @@
                     (string? (:tags entry))    (vec (str/split (:tags entry) #","))
                     :else                      [])
         tags-str  (str/join "," tags-vec)
-        tp        (:type entry)]
+        tp        (:type entry)
+        content   (content->text (:content entry))]
     {:id       (:id entry)
-     :document (or (:content entry) "")
+     :document content
      :distance (:distance entry)
      :metadata {:tags       tags-str
                 :type       (cond-> tp (keyword? tp) name)
-                :content    (:content entry)
+                :content    content
                 :project-id (:project-id entry)}}))
 
 (defn- record-co-access!

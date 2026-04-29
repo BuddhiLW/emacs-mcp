@@ -120,13 +120,12 @@
     (dtlv/db (kg/ensure-conn! this)))
 
   (reset-conn! [this]
-    (log/info "Resetting Datalevin KG store" {:path db-path})
+    ;; NON-DESTRUCTIVE — close conn and reopen the SAME on-disk DB.
+    ;; See AXIOM "Never NUKE Data". Destructive wipe lives on
+    ;; IPersistentKGStore/delete-database!.
+    (log/info "Reopening Datalevin KG store (non-destructive)" {:path db-path})
     (when-let [c @conn-atom]
       (rescue nil (dtlv/close c)))
-    (let [dir (io/file db-path)]
-      (when (.exists dir)
-        (doseq [f (reverse (file-seq dir))]
-          (.delete f))))
     (reset! conn-atom nil)
     (kg/ensure-conn! this))
 
@@ -134,7 +133,32 @@
     (when-let [c @conn-atom]
       (log/info "Closing Datalevin KG store" {:path db-path})
       (rescue nil (dtlv/close c))
-      (reset! conn-atom nil))))
+      (reset! conn-atom nil)))
+
+  kg/IPersistentKGStore
+
+  (delete-database! [_this confirm]
+    ;; DESTRUCTIVE — guard required.
+    (when-not (= confirm :i-mean-it)
+      (throw (ex-info "delete-database! requires confirm=:i-mean-it"
+                      {:passed-confirm confirm
+                       :hint "This call deletes the database directory from disk. Pass :i-mean-it explicitly to proceed."
+                       :backend :datalevin
+                       :db-path db-path})))
+    (log/error "[storage/destruction-fired] Datalevin delete-database! invoked"
+               {:backend :datalevin
+                :db-path db-path
+                :stacktrace (mapv str (.getStackTrace (Throwable.)))})
+    (when-let [c @conn-atom]
+      (rescue nil (dtlv/close c)))
+    (let [dir (io/file db-path)]
+      (when (.exists dir)
+        (doseq [f (reverse (file-seq dir))]
+          (.delete f))))
+    (reset! conn-atom nil)
+    (log/error "[storage/destruction-completed] Datalevin directory deleted"
+               {:backend :datalevin :db-path db-path})
+    nil))
 
 (def ^:private default-db-path "data/kg/datalevin")
 

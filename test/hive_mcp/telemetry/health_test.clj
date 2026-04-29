@@ -12,19 +12,15 @@
             [hive-mcp.telemetry.prometheus :as prom]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.channel.core :as channel]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
 ;;; =============================================================================
 
-(defn reset-state-fixture
-  "Reset DataScript before each test."
-  [f]
-  (ds/reset-conn!)
-  (f))
-
-(use-fixtures :each reset-state-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds))
 
 ;;; =============================================================================
 ;;; emit-health-event! Tests

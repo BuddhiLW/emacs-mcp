@@ -14,7 +14,9 @@
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.swarm.protocol :as proto]
             [hive-mcp.swarm.datascript.registry :as registry]
-            [hive-mcp.swarm.datascript.connection :as conn]))
+            [hive-mcp.swarm.datascript.connection :as conn]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -25,12 +27,15 @@
 
 (def ^:dynamic *registry* nil)
 
-(defn with-fresh-registry [f]
-  (conn/reset-conn!)
+(defn- registry-fixture
+  "Bind *registry* to the default DS registry for each test."
+  [f]
   (binding [*registry* (registry/get-default-registry)]
     (f)))
 
-(use-fixtures :each with-fresh-registry)
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  registry-fixture)
 
 (defn gen-slave-id []
   (str "test-slave-" (java.util.UUID/randomUUID)))

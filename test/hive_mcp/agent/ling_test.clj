@@ -20,20 +20,15 @@
             [hive-mcp.swarm.datascript.lings :as ds-lings]
             [hive-mcp.swarm.datascript.queries :as ds-queries]
             [hive-mcp.swarm.datascript.connection :as conn]
-            [hive-mcp.emacs.client :as ec]))
+            [hive-mcp.emacs.client :as ec]
+            [hive-test.isolation :as iso]
+            hive-mcp.isolation-methods))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn reset-datascript-fixture
-  "Reset DataScript state before and after each test."
-  [f]
-  (ds/reset-conn!)
-  (f)
-  (ds/reset-conn!))
-
-(use-fixtures :each reset-datascript-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds))
 
 ;; =============================================================================
 ;; Mock Helpers
