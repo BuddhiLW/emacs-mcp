@@ -463,3 +463,27 @@
       (is (= :medium (:estimate step)))
       (is (= [] (:files step)))
       (is (= [] (:tags step))))))
+
+(deftest parse-plan-edn-schema-error-surfaces-test
+  (testing "kanban 20260429135746-3fabed1d: when contains-edn-plan? is true and EDN parse fails schema validation, surface the schema :details — do not silently fall back to markdown"
+    (let [content "{:steps [{:id :title :priority :estimate :files :depends-on}]}"
+          edn-result (parser/parse-edn-plan content)
+          plan-result (parser/parse-plan content)]
+      (is (parser/contains-edn-plan? content)
+          "test setup: content must trigger EDN auto-detect")
+      (is (false? (:success edn-result))
+          "test setup: EDN parse must fail schema validation")
+      (is (some? (:details edn-result))
+          "test setup: EDN parser must report schema :details")
+      (is (false? (:success plan-result)))
+      (is (= (:details edn-result) (:details plan-result))
+          "parse-plan must propagate the EDN schema :details, not swallow them")
+      (is (not= "No ## headers found in content" (:error plan-result))
+          "regression guard: must not return the misleading markdown fallback error")))
+
+  (testing "non-EDN-plan content with bad EDN block still falls through to markdown"
+    (let [content "# Plan\n\n## Step\n\n```edn\n{:not-a-plan true}\n```"
+          result (parser/parse-plan content)]
+      (is (:success result))
+      (is (= :markdown (-> result :plan :source-format))
+          "fallback path preserved when contains-edn-plan? is false"))))

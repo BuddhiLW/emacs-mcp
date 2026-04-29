@@ -67,7 +67,11 @@
   "Parse plan from memory content, auto-detecting format.
 
    If content contains ```edn blocks, attempts EDN parsing first.
-   Falls back to markdown parsing if EDN parsing fails or no EDN blocks.
+   Falls back to markdown parsing only if the EDN structure was unrecognized
+   (no schema validation reached). When EDN structure parsed but schema
+   validation failed, the schema error is surfaced — silent markdown
+   fallback hid actionable schema errors behind a misleading
+   \"No ## headers found\" message.
 
    Args:
    - content: Memory entry content (string)
@@ -80,27 +84,23 @@
    - {:success false :error ...} with error details"
   ([content] (parse-plan content {}))
   ([content {:keys [prefer-format memory-id]}]
-   (let [;; Extract title from markdown for phase-block parsing
-         title (md-parser/extract-title content)
+   (let [title (md-parser/extract-title content)
          result (cond
-                  ;; Forced format
                   (= prefer-format :edn)
                   (edn-parser/parse-edn-plan content {:title title})
 
                   (= prefer-format :markdown)
                   (md-parser/parse-markdown-plan content)
 
-                  ;; Auto-detect: try EDN first if EDN structure present
                   (edn-parser/contains-edn-plan? content)
                   (let [edn-result (edn-parser/parse-edn-plan content {:title title})]
-                    (if (:success edn-result)
-                      edn-result
-                      (md-parser/parse-markdown-plan content)))
+                    (cond
+                      (:success edn-result)  edn-result
+                      (:details edn-result)  edn-result
+                      :else                  (md-parser/parse-markdown-plan content)))
 
-                  ;; Default to markdown
                   :else
                   (md-parser/parse-markdown-plan content))]
-     ;; Attach memory-id if provided
      (if (and (:success result) memory-id)
        (update result :plan assoc :memory-id memory-id)
        result))))
