@@ -96,9 +96,21 @@
             (get-handler tool-name))))
 
 (defn resolve-tool-handler
-  "Resolve a tool name to its handler. Consolidated first, flat fallback."
+  "Resolve a tool name to its handler.
+
+   Order (T13 Phase 3 / multi-IAddon-native):
+     1. multi.registry — covers :multi/core seed (existing 20 consolidated tools)
+        AND any addon contributions registered via :multi/tool hook key.
+     2. consolidated.multi — back-compat for callers that haven't loaded
+        multi.registry yet (e.g. early bootstrap before core-seed fires).
+     3. flat-tool fallback via hive-mcp.tools/get-tool-by-name.
+
+   Decision: 20260429230453-7e7627cc"
   [tool-name]
-  (or (resolve-consolidated-handler tool-name)
+  (or (rescue nil
+              (when-let [resolver (requiring-resolve 'hive-mcp.multi.registry/resolve-tool-handler)]
+                (resolver tool-name)))
+      (resolve-consolidated-handler tool-name)
       (rescue nil
               (let [get-tool-fn (requiring-resolve 'hive-mcp.tools/get-tool-by-name)
                     tool-def    (get-tool-fn tool-name)]
