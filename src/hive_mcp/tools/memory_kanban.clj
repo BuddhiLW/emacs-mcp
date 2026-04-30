@@ -121,7 +121,8 @@
 ;; Pure operations
 ;; ============================================================
 
-(defn- create* [{:keys [title description priority context directory agent_id]}]
+(defn- create* [{:keys [title description priority context directory agent_id tags]
+                 :as _params}]
   (when (or (nil? title) (and (string? title) (str/blank? title)))
     (throw (ex-info "Kanban task requires a non-empty title" {:type :validation-error})))
   (let [eff-dir   (effective-dir directory)
@@ -132,7 +133,13 @@
                          :priority priority :created (kt/kanban-timestamp)
                          :started nil :context context}
                   description (assoc :description description))
-        tags (kt/build-kanban-tags "todo" priority project-id)
+        ;; Merge caller-supplied tags (e.g. wave:N from plan-to-kanban,
+        ;; epic:foo from grouping) with the standard kanban tag set.
+        ;; Audit kanban 20260429203429: previously :tags was silently dropped.
+        extra-tags (when (sequential? tags)
+                     (filterv string? tags))
+        tags (vec (distinct (concat (kt/build-kanban-tags "todo" priority project-id)
+                                    (or extra-tags []))))
         crud-result (mem-crud/handle-add {:type "note"
                                           :content (json/write-str content)
                                           :tags tags :directory eff-dir

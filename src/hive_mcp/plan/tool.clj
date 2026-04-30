@@ -24,6 +24,43 @@
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
+(defn- normalize-user-waves
+  "Convert a user-supplied :waves map into the same step-id → wave-number
+   shape produced by `compute-waves`. Accepted shapes:
+
+     {:A {:parallel [\"s1\" \"s2\"]}    ; explicit grouping
+      :B {:parallel [\"s3\"]}}
+
+     {:A [\"s1\" \"s2\"] :B [\"s3\"]}    ; bare seq under each key
+
+   Wave numbers are assigned by lexicographic key order so :A → 0, :B → 1, etc.
+
+   Returns nil for absent/empty/unrecognized shapes — callers fall back
+   to the auto-computed waves (audit kanban 20260429203429: hand-written
+   :waves was silently dropped)."
+  [waves-map]
+  (when (and (map? waves-map) (seq waves-map))
+    (let [ordered-keys (sort-by str (keys waves-map))]
+      (into {}
+            (mapcat (fn [wave-num k]
+                      (let [v (get waves-map k)
+                            parallel (cond
+                                       (and (map? v) (sequential? (:parallel v)))
+                                       (:parallel v)
+                                       (sequential? v)
+                                       v
+                                       :else [])]
+                        (mapv (fn [sid] [(str sid) wave-num]) parallel)))
+                    (range) ordered-keys)))))
+
+(defn- merge-waves
+  "Merge user-supplied :waves over auto-computed waves. User wins per step.
+   Steps not mentioned by user keep their auto-derived wave."
+  [auto-waves user-waves-map]
+  (if-let [user (normalize-user-waves user-waves-map)]
+    (merge auto-waves user)
+    auto-waves))
+
 (defn compute-waves
   "Compute DAG wave numbers for plan steps based on dependencies.
 
@@ -72,21 +109,26 @@
 
 (defn- create-kanban-task!
   "Create a kanban task for a plan step.
+
+   Optional `wave` (non-negative int, or nil): when supplied a `wave:N`
+   tag is added so `kanban list :tags [\"wave:1\"]` filters to a wave
+   (audit kanban 20260429203429 + 20260429203455 — wave-aware kanban).
+
    Returns {:ok task-id} or {:error message}"
-  [{:keys [title description priority]} directory]
+  [{:keys [title description priority]} directory & {:keys [wave]}]
   (try
     (let [priority-str (if (keyword? priority) (name priority) (str priority))
-          result (mem-kanban/handle-mem-kanban-create
-                  (cond-> {:title title
-                           :priority priority-str
-                           :directory directory}
-                    description (assoc :description description)))]
+          wave-tag     (when (some? wave) (str "wave:" wave))
+          base-params  (cond-> {:title title
+                                :priority priority-str
+                                :directory directory}
+                         description (assoc :description description)
+                         wave-tag    (assoc :tags [wave-tag]))
+          result       (mem-kanban/handle-mem-kanban-create base-params)]
       (if (:isError result)
         {:error (:text result)}
-        ;; Parse the result to get the task ID
         (let [parsed (rescue nil (json/read-str (:text result) :key-fn keyword))]
           (cond
-            ;; Backend returned structured failure JSON (e.g. circuit-open)
             (and (map? parsed) (false? (:success? parsed)))
             {:error (str "kanban backend rejected: " (:error parsed)
                          (when-let [r (:retry-after parsed)]
@@ -183,6 +225,12 @@
    Closes over directory/plan-id/project-id/agent-id to create
    kanban tasks and KG edges during the :approved → :executing transition.
 
+   Wave handling (audit kanban 20260429203429): merges any user-supplied
+   :waves map from the plan over the auto-derived waves (Kahn over
+   :depends-on). User pins win per step; unmentioned steps keep auto.
+   Each created kanban task gets a `wave:N` tag so `kanban list` filters
+   by wave (closes 20260429203455).
+
    Args (closed over):
      directory      - Working directory for kanban task creation
      plan-memory-id - Plan memory entry ID for KG edge source
@@ -194,13 +242,17 @@
   [directory plan-memory-id project-id agent-id]
   (fn [{:keys [plan]}]
     (let [steps (:steps plan)
-          ;; Compute wave numbers for DAG-Wave execution
-          waves (compute-waves steps)
+          ;; Compute wave numbers — auto from :depends-on, then merge
+          ;; user-supplied :waves over (user wins per step).
+          auto-waves (compute-waves steps)
+          waves      (merge-waves auto-waves (:waves plan))
 
-          ;; Create kanban tasks for each step
+          ;; Create kanban tasks for each step, threading wave-number through
           task-results (doall
                         (for [step steps]
-                          (let [{:keys [ok error]} (create-kanban-task! step directory)]
+                          (let [wave-n (get waves (:id step))
+                                {:keys [ok error]} (create-kanban-task!
+                                                     step directory :wave wave-n)]
                             (if error
                               {:step-id (:id step) :error error}
                               {:step-id (:id step) :task-id ok}))))

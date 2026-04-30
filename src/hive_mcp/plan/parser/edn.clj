@@ -356,14 +356,16 @@
    are NOT yet consumed (see `recognized-but-unused-plan-keys`) get a
    distinct warn so the user knows the parser saw them but the kanban
    pipeline ignored them."
-  #{:id :plan/id :title :description :steps :plan/steps :decision-id})
+  #{:id :plan/id :title :description :steps :plan/steps :decision-id :waves})
 
 (def ^:private recognized-but-unused-plan-keys
   "Plan keys the user reasonably expects the parser to honor, but which
    the current kanban pipeline silently ignores. Warn distinctly so the
    user sees \"recognized, not yet wired\" instead of \"unknown, dropped\"
-   and can avoid hand-writing them until they flow through."
-  #{:waves :objective :non-goals :validation-strategy})
+   and can avoid hand-writing them until they flow through.
+
+   :waves graduated to known-plan-keys 2026-04-29 (kanban 20260429203429)."
+  #{:objective :non-goals :validation-strategy})
 
 (defn- warn-unknown-plan-keys
   "Log warn for plan-level keys not in `known-plan-keys`. Pure pass-through.
