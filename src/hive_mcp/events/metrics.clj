@@ -7,38 +7,37 @@
    - Dispatch tracking: record-effect-executed!, record-effect-error!
    - The :metrics interceptor (per-event-type timing)"
   (:require [hive.events.interceptor :as interceptor]
+            [hive-mcp.events.config :as ev-cfg]
             [hive-mcp.events.context :as ctx]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
-;; Configuration
+;; Configuration (delegated to hive-mcp.events.config — DIP)
 ;; =============================================================================
 
-(def ^:private default-metrics-config
-  "Default configuration for metrics buffer sizes."
-  {:max-timings 1000
-   :max-timings-per-type 200})
-
-(defonce ^:private *metrics-config (atom default-metrics-config))
-
 (defn configure-metrics!
-  "Configure metrics buffer limits.
+  "Set runtime override on hive-mcp.events.config/metrics-config.
+
+   Resolution order: defconfig defaults <- env (HIVE_EVENTS_METRICS_*)
+                     <- runtime override <- caller overrides.
 
    Options:
-   - :max-timings          - Max samples in the global :timings buffer (default: 1000)
-   - :max-timings-per-type - Max samples per event type in :timings-by-type (default: 200)
+   - :max-timings          - Max samples in :timings (default 1000)
+   - :max-timings-per-type - Max samples per event type (default 200)
 
-   Example:
+   Tests can also rebind the resolver directly:
    ```clojure
-   (configure-metrics! {:max-timings 500 :max-timings-per-type 100})
+   (with-redefs [ev-cfg/metrics-config
+                 (constantly {:max-timings 5 :max-timings-per-type 3})]
+     ...)
    ```"
   [{:keys [max-timings max-timings-per-type]}]
-  (swap! *metrics-config merge
-         (cond-> {}
-           max-timings          (assoc :max-timings max-timings)
-           max-timings-per-type (assoc :max-timings-per-type max-timings-per-type))))
+  (ev-cfg/set-metrics-override!
+   (cond-> {}
+     max-timings          (assoc :max-timings max-timings)
+     max-timings-per-type (assoc :max-timings-per-type max-timings-per-type))))
 
 ;; =============================================================================
 ;; Bounded Buffer Helper
@@ -90,7 +89,7 @@
    :timings-buffer-size, :timings-buffer-capacity, :timings-dropped."
   []
   (let [m @*metrics
-        cfg @*metrics-config
+        cfg (ev-cfg/metrics-config)
         timings (:timings m)
         timings-by-type (:timings-by-type m)
         avg-ms (if (seq timings)
@@ -172,7 +171,7 @@
                   elapsed-ms (when start-ns
                                (/ (- (System/nanoTime) start-ns) 1000000.0))]
               (when elapsed-ms
-                (let [{:keys [max-timings max-timings-per-type]} @*metrics-config]
+                (let [{:keys [max-timings max-timings-per-type]} (ev-cfg/metrics-config)]
                   (swap! *metrics
                          (fn [m]
                            (let [[new-timings global-dropped?]

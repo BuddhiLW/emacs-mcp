@@ -22,6 +22,7 @@
   (:require [hive.events.interceptor :as interceptor]
             [hive.events.fx :as fx]
             [hive.events.cofx :as cofx]
+            [hive-mcp.events.config :as ev-cfg]
             [hive-mcp.events.context :as ctx]
             [hive-mcp.events.metrics :as mt]
             [hive-mcp.events.registry :as registry]
@@ -158,14 +159,10 @@
     (reg-cofx :random
               (fn [coeffects]
                 (assoc coeffects :random (rand))))
+    ;; Resolved via hive-di defconfig EventsAgentConfig (CLAUDE_SWARM_* env vars).
     (reg-cofx :agent-context
               (fn [coeffects]
-                (assoc coeffects :agent-context
-                       {:agent-id (System/getenv "CLAUDE_SWARM_SLAVE_ID")
-                        :parent-id (System/getenv "CLAUDE_SWARM_PARENT_ID")
-                        :depth (some-> (System/getenv "CLAUDE_SWARM_DEPTH")
-                                       Integer/parseInt)
-                        :role (System/getenv "CLAUDE_SWARM_ROLE")})))
+                (assoc coeffects :agent-context (ev-cfg/agent-config))))
     (reg-cofx :db-snapshot
               (fn [coeffects]
                 (assoc coeffects :db-snapshot @(ds/get-conn))))
