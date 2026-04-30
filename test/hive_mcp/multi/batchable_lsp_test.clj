@@ -35,12 +35,6 @@
 ;; Generators
 ;; =============================================================================
 
-(def gen-id
-  (gen/fmap str (gen/such-that pos-int? gen/nat 50)))
-
-(def gen-tags
-  (gen/vector (gen/elements ["a" "b" "c" "d"]) 0 3))
-
 (defn- mk-mem-add-op [id]
   {:id id :tool "memory" :command "add"
    :type "note" :content (str "content-" id)
@@ -51,25 +45,36 @@
   {:id id :tool "memory" :command "get"
    :ids [(str "ent-" id)]})
 
-(def gen-memory-ops
-  (gen/vector (gen/one-of [(gen/fmap mk-mem-add-op gen-id)
-                            (gen/fmap mk-mem-get-op gen-id)])
-              1 5))
-
 (defn- mk-kg-edge-op [id]
   {:id id :tool "kg" :command "edge"
    :from (str "node-" id "-a") :to (str "node-" id "-b")
    :relation "depends-on"})
 
-(def gen-kg-ops
-  (gen/vector (gen/fmap mk-kg-edge-op gen-id) 1 4))
-
 (defn- mk-kanban-update-op [id]
   {:id id :tool "kanban" :command "update"
    :task_id (str "task-" id) :new_status "todo"})
 
+(defn- with-unique-ids
+  "Replace each op's :id with `\"op-<index>\"` to keep IDs unique across the
+   generated vector. Underlying batch handlers (correctly) merge ops with the
+   same :id, which would shrink the per-op result vector and break the
+   shape predicate's `(= (count ops) (count results))` invariant."
+  [ops]
+  (mapv (fn [i op] (assoc op :id (str "op-" i))) (range) ops))
+
+(def gen-memory-ops
+  (gen/fmap with-unique-ids
+    (gen/vector (gen/one-of [(gen/fmap mk-mem-add-op (gen/return ""))
+                              (gen/fmap mk-mem-get-op (gen/return ""))])
+                1 5)))
+
+(def gen-kg-ops
+  (gen/fmap with-unique-ids
+    (gen/vector (gen/fmap mk-kg-edge-op (gen/return "")) 1 4)))
+
 (def gen-kanban-ops
-  (gen/vector (gen/fmap mk-kanban-update-op gen-id) 1 4))
+  (gen/fmap with-unique-ids
+    (gen/vector (gen/fmap mk-kanban-update-op (gen/return "")) 1 4)))
 
 ;; =============================================================================
 ;; Shape predicates

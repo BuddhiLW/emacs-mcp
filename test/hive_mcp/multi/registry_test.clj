@@ -189,14 +189,17 @@
 
 (deftest lookup-batchable-or-default-explicit
   (testing "Explicit Batchable record substitutes for the default"
+    ;; Use a tool name not seeded under :multi/core so there's no conflict.
     (with-fresh-registry
       (fn []
+        (r-batchables/deregister-by-owner! :test/owner)
         (let [explicit (reify bproto/Batchable
                          (batch-execute [_ ops _opts]
                            {:success true :waves {} :summary {:total (count ops)}})
                          (batch-schema [_] {:type "object"}))]
-          (r-batchables/register! :test/owner "memory" {:record explicit})
-          (let [returned (registry/lookup-batchable-or-default "memory")]
+          (r-batchables/register! :test/owner "lsp-test-tool-only"
+                                  {:record explicit})
+          (let [returned (registry/lookup-batchable-or-default "lsp-test-tool-only")]
             (is (identical? explicit returned)
                 "Explicit record substitutes for the default")))))))
 
