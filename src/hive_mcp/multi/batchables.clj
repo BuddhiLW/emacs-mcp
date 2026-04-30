@@ -81,6 +81,25 @@
     (or @out
         {:type "error" :error "batch handler returned nil"})))
 
+(defn- iter-handler
+  "Wrap a single-op handler into a batch-shaped handler for commands that
+   don't (yet) have a true single-store-call batch path. The output mirrors
+   the existing consolidated.memory `make-single-command-batch` shape so the
+   per-op result extractor can decode it.
+
+   PR4 will replace iter-handler with real bulk-store calls for :add /
+   :feedback once the Milvus upsert path is wired."
+  [single-op-handler]
+  (fn [{:keys [operations]}]
+    (let [results (mapv (fn [op]
+                          (let [r (safe-call single-op-handler op)]
+                            (if (and (map? r) (= "error" (:type r)))
+                              {:id (:id op) :success false :error (:error r)}
+                              {:id (:id op) :success true :result r})))
+                        operations)]
+      {:type "text"
+       :text (json/write-str {:results results})})))
+
 (defn- ok-wave [ops results]
   {1 {:ops ops :results results}})
 
@@ -123,14 +142,20 @@
 ;; =============================================================================
 
 (defn- memory-handlers
-  "Lazy-resolve memory's existing batch-X handlers."
+  "Lazy-resolve memory's batch handlers. :edit and :get are real single-store
+   batch paths. :add and :feedback fall back to an iter-handler over the
+   single-op handler since memory has no bulk-add path yet (PR4 work)."
   []
-  {:add  (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory.crud/handle-batch-add)
-                             deref))
-   :edit (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory.crud/handle-batch-edit)
-                             deref))
-   :get  (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory.crud/handle-batch-get)
-                             deref))})
+  (let [add-h      (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory.crud/handle-add)
+                                       deref))
+        feedback-h (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory/handle-mcp-memory-feedback)
+                                       deref))]
+    {:add      (when add-h (iter-handler add-h))
+     :feedback (when feedback-h (iter-handler feedback-h))
+     :edit     (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory.crud/handle-batch-edit)
+                                   deref))
+     :get      (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory.crud/handle-batch-get)
+                                   deref))}))
 
 (defrecord MemoryBatchable []
   bproto/Batchable

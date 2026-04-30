@@ -374,26 +374,33 @@
      - :unknown — outside both sets; almost certainly a typo or stale field."
   [plan]
   (let [present-keys (set (keys plan))
-        recognized   (clojure.set/intersection
+        recognized   (set/intersection
                        present-keys recognized-but-unused-plan-keys)
-        unknown      (clojure.set/difference
+        unknown      (set/difference
                        present-keys known-plan-keys
                        recognized-but-unused-plan-keys)]
     (when (seq recognized)
-      (clojure.tools.logging/warn
+      (log/warn
        "[plan-parser] plan has recognized-but-unused keys (parser saw, kanban ignored):"
        {:plan-id (or (:id plan) (:plan/id plan)) :keys (vec recognized)}))
     (when (seq unknown)
-      (clojure.tools.logging/warn
+      (log/warn
        "[plan-parser] plan has unknown keys (silently dropped):"
        {:plan-id (or (:id plan) (:plan/id plan)) :keys (vec unknown)}))
     plan))
 
 (defn- normalize-edn-plan
   "Normalize an EDN plan map, converting namespaced keys to non-namespaced.
-   Also normalizes nested step maps and coerces plan-level :id to string."
+
+   Also normalizes nested step maps, coerces plan-level :id to string, and
+   warns on plan-level keys outside the known set (audit kanban
+   20260429203446) — surfaces silent drops at the plan boundary the way
+   step-level `warn-unknown-keys` does for steps."
   [data]
-  (let [base-map (-> data strip-all-namespaces coerce-id)
+  (let [base-map (-> data
+                     strip-all-namespaces
+                     coerce-id
+                     warn-unknown-plan-keys)
         steps (get-steps-key data)]
     (cond-> base-map
       steps (assoc :steps (mapv normalize-edn-step steps)))))
