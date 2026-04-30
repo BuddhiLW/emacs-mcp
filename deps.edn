@@ -81,11 +81,11 @@
         ;; hive-events - re-frame inspired event system for JVM
         ;; v0.4.0 adds sub-FSM composition + multi-dispatch
         io.github.hive-agi/hive-events
-        {:git/tag "v0.5.1" :git/sha "ac48b40"}
+        {:git/tag "v0.5.2" :git/sha "24a58a1"}
 
         ;; hive-hot - unified hot-reload with events integration
         io.github.hive-agi/hive-hot
-        {:git/tag "v0.1.1" :git/sha "79aa403"}
+        {:git/tag "v0.1.2" :git/sha "9b16c87"}
 
         ;; Prometheus metrics - iapetos provides idiomatic Clojure wrapper
         ;; CLARITY-T: Telemetry first - observable system
@@ -116,34 +116,34 @@
 
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
-        io.github.hive-agi/hive-di {:git/tag "v0.3.0" :git/sha "4f57512"}
+        io.github.hive-agi/hive-di {:git/tag "v0.3.1" :git/sha "ab63fd0"}
 
         ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
         ;; Overrides default Chroma store when Milvus is reachable.
-        io.github.hive-agi/hive-milvus {:git/tag "v0.2.1" :git/sha "cb8f40a"}
+        io.github.hive-agi/hive-milvus {:git/tag "v0.2.2" :git/sha "61c3aa8"}
 
         ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj
-        io.github.hive-agi/hive-weave {:git/tag "v0.2.1" :git/sha "51bed20"}
+        io.github.hive-agi/hive-weave {:git/tag "v0.2.2" :git/sha "7aa6234"}
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
-        io.github.hive-agi/hive-emacs {:git/tag "v0.4.0" :git/sha "03cd3ca"}
+        io.github.hive-agi/hive-emacs {:git/tag "v0.4.1" :git/sha "47e0f04"}
 
         ;; hive-proximum — temporal/bitemporal memory backend (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/hive-proximum.edn manifest.
         ;; Stub store until backend impl lands (task 486248c0).
-        io.github.hive-agi/hive-proximum {:git/tag "v0.1.2" :git/sha "f9ba8b3"}
+        io.github.hive-agi/hive-proximum {:git/tag "v0.1.3" :git/sha "835a36c"}
 
         ;; hive-ttracking — telemetry/timing (timed-query, track*, bench*).
         ;; Consumed by catchup.clj and siblings (bundle/hydration/hierarchy).
-        io.github.hive-agi/hive-ttracking {:git/tag "v0.1.2" :git/sha "9ede26f"}
+        io.github.hive-agi/hive-ttracking {:git/tag "v0.1.3" :git/sha "13eab91"}
 
         ;; hive-system — system-level abstractions (IProcess, INetwork,
         ;; process liveness, secrets, shell, redaction). Single source of
         ;; truth for "is this pid alive?", `kill -0` semantics, etc.
         ;; NOTE: process.liveness ns is post-v0.2.1 — when the next tag is
         ;; cut, bump :git/sha here and drop the deps.local.edn override.
-        io.github.hive-agi/hive-system {:git/tag "v0.2.1" :git/sha "61c6e34"}
+        io.github.hive-agi/hive-system {:git/tag "v0.2.2" :git/sha "53524e3"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
@@ -228,7 +228,7 @@
                 ;; Generative testing for spec validation
                 org.clojure/test.check {:mvn/version "1.1.1"}
                 ;; Trifecta macro: golden + property + mutation facets
-                io.github.hive-agi/hive-test {:git/tag "v0.2.0" :git/sha "841da83"}}
+                io.github.hive-agi/hive-test {:git/tag "v0.2.1" :git/sha "48b480f"}}
    :main-opts ["-m" "cognitect.test-runner"]}
 
   ;; CI-friendly: Run only unit tests (excludes tests requiring Emacs)
@@ -237,7 +237,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}
-                io.github.hive-agi/hive-test {:git/tag "v0.2.0" :git/sha "841da83"}}
+                io.github.hive-agi/hive-test {:git/tag "v0.2.1" :git/sha "48b480f"}}
    :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:excludes [:integration]}}
@@ -248,7 +248,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 io.github.hive-agi/hive-test
-                {:git/tag "v0.2.0" :git/sha "841da83"}}
+                {:git/tag "v0.2.1" :git/sha "48b480f"}}
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:includes [:integration]}}
@@ -263,6 +263,6 @@
 ;; Local dev overrides for sibling :local/root projects.
   ;; start-mcp.sh auto-merges deps.local.edn via -Sdeps when present.
   ;; Create deps.local.edn (gitignored) with :deps key, e.g.:
-  ;;   {:deps {io.github.hive-agi/hive-events {:git/tag "v0.5.1" :git/sha "ac48b40"}}}
+  ;;   {:deps {io.github.hive-agi/hive-events {:git/tag "v0.5.2" :git/sha "24a58a1"}}}
   ;; NOTE: Use :deps (top-level key), NOT :override-deps (alias-level only).
   }}

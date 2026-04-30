@@ -13,6 +13,7 @@
 
    Decision: 20260429230453-7e7627cc"
   (:require [hive-mcp.multi.registry :as registry]
+            [hive-mcp.multi.batchables :as bx]
             [hive-mcp.dsl.verbs :as dsl-verbs]
             [taoensso.timbre :as log]))
 
@@ -57,6 +58,24 @@
                                  [{:short short :full full}]))
     (count aliases)))
 
+(defn- seed-batchables!
+  "Seed registry.batchables with the explicit Batchable records for the three
+   highest-leverage core tools: memory, kg, kanban.
+
+   Each record wraps the existing handle-batch-X handlers so multi's per-op
+   loop collapses into ONE store round-trip per op-class per wave instead of
+   the N round-trips today's tools/cli/make-batch-handler path produces.
+
+   Tools without an explicit Batchable still resolve to the LSP-clean
+   DefaultBatchableAdapter via registry/lookup-batchable-or-default."
+  []
+  (let [entries [{:tool-name "memory" :record (bx/memory-batchable)}
+                 {:tool-name "kg"     :record (bx/kg-batchable)}
+                 {:tool-name "kanban" :record (bx/kanban-batchable)}]]
+    (doseq [entry entries]
+      (registry/register-by-key! core-owner :multi/batchable [entry]))
+    (count entries)))
+
 (defonce ^{:doc "Seed runs once on namespace load. Idempotent — re-loading
                  the namespace is a no-op because defonce guards the side
                  effect. Call `install!` from a REPL to force re-seed
@@ -64,10 +83,11 @@
   installed
   (let [tools (seed-tools!)
         verbs (seed-verbs!)
-        aliases (seed-aliases!)]
+        aliases (seed-aliases!)
+        batchables (seed-batchables!)]
     (log/info "[multi.core-seed] seeded :multi/core owner"
-              {:tools tools :verbs verbs :aliases aliases})
-    {:tools tools :verbs verbs :aliases aliases}))
+              {:tools tools :verbs verbs :aliases aliases :batchables batchables})
+    {:tools tools :verbs verbs :aliases aliases :batchables batchables}))
 
 (defn install!
   "Force re-seed (test/REPL). Production code should rely on the defonce
@@ -76,6 +96,7 @@
   (registry/deregister-by-owner! core-owner)
   (let [result {:tools (seed-tools!)
                 :verbs (seed-verbs!)
-                :aliases (seed-aliases!)}]
+                :aliases (seed-aliases!)
+                :batchables (seed-batchables!)}]
     (log/info "[multi.core-seed] re-seeded :multi/core owner" result)
     result))

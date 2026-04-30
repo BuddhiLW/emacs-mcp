@@ -19,7 +19,8 @@
             [clojure.edn :as edn]
             [hive-mcp.dns.result :as result]
             [hive-mcp.plan.schema :as schema]
-            [clojure.tools.logging :as log]))
+            [clojure.tools.logging :as log]
+            [clojure.set :as set]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -346,6 +347,47 @@
 ;; =============================================================================
 ;; Plan Normalization
 ;; =============================================================================
+
+(def ^:private known-plan-keys
+  "Top-level plan keys recognized by the parser + downstream consumers.
+
+   Keys outside this set trigger a warn — surfaces silent drops at the
+   plan boundary (audit kanban 20260429203446). Keys present here that
+   are NOT yet consumed (see `recognized-but-unused-plan-keys`) get a
+   distinct warn so the user knows the parser saw them but the kanban
+   pipeline ignored them."
+  #{:id :plan/id :title :description :steps :plan/steps :decision-id})
+
+(def ^:private recognized-but-unused-plan-keys
+  "Plan keys the user reasonably expects the parser to honor, but which
+   the current kanban pipeline silently ignores. Warn distinctly so the
+   user sees \"recognized, not yet wired\" instead of \"unknown, dropped\"
+   and can avoid hand-writing them until they flow through."
+  #{:waves :objective :non-goals :validation-strategy})
+
+(defn- warn-unknown-plan-keys
+  "Log warn for plan-level keys not in `known-plan-keys`. Pure pass-through.
+
+   Two warning classes:
+     - :recognized-but-unused — listed in recognized-but-unused-plan-keys;
+       parser sees them but downstream (plan-to-kanban, KG) ignores them.
+     - :unknown — outside both sets; almost certainly a typo or stale field."
+  [plan]
+  (let [present-keys (set (keys plan))
+        recognized   (clojure.set/intersection
+                       present-keys recognized-but-unused-plan-keys)
+        unknown      (clojure.set/difference
+                       present-keys known-plan-keys
+                       recognized-but-unused-plan-keys)]
+    (when (seq recognized)
+      (clojure.tools.logging/warn
+       "[plan-parser] plan has recognized-but-unused keys (parser saw, kanban ignored):"
+       {:plan-id (or (:id plan) (:plan/id plan)) :keys (vec recognized)}))
+    (when (seq unknown)
+      (clojure.tools.logging/warn
+       "[plan-parser] plan has unknown keys (silently dropped):"
+       {:plan-id (or (:id plan) (:plan/id plan)) :keys (vec unknown)}))
+    plan))
 
 (defn- normalize-edn-plan
   "Normalize an EDN plan map, converting namespaced keys to non-namespaced.
