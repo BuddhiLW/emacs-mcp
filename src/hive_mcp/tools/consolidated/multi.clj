@@ -236,6 +236,66 @@
                           :hint "hive-mcp.tools.multi-async is not available"})))))
 
 ;; =============================================================================
+;; Plan / Run (PR5 — persistent compile-then-run)
+;; =============================================================================
+
+(defn- resolve-plan-fn [fn-name]
+  (resolve-or-err (symbol "hive-mcp.multi.plan" (name fn-name)) :plan-resolve-error))
+
+(defn- result->mcp
+  "Convert a hive-dsl.result Result map to an MCP envelope.
+
+   Result shape: {:ok value} | {:error category ...extra}"
+  [result]
+  (cond
+    (and (map? result) (contains? result :error))
+    (mcp-error (str (:error result) ": "
+                    (or (:message result) (pr-str (dissoc result :error)))))
+
+    (and (map? result) (contains? result :ok))
+    {:type "text" :text (pr-str (:ok result))}
+
+    :else
+    {:type "text" :text (pr-str result)}))
+
+(defn- handle-plan
+  "Compile ops/dsl into a persisted plan, return plan-id.
+
+   Accepts EITHER `:operations` (raw op vector) OR `:dsl` (verb sentences)."
+  [{:keys [operations dsl reason directory]}]
+  (let [compile-fn (resolve-plan-fn 'compile-and-persist!)
+        compile-paragraph (resolve-compile-paragraph)
+        ops (cond
+              (sequential? operations)
+              (mapv rb/keywordize-map operations)
+
+              (sequential? dsl)
+              (when compile-paragraph (compile-paragraph dsl))
+
+              :else nil)]
+    (cond
+      (or (nil? ops) (empty? ops))
+      (mcp-error "plan requires non-empty 'operations' or 'dsl' input")
+
+      (nil? compile-fn)
+      (mcp-error "multi.plan/compile-and-persist! not resolvable")
+
+      :else
+      (result->mcp (compile-fn ops {:reason reason :directory directory})))))
+
+(defn- handle-run
+  "Execute a previously persisted plan by `plan_id`."
+  [{:keys [plan_id]}]
+  (cond
+    (str/blank? (str plan_id))
+    (mcp-error "run requires 'plan_id' parameter (use command='plan' to obtain one)")
+
+    :else
+    (if-let [run-fn (resolve-plan-fn 'run!)]
+      (result->mcp (run-fn (str plan_id) {}))
+      (mcp-error "multi.plan/run! not resolvable"))))
+
+;; =============================================================================
 ;; Main Router
 ;; =============================================================================
 
@@ -269,6 +329,13 @@
 
       (= "cancel-async" (str command))
       (handle-async-cancel normalized)
+
+      ;; Plan/Run commands (PR5 — persistent compile-then-run)
+      (= "plan" (str command))
+      (handle-plan normalized)
+
+      (= "run" (str command))
+      (handle-run normalized)
 
       ;; Batch mode: operations present, no tool specified
       (and (some? operations) (or (nil? tool) (str/blank? (str tool))))
