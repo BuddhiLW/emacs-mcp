@@ -164,6 +164,24 @@
 ;; Batch Handler Factory (generic batch middleware)
 ;; =============================================================================
 
+(def ^:private deprecation-warned (atom #{}))
+
+(defn- warn-deprecation-once
+  "Emit a one-shot deprecation warning per handler-map identity. Avoids
+   log-flooding when a single make-batch-handler is invoked thousands of
+   times. Identity is a hash of `(keys handlers)` since the closure itself
+   isn't a stable comparison key."
+  [handlers]
+  (let [k (hash (sort (map name (keys handlers))))]
+    (when-not (contains? @deprecation-warned k)
+      (swap! deprecation-warned conj k)
+      (taoensso.timbre/warn
+       "[deprecated] make-batch-handler iterates per-op (N+1 store calls)."
+       "Migrate to an explicit hive-mcp.batch.protocol/Batchable record,"
+       "registered via :multi/batchable in IAddon (hooks). See"
+       "hive-mcp.multi.batchables/{memory,kg,kanban}-batchable for the pattern."
+       {:commands (sort (map name (keys handlers)))}))))
+
 (defn make-batch-handler
   "Higher-order function: takes a handlers map (same as make-cli-handler),
    returns a handler that accepts {:operations [{:command ... :param1 ...}, ...], :parallel bool}.
@@ -174,8 +192,16 @@
 
    Sequential by default, :parallel true uses pmap.
 
-   Returns: {:results [...] :summary {:total N :success M :failed F}}"
+   Returns: {:results [...] :summary {:total N :success M :failed F}}
+
+   ─── DEPRECATED ──────────────────────────────────────────────────────
+   Per the multi IAddon-native batch architecture (decision
+   20260429230453-7e7627cc, T13 Phase 3+), this iterator path is the
+   slow fallback. Migrate to an explicit hive-mcp.batch.protocol/Batchable
+   record (see hive-mcp.multi.batchables for canonical examples) and
+   register it via :multi/batchable in your IAddon (hooks)."
   [handlers]
+  (warn-deprecation-once handlers)
   (fn [{:keys [operations parallel] :as params}]
     (if (or (nil? operations) (empty? operations))
       (mcp-error "operations is required (array of {command, ...} objects)")

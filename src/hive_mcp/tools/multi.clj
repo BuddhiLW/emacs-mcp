@@ -153,10 +153,16 @@
 (def ^:private default-runner
   "Shared Batchable reference runner for this namespace. Lazy so the
    protocol record is built only on first batch call, and reused across
-   requests. Proves the Batchable path works end-to-end (T13 Phase 2)."
+   requests. Proves the Batchable path works end-to-end (T13 Phase 2).
+
+   PR4.1: `:resolve-handler` is wrapped in a thunk so the runner re-resolves
+   the var on every call. Without this, the realized delay captures the
+   current fn VALUE and `(with-redefs [resolve-tool-handler ...] ...)` in
+   tests fails to influence dispatch. Var-lookup at call time keeps test
+   substitution honest."
   (delay
     (batch/make-default-runner
-     {:resolve-handler resolve-tool-handler
+     {:resolve-handler #(resolve-tool-handler %)
       :emit-fx         fire-fx!})))
 
 (defn run-multi
