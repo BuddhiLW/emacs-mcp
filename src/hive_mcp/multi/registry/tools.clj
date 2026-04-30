@@ -26,7 +26,7 @@
 
    entry shape: {:handler ifn :batchable (some-fn nil? any?)}"
   [owner tool-name entry]
-  (let [now #?(:clj (java.time.Instant/now) :default nil)
+  (let [now (java.time.Instant/now)
         v   (assoc entry :owner owner :registered-at now)]
     (let [outcome (atom :ok)]
       (swap! state

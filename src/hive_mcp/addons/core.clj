@@ -139,8 +139,11 @@
                     ;; the hooks this addon registered (no clobber across addons).
                                  (let [hooks-map (r/rescue {} (proto/hooks addon))]
                                    (when (seq hooks-map)
-                                     (doseq [[k f] hooks-map]
-                                       (ext/register! k f))
+                                     (doseq [[k v] hooks-map]
+                                       (case (namespace k)
+                                         "multi" ((requiring-resolve 'hive-mcp.multi.registry/register-by-key!)
+                                                  id k v)
+                                         (ext/register! k v)))
                                      (swap! addon-registry assoc-in
                                             [id :hook-keys] (set (keys hooks-map)))
                                      (log/debug "Addon registered hooks"
@@ -188,7 +191,13 @@
                              (log/debug "Addon deregistered extensions" {:addon id :keys (keys exts)}))
               ;; Deregister hooks (only those owned by this addon)
                            (when (seq hook-keys)
-                             (doseq [k hook-keys] (ext/deregister! k))
+                             (doseq [k hook-keys]
+                               (case (namespace k)
+                                 "multi" ((requiring-resolve 'hive-mcp.multi.registry/deregister-by-key!)
+                                          id k)
+                                 (ext/deregister! k)))
+                             ;; Belt-and-suspenders: clear any leftover :multi/* entries by owner
+                             ((requiring-resolve 'hive-mcp.multi.registry/deregister-by-owner!) id)
                              (log/debug "Addon deregistered hooks" {:addon id :keys hook-keys}))
               ;; Deregister tools
                            (doseq [t (proto/tools addon)]
