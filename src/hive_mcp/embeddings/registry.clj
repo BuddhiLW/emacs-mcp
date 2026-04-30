@@ -67,6 +67,14 @@
     (factory {:api-key (get-in config [:options :api-key])
               :model (:model config)})))
 
+(defn- create-venice-provider
+  "Create Venice embedding provider from config."
+  [config]
+  (require 'hive-mcp.embeddings.venice)
+  (let [factory (resolve 'hive-mcp.embeddings.venice/->provider)]
+    (factory {:api-key (get-in config [:options :api-key])
+              :model (:model config)})))
+
 
 (defn register-factory!
   "Register a factory function for a provider type.
@@ -91,8 +99,17 @@
   (register-factory! :ollama create-ollama-provider)
   (register-factory! :openai create-openai-provider)
   (register-factory! :openrouter create-openrouter-provider)
+  (register-factory! :venice create-venice-provider)
   (log/info "Embedding provider registry initialized with factories:"
             (keys @provider-factories))
+  true)
+
+(defn register-venice!
+  "Idempotent registration of the Venice factory. Used by the addon manifest
+   bridge in `hive-mcp.embeddings.init` so Venice self-registers on classpath
+   presence without forcing core init! to know about it."
+  []
+  (register-factory! :venice create-venice-provider)
   true)
 
 (defn get-provider

@@ -242,6 +242,27 @@
        updated))))
 
 ;; =============================================================================
+;; Runtime Mutation (in-memory only — does NOT persist to disk)
+;; =============================================================================
+
+(defn update-in-config!
+  "In-memory `update-in` on the cached global config.
+   Loads defaults if config is unloaded. Does NOT persist to disk —
+   use `set-config-value!` for that. Intended for runtime overrides
+   like service-driven embedder routing wiring.
+
+   IMPORTANT: this bypasses `~/.config/hive-mcp/config.edn`, so the
+   change is per-JVM. On the next boot, `load-global-config!` deep-
+   merges the on-disk user config over defaults — meaning any value
+   the user explicitly placed at `path` via `hive config set` will
+   resurface. Treat this fn as a guarded-override mechanism, not a
+   substitute for persisted user intent."
+  [path f & args]
+  (when-not @global-config
+    (reset! global-config merge/default-config))
+  (apply swap! global-config update-in path f args))
+
+;; =============================================================================
 ;; Reset (for testing)
 ;; =============================================================================
 

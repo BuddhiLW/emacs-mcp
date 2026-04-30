@@ -1,0 +1,5 @@
+{:bare {:id "s1", :title "x"},
+ :blockedBy-only {:id "s1", :title "x", :depends-on ["b"]},
+ :dependencies-only {:id "s1", :title "x", :depends-on ["a"]},
+ :depends-on-wins {:id "s1", :title "x", :depends-on ["c"]},
+ :deps-over-blocked {:id "s1", :title "x", :depends-on ["d"]}}

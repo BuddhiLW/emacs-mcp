@@ -18,7 +18,8 @@
   (:require [clojure.string :as str]
             [clojure.edn :as edn]
             [hive-mcp.dns.result :as result]
-            [hive-mcp.plan.schema :as schema]))
+            [hive-mcp.plan.schema :as schema]
+            [clojure.tools.logging :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -132,18 +133,22 @@
             (keep safe-read-edn (balanced-edn-substrings content)))))
 
 (defn- is-plan-shape?
-  "True iff `x` is a map carrying :steps or :plan/steps with a vector value."
+  "True iff `x` is a map carrying :steps or :plan/steps with a sequential value.
+   Accepts vectors and lists — EDN authored with parens (`:steps (...)`) is
+   normalized to a vector downstream by `normalize-edn-plan`'s `mapv`."
   [x]
   (and (map? x)
        (let [steps (or (:steps x) (:plan/steps x))]
-         (vector? steps))))
+         (sequential? steps))))
 
 (defn- is-phase-shape?
-  "True iff `x` is a map carrying both a phase identifier and a :tasks vector."
+  "True iff `x` is a map carrying both a phase identifier and a :tasks
+   sequential. Accepts vectors and lists — list `:tasks` are normalized
+   to a vector by `phase-tasks->steps`'s `map-indexed`/`vec`."
   [x]
   (and (map? x)
        (or (contains? x :phase) (contains? x :phase/id))
-       (or (vector? (:tasks x)) (vector? (:phase/tasks x)))))
+       (or (sequential? (:tasks x)) (sequential? (:phase/tasks x)))))
 
 (defn- plan-or-phase-anywhere?
   "Walk the parsed AST and return true if any subform is plan- or phase-shaped."
@@ -236,11 +241,13 @@
   (if-let [steps (:steps data)] steps (:plan/steps data)))
 
 (defn- is-plan-edn?
-  "Check if parsed EDN looks like a plan (has :steps or :plan/steps key)."
+  "Check if parsed EDN looks like a plan (has :steps or :plan/steps key).
+   Accepts sequential values (vectors or lists); normalization upstream
+   coerces lists to vectors before schema validation."
   [data]
   (when-let [_ (map? data)]
     (when-let [steps (get-steps-key data)]
-      (vector? steps))))
+      (sequential? steps))))
 
 (defn- is-phase-edn?
   "Check if parsed EDN looks like a phase block ({:phase N :tasks [...]})."
@@ -278,11 +285,16 @@
     step))
 
 (defn- alias-dependencies
-  "Normalize :dependencies alias -> :depends-on (SAA plans use :dependencies)."
+  "Normalize :dependencies / :blockedBy alias -> :depends-on.
+   SAA plans use :dependencies; some EDN dialects emit :blockedBy.
+   Canonical key is :depends-on; existing :depends-on takes precedence."
   [step]
-  (if-let [deps (when-not (contains? step :depends-on) (:dependencies step))]
-    (-> step (assoc :depends-on deps) (dissoc :dependencies))
-    step))
+  (if-let [deps (when-not (contains? step :depends-on)
+                  (or (:dependencies step) (:blockedBy step)))]
+    (-> step
+        (assoc :depends-on deps)
+        (dissoc :dependencies :blockedBy))
+    (dissoc step :blockedBy)))
 
 (defn- coerce-depends-on
   "Coerce :depends-on items from keywords to strings."
@@ -300,12 +312,31 @@
         (dissoc :file))
     step))
 
+(def ^:private known-step-keys
+  "Step keys recognized by the parser (post strip-namespaces, post-aliasing).
+   Anything outside this set triggers a warn — surfaces silent drops like :wave."
+  #{:id :title :description :depends-on :priority :files :estimate :tags
+    :dependencies :blockedBy :file
+    :why :validation :details :deliverable :est-tokens
+    :files-read :files-write})
+
+(defn- warn-unknown-keys
+  "Log warn for step keys not in `known-step-keys`. Pure pass-through."
+  [step]
+  (let [unknown (remove known-step-keys (keys step))]
+    (when (seq unknown)
+      (clojure.tools.logging/warn
+       "[plan-parser] step has unknown keys (silently dropped):"
+       {:step-id (:id step) :unknown (vec unknown)}))
+    step))
+
 (defn- normalize-edn-step
   "Normalize an EDN step map via composable transform pipeline.
-
-   Pipeline: strip-namespaces -> coerce-id -> alias-deps -> coerce-deps -> alias-file"
+   Pipeline: warn-unknown -> strip-namespaces -> coerce-id ->
+             alias-deps -> coerce-deps -> alias-file"
   [step]
   (-> step
+      warn-unknown-keys
       strip-all-namespaces
       coerce-id
       alias-dependencies

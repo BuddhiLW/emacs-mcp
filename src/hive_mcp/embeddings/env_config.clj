@@ -8,6 +8,7 @@
      OllamaConfig         / resolve-OllamaConfig
      OpenAIConfig         / resolve-OpenAIConfig
      OpenRouterConfig     / resolve-OpenRouterConfig
+     VeniceConfig         / resolve-VeniceConfig
 
    Resolution order (per hive-di):
      1. Explicit overrides map passed to (resolve-*Config overrides)
@@ -50,3 +51,13 @@
                  :default "qwen/qwen3-embedding-8b"
                  :type    :string
                  :doc     "Embedding model name. Must be present in openrouter.clj/models."))
+
+(defconfig VeniceConfig
+  :api-base (env "VENICE_API_BASE"
+                 :default "https://api.venice.ai/api/v1"
+                 :type    :string
+                 :doc     "Venice API base URL — /embeddings is appended.")
+  :model    (env "VENICE_EMBEDDING_MODEL"
+                 :default "text-embedding-qwen3-8b"
+                 :type    :string
+                 :doc     "Embedding model name. Must be present in venice.clj/models."))

@@ -186,9 +186,11 @@
          "Tags: " (if (sequential? tags) (str/join ", " tags) (or tags "")) "\n\n"
          content)))
 
-(defn- count-plan-steps
+(defn count-plan-steps
   "Heuristic to count steps in plan content.
-   Looks for numbered lists, ## Step headers, etc."
+   Looks for numbered lists, ## Step headers, etc.
+   Public — used by tools/memory/crud/write to enrich plan-type entries
+   when the IMemoryStore add-entry! path stores `:steps-count` metadata."
   [content]
   (when content
     (let [numbered (count (re-seq #"(?m)^\s*\d+[\.\)]\s+" content))

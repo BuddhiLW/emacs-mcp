@@ -67,6 +67,15 @@
                           :openrouter-qwen3 {:impl :openrouter
                                              :model "qwen/qwen3-embedding-8b"
                                              :max-tokens 32768
+                                             :dimension 4096}
+                          ;; Venice's qwen3-8b — same dimension/context as
+                          ;; OpenRouter's qwen3-8b, but routed through Venice's
+                          ;; privacy-preserving endpoint. Inert until
+                          ;; service/configure-defaults! flips :type/plan to
+                          ;; :venice-qwen3 (only when VENICE_API_KEY present).
+                          :venice-qwen3     {:impl :venice
+                                             :model "text-embedding-qwen3-8b"
+                                             :max-tokens 32768
                                              :dimension 4096}}}
    :services {:chroma {:mode :local :host "localhost" :port 8000}
               :ollama {:mode :local :host "http://localhost:11434" :model "nomic-embed-text"}

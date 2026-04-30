@@ -1,0 +1,15 @@
+{:many-unknown
+ {:result {:id "s1", :title "x", :wave :A, :rogue 1, :rogue2 2},
+  :warned? true,
+  :warns? true},
+ :no-extras {:result {:id "s1", :title "x"}, :warned? false},
+ :rogue-warns
+ {:result {:id "s1", :title "x", :rogue 42},
+  :warned? true,
+  :warns? true},
+ :wave-warns
+ {:result {:id "s1", :title "x", :wave :A},
+  :warned? true,
+  :warns? true},
+ :why-tolerated
+ {:result {:id "s1", :title "x", :why "reason"}, :warned? false}}

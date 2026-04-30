@@ -182,7 +182,29 @@
      Returns #{} (empty set) if no exclusions are needed.
 
      Legacy addons that don't implement this method are handled gracefully
-     by the registry (defaults to #{})."))
+     by the registry (defaults to #{}).")
+
+  (hooks [this]
+    "Return a map of hook-key → hook-fn registered by this addon into the
+     extension registry (hive-mcp.extensions.registry).
+
+     Hook keys are namespaced keywords matching the existing ext-key
+     surface that hive-mcp core consumes via `ext/get-extension`.
+     Examples: :cu/a, :catchup/wrap, :gx/score, :sk/seed!, :ag/run.
+
+     The addon registry walks this map after `initialize!` succeeds and
+     calls `ext/register!` for each entry. On `shutdown!`, the registry
+     deregisters every hook this addon registered (ownership tracked
+     per-addon, so addons never clobber each other).
+
+     This is the canonical way for new addons to contribute extensions
+     — it replaces ad-hoc `ext/register!` calls inside `initialize!`,
+     making the contribution surface declarative and lifecycle-bound.
+
+     Returns {} (empty map) if the addon contributes no hooks.
+
+     Legacy addons that don't implement this method are handled
+     gracefully by the registry (defaults to {})."))
 
 ;; =============================================================================
 ;; Predicates

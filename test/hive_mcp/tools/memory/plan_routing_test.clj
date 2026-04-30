@@ -105,7 +105,12 @@
                   hive-mcp.tools.memory.duration/calculate-expires
                   (constantly "2026-06-01")]
       (let [result (crud/handle-add {:type "plan"
-                                     :content "Step 1: Do X"
+                                     :content (pr-str
+                                                {:id "plan-routing-test"
+                                                 :title "Routing test plan"
+                                                 :steps [{:id "s1" :title "Do X"}
+                                                         {:id "s2" :title "Do Y" :depends-on ["s1"]}
+                                                         {:id "s3" :title "Do Z" :depends-on ["s2"]}]})
                                      :tags []
                                      :duration "long"})]
         ;; Should have called plans/index-plan!, NOT chroma/index-memory-entry!

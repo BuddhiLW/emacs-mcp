@@ -23,17 +23,15 @@
     (is (sut/plan-content? "{:plan/steps [{:step/id \"s1\"}]}"))
     (is (sut/plan-content? "```edn\n{:steps [{:id \"s1\" :title \"X\"}]}\n```")))
 
-  (testing "detects markdown plan content (2+ headers)"
-    (is (sut/plan-content? "## Step 1\nDo A\n## Step 2\nDo B")))
+  (testing "detects markdown plan content (1+ header — parity with parser)"
+    (is (sut/plan-content? "## Step 1\nDo A\n## Step 2\nDo B"))
+    (is (sut/plan-content? "## Only One Section\nSome notes")))
 
   (testing "rejects non-plan content"
     (is (not (sut/plan-content? "Just a note about the plan")))
     (is (not (sut/plan-content? "FRICTION: tool X returned unexpected result")))
     (is (not (sut/plan-content? "")))
-    (is (not (sut/plan-content? nil))))
-
-  (testing "rejects single-header markdown (not enough for a plan)"
-    (is (not (sut/plan-content? "## Only One Section\nSome notes")))))
+    (is (not (sut/plan-content? nil)))))
 
 ;; =============================================================================
 ;; validate-for-storage Tests - Valid Plans
