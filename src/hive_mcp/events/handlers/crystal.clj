@@ -54,6 +54,19 @@
    kanban-closures — are appended only when non-zero so the line stays
    tight on lean sessions while surfacing the full picture on rich ones.
 
+   Disposition counters (audit kanban 20260429203442) — when producers
+   populate them, the message gains a trailing \"[wrote N · merged M
+   · skipped K]\" segment that disambiguates wrap-form items from the
+   actual corpus delta:
+     :wrapped           — entries newly written to the corpus by this wrap
+     :already-in-corpus — entries deduped onto an existing record (tag merge)
+     :skipped           — entries rejected (validation fail, missing fields, …)
+
+   When ALL wrap-form bucket counts are zero AND no disposition keys are
+   present, append a hint pointing the operator at /permeate so the
+   classic \"0 decisions, 0 conventions\" line stops reading like
+   \"nothing was learned\" — direct memory writes accrue independently.
+
    Accepts both `:decisions N` and `:decision-count N` shapes (legacy
    producer compat — strips trailing s and tries `<singular>-count`).
    Reason for existence: the bare 'N decisions, M conventions' format
@@ -69,22 +82,40 @@
                   (or (get m k)
                       (get m (keyword (str singular "-count")))
                       0)))
-        decisions   (get-n :decisions)
-        conventions (get-n :conventions)
-        extras      (->> [[:notes "notes"]
-                          [:principles "principles"]
-                          [:axioms "axioms"]
-                          [:snippets "snippets"]
-                          [:plans "plans"]
-                          [:accomplishments "accomplishments"]
-                          [:kanban-closures "kanban→done"]]
-                         (keep (fn [[k label]]
-                                 (let [n (get-n k)]
-                                   (when (pos? n)
-                                     (str n " " label)))))
-                         seq)]
+        decisions    (get-n :decisions)
+        conventions  (get-n :conventions)
+        bucket-pairs [[:notes "notes"]
+                      [:principles "principles"]
+                      [:axioms "axioms"]
+                      [:snippets "snippets"]
+                      [:plans "plans"]
+                      [:accomplishments "accomplishments"]
+                      [:kanban-closures "kanban→done"]]
+        extras       (->> bucket-pairs
+                          (keep (fn [[k label]]
+                                  (let [n (get-n k)]
+                                    (when (pos? n)
+                                      (str n " " label)))))
+                          seq)
+        ;; Disposition triple (optional — only present when producer wired it)
+        wrapped      (get m :wrapped)
+        in-corpus    (get m :already-in-corpus)
+        skipped      (get m :skipped)
+        disposition? (or wrapped in-corpus skipped)
+        disposition  (when disposition?
+                       (str " [wrote " (or wrapped 0)
+                            " · merged " (or in-corpus 0)
+                            " · skipped " (or skipped 0) "]"))
+        all-zero?    (and (zero? decisions)
+                          (zero? conventions)
+                          (nil? extras)
+                          (not disposition?))
+        hint         (when all-zero?
+                       " (no items in wrap form — direct memory writes accrue independently; run /permeate for queued crystals)")]
     (str "Session wrapped: " decisions " decisions, " conventions " conventions"
-         (when extras (str ", " (str/join ", " extras))))))
+         (when extras (str ", " (str/join ", " extras)))
+         disposition
+         hint)))
 
 (defn handle-crystal-wrap-request
   "Handler for :crystal/wrap-request events.
