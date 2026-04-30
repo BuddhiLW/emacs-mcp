@@ -310,39 +310,59 @@
    - hive-mcp-presets: OpenRouter (accurate, 4096 dims) if API key available
    - hive-mcp-plans: OpenRouter (4096 dims) if API key available, Ollama fallback
 
-   Per-memory-type routing is delegated to `routing/apply-route-flip!` —
-   user `hive config set` pins are honored (idempotent re-runs).
+   All collection routings are guarded by `routing/apply-collection-flip!`
+   so a user pin at `[:embedder :collections <name>]` survives boot
+   (audit kanban 20260429203437). Per-memory-type :type/plan flip is
+   delegated to `routing/apply-route-flip!` (long-standing).
 
    Call after init! for typical hive-mcp setup."
   []
-  ;; Memory always uses Ollama (fast, free, local)
-  (configure-collection! "hive-mcp-memory" (config/ollama-config))
+  ;; Memory always uses Ollama (fast, free, local) — guarded so a user
+  ;; can pin to a different provider for benchmarking without losing it
+  ;; on every boot.
+  (routing/apply-collection-flip!
+   {:collection   "hive-mcp-memory"
+    :default      :ollama
+    :to-id        :ollama
+    :configure-fn #(configure-collection! "hive-mcp-memory" (config/ollama-config))
+    :reason       "fast local 768-dim embeddings for memory"})
 
-  ;; Presets use OpenRouter if available (more accurate semantic search)
-  (when (global-config/get-secret :openrouter-api-key)
-    (try
-      (configure-collection! "hive-mcp-presets" (config/openrouter-config))
-      (catch Exception e
-        (log/warn "Could not configure OpenRouter for presets:" (.getMessage e))
-        ;; Fall back to Ollama for presets too
-        (configure-collection! "hive-mcp-presets" (config/ollama-config)))))
-
-  ;; Plans use OpenRouter if available (plans are 1000-5000+ chars, exceed Ollama limit)
+  ;; Presets: OpenRouter when the key is present; Ollama fallback. Both
+  ;; paths now respect the user pin.
   (if (global-config/get-secret :openrouter-api-key)
-    (try
-      (configure-collection! "hive-mcp-plans" (config/openrouter-config))
-      (catch Exception e
-        (log/warn "Could not configure OpenRouter for plans:" (.getMessage e))
-        (configure-collection! "hive-mcp-plans" (config/ollama-config))))
-    ;; Fallback: Ollama with truncation risk warning
-    (do
-      (configure-collection! "hive-mcp-plans" (config/ollama-config))
-      (log/warn "Plans collection using Ollama (no OPENROUTER_API_KEY) - entries >1500 chars may be truncated")))
+    (routing/apply-collection-flip!
+     {:collection   "hive-mcp-presets"
+      :default      :ollama
+      :to-id        :openrouter
+      :configure-fn #(configure-collection! "hive-mcp-presets" (config/openrouter-config))
+      :reason       "OpenRouter — accurate 4096-dim semantic search for presets"})
+    (routing/apply-collection-flip!
+     {:collection   "hive-mcp-presets"
+      :default      :ollama
+      :to-id        :ollama
+      :configure-fn #(configure-collection! "hive-mcp-presets" (config/ollama-config))
+      :reason       "Ollama fallback (no OPENROUTER_API_KEY)"}))
+
+  ;; Plans: OpenRouter when key present (1000-5000+ char plans exceed
+  ;; Ollama's ceiling). Ollama fallback warns about truncation.
+  (if (global-config/get-secret :openrouter-api-key)
+    (routing/apply-collection-flip!
+     {:collection   "hive-mcp-plans"
+      :default      :ollama
+      :to-id        :openrouter
+      :configure-fn #(configure-collection! "hive-mcp-plans" (config/openrouter-config))
+      :reason       "OpenRouter — long EDN plans exceed Ollama 1500-char ceiling"})
+    (do (routing/apply-collection-flip!
+          {:collection   "hive-mcp-plans"
+           :default      :ollama
+           :to-id        :ollama
+           :configure-fn #(configure-collection! "hive-mcp-plans" (config/ollama-config))
+           :reason       "Ollama fallback (no OPENROUTER_API_KEY)"})
+        (log/warn "Plans collection on Ollama — entries >1500 chars may be truncated")))
 
   ;; Per-memory-type route flip: :type/plan → venice qwen3-8b when
   ;; VENICE_API_KEY is present AND the user hasn't pinned a different
   ;; route via `hive config set embedder.routes.type/plan ...`.
-  ;; See routing/apply-route-flip! for the user-intent guard.
   (routing/apply-route-flip!
    {:route   :type/plan
     :default :openrouter-qwen3
