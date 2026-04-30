@@ -72,6 +72,12 @@
   (merge handlers
          {:batch-add      (make-single-command-batch :add (:add handlers))
           :batch-feedback (make-single-command-batch :feedback (:feedback handlers))
+          ;; PR4.3 — additional batch siblings via the same iterator pattern.
+          ;; A real single-store-call optimization for these is PR5+ work.
+          :batch-tags     (make-single-command-batch :tags (:tags handlers))
+          :batch-duration (make-single-command-batch :duration (:duration handlers))
+          :batch-promote  (make-single-command-batch :promote (:promote handlers))
+          :batch-demote   (make-single-command-batch :demote (:demote handlers))
           ;; Nested subdomains (core-owned only — OCP compliant)
           :kg         c-kg/handlers
           :migration  c-mig/handlers}))
@@ -83,7 +89,8 @@
     :log_access :feedback :helpfulness :tags
     :cleanup :expire :decay :xpoll
     :migrate :migrate-scoped :import :rename
-    :batch-feedback
+    :batch-feedback :batch-tags :batch-duration
+    :batch-promote :batch-demote
     :edit :batch-edit})
 
 (def handle-memory

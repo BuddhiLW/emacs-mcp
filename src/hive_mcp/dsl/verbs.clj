@@ -60,6 +60,10 @@
    "m?" {:tool "memory"   :command "query"}
    "m@" {:tool "memory"   :command "get"}
    "m/" {:tool "memory"   :command "search"}
+   "m="  {:tool "memory"  :command "edit"}
+   "m#"  {:tool "memory"  :command "tags"}
+   "m^"  {:tool "memory"  :command "promote"}
+   "m_"  {:tool "memory"  :command "demote"}
 
    ;; Knowledge Graph (k)
    "k>" {:tool "kg"       :command "edge"}
@@ -78,6 +82,7 @@
    "b>" {:tool "kanban"   :command "update"}
    "b?" {:tool "kanban"   :command "list"}
    "b#" {:tool "kanban"   :command "status"}
+   "b-" {:tool "kanban"   :command "delete"}
 
    ;; Session (s)
    "s." {:tool "session"  :command "complete"}

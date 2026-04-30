@@ -9,9 +9,12 @@
   "Handlers reachable from a kanban batch operation.
 
    Restricted to ID-keyed mutating commands — read ops (`list`, `status`)
-   make no sense per-op. Adding more commands here is a deliberate decision."
+   make no sense per-op. Adding more commands here is a deliberate decision.
+
+   PR4.4 — :create added so batch-create can sweep many task titles at once."
   {:update mem-kanban/handle-mem-kanban-move
-   :delete mem-kanban/handle-mem-kanban-delete})
+   :delete mem-kanban/handle-mem-kanban-delete
+   :create mem-kanban/handle-mem-kanban-create})
 
 (defn- with-default-command
   "Set :command on each op only when missing. Never overwrites a caller's
@@ -43,6 +46,18 @@
   (let [inner (make-batch-handler batch-allowed-handlers)]
     (inner (assoc params :operations (with-default-command operations "delete")))))
 
+(defn- handle-batch-create
+  "Batch handler defaulting omitted :command to \"create\".
+
+   Sweep many titles at once:
+
+     {:command \"batch-create\"
+      :operations [{:title \"task-1\" :description \"...\"}
+                   {:title \"task-2\"} ...]}"
+  [{:keys [operations] :as params}]
+  (let [inner (make-batch-handler batch-allowed-handlers)]
+    (inner (assoc params :operations (with-default-command operations "create")))))
+
 (def ^:private canonical-handlers
   {:list           mem-kanban/handle-mem-kanban-list-slim
    :create         mem-kanban/handle-mem-kanban-create
@@ -52,7 +67,8 @@
    :sync           (fn [_] {:success true :message "Memory kanban is single-backend, no sync needed"})
    :plan-to-kanban plan-tool/handle-plan-to-kanban
    :batch-update   handle-batch-update
-   :batch-delete   handle-batch-delete})
+   :batch-delete   handle-batch-delete
+   :batch-create   handle-batch-create})
 
 (def ^:private deprecated-aliases
   {:move     :update
