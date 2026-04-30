@@ -22,7 +22,9 @@
             [hive-mcp.knowledge-graph.migration :as kg-mig]
             [hive-mcp.knowledge-graph.connection :as conn]
             [hive-mcp.knowledge-graph.protocol :as proto]
-            [hive-mcp.knowledge-graph.store.datascript :as ds-store])
+            [hive-mcp.knowledge-graph.store.datascript :as ds-store]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods])
   (:import [java.util UUID]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -52,41 +54,40 @@
 
 (defn integration-test-fixture
   "Create isolated temp directories for each test.
-   
+
    Structure:
    /tmp/hive-migration-integration-{uuid}/
      ├── backups/
      ├── datalevin/
-     └── datahike/"
+     └── datahike/
+
+   Binds *test-store* to a fresh DataScript store so the override-aware
+   ensure-store! returns it without touching the global proto store."
   [f]
   (let [uuid (gen-test-uuid)
         root (io/file (System/getProperty "java.io.tmpdir")
                       (str "hive-migration-integration-" uuid))
         backup-dir (io/file root "backups")
         datalevin-dir (io/file root "datalevin")
-        datahike-dir (io/file root "datahike")]
-    ;; Create all directories
+        datahike-dir (io/file root "datahike")
+        store (ds-store/create-store)
+        test-store-var (requiring-resolve
+                         'hive-mcp.knowledge-graph.connection/*test-store*)]
     (.mkdirs backup-dir)
     (.mkdirs datalevin-dir)
     (.mkdirs datahike-dir)
-
+    (proto/ensure-conn! store)
     (binding [*test-root* (.getAbsolutePath root)
               *backup-dir* (.getAbsolutePath backup-dir)
               *datalevin-dir* (.getAbsolutePath datalevin-dir)
               *datahike-dir* (.getAbsolutePath datahike-dir)]
-      (try
-        ;; Start with a fresh DataScript store
-        (let [store (ds-store/create-store)]
-          (proto/set-store! store)
-          (proto/ensure-conn! store))
-        (f)
-        (finally
-          ;; Clean up everything
+      (with-bindings* {test-store-var store}
+        (fn []
           (try
-            (when (proto/store-set?)
-              (proto/close! (proto/get-store)))
-            (catch Exception _ nil))
-          (delete-dir-recursive! root))))))
+            (f)
+            (finally
+              (try (proto/close! store) (catch Exception _ nil))
+              (delete-dir-recursive! root))))))))
 
 (use-fixtures :each integration-test-fixture)
 

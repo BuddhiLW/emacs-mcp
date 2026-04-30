@@ -61,25 +61,34 @@
   "Attempt to initialize an extension namespace.
    Strategy: try init-as-addon! first (new multiplexer protocol),
    then fall back to init! (legacy self-registration).
-   Returns result map or nil."
+
+   On exception inside the init fn, logs at :error level with stacktrace
+   + ns + strategy name, then returns nil. Previously these failures were
+   silently swallowed by `rescue nil`, masking macroexpansion errors and
+   broken `:require` lines so whole addon tool surfaces would just
+   disappear from the registry without trace (kanban 20260428113129).
+
+   Returns init result map on success, nil on failure."
   [ns-sym]
-  (let [addon-sym (symbol (str ns-sym) "init-as-addon!")
-        legacy-sym (symbol (str ns-sym) "init!")]
-    (or
-     ;; Strategy 1: New multiplexer protocol (IAddon from addons.protocol)
-     (rescue nil
-             (when-let [addon-fn (try-resolve addon-sym)]
-               (let [result (addon-fn)]
-                 (log/info "Extension" ns-sym "initialized via IAddon (multiplexer):"
-                           (:total result 0) "capabilities")
-                 result)))
-     ;; Strategy 2: Legacy self-registration
-     (rescue nil
-             (when-let [init-fn (try-resolve legacy-sym)]
-               (let [result (init-fn)]
-                 (log/info "Extension initializer" legacy-sym "registered"
-                           (:total result 0) "capabilities")
-                 result))))))
+  (let [addon-sym  (symbol (str ns-sym) "init-as-addon!")
+        legacy-sym (symbol (str ns-sym) "init!")
+        try-call   (fn [strategy-name init-sym]
+                     (try
+                       (when-let [init-fn (try-resolve init-sym)]
+                         (let [result (init-fn)]
+                           (log/info "Extension" ns-sym
+                                     "initialized via" strategy-name ":"
+                                     (:total result 0) "capabilities")
+                           result))
+                       (catch Throwable t
+                         (log/error t
+                                    "Extension init FAILED for" ns-sym
+                                    "via" strategy-name
+                                    "— addon will be SKIPPED. Cause:"
+                                    (.getMessage t))
+                         nil)))]
+    (or (try-call "IAddon (multiplexer)" addon-sym)
+        (try-call "init! (legacy)" legacy-sym))))
 
 ;; =============================================================================
 ;; Public API
@@ -111,6 +120,7 @@
    2. Merge discovered init-ns with hardcoded extension-namespaces (dedup)
    3. Try extension self-registration (init! functions) — preferred path
    4. For manifests whose init-ns failed, try init-from-manifest! (constructor)
+   5. Core overrides — hive-mcp-owned handlers that must win over addons
 
    Addons self-register all capabilities via their init! functions.
    No fallback manifest gap-fill — core has zero knowledge of addon internals.
@@ -163,6 +173,20 @@
                 ", classpath-manifests:" (count ordered)
                 ", manifest-fallback:" @manifest-init-count ")")
       (log/debug "No extensions found on classpath — all capabilities will use defaults"))
+
+    ;; Step 5: Core overrides — must run AFTER addon self-registration so
+    ;; hive-mcp-owned handlers win via contribute-commands! / tool-registry
+    ;; merge semantics.
+    ;;   - `analysis bridge-status`   kanban 20260423132050-0b5d09a6
+    ;;   - `clojure discover` fallback kanban 20260423132055-27af713a
+    (rescue nil
+            (require 'hive-mcp.tools.analysis-bridge)
+            (when-let [install! (resolve 'hive-mcp.tools.analysis-bridge/install!)]
+              (install!)))
+    (rescue nil
+            (require 'hive-mcp.tools.clojure-discover)
+            (when-let [install! (resolve 'hive-mcp.tools.clojure-discover/install!)]
+              (install!)))
 
     ;; Build composite tools from addon command contributions
     (let [composite-tools (composite/build-all-composite-tools

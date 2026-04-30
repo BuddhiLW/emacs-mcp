@@ -29,7 +29,6 @@
    - hive-mcp.addons.protocol — IAddon protocol definition"
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.walk :as walk]
             [hive-mcp.addons.protocol :as proto]
             [hive-mcp.dns.result :as r]
             [malli.core :as m]
@@ -289,32 +288,38 @@
 ;; Environment Variable Expansion
 ;; =============================================================================
 
-(defn expand-env-vars
-  "Expand ${VAR_NAME} patterns in string values within a config map.
+(defn- pure-env-template?
+  "True when v is a string of the exact shape \"${VAR}\" — a whole-string env-var ref.
 
-   Recursively walks the config map and replaces ${VAR} with the
-   corresponding environment variable value. Missing env vars are
-   replaced with empty string and logged as warnings.
+   Mixed-template strings (e.g. \"prefix-${VAR}-suffix\") are NOT considered pure;
+   they pass through untouched. Pure templates are dropped from manifest configs
+   so the addon's hive-di defconfig resolves the value from the env directly,
+   gaining typed coercion and blank->nil semantics."
+  [v]
+  (and (string? v)
+       (some? (re-matches #"\s*\$\{[^}]+\}\s*" v))))
+
+(defn strip-env-templates
+  "Remove keys whose values are pure ${VAR} templates from a config map.
+
+   Manifests historically embedded \"${MILVUS_HOST}\" placeholders that an
+   ad-hoc walker re-resolved via System/getenv. Now those fields are owned
+   by the addon's hive-di defconfig (typed source, blank->nil, Result errors).
+
+   Stripping them here means resolve-<Addon>Config sees no override for the
+   pure-template fields and falls through to its declared :source/env source.
+   Literal manifest values (non-string, or strings without ${VAR}) survive
+   as overrides — they remain the authoritative source.
 
    Arguments:
-     config - Map with potentially templated string values
+     config - Manifest config map
 
    Returns:
-     Config map with env vars expanded."
+     Config map with pure ${VAR} entries removed."
   [config]
-  (let [expand-str (fn [s]
-                     (if (string? s)
-                       (str/replace s #"\$\{([^}]+)\}"
-                                    (fn [[_ var-name]]
-                                      (or (System/getenv var-name)
-                                          (do (log/warn "Missing env var in addon config"
-                                                        {:var var-name})
-                                              ""))))
-                       s))]
-    (walk/postwalk
-     (fn [x]
-       (if (string? x) (expand-str x) x))
-     config)))
+  (into (empty config)
+        (remove (fn [[_ v]] (pure-env-template? v)))
+        config))
 
 (defn- addon-id->service-key
   "Derive config.edn service key from addon ID.
@@ -328,12 +333,17 @@
   "Prepare a manifest's config for addon initialization.
 
    Applies:
-   1. Merge config.edn :services values (authoritative config source)
-   2. Environment variable expansion (overrides for unset values)
-   3. Merges addon/id and addon/type into config for context
+   1. Merge config.edn :services values (authoritative literal overrides)
+   2. Strip pure ${VAR} placeholders so the addon's hive-di defconfig resolves
+      env-sourced fields directly (typed coercion + blank->nil + Result errors)
+   3. Inject :addon/id and :addon/type for context
 
-   Config precedence (highest wins):
-     env vars > config.edn :services > manifest :addon/config defaults
+   Config precedence (highest wins, after addon defconfig resolution):
+     manifest :addon/config literal > config.edn :services > env vars > defaults
+
+   Pure ${VAR} placeholders are dropped here, not expanded — env resolution is
+   the addon's responsibility via its (defconfig …) field registry. Literal
+   non-template values in :addon/config remain authoritative overrides.
 
    Arguments:
      manifest - Validated manifest map
@@ -351,7 +361,7 @@
                             (dissoc (get-svc service-key) :mode)))
                         (catch Exception _ nil)))]
     (-> (merge raw-config file-config)
-        expand-env-vars
+        strip-env-templates
         (assoc :addon/id (:addon/id manifest)
                :addon/type (:addon/type manifest)))))
 

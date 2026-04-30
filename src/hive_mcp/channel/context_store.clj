@@ -1,6 +1,7 @@
 (ns hive-mcp.channel.context-store
   "Ephemeral context store for pass-by-reference agent communication with TTL auto-eviction."
-  (:require [taoensso.timbre :as log])
+  (:require [taoensso.timbre :as log]
+            [hive-mcp.server.guards :as guards])
   (:import [java.util.concurrent ConcurrentHashMap ScheduledExecutorService
             Executors TimeUnit]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -209,7 +210,13 @@
 ;; Reset (for testing)
 
 (defn reset-all!
-  "Clear all entries and stop reaper. For testing."
+  "Clear all entries and stop reaper. For testing.
+
+   Guarded by `when-not-coordinator` — no-op when the live coordinator
+   is running so test fixtures cannot wipe the live context store or
+   stop the live reaper."
   []
-  (.clear store)
-  (stop-reaper!))
+  (guards/when-not-coordinator
+   "channel.context-store/reset-all! blocked"
+   (.clear store)
+   (stop-reaper!)))

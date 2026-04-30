@@ -67,7 +67,7 @@
 ;; Test: Embedding Provider Configuration
 ;; =============================================================================
 
-(deftest test-embedding-provider-configuration
+(deftest ^:integration test-embedding-provider-configuration
   (testing "Mock embedder is configured"
     (is (chroma/embedding-configured?))
     (is (some? (chroma/status))))
@@ -77,7 +77,7 @@
       (is (:configured? status))
       (is (str/includes? (str (:provider status)) "MockEmbedder")))))
 
-(deftest test-mock-embedder-produces-deterministic-vectors
+(deftest ^:integration test-mock-embedder-produces-deterministic-vectors
   (testing "Same text produces same embedding"
     (let [embedder (fixtures/->MockEmbedder 384)
           text "Test content"
@@ -92,7 +92,7 @@
           emb2 (chroma/embed-text embedder "Second text")]
       (is (not= emb1 emb2)))))
 
-(deftest test-batch-embedding
+(deftest ^:integration test-batch-embedding
   (testing "Batch embedding produces correct count"
     (let [embedder (fixtures/->MockEmbedder 384)
           texts ["one" "two" "three"]
@@ -104,13 +104,13 @@
 ;; Test: Memory CRUD - Create
 ;; =============================================================================
 
-(deftest test-index-memory-entry-basic
+(deftest ^:integration test-index-memory-entry-basic
   (testing "Index single memory entry returns ID"
     (let [entry (make-memory-entry :content "Basic test note")
           result (chroma/index-memory-entry! entry)]
       (is (= (:id entry) result)))))
 
-(deftest test-index-memory-entry-with-all-fields
+(deftest ^:integration test-index-memory-entry-with-all-fields
   (testing "Index entry with all fields"
     (let [entry (make-memory-entry
                  :type "convention"
@@ -120,14 +120,14 @@
           result (chroma/index-memory-entry! entry)]
       (is (= (:id entry) result)))))
 
-(deftest test-index-memory-entry-different-types
+(deftest ^:integration test-index-memory-entry-different-types
   (testing "Index entries of different types"
     (doseq [type ["note" "snippet" "convention" "decision"]]
       (let [entry (make-memory-entry :type type :content (str "Content for " type))
             result (chroma/index-memory-entry! entry)]
         (is (= (:id entry) result))))))
 
-(deftest test-index-memory-entries-batch
+(deftest ^:integration test-index-memory-entries-batch
   (testing "Batch index multiple entries"
     (let [entries (mapv #(make-memory-entry :content (str "Batch entry " %))
                         (range 5))
@@ -135,7 +135,7 @@
       (is (= 5 (count results)))
       (is (= (mapv :id entries) results)))))
 
-(deftest test-index-memory-entry-upsert-behavior
+(deftest ^:integration test-index-memory-entry-upsert-behavior
   (testing "Re-indexing same ID updates entry (upsert)"
     (let [id (gen-test-id)
           entry-v1 (make-memory-entry :id id :content "Version 1")
@@ -150,7 +150,7 @@
 ;; Test: Memory CRUD - Read
 ;; =============================================================================
 
-(deftest test-search-by-id
+(deftest ^:integration test-search-by-id
   (testing "Retrieve entry by ID"
     (let [entry (make-memory-entry :content "Searchable by ID")
           _ (chroma/index-memory-entry! entry)
@@ -158,7 +158,7 @@
       (is (some? result))
       (is (str/includes? (:document result) "Searchable by ID")))))
 
-(deftest test-search-by-id-not-found
+(deftest ^:integration test-search-by-id-not-found
   (testing "Search for non-existent ID returns nil"
     (let [result (chroma/search-by-id "non-existent-id-12345")]
       (is (nil? result)))))
@@ -167,7 +167,7 @@
 ;; Test: Memory CRUD - Delete
 ;; =============================================================================
 
-(deftest test-delete-entry
+(deftest ^:integration test-delete-entry
   (testing "Delete entry by ID"
     (let [entry (make-memory-entry :content "To be deleted")
           _ (chroma/index-memory-entry! entry)
@@ -177,7 +177,7 @@
       (let [search-result (chroma/search-by-id (:id entry))]
         (is (nil? search-result))))))
 
-(deftest test-delete-non-existent-entry
+(deftest ^:integration test-delete-non-existent-entry
   (testing "Delete non-existent entry doesn't throw"
     (let [result (chroma/delete-entry! "non-existent-delete-id")]
       (is (= "non-existent-delete-id" result)))))
@@ -186,7 +186,7 @@
 ;; Test: Semantic Search
 ;; =============================================================================
 
-(deftest test-semantic-search-basic
+(deftest ^:integration test-semantic-search-basic
   (testing "Semantic search finds related content"
     ;; Index some entries
     (chroma/index-memory-entry!
@@ -202,7 +202,7 @@
       ;; Should find Clojure entry (most relevant)
       (is (some #(str/includes? (or (:document %) "") "Clojure") results)))))
 
-(deftest test-semantic-search-with-limit
+(deftest ^:integration test-semantic-search-with-limit
   (testing "Semantic search respects limit parameter"
     ;; Index entries
     (doseq [i (range 10)]
@@ -212,7 +212,7 @@
     (let [results (chroma/search-similar "entry" :limit 5)]
       (is (<= (count results) 5)))))
 
-(deftest test-semantic-search-with-type-filter
+(deftest ^:integration test-semantic-search-with-type-filter
   (testing "Semantic search filters by type"
     ;; Index different types
     (chroma/index-memory-entry!
@@ -226,7 +226,7 @@
       ;; All results should be notes
       (is (every? #(= "note" (get-in % [:metadata :type])) results)))))
 
-(deftest test-semantic-search-returns-distances
+(deftest ^:integration test-semantic-search-returns-distances
   (testing "Search results include distance scores"
     (chroma/index-memory-entry!
      (make-memory-entry :content "Query matching content"))
@@ -247,7 +247,7 @@
    "long" 90
    "permanent" nil})
 
-(deftest test-memory-entry-with-duration-ephemeral
+(deftest ^:integration test-memory-entry-with-duration-ephemeral
   (testing "Ephemeral entries (1 day TTL)"
     (let [entry (make-memory-entry :duration "ephemeral" :content "Temporary note")
           result (chroma/index-memory-entry! entry)]
@@ -256,31 +256,31 @@
       (let [retrieved (chroma/search-by-id (:id entry))]
         (is (some? retrieved))))))
 
-(deftest test-memory-entry-with-duration-short
+(deftest ^:integration test-memory-entry-with-duration-short
   (testing "Short-term entries (7 days TTL)"
     (let [entry (make-memory-entry :duration "short" :content "Week-long note")
           result (chroma/index-memory-entry! entry)]
       (is (some? result)))))
 
-(deftest test-memory-entry-with-duration-medium
+(deftest ^:integration test-memory-entry-with-duration-medium
   (testing "Medium-term entries (30 days TTL, default)"
     (let [entry (make-memory-entry :duration "medium" :content "Month-long note")
           result (chroma/index-memory-entry! entry)]
       (is (some? result)))))
 
-(deftest test-memory-entry-with-duration-long
+(deftest ^:integration test-memory-entry-with-duration-long
   (testing "Long-term entries (90 days TTL)"
     (let [entry (make-memory-entry :duration "long" :content "Quarter-long note")
           result (chroma/index-memory-entry! entry)]
       (is (some? result)))))
 
-(deftest test-memory-entry-with-duration-permanent
+(deftest ^:integration test-memory-entry-with-duration-permanent
   (testing "Permanent entries (no expiration)"
     (let [entry (make-memory-entry :duration "permanent" :content "Forever note")
           result (chroma/index-memory-entry! entry)]
       (is (some? result)))))
 
-(deftest test-expiration-timestamp-calculation
+(deftest ^:integration test-expiration-timestamp-calculation
   (testing "Expiration is calculated from duration"
     ;; This documents expected behavior for expiration calculation
     ;; The actual implementation would compute expires_at from created + duration_days
@@ -296,7 +296,7 @@
 ;; Test: Scope Filtering
 ;; =============================================================================
 
-(deftest test-scope-tag-global
+(deftest ^:integration test-scope-tag-global
   (testing "Global scope entries have scope:global tag"
     (let [entry (make-memory-entry :scope "global" :content "Global memory")
           _ (chroma/index-memory-entry! entry)
@@ -305,7 +305,7 @@
       ;; Tags stored as comma-separated string in Chroma metadata
       (is (str/includes? (or (get-in retrieved [:metadata :tags]) "") "scope:global")))))
 
-(deftest test-scope-tag-project
+(deftest ^:integration test-scope-tag-project
   (testing "Project scope entries have scope:project:<name> tag"
     (let [entry (make-memory-entry
                  :tags ["scope:project:hive-mcp"]
@@ -316,7 +316,7 @@
       (is (str/includes? (or (get-in retrieved [:metadata :tags]) "")
                          "scope:project:hive-mcp")))))
 
-(deftest test-scope-tag-domain
+(deftest ^:integration test-scope-tag-domain
   (testing "Domain scope entries have scope:domain:<name> tag"
     (let [entry (make-memory-entry
                  :tags ["scope:domain:dev-tools"]
@@ -327,7 +327,7 @@
       (is (str/includes? (or (get-in retrieved [:metadata :tags]) "")
                          "scope:domain:dev-tools")))))
 
-(deftest test-semantic-search-respects-scope-via-metadata
+(deftest ^:integration test-semantic-search-respects-scope-via-metadata
   (testing "Scope information preserved in metadata for filtering"
     ;; Index entries with different scopes
     (chroma/index-memory-entry!
@@ -345,7 +345,7 @@
       ;; Check that tags metadata is preserved
       (is (every? #(string? (get-in % [:metadata :tags])) results)))))
 
-(deftest test-multiple-scope-tags
+(deftest ^:integration test-multiple-scope-tags
   (testing "Entries can have multiple scope tags"
     (let [entry (make-memory-entry
                  :tags ["scope:global" "scope:domain:shared"]
@@ -369,20 +369,20 @@
                        (str/replace #"\s+" " "))]
     (format "%x" (hash normalized))))
 
-(deftest test-content-hash-deterministic
+(deftest ^:integration test-content-hash-deterministic
   (testing "Same content produces same hash"
     (let [content "Test content for hashing"
           hash1 (content-hash content)
           hash2 (content-hash content)]
       (is (= hash1 hash2)))))
 
-(deftest test-content-hash-different-content
+(deftest ^:integration test-content-hash-different-content
   (testing "Different content produces different hash"
     (let [hash1 (content-hash "First content")
           hash2 (content-hash "Second content")]
       (is (not= hash1 hash2)))))
 
-(deftest test-content-hash-whitespace-normalization
+(deftest ^:integration test-content-hash-whitespace-normalization
   (testing "Whitespace normalized before hashing"
     (let [content1 "multiple   spaces   here"
           content2 "multiple spaces here"
@@ -390,7 +390,7 @@
           hash2 (content-hash content2)]
       (is (= hash1 hash2)))))
 
-(deftest test-content-hash-trim-normalization
+(deftest ^:integration test-content-hash-trim-normalization
   (testing "Leading/trailing whitespace trimmed"
     (let [content1 "  padded content  "
           content2 "padded content"
@@ -398,7 +398,7 @@
           hash2 (content-hash content2)]
       (is (= hash1 hash2)))))
 
-(deftest test-dedup-same-content-different-ids
+(deftest ^:integration test-dedup-same-content-different-ids
   (testing "Detecting duplicate content with different IDs"
     ;; Index first entry
     (let [content "This is duplicate content"
@@ -417,7 +417,7 @@
       (is (some? (chroma/search-by-id "entry-1")))
       (is (some? (chroma/search-by-id "entry-2"))))))
 
-(deftest test-dedup-detection-via-semantic-search
+(deftest ^:integration test-dedup-detection-via-semantic-search
   (testing "Semantic search can find near-duplicates"
     ;; Index original
     (chroma/index-memory-entry!
@@ -434,7 +434,7 @@
 ;; Test: Collection Statistics
 ;; =============================================================================
 
-(deftest test-collection-stats-empty
+(deftest ^:integration test-collection-stats-empty
   (testing "Stats on empty/new collection"
     (chroma/reset-collection-cache!)
     (let [stats (chroma/collection-stats)]
@@ -443,7 +443,7 @@
       (is (or (= 0 (:count stats))
               (some? (:error stats)))))))
 
-(deftest test-collection-stats-with-entries
+(deftest ^:integration test-collection-stats-with-entries
   (testing "Stats after indexing entries"
     ;; Index some entries of different types
     (chroma/index-memory-entry!
@@ -463,7 +463,7 @@
 ;; Test: Error Handling
 ;; =============================================================================
 
-(deftest test-index-without-embedding-provider
+(deftest ^:integration test-index-without-embedding-provider
   (testing "Indexing without embedding provider throws"
     (let [original (chroma/get-embedding-provider)]
       (chroma/reset-embedding-provider!)
@@ -474,7 +474,7 @@
         (finally
           (chroma/set-embedding-provider! original))))))
 
-(deftest test-search-without-embedding-provider
+(deftest ^:integration test-search-without-embedding-provider
   (testing "Searching without embedding provider throws"
     (let [original (chroma/get-embedding-provider)]
       (chroma/reset-embedding-provider!)
@@ -488,7 +488,7 @@
 ;; Test: Document Format
 ;; =============================================================================
 
-(deftest test-memory-to-document-format
+(deftest ^:integration test-memory-to-document-format
   (testing "Memory entry converted to searchable document"
     (let [entry (make-memory-entry
                  :type "convention"
@@ -503,7 +503,7 @@
         (is (str/includes? doc "Tags:"))
         (is (str/includes? doc "Content: Use kebab-case"))))))
 
-(deftest test-document-format-without-tags
+(deftest ^:integration test-document-format-without-tags
   (testing "Document format handles empty tags"
     (let [entry {:id (gen-test-id)
                  :type "note"
@@ -520,7 +520,7 @@
 ;; Test: Integration - Full Memory Lifecycle
 ;; =============================================================================
 
-(deftest test-memory-lifecycle-create-search-delete
+(deftest ^:integration test-memory-lifecycle-create-search-delete
   (testing "Complete lifecycle: create -> search -> delete"
     ;; Create
     (let [entry (make-memory-entry
@@ -545,7 +545,7 @@
       ;; Verify deleted
       (is (nil? (chroma/search-by-id (:id entry)))))))
 
-(deftest test-memory-update-via-upsert
+(deftest ^:integration test-memory-update-via-upsert
   (testing "Update memory entry via upsert"
     (let [id (gen-test-id)
           entry-v1 (make-memory-entry :id id :content "Initial content" :tags ["v1"])
@@ -565,7 +565,7 @@
 ;; Test: Chroma Metadata Constraints
 ;; =============================================================================
 
-(deftest test-metadata-scalar-values-only
+(deftest ^:integration test-metadata-scalar-values-only
   (testing "Tags stored as comma-separated string (Chroma constraint)"
     ;; Chroma metadata only supports scalar values
     (let [entry (make-memory-entry :tags ["tag1" "tag2" "tag3"])
@@ -578,7 +578,7 @@
         (is (str/includes? tags-meta "tag2"))
         (is (str/includes? tags-meta "tag3"))))))
 
-(deftest test-metadata-type-preserved
+(deftest ^:integration test-metadata-type-preserved
   (testing "Memory type preserved in metadata"
     (doseq [type ["note" "snippet" "convention" "decision"]]
       (let [entry (make-memory-entry :type type)
@@ -586,7 +586,7 @@
             result (chroma/search-by-id (:id entry))]
         (is (= type (get-in result [:metadata :type])))))))
 
-(deftest test-metadata-created-timestamp
+(deftest ^:integration test-metadata-created-timestamp
   (testing "Created timestamp preserved in metadata"
     (let [timestamp "2024-01-15T10:30:00Z"
           entry (make-memory-entry :created timestamp)

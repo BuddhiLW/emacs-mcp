@@ -9,19 +9,15 @@
    - Multi-project coordinator queries"
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [hive-mcp.swarm.datascript.connection :as conn]
-            [hive-mcp.swarm.datascript.coordination :as coordination]))
+            [hive-mcp.swarm.datascript.coordination :as coordination]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
 ;;; =============================================================================
 
-(defn reset-db-fixture
-  "Reset DataScript database before each test."
-  [f]
-  (conn/reset-conn!)
-  (f))
-
-(use-fixtures :each reset-db-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds))
 
 ;;; =============================================================================
 ;;; Registration Tests

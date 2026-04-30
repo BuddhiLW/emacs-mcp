@@ -22,7 +22,7 @@
 
 
 (defrecord EmbeddingConfig
-           [provider-type  ; :ollama, :openai, :openrouter
+           [provider-type  ; :ollama, :openai, :openrouter, :venice
             model          ; e.g., "nomic-embed-text", "qwen/qwen3-embedding-8b"
             dimension      ; 768, 1536, 4096
             options])      ; {:host "..." :api-key "..."}
@@ -31,7 +31,7 @@
   "Check if an EmbeddingConfig is valid."
   [config]
   (and (instance? EmbeddingConfig config)
-       (#{:ollama :openai :openrouter} (:provider-type config))
+       (#{:ollama :openai :openrouter :venice} (:provider-type config))
        (string? (:model config))
        (pos-int? (:dimension config))))
 
@@ -65,6 +65,13 @@
    "cohere/embed-english-v3.0" 1024
    "cohere/embed-multilingual-v3.0" 1024})
 
+(def ^:private venice-models
+  "Venice embedding models with dimensions.
+   Venice exposes its embedding catalogue via /models — Qwen3-Embedding-8B
+   emits up to 4096 dims (matrioshka). Add new models here as Venice's
+   catalogue grows."
+  {"text-embedding-qwen3-8b" 4096})
+
 (defn get-dimension
   "Get embedding dimension for a provider/model pair.
    Returns nil if model is unknown."
@@ -73,6 +80,7 @@
     :ollama (get ollama-models model)
     :openai (get openai-models model)
     :openrouter (get openrouter-models model 4096) ; Default for unknown OpenRouter models
+    :venice     (get venice-models model 4096)     ; Default for unknown Venice models
     nil))
 
 
@@ -135,6 +143,24 @@
        (throw (ex-info "OpenRouter API key required. Set OPENROUTER_API_KEY env var or pass :api-key option."
                        {:type :missing-api-key})))
      (->EmbeddingConfig :openrouter model dimension {:api-key api-key}))))
+
+(defn venice-config
+  "Create Venice embedding configuration.
+
+   Options:
+     :model - Embedding model (default: text-embedding-qwen3-8b)
+     :api-key - API key (default: from VENICE_API_KEY env)
+
+   Returns EmbeddingConfig record."
+  ([] (venice-config {}))
+  ([{:keys [model api-key]
+     :or {model "text-embedding-qwen3-8b"}}]
+   (let [api-key (or api-key (global-config/get-secret :venice-api-key))
+         dimension (get venice-models model 4096)] ; Default dimension for unknown models
+     (when-not api-key
+       (throw (ex-info "Venice API key required. Set VENICE_API_KEY env var or pass :api-key option."
+                       {:type :missing-api-key})))
+     (->EmbeddingConfig :venice model dimension {:api-key api-key}))))
 
 
 (defn same-dimension?

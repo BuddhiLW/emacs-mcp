@@ -24,40 +24,24 @@
             [hive-mcp.tools.swarm.core :as swarm-core]
             [hive-mcp.events.core :as events]
             [hive-mcp.scheduler.dag-waves :as dag-waves]
-            [hive-mcp.server.guards :as guards]))
+            [hive-mcp.server.guards :as guards]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn reset-swarm-state-fixture
-  "Reset swarm state for clean tests.
-
-   Temporarily marks coordinator as stopped so conn/reset-conn! actually
-   works (it's guarded by when-not-coordinator to protect production state).
-   Restores coordinator-running? after the test."
+(defn- logic-and-redefs-fixture
+  "Reset logic db and stub swarm-addon-available? for each test."
   [f]
-  (let [was-running? (guards/coordinator-running?)]
-    ;; Temporarily disable coordinator guard so reset-conn! works
-    (when was-running? (guards/mark-coordinator-stopped!))
-    (try
-      ;; Reset DataScript connection
-      (conn/reset-conn!)
-      ;; Reset logic database
-      (logic/reset-db!)
-      ;; Mock swarm-addon-available? to return false during tests
-      ;; This prevents handle-status from querying elisp for lings
-      ;; (FIX: swarm_status merge with elisp lings)
-      (with-redefs [swarm-core/swarm-addon-available? (constantly false)]
-        (f))
-      ;; Cleanup after test
-      (conn/reset-conn!)
-      (logic/reset-db!)
-      (finally
-        ;; Restore coordinator state
-        (when was-running? (guards/mark-coordinator-running!))))))
+  (logic/reset-db!)
+  (with-redefs [swarm-core/swarm-addon-available? (constantly false)]
+    (try (f) (finally (logic/reset-db!)))))
 
-(use-fixtures :each reset-swarm-state-fixture)
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  logic-and-redefs-fixture)
 
 ;; =============================================================================
 ;; Helper Functions

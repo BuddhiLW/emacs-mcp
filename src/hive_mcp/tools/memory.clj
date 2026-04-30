@@ -42,6 +42,14 @@
 (def handle-mcp-memory-check-duplicate crud/handle-check-duplicate)
 (def handle-mcp-memory-update-tags crud/handle-update-tags)
 
+(def handle-mcp-memory-edit
+  "Edit a memory entry in place (ID preserved → KG edges preserved)."
+  crud/handle-edit)
+
+(def handle-mcp-memory-batch-edit
+  "Batch memory edit. Sequential per-op; summary + per-op results."
+  crud/handle-batch-edit)
+
 ;; Search Operations
 (def handle-mcp-memory-search-semantic search/handle-search-semantic)
 

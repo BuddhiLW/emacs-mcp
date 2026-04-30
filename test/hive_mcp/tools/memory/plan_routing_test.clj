@@ -67,8 +67,8 @@
 ;; handle-add: Plan Routing Tests
 ;; ============================================================
 
-(deftest handle-add-routes-plan-to-plans-collection
-  (testing "type=plan calls plans/index-plan! instead of chroma/index-memory-entry!"
+(deftest handle-add-routes-plan-through-imemorystore
+  (testing "type=plan flows through IMemoryStore add-entry!, NOT plans/index-plan! (post-IMem-unification)"
     (reset-call-log!)
     (with-redefs [chroma/embedding-configured?
                   (constantly true)
@@ -105,17 +105,20 @@
                   hive-mcp.tools.memory.duration/calculate-expires
                   (constantly "2026-06-01")]
       (let [result (crud/handle-add {:type "plan"
-                                     :content "Step 1: Do X"
+                                     :content (pr-str
+                                                {:id "plan-routing-test"
+                                                 :title "Routing test plan"
+                                                 :steps [{:id "s1" :title "Do X"}
+                                                         {:id "s2" :title "Do Y" :depends-on ["s1"]}
+                                                         {:id "s3" :title "Do Z" :depends-on ["s2"]}]})
                                      :tags []
                                      :duration "long"})]
-        ;; Should have called plans/index-plan!, NOT chroma/index-memory-entry!
-        (is (= 1 (count (calls-to :plans-index)))
-            "plans/index-plan! should be called once")
-        (is (= 0 (count (calls-to :chroma-index)))
-            "chroma/index-memory-entry! should NOT be called for plans")
-        ;; Should retrieve from plans collection
-        (is (= 1 (count (calls-to :plans-get)))
-            "plans/get-plan should be called to retrieve created entry")
+        ;; Post-IMem-unification: plans no longer route to a separate collection.
+        ;; They flow through the same IMemoryStore add-entry! path as every other type.
+        (is (= 0 (count (calls-to :plans-index)))
+            "plans/index-plan! must NOT be called — type=plan now flows through IMemoryStore")
+        (is (= 0 (count (calls-to :plans-get)))
+            "plans/get-plan must NOT be called by handle-add — IMemoryStore get-entry handles retrieval")
         (is (not (:isError result)))))))
 
 (deftest handle-add-routes-non-plan-to-memory-collection

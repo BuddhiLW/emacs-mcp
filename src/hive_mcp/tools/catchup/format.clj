@@ -107,8 +107,8 @@
    Includes header, context, kg-insights, meta, and (when available) carto-status."
   [{:keys [project-name project-id scopes git-info permeation
            axioms-meta principles-meta priority-meta sessions-meta decisions-meta
-           conventions-meta snippets-meta expiring-meta kg-insights
-           project-tree-scan disc-decay carto-status context-refs]}]
+           conventions-meta snippets-meta expiring-meta recent-wraps kg-insights
+           project-tree-scan disc-decay carto-status kanban-summary context-refs]}]
   (let [total-enqueued (+ (count axioms-meta) (count principles-meta) (count priority-meta))]
     (filterv some?
     [(make-block "header"
@@ -122,6 +122,7 @@
                            :principles (count principles-meta)
                            :priority-conventions (count priority-meta)
                            :sessions (count sessions-meta)
+                           :recent-wraps (count recent-wraps)
                            :decisions (count decisions-meta)
                            :conventions (count conventions-meta)
                            :snippets (count snippets-meta)
@@ -137,6 +138,11 @@
                   :context {:sessions sessions-meta}
                   :via-piggyback "Axioms, principles, priority conventions drain via ---MEMORY--- blocks on subsequent tool calls."
                   :via-context-refs "Decisions, conventions, snippets, expiring available via context-refs in header. Use context_get to deep-dive by necessity."})
+     (when (seq recent-wraps)
+       (make-block "recent-wraps"
+                   {:_block "recent-wraps"
+                    :recent-wraps recent-wraps
+                    :hint "Last 10 persisted wrap-generated session syntheses (full content). Read these to recover prior-session insights without re-running synthesis."}))
      (make-block "kg-insights"
                  {:_block "kg-insights"
                   :kg-insights (trim-kg-insights kg-insights)})
@@ -145,6 +151,15 @@
                   :project-tree project-tree-scan
                   :disc-decay disc-decay
                   :hint "Axioms and priority conventions are being delivered via ---MEMORY--- piggyback blocks. AXIOMS are INVIOLABLE - follow them word-for-word. Entries with :kg key have Knowledge Graph relationships."})
+     (when (and kanban-summary
+                (or (pos? (apply + (vals (:counts kanban-summary {}))))
+                    (seq (:recent-todos kanban-summary))))
+       (make-block "kanban"
+                   {:_block       "kanban"
+                    :counts       (:counts kanban-summary)
+                    :recent-todos (:recent-todos kanban-summary)
+                    :scope-tag    (:scope-tag kanban-summary)
+                    :hint         "Kanban summary for current project scope. Use mcp__hive__project kanban list status=todo|inprogress for full rows."}))
      (when carto-status
        (make-block "carto-status"
                    {:_block "carto-status"
@@ -154,7 +169,10 @@
                     :last-scan-ts  (:last-scan-ts carto-status)
                     :scan-status   (:scan-status carto-status)
                     :scan-result   (:scan-result carto-status)
-                    :hint "Carto readiness at-a-glance. lsp-up?=false means structural-edit tasks will fail. indexed-forms=0 means scan needed before carto queries."}))])))
+                    :readiness     (:readiness carto-status)
+                    :warnings      (or (:warnings carto-status) [])
+                    :hint          (or (:hint carto-status)
+                                       "Carto readiness at-a-glance.")}))])))
 
 (defn store-not-configured-error
   "Return error response when no IMemoryStore is registered."

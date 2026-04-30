@@ -20,7 +20,8 @@
             [hive-mcp.extensions.registry :as ext]
             [hive-dsl.context.identity :as ctx-id]
             [clojure.string :as str]
-            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]
+            [hive-mcp.channel.conversation-inbox :as conv-inbox]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -73,11 +74,18 @@
          "\n---/" tag "---")))
 
 (defn drain-all!
-  "Drain all 4 piggyback channels for an agent.
+  "Drain all 5 piggyback channels for an agent.
 
    Arguments:
    - agent-id:   The ling/drone identity (e.g. \"ling-xyz\")
    - project-id: Project scope string (e.g. \"hive-mcp\"), or nil for global
+
+   Channels (in render order):
+     1. TOOLRESULT — async completion results
+     2. MEMORY — axioms, conventions, enrichment batches
+     3. INBOX — per-agent conversation envelopes (tell/ask/respond)
+     4. Catchup enrichment blocks
+     5. HIVEMIND — agent shouts
 
    Returns a string of concatenated delimited blocks, or nil if all channels empty.
    Designed to be appended to tool observation text in the agentic loop."
@@ -91,10 +99,17 @@
           ;; 2. Memory entries
           memory-drain (drain-memory-piggyback caller-id)
 
-          ;; 3. Catchup enrichment blocks
+          ;; 3. Conversation inbox (per-agent)
+          inbox-drain (try (conv-inbox/drain! agent-id)
+                           (catch Exception e
+                             (log/debug "piggyback-tap: inbox drain failed:"
+                                        (.getMessage e))
+                             nil))
+
+          ;; 4. Catchup enrichment blocks
           catchup-blocks (drain-catchup-piggyback caller-id)
 
-          ;; 4. Hivemind (project-scoped cursor)
+          ;; 5. Hivemind (project-scoped cursor)
           hm-caller (ctx-id/parse-caller-id agent-id)
           hm-scope (ctx-id/parse-project-scope project-id)
           hm-agent-id (ctx-id/make-piggyback-agent-id hm-caller hm-scope)
@@ -108,6 +123,9 @@
 
                    memory-drain
                    (conj (format-block "MEMORY" (pr-str memory-drain)))
+
+                   inbox-drain
+                   (conj (format-block "INBOX" (pr-str inbox-drain)))
 
                    (seq catchup-blocks)
                    (into (for [[tag body] catchup-blocks]
@@ -123,6 +141,7 @@
           (log/debug "piggyback-tap: drained for" agent-id
                      {:async? (some? async-drain)
                       :memory? (some? memory-drain)
+                      :inbox? (some? inbox-drain)
                       :catchup? (some? (seq catchup-blocks))
                       :hivemind? (some? (seq hivemind-msgs))})
           result)))

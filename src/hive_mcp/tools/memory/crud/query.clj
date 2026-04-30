@@ -11,7 +11,8 @@
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.agent.context :as ctx]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -75,7 +76,11 @@
 
 (defn- fetch-entries
   "Fetch entries from Chroma or plans collection with over-fetch factor.
-   Plans route to OpenRouter-backed plans collection. Everything else → Ollama."
+   Plans route to OpenRouter-backed plans collection. Everything else → Ollama.
+
+   Wraps the IMemoryStore `query-entries` call in `with-resilience` so a
+   dropped Milvus HTTP transport is recovered via the heal loop and the
+   call retries once before surfacing an error."
   [type project-ids-for-db tags limit-val include-descendants?
    & {:keys [exclude-tags]}]
   (let [openrouter? (plans/high-abstraction-type? type)
@@ -85,12 +90,13 @@
                          :type type
                          :limit (* limit-val over-fetch-factor)
                          :tags tags)
-      (mem-proto/query-entries (mem-proto/get-store)
-                               {:type type
-                                :project-ids project-ids-for-db
-                                :tags tags
-                                :exclude-tags exclude-tags
-                                :limit (* limit-val over-fetch-factor)}))))
+      (with-resilience
+        (mem-proto/query-entries (mem-proto/get-store)
+                                 {:type type
+                                  :project-ids project-ids-for-db
+                                  :tags tags
+                                  :exclude-tags exclude-tags
+                                  :limit (* limit-val over-fetch-factor)})))))
 
 (defn- apply-scope-filter
   "Apply in-memory scope filter as safety net.

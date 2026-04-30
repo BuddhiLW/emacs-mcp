@@ -38,6 +38,7 @@ from typing import Any
 from claude_agent_sdk import tool
 
 from .bridge import call_handler
+from .wrap_fallback import degraded_wrap_response, is_nrepl_down_error
 
 
 # =============================================================================
@@ -302,17 +303,29 @@ async def kanban_status(args: dict[str, Any]) -> dict[str, Any]:
     },
 )
 async def session_wrap(args: dict[str, Any]) -> dict[str, Any]:
-    """Crystallize session learnings into memory."""
+    """Crystallize session learnings into memory.
+
+    Degraded path: when the babashka nREPL is unreachable, persist a local
+    wrap breadcrumb (content/tags/temporal metadata) to ``HIVE_WRAP_QUEUE_DIR``
+    and return a ``wrap-degraded`` response instead of raising an HTTP-style
+    error (kanban bug 20260404141548-1c053836).
+    """
+    agent_id = args.get("agent_id")
+    directory = args.get("directory")
     try:
         params: dict[str, Any] = {"command": "wrap"}
-        if "agent_id" in args:
-            params["agent_id"] = args["agent_id"]
-        if "directory" in args:
-            params["directory"] = args["directory"]
+        if agent_id is not None:
+            params["agent_id"] = agent_id
+        if directory is not None:
+            params["directory"] = directory
 
         result = call_handler("session", params)
         return _text_response(result)
     except Exception as e:
+        if is_nrepl_down_error(e):
+            return _text_response(
+                degraded_wrap_response(agent_id, directory, str(e))
+            )
         return _error_response(f"session_wrap failed: {e}")
 
 
@@ -380,12 +393,20 @@ async def session_catchup(args: dict[str, Any]) -> dict[str, Any]:
     },
 )
 async def session_complete(args: dict[str, Any]) -> dict[str, Any]:
-    """Complete session lifecycle: commit + kanban + wrap + shout."""
+    """Complete session lifecycle: commit + kanban + wrap + shout.
+
+    Degraded path: if nREPL is unreachable the wrap portion still produces a
+    local breadcrumb so the session leaves a trail. Commit/kanban work that
+    runs Clojure-side is unavoidable here, but we surface a structured
+    degraded response rather than a raw HTTP error.
+    """
+    agent_id = args["agent_id"]
+    directory = args["directory"]
     try:
         params: dict[str, Any] = {
             "command": "complete",
-            "agent_id": args["agent_id"],
-            "directory": args["directory"],
+            "agent_id": agent_id,
+            "directory": directory,
         }
         if "commit_msg" in args:
             params["commit_msg"] = args["commit_msg"]
@@ -395,6 +416,15 @@ async def session_complete(args: dict[str, Any]) -> dict[str, Any]:
         result = call_handler("session", params)
         return _text_response(result)
     except Exception as e:
+        if is_nrepl_down_error(e):
+            payload = degraded_wrap_response(agent_id, directory, str(e))
+            payload["status"] = "session-complete-degraded"
+            payload["message"] = (
+                "nREPL was unreachable; persisted a local wrap breadcrumb. "
+                "Commit/kanban side-effects could not run — re-invoke "
+                "session_complete once nREPL is back."
+            )
+            return _text_response(payload)
         return _error_response(f"session_complete failed: {e}")
 
 

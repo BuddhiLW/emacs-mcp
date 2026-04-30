@@ -278,7 +278,7 @@
             (handlers/make-default-result result-data
                                           :status :error
                                           :result "FSM completed without building result")))
-      (catch Exception e
+      (catch Throwable e
         (log/error e "drone-loop FSM unexpected error" {:drone-id (:drone-id data)})
         (handlers/make-default-result data
                                       :status :error

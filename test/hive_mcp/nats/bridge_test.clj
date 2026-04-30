@@ -84,3 +84,69 @@
       (is (str/includes? shout-msg ":parse-fail"))
       (is (not (str/includes? shout-msg "NNNNNNNNNNNNNNN")))
       (is (<= (count shout-msg) 400)))))
+
+;; =============================================================================
+;; Integration: real Throwable (deep cause + huge message + 50-frame trace)
+;; goes through summarize-drone-error → bounded shout payload.
+;;
+;; Mirrors the real shout site:
+;;   (str "Drone " task-id " failed: " (summarize-drone-error error))
+;; =============================================================================
+
+(def ^:private throwable-shout-budget
+  "Shout payload budget for real Throwables — keep under ~600 chars so a
+   single drone failure never balloons piggyback blocks."
+  600)
+
+(defn- build-deep-error
+  "Construct a deeply-nested Throwable mimicking a runaway drone:
+     - top: ExceptionInfo with :error/type + small message
+     - mid: IllegalStateException
+     - root: NullPointerException with deep (1.5KB) message + ex-data noise"
+  []
+  (let [root (NullPointerException.
+              (apply str (repeat 1500 "R")))
+        mid  (IllegalStateException.
+              "drone middleware exploded" root)]
+    (ex-info "drone exploded"
+             {:error/type :drone/model-error
+              :diagnostic (apply str (repeat 8000 "D"))}
+             mid)))
+
+(deftest deep-throwable-shout-bounded
+  (testing "huge throwable + cause chain → bounded shout < budget"
+    (let [err     (build-deep-error)
+          summary (summarize-drone-error err)
+          shout   (str "Drone task-deep failed: " summary)]
+      (is (<= (count shout) throwable-shout-budget)
+          (str "shout too long (" (count shout) " > " throwable-shout-budget ")"))
+      (is (str/includes? summary ":drone/model-error")
+          "should retain :error/type")
+      (is (str/includes? summary "drone exploded")
+          "should retain top message")
+      (is (str/includes? summary "←")
+          "should mention the cause chain when budget allows")
+      (is (not (str/includes? summary "DDDDDDDDDDDD"))
+          "should drop ex-data noise")
+      (is (not (str/includes? summary "RRRRRRRRRRRRRRRRRRRRRRRRRRR"))
+          "deep cause message bounded — never dump 1.5KB"))))
+
+(deftest auto-shout-payload-respects-budget
+  (testing "shout-msg built at handle-drone-failed site stays bounded"
+    ;; Real shout site is in `handle-drone-failed` (private fn). It builds:
+    ;;   (str "Drone " task-id " failed: " (summarize-drone-error error))
+    ;; and forwards via `auto-shout-drone-event!` as {:message <msg>}.
+    ;; Asserting the same string-construction pipeline keeps the contract.
+    (let [errors  [(NullPointerException. "raw npe")
+                   (RuntimeException. (apply str (repeat 5000 "X")))
+                   (ex-info "outer" {:error/type :validation}
+                            (RuntimeException.
+                             (apply str (repeat 3000 "Y"))))]
+          payload (mapv (fn [e]
+                          (let [msg (str "Drone task-x failed: "
+                                         (summarize-drone-error e))]
+                            {:message msg :len (count msg)}))
+                        errors)]
+      (doseq [{:keys [len message]} payload]
+        (is (<= len throwable-shout-budget)
+            (str "payload too long: " len " :: " message))))))

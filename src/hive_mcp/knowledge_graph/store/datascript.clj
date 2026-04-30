@@ -40,11 +40,24 @@
   (pull-entity [this pattern eid]
     (d/pull @(kg/ensure-conn! this) pattern eid))
 
+  (eids-by-attr [this attr]
+    ;; DataScript :aevt index is sorted attribute, entity, value — iterating
+    ;; gives one datom per entity-attr pair in entity order. For :db.cardinality/one
+    ;; attributes (all :kg-edge/* today) that's one datom per entity, so we don't
+    ;; need to dedupe. `d/datoms` returns a lazy iterator over the index, so the
+    ;; outer map stays lazy as long as the caller consumes it incrementally.
+    (map :e (d/datoms @(kg/ensure-conn! this) :aevt attr)))
+
   (db-snapshot [this]
     @(kg/ensure-conn! this))
 
   (reset-conn! [_this]
-    (log/debug "Resetting DataScript KG store")
+    ;; Ephemeral store — no persistent backing. "Reset" creates a fresh
+    ;; conn by definition; nothing to delete because nothing was ever
+    ;; persisted. DataScript intentionally does NOT extend
+    ;; IPersistentKGStore — `delete-database!` is meaningless here and
+    ;; callers must gate on `(satisfies? IPersistentKGStore store)` first.
+    (log/debug "Resetting DataScript KG store (ephemeral)")
     (reset! conn-atom (d/create-conn (schema/full-schema)))
     @conn-atom)
 

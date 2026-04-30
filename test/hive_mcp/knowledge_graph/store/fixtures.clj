@@ -10,6 +10,7 @@
      (use-fixtures :each fixtures/dual-backend-fixture)"
   (:require [hive-mcp.knowledge-graph.protocol :as proto]
             [hive-mcp.knowledge-graph.store.datascript :as ds-store]
+            [hive-mcp.knowledge-graph.edges :as edges]
             [clojure.java.io :as io]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -21,15 +22,24 @@
 ;; =============================================================================
 
 (defn datascript-fixture
-  "Fixture that runs test f with a fresh DataScript store."
+  "Fixture that runs test f against a per-thread fresh DataScript store.
+
+   Binds `hive-mcp.knowledge-graph.connection/*test-store*` so the
+   override-aware ensure-store! returns the test store, leaving the
+   global proto store untouched (test isolation)."
   [f]
-  (let [store (ds-store/create-store)]
-    (proto/set-store! store)
+  (let [store          (ds-store/create-store)
+        test-store-var (requiring-resolve
+                         'hive-mcp.knowledge-graph.connection/*test-store*)]
     (proto/ensure-conn! store)
-    (try
-      (f)
-      (finally
-        (proto/reset-conn! store)))))
+    (edges/reset-stats-cache!)
+    (with-bindings* {test-store-var store}
+      (fn []
+        (try
+          (f)
+          (finally
+            (proto/reset-conn! store)
+            (edges/reset-stats-cache!)))))))
 
 (defn datalevin-fixture
   "Fixture that runs test f with a fresh Datalevin store in a temp dir.
@@ -45,10 +55,12 @@
             store (create-fn {:db-path db-path})]
         (proto/set-store! store)
         (proto/ensure-conn! store)
+        (edges/reset-stats-cache!)
         (try
           (f)
           (finally
             (proto/close! store)
+            (edges/reset-stats-cache!)
             ;; Clean up temp directory
             (when (.exists tmp-dir)
               (doseq [file (reverse (file-seq tmp-dir))]
@@ -70,10 +82,12 @@
             store (create-fn {:db-path db-path})]
         (proto/set-store! store)
         (proto/ensure-conn! store)
+        (edges/reset-stats-cache!)
         (try
           (f)
           (finally
             (proto/close! store)
+            (edges/reset-stats-cache!)
             ;; Clean up temp directory
             (when (.exists tmp-dir)
               (doseq [file (reverse (file-seq tmp-dir))]

@@ -49,29 +49,47 @@
   [event-type]
   (event-registry/slave-status event-type))
 
-(def ^:const ^:private shout-message-cap
-  "Hard ceiling on the :message and :task strings carried in a shout.
-   Bounded to keep one bad shout from flooding every consumer's context window
-   (per-agent ring × backbone fanout × N subscribers). Sources that need more
-   should write to memory and reference the entry-id in the shout."
-  800)
+(def ^:const default-shout-message-cap
+  "Fallback cap when config is unloaded or missing :hivemind/:shout-message-cap.
+   One bad shout fans out across (per-agent ring × backbone × subscribers), so
+   bound it aggressively. Override via config path [:hivemind :shout-message-cap]."
+  2048)
 
-(def ^:const ^:private shout-message-head
-  "Head bytes preserved when a shout payload exceeds shout-message-cap."
-  600)
+(def ^:const ^:private ellipsis "…")
 
-(defn- truncate-shout-string
-  "Cap any shout payload at shout-message-cap. Keeps the head, appends a marker
-   noting how many chars were dropped. nil → nil. Non-strings are pr-str'd
-   first so accidental coll/map :message values are still bounded."
-  [v]
-  (when (some? v)
-    (let [s (if (string? v) v (pr-str v))]
-      (if (<= (count s) shout-message-cap)
-        s
-        (let [dropped (- (count s) shout-message-head)]
-          (str (subs s 0 shout-message-head)
-               " … [truncated, dropped " dropped " chars]"))))))
+(defn- resolve-shout-cap
+  "Pull :shout-message-cap from loaded config, fall back to default.
+   Lazy requiring-resolve avoids circular dep at hivemind bootstrap."
+  []
+  (or (try
+        (when-let [f (requiring-resolve 'hive-mcp.config.core/get-in-config)]
+          (f [:hivemind :shout-message-cap]))
+        (catch Exception _ nil))
+      default-shout-message-cap))
+
+(defn cap-message
+  "Cap a shout payload string at `cap` characters. Pure helper.
+
+   Behavior:
+   - nil             → nil
+   - \"\"              → \"\" (empty passes through)
+   - (count s) ≤ cap → s  (under-cap passes through verbatim)
+   - else            → (subs s 0 (- cap 3)) + \"…\"  (ellipsis suffix)
+
+   Non-strings are `pr-str`'d first so accidental coll/map payloads are still
+   bounded. Invariant: (count (cap-message s cap)) ≤ cap for any input when
+   cap ≥ 3."
+  ([v] (cap-message v (resolve-shout-cap)))
+  ([v cap]
+   (cond
+     (nil? v) nil
+     (and (string? v) (zero? (count v))) v
+     :else
+     (let [s (if (string? v) v (pr-str v))]
+       (if (<= (count s) cap)
+         s
+         (let [head-n (max 0 (- cap 3))]
+           (str (subs s 0 head-n) ellipsis)))))))
 
 (defn- publish-shout-to-backbone!
   "Publish shout via IEventBackbone. Subscribers handle fanout.
@@ -89,16 +107,43 @@
   [payload]
   (dc/fanout! payload))
 
-(defn shout!
-  "Broadcast a message to the hivemind coordinator.
+(defn- blank-payload-value?
+  "True iff `v` carries no signal: nil, empty string, or empty coll."
+  [v]
+  (cond
+    (nil? v) true
+    (string? v) (zero? (count v))
+    (coll? v) (empty? v)
+    :else false))
 
-   M1 Architecture (protocol-first):
-   - Local state (atom + DataScript) updated synchronously
-   - If backbone connected: single publish → backbone subscribers handle fanout
-   - If backbone disconnected: direct fanout via IDeliveryChannel registry
-   - Domain events (:ling/completed) are NOT dispatched here — callers
-     that need domain side-effects dispatch them explicitly. This avoids
-     a feedback loop: shout! → :ling/completed handler → :shout effect → shout!"
+(defn empty-shout?
+  "Predicate: would this shout carry a zero-information payload?
+
+   A shout is considered empty when *all* of the following hold:
+     1. `:task` is missing/nil/blank-string/empty-coll
+     2. `:message` is missing/nil/blank-string/empty-coll
+     3. The remainder of `data` (after stripping :task :message :directory
+        :project-id) has no entries with meaningful values.
+
+   Such shouts get rendered as `[] ()`-shaped no-ops in piggyback HIVEMIND
+   blocks during high-throughput batch ops (kanban hygiene, wave dispatch
+   side-effects, FSM phase shouts that race past payload assembly).
+
+   `data` may be anything callers pass through — non-map values are treated
+   as opaque (so non-nil, non-blank, non-empty data → not empty)."
+  [data]
+  (cond
+    (nil? data) true
+    (not (map? data)) (blank-payload-value? data)
+    :else
+    (let [residual (dissoc data :task :message :directory :project-id)]
+      (and (blank-payload-value? (:task data))
+           (blank-payload-value? (:message data))
+           (every? blank-payload-value? (vals residual))))))
+
+(defn- shout!*
+  "Internal shout implementation — assumes payload has been validated
+   non-empty by `shout!`."
   [agent-id event-type data]
   (let [now (System/currentTimeMillis)
         shout-id (str (random-uuid))
@@ -117,8 +162,8 @@
                        "global")
         ;; Cap message/task at canonical ingestion. One bad shout can otherwise
         ;; pollute the per-agent 10-message ring AND every backbone subscriber.
-        capped-message (truncate-shout-string (:message data))
-        capped-task (truncate-shout-string (:task data))
+        capped-message (cap-message (:message data))
+        capped-task (cap-message (:task data))
         message (cond-> {:event-type event-type
                          :timestamp now
                          :project-id project-id
@@ -155,6 +200,31 @@
     ;; 4. Log
     (log/info "Hivemind shout:" agent-id event-type "project:" project-id)
     true))
+
+(defn shout!
+  "Broadcast a message to the hivemind coordinator.
+
+   M1 Architecture (protocol-first):
+   - Local state (atom + DataScript) updated synchronously
+   - If backbone connected: single publish → backbone subscribers handle fanout
+   - If backbone disconnected: direct fanout via IDeliveryChannel registry
+   - Domain events (:ling/completed) are NOT dispatched here — callers
+     that need domain side-effects dispatch them explicitly. This avoids
+     a feedback loop: shout! → :ling/completed handler → :shout effect → shout!
+
+   Empty-payload guard (kanban-hygiene-2026-04-27):
+   - If the shout carries no task/message/data signal (`empty-shout?` true),
+     it is suppressed with a debug log and `false` is returned. This prevents
+     the `[] ()` no-op shouts observed during bulk-close cascades where
+     side-effect chains race past payload assembly. Callers wanting telemetry
+     for the no-op transition should pass at minimum a non-blank :message."
+  [agent-id event-type data]
+  (if (empty-shout? data)
+    (do
+      (log/debug "Hivemind shout suppressed (empty payload):"
+                 agent-id event-type)
+      false)
+    (shout!* agent-id event-type data)))
 
 (defn ask!
   "Request a decision from the human coordinator, blocking until response or timeout."

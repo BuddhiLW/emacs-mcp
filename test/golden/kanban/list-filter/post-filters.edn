@@ -1,0 +1,12 @@
+{:empty           false
+ :only-status     false
+ :query-set       true
+ :priority-set    true
+ :created-set     true
+ :updated-set     true
+ :tags-any        true
+ :tags-all        false
+ :limit-set       true
+ :offset-set      true
+ :fields-set      true
+ :blank-query     false}

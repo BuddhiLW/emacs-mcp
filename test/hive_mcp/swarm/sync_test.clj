@@ -9,7 +9,9 @@
             [hive-mcp.swarm.sync :as sync]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.hooks.core :as hooks]
-            [hive-mcp.hivemind.core :as hivemind]))
+            [hive-mcp.hivemind.core :as hivemind]
+            [hive-test.isolation :as iso]
+            hive-mcp.isolation-methods))
 
 ;; =============================================================================
 ;; Test State
@@ -21,12 +23,10 @@
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn reset-state-fixture
-  "Reset database and capture shouts."
+(defn shouts-capture-fixture
+  "Bind *shouts* to a fresh atom and redirect hivemind/shout! into it."
   [f]
-  (ds/reset-conn!)
   (binding [*shouts* (atom [])]
-    ;; Capture shouts by redefining hivemind/shout!
     (with-redefs [hive-mcp.hivemind.core/shout!
                   (fn [agent-id event-type data]
                     (swap! *shouts* conj {:agent-id agent-id
@@ -34,7 +34,9 @@
                                           :data data}))]
       (f))))
 
-(use-fixtures :each reset-state-fixture)
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  shouts-capture-fixture)
 
 ;; =============================================================================
 ;; Layer 4: Synthetic Shout Tests

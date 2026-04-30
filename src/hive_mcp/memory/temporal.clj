@@ -52,7 +52,7 @@
 
 (def ^:private valid-ops
   "Valid mutation operation types."
-  #{:feedback :kanban-done :kanban-move :expire :decay
+  #{:feedback :kanban-done :kanban-move :kanban-delete :expire :decay
     :promote :reground :migrate :log-access :cleanup})
 
 (defn record-mutation!

@@ -23,24 +23,16 @@
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.swarm.datascript.lings :as ds-lings]
             [hive-mcp.swarm.datascript.queries :as ds-queries]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [hive-test.isolation :as iso]
+            hive-mcp.isolation-methods))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn reset-datascript-fixture
-  "Reset DataScript and registries before and after each test."
-  [f]
-  (ds/reset-conn!)
-  (terminal-reg/clear-registry!)
-  (headless-reg/clear-registry!)
-  (f)
-  (headless-reg/clear-registry!)
-  (terminal-reg/clear-registry!)
-  (ds/reset-conn!))
-
-(use-fixtures :each reset-datascript-fixture)
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds :terminal-registry :headless-registry))
 
 ;; =============================================================================
 ;; Mock Strategy Helper

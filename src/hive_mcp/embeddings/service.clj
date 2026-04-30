@@ -41,7 +41,8 @@
             [hive-mcp.chroma.embeddings :as chroma]
             [hive-mcp.config.core :as global-config]
             [hive-mcp.dns.result :refer [rescue]]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.embeddings.routing :as routing]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -250,6 +251,7 @@
                         :ollama     {:host (get provider-spec :host "http://localhost:11434")}
                         :openrouter {:api-key (global-config/get-secret :openrouter-api-key)}
                         :openai     {:api-key (global-config/get-secret :openai-api-key)}
+                        :venice     {:api-key (global-config/get-secret :venice-api-key)}
                         {})
             emb-cfg   (config/->EmbeddingConfig impl model dimension options)
             coll-name (if (= dimension 768)
@@ -308,6 +310,9 @@
    - hive-mcp-presets: OpenRouter (accurate, 4096 dims) if API key available
    - hive-mcp-plans: OpenRouter (4096 dims) if API key available, Ollama fallback
 
+   Per-memory-type routing is delegated to `routing/apply-route-flip!` —
+   user `hive config set` pins are honored (idempotent re-runs).
+
    Call after init! for typical hive-mcp setup."
   []
   ;; Memory always uses Ollama (fast, free, local)
@@ -333,6 +338,17 @@
     (do
       (configure-collection! "hive-mcp-plans" (config/ollama-config))
       (log/warn "Plans collection using Ollama (no OPENROUTER_API_KEY) - entries >1500 chars may be truncated")))
+
+  ;; Per-memory-type route flip: :type/plan → venice qwen3-8b when
+  ;; VENICE_API_KEY is present AND the user hasn't pinned a different
+  ;; route via `hive config set embedder.routes.type/plan ...`.
+  ;; See routing/apply-route-flip! for the user-intent guard.
+  (routing/apply-route-flip!
+   {:route   :type/plan
+    :default :openrouter-qwen3
+    :to      :venice-qwen3
+    :secret  :venice-api-key
+    :reason  "32k context for long EDN plans (Ollama 2048 ceiling caused HTTP error 2026-04-29)"})
 
   (log/info "Default embedding configuration applied:"
             (list-configured-collections)))

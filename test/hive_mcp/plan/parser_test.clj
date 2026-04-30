@@ -34,10 +34,44 @@
     (is (parser/contains-edn-plan? "{:steps [{:id \"s1\"}]}"))
     (is (parser/contains-edn-plan? "{:id \"plan-1\" :steps []}")))
 
+  (testing "detects EDN with nested map before :steps (regression — old `\\{[^}]*` form choked on inner `}`)"
+    (is (parser/contains-edn-plan?
+         "{:title \"P\" :metadata {:author \"a\"} :steps [{:id \"s1\"}]}"))
+    (is (parser/contains-edn-plan?
+         "{:plan/id \"p\" :plan/meta {:k :v} :plan/steps [{:step/id \"s1\"}]}")))
+
+  (testing "detects namespaced map literal"
+    (is (parser/contains-edn-plan? "#:plan{:steps [{:step/id \"s1\"}]}")))
+
+  (testing "detects phase-block vectors"
+    (is (parser/contains-edn-plan? "[{:phase 1 :tasks [{:id \"t1\"}]}]"))
+    (is (parser/contains-edn-plan? "[{:phase/id 1 :phase/tasks [{:task/id \"t1\"}]}]")))
+
+  (testing "detects EDN embedded in prose"
+    (is (parser/contains-edn-plan? "Some text. {:steps [{:id \"s1\"}]} more text.")))
+
+  (testing "handles EDN spec features the reader gives us for free"
+    ;; Commas as whitespace (EDN spec).
+    (is (parser/contains-edn-plan? "{:steps, [{:id, \"s1\"}]}"))
+    ;; `;` line comments.
+    (is (parser/contains-edn-plan? "; preamble\n{:steps [{:id \"s1\"}]}"))
+    ;; `#_` discard does not hide a following plan form.
+    (is (parser/contains-edn-plan? "#_ {:fake :map} {:steps [{:id \"s1\"}]}"))
+    ;; Unknown user reader tag wrapping the plan map (passed through via :default).
+    (is (parser/contains-edn-plan? "#myapp/Plan {:steps [{:id \"s1\"}]}"))
+    ;; Set / list collections containing a plan map.
+    (is (parser/contains-edn-plan? "#{{:steps [{:id \"s1\"}]}}"))
+    (is (parser/contains-edn-plan? "({:phase 1 :tasks [{:id \"t1\"}]})"))
+    ;; `\}` character literal must not confuse a hand-rolled brace counter.
+    (is (parser/contains-edn-plan? "{:char \\} :steps [{:id \"s1\"}]}")))
+
   (testing "returns false for non-plan content"
     (is (not (parser/contains-edn-plan? "Just some text")))
     (is (not (parser/contains-edn-plan? "# Markdown header")))
-    (is (not (parser/contains-edn-plan? "{:foo :bar}")))))
+    (is (not (parser/contains-edn-plan? "{:foo :bar}")))
+    (is (not (parser/contains-edn-plan? "We mention :steps in prose")))
+    (is (not (parser/contains-edn-plan? "{:steps [unbalanced")))
+    (is (not (parser/contains-edn-plan? nil)))))
 
 (deftest parse-edn-plan-test
   (testing "parses valid EDN plan from code block"
@@ -262,6 +296,78 @@
       (is (= "20260128-abc" (-> result :plan :memory-id))))))
 
 ;; =============================================================================
+;; Regression: plan_id path (prose-wrapped EDN from memory)
+;; =============================================================================
+;;
+;; When `plan-to-kanban` is called with `plan_id`, content is fetched from the
+;; plans collection via `plans/get-plan`, which returns the document text as
+;; stored by `entry-to-document` — a wrapped form like:
+;;
+;;   "Plan Entry [draft]\nType: plan\nProject: ...\nTags: ...\n\n<EDN>"
+;;
+;; The non-EDN preamble used to abort the top-level reader before it could
+;; reach the embedded plan map, causing `contains-edn-plan?` to return false
+;; and the parser to fall through to markdown — failing with
+;; "No ## headers found in content". The fix scans for balanced `{...}`
+;; substrings as additional candidate forms.
+
+(defn- chroma-style-wrap
+  "Mirror plans/entry-to-document — prepend the same prose preamble that
+   plans collection writes around plan content before storing in Chroma."
+  [edn-content]
+  (str "Plan Entry [draft]\n"
+       "Type: plan\n"
+       "Project: hive-mcp\n"
+       "Steps: 2\n"
+       "Tags: plan,SAA\n\n"
+       edn-content))
+
+(deftest parse-plan-prose-wrapped-edn-test
+  (testing "auto-detects raw EDN with :plan/steps inside Chroma prose preamble"
+    (let [edn "{:plan/id \"test-plan\" :plan/title \"Wrapped EDN\"
+                :plan/steps [{:step/id \"s1\" :step/title \"First\"}
+                             {:step/id \"s2\" :step/title \"Second\"
+                              :step/depends-on [\"s1\"]}]}"
+          content (chroma-style-wrap edn)
+          result (parser/parse-plan content)]
+      (is (parser/contains-edn-plan? content)
+          "contains-edn-plan? must see through the prose preamble")
+      (is (:success result)
+          "parse-plan must auto-detect EDN despite the prose prefix")
+      (is (= :edn (-> result :plan :source-format)))
+      (is (= "Wrapped EDN" (-> result :plan :title)))
+      (is (= 2 (count (-> result :plan :steps))))
+      (is (= ["s1"] (-> result :plan :steps second :depends-on)))))
+
+  (testing "auto-detects raw EDN with plain :steps inside Chroma prose preamble"
+    (let [edn "{:id \"plan-x\" :title \"Plain Steps\"
+                :steps [{:id \"a\" :title \"A\"}]}"
+          content (chroma-style-wrap edn)
+          result (parser/parse-plan content)]
+      (is (:success result))
+      (is (= :edn (-> result :plan :source-format)))
+      (is (= "Plain Steps" (-> result :plan :title)))))
+
+  (testing "regression: kanban task 20260428091059-3dc5cc34 — plan_id+EDN combo"
+    ;; Reproduces the exact failure: content retrieved via plan_id used to
+    ;; bypass EDN auto-detect and fail with "No ## headers found in content".
+    (let [edn "{:plan/id \"saa-plan\"
+                :plan/title \"SAA Plan\"
+                :plan/steps [{:step/id \"explore\" :step/title \"Explore\" :step/priority :high}
+                             {:step/id \"abstract\" :step/title \"Abstract\"
+                              :step/depends-on [\"explore\"]}
+                             {:step/id \"act\" :step/title \"Act\"
+                              :step/depends-on [\"abstract\"]}]}"
+          content (chroma-style-wrap edn)
+          result (parser/parse-plan content {:memory-id "20260428091059-saa"})]
+      (is (:success result)
+          "must not fail with 'No ## headers found in content'")
+      (is (not= "No ## headers found in content" (:error result)))
+      (is (= "SAA Plan" (-> result :plan :title)))
+      (is (= 3 (count (-> result :plan :steps))))
+      (is (= "20260428091059-saa" (-> result :plan :memory-id))))))
+
+;; =============================================================================
 ;; Utility Function Tests
 ;; =============================================================================
 
@@ -357,3 +463,27 @@
       (is (= :medium (:estimate step)))
       (is (= [] (:files step)))
       (is (= [] (:tags step))))))
+
+(deftest parse-plan-edn-schema-error-surfaces-test
+  (testing "kanban 20260429135746-3fabed1d: when contains-edn-plan? is true and EDN parse fails schema validation, surface the schema :details — do not silently fall back to markdown"
+    (let [content "{:steps [{:id :title :priority :estimate :files :depends-on}]}"
+          edn-result (parser/parse-edn-plan content)
+          plan-result (parser/parse-plan content)]
+      (is (parser/contains-edn-plan? content)
+          "test setup: content must trigger EDN auto-detect")
+      (is (false? (:success edn-result))
+          "test setup: EDN parse must fail schema validation")
+      (is (some? (:details edn-result))
+          "test setup: EDN parser must report schema :details")
+      (is (false? (:success plan-result)))
+      (is (= (:details edn-result) (:details plan-result))
+          "parse-plan must propagate the EDN schema :details, not swallow them")
+      (is (not= "No ## headers found in content" (:error plan-result))
+          "regression guard: must not return the misleading markdown fallback error")))
+
+  (testing "non-EDN-plan content with bad EDN block still falls through to markdown"
+    (let [content "# Plan\n\n## Step\n\n```edn\n{:not-a-plan true}\n```"
+          result (parser/parse-plan content)]
+      (is (:success result))
+      (is (= :markdown (-> result :plan :source-format))
+          "fallback path preserved when contains-edn-plan? is false"))))

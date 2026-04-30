@@ -10,7 +10,8 @@
    Function signatures match the chroma API callers expect (keyword args where
    chroma used keyword args) so resolve-site swaps are zero-change for callers."
   (:require [hive-mcp.protocols.memory :as proto]
-            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -23,7 +24,8 @@
 (defn index-memory-entry!
   "Index a memory entry via the active backend. Returns entry ID."
   [entry]
-  (proto/add-entry! (proto/get-store) entry))
+  (with-resilience
+    (proto/add-entry! (proto/get-store) entry)))
 
 (defn index-memory-entries!
   "Batch-index multiple memory entries via the active backend.
@@ -43,7 +45,7 @@
   (let [store (proto/get-store)]
     (mapv (fn [entry]
             (try
-              (proto/add-entry! store entry)
+              (with-resilience (proto/add-entry! store entry))
               (catch Exception e
                 (log/warn "index-memory-entries!: entry failed:"
                           (:id entry) (ex-message e))
@@ -53,7 +55,8 @@
 (defn get-entry-by-id
   "Get a memory entry by ID from the active backend."
   [id]
-  (proto/get-entry (proto/get-store) id))
+  (with-resilience
+    (proto/get-entry (proto/get-store) id)))
 
 (defn get-entries-by-ids
   "Batch-fetch memory entries by IDs from the active backend.
@@ -69,8 +72,8 @@
     (when (seq ids)
       (let [store (proto/get-store)]
         (if (proto/batch-store? store)
-          (vec (proto/get-entries store ids))
-          (vec (keep #(rescue nil (proto/get-entry store %)) ids)))))))
+          (with-resilience (vec (proto/get-entries store ids)))
+          (vec (keep #(rescue nil (with-resilience (proto/get-entry store %))) ids)))))))
 
 (defn query-entries
   "Query memory entries with filtering.
@@ -80,22 +83,24 @@
   [& {:keys [type project-id project-ids tags exclude-tags limit
              include-expired? output-fields]
       :or {limit 100 include-expired? false}}]
-  (proto/query-entries (proto/get-store)
-                       (cond-> {:type             type
-                                :project-id       project-id
-                                :project-ids      project-ids
-                                :tags             tags
-                                :exclude-tags     exclude-tags
-                                :limit            limit
-                                :include-expired? include-expired?}
-                         output-fields (assoc :output-fields output-fields))))
+  (with-resilience
+    (proto/query-entries (proto/get-store)
+                         (cond-> {:type             type
+                                  :project-id       project-id
+                                  :project-ids      project-ids
+                                  :tags             tags
+                                  :exclude-tags     exclude-tags
+                                  :limit            limit
+                                  :include-expired? include-expired?}
+                           output-fields (assoc :output-fields output-fields)))))
 
 (defn find-duplicate
   "Find entry with matching content-hash in the given type.
    Accepts keyword args for backward compat with chroma API."
   [type content-hash & {:keys [project-id]}]
-  (proto/find-duplicate (proto/get-store) type content-hash
-                        {:project-id project-id}))
+  (with-resilience
+    (proto/find-duplicate (proto/get-store) type content-hash
+                          {:project-id project-id})))
 
 ;;; ============================================================================
 ;;; Semantic Search
@@ -106,11 +111,12 @@
    Accepts keyword args for backward compat with chroma API."
   [query-text & {:keys [limit type project-ids exclude-tags]
                  :or {limit 10}}]
-  (proto/search-similar (proto/get-store) query-text
-                        {:limit        limit
-                         :type         type
-                         :project-ids  project-ids
-                         :exclude-tags exclude-tags}))
+  (with-resilience
+    (proto/search-similar (proto/get-store) query-text
+                          {:limit        limit
+                           :type         type
+                           :project-ids  project-ids
+                           :exclude-tags exclude-tags})))
 
 ;;; ============================================================================
 ;;; Mutation Operations
@@ -119,12 +125,14 @@
 (defn update-entry!
   "Update an existing entry's attributes via the active backend."
   [id updates]
-  (proto/update-entry! (proto/get-store) id updates))
+  (with-resilience
+    (proto/update-entry! (proto/get-store) id updates)))
 
 (defn delete-entry!
   "Delete an entry from the active backend."
   [id]
-  (proto/delete-entry! (proto/get-store) id))
+  (with-resilience
+    (proto/delete-entry! (proto/get-store) id)))
 
 ;;; ============================================================================
 ;;; Utilities
@@ -161,7 +169,20 @@
 (defn cleanup-expired!
   "Delete expired entries via the active backend."
   []
-  (proto/cleanup-expired! (proto/get-store)))
+  (with-resilience
+    (proto/cleanup-expired! (proto/get-store))))
+
+(defn get-store
+  "Return the active memory store from the registry.
+   Thin facade over hive-mcp.protocols.memory/get-store.
+
+   0-arity: returns the :default store, throws if none registered.
+   1-arity: returns the store registered under `key`, throws if absent.
+
+   Callers (hive-knowledge init.clj, provenance/core.clj) prefer this
+   facade over the protocols ns so the boundary seam stays single-source."
+  ([] (proto/get-store))
+  ([key] (proto/get-store key)))
 
 (defn available?
   "Check if a memory store backend is configured and ready."

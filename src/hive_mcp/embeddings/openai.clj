@@ -16,8 +16,10 @@
      ;; Use different model
      (chroma/set-embedding-provider! 
        (openai/->provider {:model \"text-embedding-ada-002\"}))"
-  (:require [hive-mcp.chroma.core :as chroma]
-            [hive-mcp.config.core :as global-config]
+  (:require [hive-mcp.config.core :as global-config]
+            [hive-mcp.embeddings.env-config :as env-cfg]
+            [hive-mcp.embeddings.http-client :as http]
+            [hive-mcp.embeddings.protocol :as emb-proto]
             [clojure.data.json :as json]
             [taoensso.timbre :as log])
   (:import [java.net URI]
@@ -34,27 +36,40 @@
    "text-embedding-3-large" 3072
    "text-embedding-ada-002" 1536})
 
-(def ^:private default-model "text-embedding-3-small")
-(def ^:private api-url "https://api.openai.com/v1/embeddings")
+(defn- resolve-config!
+  "Resolve OpenAI api-base + model via hive-di (env → overrides → defaults).
+   Throws ex-info on :config/invalid."
+  [overrides]
+  (let [result (env-cfg/resolve-OpenAIConfig overrides)]
+    (or (:ok result)
+        (throw (ex-info "Invalid OpenAI config"
+                        {:type :invalid-config :result result})))))
+
+(defn- embeddings-url
+  "Return the full /embeddings URL for a given api-base."
+  [api-base]
+  (str api-base "/embeddings"))
 
 
 (defonce ^:private http-client
-  (delay
-    (-> (HttpClient/newBuilder)
-        (.connectTimeout (Duration/ofSeconds 30))
-        (.build))))
+  ;; Self-healing HttpClient cache. See hive-mcp.embeddings.http-client.
+  (http/mk-client
+   (fn []
+     (-> (HttpClient/newBuilder)
+         (.connectTimeout (Duration/ofSeconds 30))
+         (.build)))))
 
 (defn- make-request
-  "Make HTTP POST request to OpenAI API."
-  [api-key body]
+  "Make HTTP POST request to OpenAI embeddings API."
+  [api-base api-key body]
   (let [request (-> (HttpRequest/newBuilder)
-                    (.uri (URI/create api-url))
+                    (.uri (URI/create (embeddings-url api-base)))
                     (.header "Content-Type" "application/json")
                     (.header "Authorization" (str "Bearer " api-key))
                     (.POST (HttpRequest$BodyPublishers/ofString (json/write-str body)))
                     (.timeout (Duration/ofSeconds 60))
                     (.build))
-        response (.send @http-client request (HttpResponse$BodyHandlers/ofString))
+        response (http/send-with-retry http-client request (HttpResponse$BodyHandlers/ofString))
         status (.statusCode response)
         body-str (.body response)]
     (if (= status 200)
@@ -66,10 +81,10 @@
 
 (defn- get-embeddings
   "Get embeddings for one or more texts from OpenAI API."
-  [api-key model texts]
+  [api-base api-key model texts]
   (log/debug "Getting embeddings for" (count texts) "texts using" model)
-  (let [response (make-request api-key {:model model
-                                        :input texts})
+  (let [response (make-request api-base api-key {:model model
+                                                 :input texts})
         data (:data response)]
     ;; Sort by index to ensure order matches input
     (->> data
@@ -77,15 +92,15 @@
          (mapv :embedding))))
 
 
-(defrecord OpenAIEmbedder [api-key model dimension]
-  chroma/EmbeddingProvider
+(defrecord OpenAIEmbedder [api-base api-key model dimension]
+  emb-proto/EmbeddingProvider
   (embed-text [_ text]
-    (first (get-embeddings api-key model [text])))
+    (first (get-embeddings api-base api-key model [text])))
   (embed-batch [_ texts]
     ;; OpenAI has a limit of ~8000 tokens per batch
     ;; For safety, batch in groups of 100 texts
     (let [batches (partition-all 100 texts)]
-      (vec (mapcat #(get-embeddings api-key model (vec %)) batches))))
+      (vec (mapcat #(get-embeddings api-base api-key model (vec %)) batches))))
   (embedding-dimension [_] dimension))
 
 
@@ -93,16 +108,20 @@
   "Create an OpenAI embedding provider.
    
    Options:
-     :api-key - OpenAI API key (default: OPENAI_API_KEY env var)
-     :model - Embedding model (default: text-embedding-3-small)
-   
+     :api-key  - OpenAI API key (default: global-config :openai-api-key)
+     :api-base - API base URL (default: config [:embeddings :openai :api-base]
+                 or https://api.openai.com/v1)
+     :model    - Embedding model (default: config [:embeddings :openai :model]
+                 or text-embedding-3-small)
+
    Models:
      - text-embedding-3-small (1536 dims, cheapest, recommended)
      - text-embedding-3-large (3072 dims, higher quality)
      - text-embedding-ada-002 (1536 dims, legacy)"
   ([] (->provider {}))
-  ([{:keys [api-key model] :or {model default-model}}]
-   (let [api-key (or api-key (global-config/get-secret :openai-api-key))
+  ([{:keys [api-key] :as overrides}]
+   (let [{:keys [api-base model]} (resolve-config! (select-keys overrides [:api-base :model]))
+         api-key (or api-key (global-config/get-secret :openai-api-key))
          dimension (get models model)]
      (when-not api-key
        (throw (ex-info "OpenAI API key required. Set OPENAI_API_KEY env var or pass :api-key option."
@@ -112,5 +131,5 @@
                        {:type :unknown-model
                         :model model
                         :supported (keys models)})))
-     (log/info "Created OpenAI embedder with model:" model "dimension:" dimension)
-     (->OpenAIEmbedder api-key model dimension))))
+     (log/info "Created OpenAI embedder with model:" model "dimension:" dimension "api-base:" api-base)
+     (->OpenAIEmbedder api-base api-key model dimension))))

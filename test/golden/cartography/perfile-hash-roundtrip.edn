@@ -1,0 +1,3 @@
+{:empty {},
+ :single {"/a.clj" "deadbeef"},
+ :three {"/a.clj" "h1", "/b.clj" "h2", "/c.clj" "h3"}}

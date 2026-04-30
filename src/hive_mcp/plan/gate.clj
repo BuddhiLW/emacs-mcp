@@ -39,18 +39,21 @@
 
    Returns true if the content has structured plan indicators:
    - EDN with :steps or :plan/steps
-   - Markdown with ## step headers
-   - Phase blocks with :phase/:tasks
+   - Markdown with ≥1 ## step header
 
    Used to decide whether to apply FSM validation or store as-is
    (some plan-tagged entries may be free-form notes about plans,
-    not structured plans themselves)."
+    not structured plans themselves).
+
+   Threshold of 1 ## header (not 2) — matches parser/parse-markdown-plan
+   which accepts ≥1 H2. Asymmetric thresholds rejected single-step plans
+   at detection before the parser ran (kanban 20260429135733)."
   [content]
   (and (string? content)
        (not (str/blank? content))
        (or (parser/contains-edn-plan? content)
-           ;; Markdown plan detection: 2+ ## headers
-           (>= (count (re-seq #"(?m)^##\s+" content)) 2))))
+           ;; Markdown plan detection: ≥1 ## header (parser parity).
+           (>= (count (re-seq #"(?m)^##\s+" content)) 1))))
 
 ;; =============================================================================
 ;; Hint Builder (Actionable Fix Guidance)

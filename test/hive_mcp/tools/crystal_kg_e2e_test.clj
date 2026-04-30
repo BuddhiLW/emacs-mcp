@@ -16,7 +16,10 @@
             [hive-mcp.crystal.hooks :as crystal-hooks]
             [hive-mcp.tools.crystal]
             [hive-mcp.test-fixtures :as fixtures]
-            [hive-mcp.emacs.client :as ec]))
+            [hive-mcp.emacs.client :as ec]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]
+            [hive-mcp.chroma.connection :as chroma-conn]))
 
 ;; =============================================================================
 ;; Test Fixtures
@@ -25,28 +28,27 @@
 (def ^:dynamic *test-collection* "hive-mcp-e2e-test")
 
 (defn with-test-environment
-  "Setup mock embedder and reset KG for each test."
+  "Setup mock embedder for each test. KG isolation handled by :kg-conn fixture."
   [f]
   ;; Save original Chroma state
   (let [original-provider (chroma/get-embedding-provider)
-        original-config   (chroma/get-config)]
+        original-config   (chroma-conn/get-config)]
     ;; Configure Chroma with mock embedder
     (chroma/set-embedding-provider! (fixtures/->MockEmbedder 384))
-    (chroma/configure! {:host "localhost"
+    (chroma-conn/configure! {:host "localhost"
                         :port 8000
                         :collection-name *test-collection*})
-    ;; Reset KG
-    (kg-conn/reset-conn!)
     (try
       (f)
       (finally
         ;; Cleanup — restore original collection name + provider
-        (chroma/reset-collection-cache!)
-        (chroma/configure! (select-keys original-config [:host :port :collection-name]))
-        (kg-conn/reset-conn!)
+        (chroma-conn/reset-collection-cache!)
+        (chroma-conn/configure! (select-keys original-config [:host :port :collection-name]))
         (chroma/set-embedding-provider! original-provider)))))
 
-(use-fixtures :each with-test-environment)
+(use-fixtures :each
+  (iso/with-isolations :kg-conn)
+  with-test-environment)
 
 ;; =============================================================================
 ;; Helper Functions

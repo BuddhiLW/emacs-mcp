@@ -86,7 +86,8 @@
             [hive-mcp.events.handlers.agora :as agora]
             [hive-mcp.events.handlers.saa :as saa]
             [hive-mcp.events.handlers.memory-read :as memory-read]
-            [hive-mcp.events.handlers.lifecycle :as lifecycle]))
+            [hive-mcp.events.handlers.lifecycle :as lifecycle]
+            [hive-mcp.server.guards :as guards]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -145,6 +146,12 @@
     true))
 
 (defn reset-registration!
-  "Reset registration state. Primarily for testing."
+  "Reset registration state. Primarily for testing.
+
+   Guarded by `when-not-coordinator` — no-op when the live coordinator
+   is running so test fixtures cannot flip `*registered` to false while
+   handlers remain installed (which would corrupt event state)."
   []
-  (reset! *registered false))
+  (guards/when-not-coordinator
+   "events.handlers/reset-registration! blocked"
+   (reset! *registered false)))

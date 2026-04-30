@@ -79,7 +79,7 @@
                  :axioms (get context :axioms [])
                  :conventions (get context :conventions [])
                  :decisions (get context :decisions [])))
-        (catch Exception e
+        (catch Throwable e
           (log/error "[saa-fsm] Catchup failed" {:error (ex-message e)})
           (assoc data
                  :phase :catchup
@@ -112,7 +112,7 @@
                  :discoveries (get result :discoveries 0)
                  :silence-started (or (:silence-started data) (now-str resources))
                  :silence-iterations iteration))
-        (catch Exception e
+        (catch Throwable e
           (log/error "[saa-fsm] Silence exploration failed" {:error (ex-message e)})
           (assoc data
                  :phase :silence
@@ -169,7 +169,7 @@
                  :plan plan
                  :abstract-started (or (:abstract-started data) (now-str resources))
                  :abstract-retries retries))
-        (catch Exception e
+        (catch Throwable e
           (log/error "[saa-fsm] Plan synthesis failed" {:error (ex-message e)})
           (assoc data
                  :phase :abstract
@@ -203,7 +203,7 @@
                :phase :validate-plan
                :plan-valid? (boolean valid?)
                :validation-errors (or errors [])))
-      (catch Exception e
+      (catch Throwable e
         (log/error "[saa-fsm] Plan validation failed" {:error (ex-message e)})
         (assoc data
                :phase :validate-plan
@@ -226,7 +226,7 @@
                  :plan-memory-id memory-id
                  :kanban-task-ids (or kanban-ids [])
                  :kg-edges-created (or kg-edges 0)))
-        (catch Exception e
+        (catch Throwable e
           (log/error "[saa-fsm] Plan storage failed" {:error (ex-message e)})
           (assoc data
                  :phase :store-plan
@@ -258,7 +258,7 @@
                  :wave-id wave-id
                  :execution-result result
                  :act-started (or (:act-started data) (now-str resources))))
-        (catch Exception e
+        (catch Throwable e
           (log/error "[saa-fsm] Dispatch failed" {:error (ex-message e)})
           (assoc data
                  :phase :act-dispatch
@@ -286,7 +286,7 @@
                  :tests-passed? (boolean passed?)
                  :verification details
                  :act-ended (now-str resources)))
-        (catch Exception e
+        (catch Throwable e
           (log/warn "[saa-fsm] Verification failed" {:error (ex-message e)})
           (assoc data
                  :phase :act-verify

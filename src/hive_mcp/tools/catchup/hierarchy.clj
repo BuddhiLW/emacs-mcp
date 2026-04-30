@@ -11,7 +11,8 @@
             [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.dns.result :refer [rescue]]
             [hive-weave.parallel :as wpar]
-            [clojure.tools.logging :as log]))
+            [clojure.tools.logging :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -115,10 +116,11 @@
    evidence for the IN-list-vs-equality hypothesis."
   [store pid]
   ((timed-query (str "hierarchy/desc/" pid)
-                #(mem-proto/query-entries store
-                   {:project-ids [pid]
-                    :limit per-descendant-limit
-                    :output-fields metadata-projection}))))
+                #(with-resilience
+                   (mem-proto/query-entries store
+                     {:project-ids [pid]
+                      :limit per-descendant-limit
+                      :output-fields metadata-projection})))))
 
 (defn chunked-hierarchy-fetch
   "H12 per-descendant fork-join: replaces the legacy

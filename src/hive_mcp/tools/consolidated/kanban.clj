@@ -5,21 +5,54 @@
             [hive-mcp.tools.memory-kanban :as mem-kanban]
             [hive-mcp.plan.tool :as plan-tool]))
 
+(def ^:private batch-allowed-handlers
+  "Handlers reachable from a kanban batch operation.
+
+   Restricted to ID-keyed mutating commands — read ops (`list`, `status`)
+   make no sense per-op. Adding more commands here is a deliberate decision."
+  {:update mem-kanban/handle-mem-kanban-move
+   :delete mem-kanban/handle-mem-kanban-delete})
+
+(defn- with-default-command
+  "Set :command on each op only when missing. Never overwrites a caller's
+   explicit value — that was the silent-misroute bug (audit 20260429203443)."
+  [operations default-cmd]
+  (mapv (fn [op] (update op :command #(or % default-cmd))) operations))
+
 (defn- handle-batch-update
-  "Batch update handler: injects :command \"update\" into each operation."
+  "Batch handler defaulting omitted :command to \"update\".
+
+   Per-op :command is respected when supplied — pass :command \"delete\" to
+   mix delete ops in. Unknown commands fail loudly per-op via the inner
+   make-batch-handler (no silent misroute to update).
+
+   Backward-compatible: callers passing only :task_id + :new_status keep
+   working — :update fills in."
   [{:keys [operations] :as params}]
-  (let [inner (make-batch-handler {:update mem-kanban/handle-mem-kanban-move})]
-    (inner (assoc params :operations
-                  (mapv #(assoc % :command "update") operations)))))
+  (let [inner (make-batch-handler batch-allowed-handlers)]
+    (inner (assoc params :operations (with-default-command operations "update")))))
+
+(defn- handle-batch-delete
+  "Batch handler defaulting omitted :command to \"delete\".
+
+   Mirror of handle-batch-update. Use when sweeping many task ids:
+
+     {:command \"batch-delete\"
+      :operations [{:task_id \"id-1\"} {:task_id \"id-2\"} ...]}"
+  [{:keys [operations] :as params}]
+  (let [inner (make-batch-handler batch-allowed-handlers)]
+    (inner (assoc params :operations (with-default-command operations "delete")))))
 
 (def ^:private canonical-handlers
   {:list           mem-kanban/handle-mem-kanban-list-slim
    :create         mem-kanban/handle-mem-kanban-create
    :update         mem-kanban/handle-mem-kanban-move
+   :delete         mem-kanban/handle-mem-kanban-delete
    :status         mem-kanban/handle-mem-kanban-stats
    :sync           (fn [_] {:success true :message "Memory kanban is single-backend, no sync needed"})
    :plan-to-kanban plan-tool/handle-plan-to-kanban
-   :batch-update   handle-batch-update})
+   :batch-update   handle-batch-update
+   :batch-delete   handle-batch-delete})
 
 (def ^:private deprecated-aliases
   {:move     :update
@@ -52,10 +85,10 @@
 (def tool-def
   {:name "kanban"
    :consolidated true
-   :description "Kanban task management: list (all/filtered tasks), create (new task), update (change status/modify task), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks, supports plan_id or plan_path), batch-update (bulk status changes). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all. HCR: use include_descendants=true to aggregate descendant project tasks."
+   :description "Kanban task management: list (all/filtered tasks), create (new task), update (change status/modify task), delete (hard-remove task by id; no archival, no completion — use for duplicates/cancellations), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks, supports plan_id or plan_path), batch-update (bulk status changes; per-op :command respected — pass :command \"delete\" inside an op to mix delete in), batch-delete (sweep many task_ids; mirror of batch-update). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all. HCR: use include_descendants=true to aggregate descendant project tasks. List filters: query (substring), tags (extra required tags), tag_match (any|all), created_after / updated_after (ISO-8601), limit / offset (pagination), fields (projection)."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["list" "create" "move" "status" "update" "roadmap" "my-tasks" "sync" "plan-to-kanban" "batch-update" "help"]
+                                         :enum ["list" "create" "move" "status" "update" "delete" "roadmap" "my-tasks" "sync" "plan-to-kanban" "batch-update" "batch-delete" "help"]
                                          :description "Kanban operation to perform"}
                               "status" {:type "string"
                                         :enum ["todo" "inprogress" "inreview" "done"]
@@ -75,16 +108,41 @@
                                            :description "File path to a plan file (alternative to plan_id for plan-to-kanban). Slurps file content directly — zero-token plan loading for large plans."}
                               "operations" {:type "array"
                                             :items {:type "object"
-                                                    :properties {"task_id" {:type "string"}
-                                                                 "new_status" {:type "string"
-                                                                               :enum ["todo" "inprogress" "inreview" "done"]}
+                                                    :properties {"command"     {:type "string"
+                                                                                :enum ["update" "delete"]
+                                                                                :description "Per-op command override; defaults to the wrapper's verb (update for batch-update, delete for batch-delete)"}
+                                                                 "task_id"     {:type "string"}
+                                                                 "new_status"  {:type "string"
+                                                                                :enum ["todo" "inprogress" "inreview" "done"]}
                                                                  "description" {:type "string"}}
                                                     :required ["task_id"]}
-                                            :description "Array of update operations for batch-update command"}
+                                            :description "Array of operations for batch-update / batch-delete. Each op may specify :command (update|delete) to mix verbs in one batch; otherwise the wrapper's default applies."}
                               "directory" {:type "string"
                                            :description "Working directory for project scope (auto-detected if not provided)"}
                               "include_descendants" {:type "boolean"
                                                      :description "Include child project tasks in results (HCR Wave 4). Default true — set false to restrict to current project only."}
+                              "project_id" {:type "string"
+                                            :description "[list] Exact-match project filter (overrides directory-derived scope)"}
+                              "query" {:type "string"
+                                       :description "[list] Case-insensitive substring match on title + description"}
+                              "tags" {:type "array" :items {:type "string"}
+                                      :description "[list] Extra required tags beyond ['kanban' status]"}
+                              "tag_match" {:type "string"
+                                           :enum ["any" "all"]
+                                           :description "[list] Tag match semantics for `tags` (default 'all')"}
+                              "priority" {:type "string"
+                                          :enum ["high" "medium" "low"]
+                                          :description "[list] Filter by exact priority"}
+                              "created_after" {:type "string"
+                                               :description "[list] ISO-8601 timestamp; only entries with content :created >= this"}
+                              "updated_after" {:type "string"
+                                               :description "[list] ISO-8601 timestamp; only entries with :updated >= this"}
+                              "limit" {:type "integer"
+                                       :description "[list] Cap result count after sort"}
+                              "offset" {:type "integer"
+                                        :description "[list] Skip first N results after sort"}
+                              "fields" {:type "array" :items {:type "string"}
+                                        :description "[list] Project each result to a subset of fields (e.g. ['id' 'title'])"}
                               "parallel" {:type "boolean"
                                           :description "Run batch operations in parallel (default: false)"}}
                  :required ["command"]}

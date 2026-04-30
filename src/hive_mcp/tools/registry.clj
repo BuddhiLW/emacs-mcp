@@ -28,6 +28,7 @@
             [hive-mcp.tools.consolidated.migration :as c-migration]
             [hive-mcp.tools.consolidated.cider :as c-cider]
             [hive-mcp.tools.consolidated.magit :as c-magit]
+            [hive-mcp.tools.events.core :as c-events]
             [hive-mcp.tools.composite :as composite]
             [hive-mcp.extensions.registry :as ext]
             [clojure.string :as str]
@@ -73,6 +74,7 @@
                                   c-git/tools
                                   c-emacs/tools
                                   c-preset/tools
+                                  c-events/tools
                                   c-multi/tools))
         domain-names   (into #{} (map :name) domain-roots)
         cfg-absorbed   (config-absorbed-names)
@@ -183,7 +185,9 @@
    :kg        c-kg/handlers
    :migration c-migration/handlers
    :cider     c-cider/handlers
-   :magit     c-magit/handlers})
+   :magit     c-magit/handlers
+   ;; events tool exposed as a flat dispatcher; expose only the tool def for help
+   })
 
 (defn get-child-tools
   "Get available sub-commands for a consolidated tool by name."

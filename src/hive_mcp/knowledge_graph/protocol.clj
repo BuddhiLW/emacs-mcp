@@ -33,9 +33,14 @@
 (def entity kg/entity)
 (def entid kg/entid)
 (def pull-entity kg/pull-entity)
+(def eids-by-attr kg/eids-by-attr)
 (def db-snapshot kg/db-snapshot)
 (def reset-conn! kg/reset-conn!)
 (def close! kg/close!)
+
+;; IPersistentKGStore (optional — backends with on-disk state)
+(def delete-database! kg/delete-database!)
+(def persistent-store? kg/persistent-store?)
 
 ;; Temporal protocol methods
 (def history-db kg/history-db)

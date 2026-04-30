@@ -82,3 +82,4 @@ claude-code-ide.el/
 hive-mcp.wiki/
 hive-hot
 local.deps.edn
+.clj-kondo/

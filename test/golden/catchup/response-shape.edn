@@ -1,0 +1,34 @@
+{:block-count 4,
+ :blocks
+ [{:type "text",
+   :_block "header",
+   :key-set
+   #{:scopes
+     :memory-piggyback
+     :counts
+     :git
+     :_block
+     :permeation
+     :success
+     :project},
+   :counts-keys
+   #{:snippets
+     :decisions
+     :recent-wraps
+     :axioms
+     :principles
+     :priority-conventions
+     :sessions
+     :expiring
+     :conventions},
+   :piggyback-keys #{:enqueued :note}}
+  {:type "text",
+   :_block "context",
+   :key-set #{:via-context-refs :via-piggyback :_block :context},
+   :context-keys #{:sessions}}
+  {:type "text",
+   :_block "kg-insights",
+   :key-set #{:kg-insights :_block}}
+  {:type "text",
+   :_block "meta",
+   :key-set #{:_block :hint :project-tree :disc-decay}}]}

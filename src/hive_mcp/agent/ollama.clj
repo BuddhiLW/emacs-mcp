@@ -2,7 +2,8 @@
   "Ollama backend for local LLM access via HTTP API."
   (:require [hive-mcp.agent.protocol :as proto]
             [clojure.data.json :as json]
-            [taoensso.timbre :as log])
+            [taoensso.timbre :as log]
+            [hive-mcp.embeddings.http-client :as http])
   (:import [java.net URI]
            [java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers HttpResponse$BodyHandlers]
            [java.time Duration]))
@@ -11,13 +12,17 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defonce ^:private http-client
-  (delay
-    (-> (HttpClient/newBuilder)
-        (.connectTimeout (Duration/ofSeconds 30))
-        (.build))))
+  (http/mk-client
+   (fn []
+     (-> (HttpClient/newBuilder)
+         (.connectTimeout (Duration/ofSeconds 30))
+         (.build)))))
 
 (defn- http-post
-  "Make HTTP POST request, return parsed JSON response."
+  "Make HTTP POST request, return parsed JSON response.
+
+   Uses the self-healing HttpClient cache — a fatal selector/shutdown
+   error triggers one atomic rebuild + retry before propagating."
   [url body & {:keys [timeout-secs] :or {timeout-secs 300}}]
   (let [request (-> (HttpRequest/newBuilder)
                     (.uri (URI/create url))
@@ -25,7 +30,8 @@
                     (.POST (HttpRequest$BodyPublishers/ofString (json/write-str body)))
                     (.timeout (Duration/ofSeconds timeout-secs))
                     (.build))
-        response (.send @http-client request (HttpResponse$BodyHandlers/ofString))
+        response (http/send-with-retry http-client request
+                                       (HttpResponse$BodyHandlers/ofString))
         status (.statusCode response)
         body-str (.body response)]
     (if (= status 200)

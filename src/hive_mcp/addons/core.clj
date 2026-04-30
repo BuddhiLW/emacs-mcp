@@ -95,7 +95,12 @@
        :errors [(str "Addon " id " is not registered")]})))
 
 (defn init-addon!
-  "Initialize a registered addon."
+  "Initialize a registered addon.
+
+   On success, also registers any extensions returned by the addon's
+   `(proto/hooks addon)` into the extension registry, and tracks the
+   set of registered keys per-addon so shutdown can remove only the
+   hooks owned by this addon."
   [id & [opts]]
   (if-let [{:keys [addon state]} (get-addon-entry id)]
     (if (= state :active)
@@ -128,6 +133,21 @@
                     ;; Register tools
                                  (doseq [t (proto/tools addon)]
                                    (ext/register-tool! t))
+                    ;; Register hooks declared via IAddon `hooks` protocol method.
+                    ;; Legacy addons that don't implement `hooks` rescue to {}.
+                    ;; Per-addon hook-keys are tracked so shutdown only removes
+                    ;; the hooks this addon registered (no clobber across addons).
+                                 (let [hooks-map (r/rescue {} (proto/hooks addon))]
+                                   (when (seq hooks-map)
+                                     (doseq [[k v] hooks-map]
+                                       (case (namespace k)
+                                         "multi" ((requiring-resolve 'hive-mcp.multi.registry/register-by-key!)
+                                                  id k v)
+                                         (ext/register! k v)))
+                                     (swap! addon-registry assoc-in
+                                            [id :hook-keys] (set (keys hooks-map)))
+                                     (log/debug "Addon registered hooks"
+                                                {:addon id :keys (keys hooks-map)})))
 
                                  (log/info "Addon initialized" {:addon id
                                                                 :elapsed-ms elapsed-ms})
@@ -151,9 +171,14 @@
      :errors [(str "Addon " id " is not registered")]}))
 
 (defn shutdown-addon!
-  "Shutdown an active addon."
+  "Shutdown an active addon.
+
+   Deregisters extensions, tools, composite contributions, and hooks
+   that were registered for this addon during init. Hook ownership
+   is tracked per-addon (entry's `:hook-keys`) so shutdown only
+   removes hooks this addon registered."
   [id]
-  (if-let [{:keys [addon state init-result]} (get-addon-entry id)]
+  (if-let [{:keys [addon state init-result hook-keys]} (get-addon-entry id)]
     (if (not= state :active)
       (do
         (log/info "Addon not active, skipping shutdown" {:addon id :state state})
@@ -164,6 +189,16 @@
                            (when-let [exts (:extensions (:metadata init-result))]
                              (doseq [k (keys exts)] (ext/deregister! k))
                              (log/debug "Addon deregistered extensions" {:addon id :keys (keys exts)}))
+              ;; Deregister hooks (only those owned by this addon)
+                           (when (seq hook-keys)
+                             (doseq [k hook-keys]
+                               (case (namespace k)
+                                 "multi" ((requiring-resolve 'hive-mcp.multi.registry/deregister-by-key!)
+                                          id k)
+                                 (ext/deregister! k)))
+                             ;; Belt-and-suspenders: clear any leftover :multi/* entries by owner
+                             ((requiring-resolve 'hive-mcp.multi.registry/deregister-by-owner!) id)
+                             (log/debug "Addon deregistered hooks" {:addon id :keys hook-keys}))
               ;; Deregister tools
                            (doseq [t (proto/tools addon)]
                              (ext/deregister-tool! (:name t)))
@@ -172,6 +207,7 @@
                            (let [result (proto/shutdown! addon)]
                              (swap! addon-registry assoc-in [id :state] :registered)
                              (swap! addon-registry assoc-in [id :init-time] nil)
+                             (swap! addon-registry update id dissoc :hook-keys)
                              (log/info "Addon shut down" {:addon id})
                              (assoc result :addon-name id)))]
         (if (r/err? shutdown-result)

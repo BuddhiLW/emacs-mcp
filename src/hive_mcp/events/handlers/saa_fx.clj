@@ -56,7 +56,7 @@
         (set-allowlist! agent-id (set (or allowed-tools [])))
         (log/debug "[saa-fx] Tool allowlist set for" agent-id
                    "phase=" (name phase)))
-      (catch Exception e
+      (catch Throwable e
         (log/warn "[saa-fx] Tool gate failed (non-fatal):" (.getMessage e))))))
 
 ;; =============================================================================
@@ -97,7 +97,7 @@
           (inject-ctx! agent-id phase context)
           (log/debug "[saa-fx] Context injected for" agent-id
                      "phase=" (name phase)))
-        (catch Exception e
+        (catch Throwable e
           (log/warn "[saa-fx] Context inject failed (non-fatal):"
                     (.getMessage e)))))))
 
@@ -138,7 +138,7 @@
                 {:workflow :saa
                  :phase phase
                  :message message}))
-      (catch Exception e
+      (catch Throwable e
         (log/warn "[saa-fx] Shout failed (non-fatal):" (.getMessage e))))))
 
 ;; =============================================================================
@@ -198,7 +198,7 @@
                                                               :kanban-task-ids :plan-only?
                                                               :tests-passed? :grounding-score])
                                                 {:agent-id agent-id})])))
-        (catch Exception e
+        (catch Throwable e
           (log/error "[saa-fx] SAA workflow failed:" (.getMessage e))
           ;; Dispatch failure event
           (try
@@ -207,7 +207,7 @@
                                          :task task
                                          :phase :unknown
                                          :error (.getMessage e)}]))
-            (catch Exception e2 (log/warn "[saa-fx] Failed to dispatch :saa/failed event:" (.getMessage e2)))))))))
+            (catch Throwable e2 (log/warn "[saa-fx] Failed to dispatch :saa/failed event:" (.getMessage e2)))))))))
 
 ;; =============================================================================
 ;; Registration

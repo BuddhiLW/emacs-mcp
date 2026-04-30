@@ -6,7 +6,9 @@
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [hive-mcp.tools.swarm :as swarm]
             [hive-mcp.swarm.datascript :as ds]
-            [hive-mcp.channel.core :as ch]))
+            [hive-mcp.channel.core :as ch]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;;; Conflict test - Drone B
 
@@ -14,21 +16,19 @@
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn with-clean-state
-  "Ensure clean registry state before and after each test.
-   ADR-002: DataScript is now the only registry."
+(defn- channel-fixture
+  "Stop channel server before and after each test (50ms grace)."
   [f]
-  ;; Reset DataScript (ADR-002 - sole source of truth)
-  (ds/reset-conn!)
   (ch/stop-server!)
   (Thread/sleep 50)
-  (f)
-  (ch/stop-server!)
-  ;; Cleanup
-  (ds/reset-conn!)
-  (Thread/sleep 50))
+  (try (f)
+       (finally
+         (ch/stop-server!)
+         (Thread/sleep 50))))
 
-(use-fixtures :each with-clean-state)
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  channel-fixture)
 
 ;; =============================================================================
 ;; Unit Tests: Registry Functions

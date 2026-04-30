@@ -23,7 +23,8 @@
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -37,13 +38,14 @@
   [{:keys [id duration]}]
   (log/info "mcp-memory-set-duration:" id duration)
   (with-store
-    (let [store (mem-proto/get-store)
-          expires (dur/calculate-expires duration)
-          updated (mem-proto/update-entry! store id {:duration duration
-                                                     :expires (or expires "")})]
-      (if updated
-        {:type "text" :text (json/write-str (fmt/entry->json-alist updated))}
-        (mcp-error "Entry not found")))))
+    (with-resilience
+      (let [store (mem-proto/get-store)
+            expires (dur/calculate-expires duration)
+            updated (mem-proto/update-entry! store id {:duration duration
+                                                       :expires (or expires "")})]
+        (if updated
+          {:type "text" :text (json/write-str (fmt/entry->json-alist updated))}
+          (mcp-error "Entry not found"))))))
 
 (defn- shift-entry-duration
   "Shift entry duration by delta steps."
@@ -55,8 +57,9 @@
                                              :duration new-duration})}
         (let [store (mem-proto/get-store)
               expires (dur/calculate-expires new-duration)
-              updated (mem-proto/update-entry! store id {:duration new-duration
-                                                         :expires (or expires "")})]
+              updated (with-resilience
+                        (mem-proto/update-entry! store id {:duration new-duration
+                                                           :expires (or expires "")}))]
           {:type "text" :text (json/write-str (fmt/entry->json-alist updated))})))))
 
 (defn handle-promote
@@ -80,7 +83,8 @@
   [_]
   (log/info "mcp-memory-cleanup-expired")
   (with-store
-    (let [{:keys [count deleted-ids repaired]} (mem-proto/cleanup-expired! (mem-proto/get-store))
+    (let [{:keys [count deleted-ids repaired]} (with-resilience
+                                                 (mem-proto/cleanup-expired! (mem-proto/get-store)))
           edges-removed (when (seq deleted-ids)
                           (reduce (fn [total id]
                                     (+ total (kg-edges/remove-edges-for-node! id)))
@@ -114,7 +118,8 @@
                                             :helpful-count :unhelpful-count
                                             :access-count :project-id])
         :project-id     (:project-id entry)})
-      (mem-proto/delete-entry! (mem-proto/get-store) id)
+      (with-resilience
+        (mem-proto/delete-entry! (mem-proto/get-store) id))
       (when (pos? edges-removed)
         (log/info "Cleaned up" edges-removed "KG edges for expired entry" id))
       {:type "text" :text (json/write-str {:expired id
@@ -147,7 +152,8 @@
     (log/info "mcp-memory-expiring-soon:" days-val "limit:" limit-val "directory:" directory)
     (with-store
       (let [project-id (scope/get-current-project-id directory)
-            all-entries (mem-proto/entries-expiring-soon (mem-proto/get-store) days-val {})
+            all-entries (with-resilience
+                          (mem-proto/entries-expiring-soon (mem-proto/get-store) days-val {}))
             scope-filter (scope/make-scope-tag project-id)
             filtered (->> all-entries
                           (filter #(scope/matches-scope? % scope-filter))

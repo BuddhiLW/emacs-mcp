@@ -67,6 +67,15 @@
                           :openrouter-qwen3 {:impl :openrouter
                                              :model "qwen/qwen3-embedding-8b"
                                              :max-tokens 32768
+                                             :dimension 4096}
+                          ;; Venice's qwen3-8b — same dimension/context as
+                          ;; OpenRouter's qwen3-8b, but routed through Venice's
+                          ;; privacy-preserving endpoint. Inert until
+                          ;; service/configure-defaults! flips :type/plan to
+                          ;; :venice-qwen3 (only when VENICE_API_KEY present).
+                          :venice-qwen3     {:impl :venice
+                                             :model "text-embedding-qwen3-8b"
+                                             :max-tokens 32768
                                              :dimension 4096}}}
    :services {:chroma {:mode :local :host "localhost" :port 8000}
               :ollama {:mode :local :host "http://localhost:11434" :model "nomic-embed-text"}
@@ -106,6 +115,9 @@
                              :embedding {:provider :ollama
                                          :model "nomic-embed-code"}}
               :carto-store {:backend :qdrant-carto}}
+   :cartography {:sentinel-path (str (System/getProperty "user.home")
+                                     "/.config/hive-mcp/data/carto/preferred-backend.edn")
+                 :strict-mode?  true}
    :secrets {:openrouter-api-key nil
              :openai-api-key nil
              :anthropic-api-key nil
@@ -115,14 +127,15 @@
              :fireworks-api-key nil}
    :llm-providers {:openrouter {:api-url       "https://openrouter.ai/api/v1/chat/completions"
                                 :secret-key    :openrouter-api-key
-                                :default-model "anthropic/claude-sonnet-4-6"
+                                :default-model "anthropic/claude-opus-4-7"
                                 :available-models ["moonshotai/kimi-k2.5"
                                                    "minimax/minimax-m2.7"
                                                    "qwen/qwen3.6-plus"
                                                    "z-ai/glm-5.1"
                                                    "xiaomi/mimo-v2-pro"
-                                                   "anthropic/claude-sonnet-4-6"
-                                                   "anthropic/claude-opus-4-6"]}
+                                                   "anthropic/claude-opus-4-7"
+                                                   "anthropic/claude-opus-4-6"
+                                                   "anthropic/claude-sonnet-4-6"]}
                    :venice     {:api-url       "https://api.venice.ai/api/v1/chat/completions"
                                 :secret-key    :venice-api-key
                                 :default-model "venice-uncensored"
@@ -148,7 +161,18 @@
                                    :secret-key    nil
                                    :default-model "devstral-small:24b"
                                    :available-models ["devstral-small:24b"]}}
-   :agent-defaults {:ling       {:provider :openrouter :model "moonshotai/kimi-k2.5"}
+   :hivemind {;; Max chars preserved in a shout :message / :task before truncation.
+              ;; One bad shout fans out (per-agent ring × backbone × subscribers),
+              ;; so aggressive bound protects every downstream context window.
+              :shout-message-cap 2048}
+   :headless {;; Default concrete backend keyword for the abstract :headless
+              ;; spawn-mode. :auto = registry-driven preference per provider.
+              ;; Concrete keys (e.g. :hive-agent) come from addons that register
+              ;; via META-INF/hive-addons/*.edn + register-headless!.
+              ;; hive-mcp source MUST NOT name concrete backends — keywords here
+              ;; are inert operator data.
+              :default-backend :auto}
+   :agent-defaults {:ling       {:provider :openrouter :model "anthropic/claude-opus-4-7"}
                     :drone      {:provider :openrouter :model "minimax/minimax-m2.7"}
                     :compressor {:provider :venice     :model "venice-uncensored"}}
    :models {:task-models {:coding     "moonshotai/kimi-k2.5"

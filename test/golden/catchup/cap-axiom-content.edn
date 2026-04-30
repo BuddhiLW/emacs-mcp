@@ -1,0 +1,5 @@
+{:exact-cap {:id "a-2", :len 600, :capped? false},
+ :nil-content {:id "a-5", :len 0, :capped? false},
+ :over-cap {:id "a-3", :len 642, :capped? true},
+ :short-pass {:id "a-1", :len 16, :capped? false},
+ :way-over {:id "a-4", :len 642, :capped? true}}

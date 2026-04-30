@@ -18,7 +18,8 @@
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.crystal.recall :as recall]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 
 (def ^:const ^:private memory-write-timeout-ms
   "Timeout budget for a single memory write (Chroma add + KG tx + fetch).
@@ -29,13 +30,16 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defn- update-target-incoming!
-  "Append edge-id to target entry's kg-incoming field."
+  "Append edge-id to target entry's kg-incoming field.
+   Wraps the store read+write pair in `with-resilience` so the KG
+   back-edge bookkeeping survives a transient Milvus transport drop."
   [target-id edge-id]
   (let [store (mem-proto/get-store)]
-    (when-let [target-entry (mem-proto/get-entry store target-id)]
+    (when-let [target-entry (with-resilience (mem-proto/get-entry store target-id))]
       (let [existing-incoming (or (:kg-incoming target-entry) [])
             updated-incoming (conj existing-incoming edge-id)]
-        (mem-proto/update-entry! store target-id {:kg-incoming updated-incoming})))))
+        (with-resilience
+          (mem-proto/update-entry! store target-id {:kg-incoming updated-incoming}))))))
 
 (defn- create-kg-edges!
   "Create KG edges for the given relationships and update target entries.
@@ -78,44 +82,53 @@
 
 (defn- validate-plan-gate!
   "Validate plan content before storage via FSM gate.
-   Strict: type=plan MUST pass validation. No heuristic bypass."
+
+   Strategy: delegate the entire decision to `plan-gate/validate-for-storage`,
+   which runs parse + schema + deps + cycles and returns a structured
+   `{:valid? false :phase ... :hint ...}` for any failure mode (parse,
+   schema, dependencies, cycles, empty-steps). Surfacing that result
+   directly via `format-gate-error` gives lings actionable messages —
+   e.g. an EDN plan with a list-shaped `:steps` or a missing :title now
+   sees the FSM-emitted hint, not a generic 'doesn't look like a plan'
+   reject.
+
+   Removed: the prior `plan-content?` pre-check. It was redundant with
+   the gate (which already covers EDN + markdown detection) and its
+   failure path threw a generic message that hid the real parse error
+   — the surface area of the EDN/markdown contract bug
+   (kanban 20260429185655-1cfb9277)."
   [content]
-  (if-not (plan-gate/plan-content? content)
-    ;; Content declared as plan but doesn't look like one — reject
-    (throw (ex-info (str "Content declared as type=plan but is not parseable as a plan.\n"
-                         "Plan content must contain either:\n"
-                         "  1. EDN with {:steps [{:id \"step-1\" :title \"...\"}]}\n"
-                         "  2. Markdown with ## headers for each step\n"
-                         "Use type=note or type=decision for free-form content.")
-                    {:type :plan-gate-rejected
-                     :phase :detection
-                     :errors ["Content does not match plan format"]}))
-    (let [gate-result (plan-gate/validate-for-storage content)]
-      (when-not (:valid? gate-result)
-        (throw (ex-info (plan-gate/format-gate-error gate-result)
-                        {:type :plan-gate-rejected
-                         :phase (:phase gate-result)
-                         :errors (:errors gate-result)}))))))
+  (let [gate-result (plan-gate/validate-for-storage content)]
+    (when-not (:valid? gate-result)
+      (throw (ex-info (plan-gate/format-gate-error gate-result)
+                      {:type :plan-gate-rejected
+                       :phase (:phase gate-result)
+                       :errors (:errors gate-result)})))))
 
 (defn- index-entry!
-  "Index entry in appropriate collection.
-   Plans → OpenRouter-backed plans collection.
-   Everything else → Ollama-backed memory collection."
-  [openrouter? {:keys [type content tags-with-scope content-hash duration-str
-                       expires project-id abstraction-level knowledge-gaps agent-id]}]
-  (if openrouter?
-    (plans/index-plan!
-     {:type type :content content :tags tags-with-scope
-      :content-hash content-hash :duration duration-str
-      :expires (or expires "") :project-id project-id
-      :abstraction-level abstraction-level
-      :knowledge-gaps knowledge-gaps :agent-id agent-id})
-    (mem-proto/add-entry! (mem-proto/get-store)
-                          {:type type :content content :tags tags-with-scope
-                           :content-hash content-hash :duration duration-str
-                           :expires (or expires "") :project-id project-id
-                           :abstraction-level abstraction-level
-                           :knowledge-gaps knowledge-gaps})))
+  "Index entry through IMemoryStore. Plan-type entries get enriched with
+   plan-specific metadata (`:plan-status`, `:steps-count`) but are
+   stored via the same `add-entry!` path as every other type — there
+   is no separate plans collection.
+
+   Wraps the store add-entry! in `with-resilience` so a dropped
+   HTTP transport (selector-manager-closed IOException surfaced as
+   ExecutionException) kicks the heal loop and retries once before
+   surfacing the failure to the caller."
+  [{:keys [type content tags-with-scope content-hash duration-str
+           expires project-id abstraction-level knowledge-gaps]}]
+  (let [base-entry {:type type :content content :tags tags-with-scope
+                    :content-hash content-hash :duration duration-str
+                    :expires (or expires "") :project-id project-id
+                    :abstraction-level abstraction-level
+                    :knowledge-gaps knowledge-gaps}
+        entry (if (= type "plan")
+                (cond-> (assoc base-entry :plan-status "draft")
+                  (plans/count-plan-steps content)
+                  (assoc :steps-count (plans/count-plan-steps content)))
+                base-entry)]
+    (with-resilience
+      (mem-proto/add-entry! (mem-proto/get-store) entry))))
 
 (def ^:private ^:const read-after-write-attempts 6)
 (def ^:private ^:const read-after-write-base-ms 40)
@@ -129,12 +142,14 @@
    Attempts: `read-after-write-attempts`, waits grow linearly from
    `read-after-write-base-ms`. Total worst-case budget ≈ 40+80+120+160+200
    = 600 ms, which stays well under the 30 s memory-write-timeout-ms
-   and is invisible to callers when the first read already succeeds."
-  [store entry-id openrouter?]
+   and is invisible to callers when the first read already succeeds.
+
+   Each store read is wrapped in `with-resilience` so a transport drop
+   during the read-after-write window triggers a heal-and-retry. All
+   types — plans included — go through the same IMemoryStore path."
+  [store entry-id]
   (loop [attempt 1]
-    (let [fetched (if openrouter?
-                    (plans/get-plan entry-id)
-                    (mem-proto/get-entry store entry-id))]
+    (let [fetched (with-resilience (mem-proto/get-entry store entry-id))]
       (cond
         (some? fetched) fetched
         (>= attempt read-after-write-attempts) nil
@@ -142,17 +157,22 @@
                   (recur (inc attempt)))))))
 
 (defn- finalize-entry!
-  "Wire KG edges, fetch created entry, notify channel, and format response."
-  [entry-id openrouter? kg-params project-id agent-id
+  "Wire KG edges, fetch created entry, notify channel, and format response.
+
+   The KG outgoing-edge update is wrapped in `with-resilience` so a
+   transient Milvus transport drop during the edge-link write kicks
+   the heal loop instead of poisoning KG edges. All types — plans
+   included — flow through the single IMemoryStore."
+  [entry-id kg-params project-id agent-id
    {:keys [tags-with-scope type knowledge-gaps]}]
   (let [store (mem-proto/get-store)
         edge-ids (create-kg-edges! entry-id kg-params project-id agent-id)
-        _ (when (and (seq edge-ids) (not openrouter?))
-            (mem-proto/update-entry! store entry-id {:kg-outgoing edge-ids}))
-        created (fetch-with-retry store entry-id openrouter?)]
+        _ (when (seq edge-ids)
+            (with-resilience
+              (mem-proto/update-entry! store entry-id {:kg-outgoing edge-ids})))
+        created (fetch-with-retry store entry-id)]
     (when-not created
-      (log/error "Failed to retrieve entry after indexing:" entry-id
-                 "openrouter?" openrouter?))
+      (log/error "Failed to retrieve entry after indexing:" entry-id))
     (log/info "Created memory entry:" entry-id
               (when (seq edge-ids) (str " with " (count edge-ids) " KG edges"))
               (when (seq knowledge-gaps) (str " gaps:" (count knowledge-gaps))))
@@ -167,8 +187,15 @@
       (mcp-error (str "Entry indexed as " entry-id " but retrieval failed. Check memory store connectivity.")))))
 
 (defn- do-add!
-  "Inner core of handle-add. Runs the memory-store/KG/plan IO path.
-   Intended to be submitted to the memory pool for isolation."
+  "Inner core of handle-add. Runs the memory-store/KG IO path through
+   the single IMemoryStore — no per-type collection branching.
+   Intended to be submitted to the memory pool for isolation.
+
+   Both the duplicate-detection read and the duplicate-tag-merge write
+   are wrapped in `with-resilience`: if the Milvus HTTP transport drops
+   between the find-duplicate call and the dedup update, the heal loop
+   fires and the call retries once — otherwise transient failures here
+   would leak through `with-store`'s generic try/catch as errors."
   [{:keys [type content tags duration directory agent_id
            kg_implements kg_supersedes kg_depends_on kg_refines abstraction_level]}]
   (let [tags-vec (coerce-vec! tags :tags [])
@@ -190,20 +217,21 @@
             content-hash (mem-proto/content-hash content)
             duration-str (or duration "long")
             expires (dur/calculate-expires duration-str)
-            existing (mem-proto/find-duplicate store type content-hash {:project-id project-id})]
+            existing (with-resilience
+                       (mem-proto/find-duplicate store type content-hash {:project-id project-id}))]
         (if existing
           (let [merged-tags (distinct (concat (:tags existing) tags-with-scope))
-                updated (mem-proto/update-entry! store (:id existing) {:tags merged-tags})]
+                updated (with-resilience
+                          (mem-proto/update-entry! store (:id existing) {:tags merged-tags}))]
             (log/info "Duplicate found, merged tags:" (:id existing))
             (mcp-json (fmt/entry->json-alist updated)))
-          (let [openrouter? (plans/high-abstraction-type? type)
-                _ (when (= type "plan") (validate-plan-gate! content))
+          (let [_ (when (= type "plan") (validate-plan-gate! content))
                 entry-ctx {:type type :content content :tags-with-scope tags-with-scope
                            :content-hash content-hash :duration-str duration-str
                            :expires expires :project-id project-id
                            :abstraction-level abstraction-level
                            :knowledge-gaps knowledge-gaps :agent-id agent-id}
-                raw-id (index-entry! openrouter? entry-ctx)]
+                raw-id (index-entry! entry-ctx)]
             ;; Contract guard: IMemoryStore/add-entry! must return a non-blank
             ;; id string. Some backends (e.g. Milvus under circuit-breaker
             ;; fail-soft) return a {:success? false ...} failure map instead,
@@ -222,7 +250,7 @@
                                :kg_supersedes (:kg-supersedes-vec kg-vecs)
                                :kg_depends_on (:kg-depends-on-vec kg-vecs)
                                :kg_refines    (:kg-refines-vec kg-vecs)}]
-                (finalize-entry! entry-id openrouter? kg-params project-id agent-id entry-ctx)))))))))
+                (finalize-entry! entry-id kg-params project-id agent-id entry-ctx)))))))))
 
 (defn handle-add
   "Add an entry to project memory with optional KG edge creation.

@@ -87,7 +87,39 @@
                  :terminal?   true
                  :mcp?        false
                  :valid-next  nil
-                 :format      {:icon "📦" :abbreviated "wrap"}}))
+                 :format      {:icon "📦" :abbreviated "wrap"}}
+
+   ;; =========================================================================
+   ;; Inter-Ling Conversation Protocol (decision 20260401222011-493b1a6e)
+   ;; tell    — fire-and-forget DM (no blocking, no correlation needed)
+   ;; ask     — DM that blocks sender until :conversation/respond delivers
+   ;; respond — answer to a prior :conversation/ask, correlated via :ask-id
+   ;; Orthogonal to slave-status FSM (:mcp? false, :valid-next nil).
+   ;; =========================================================================
+
+   :conversation/tell    {:description "Direct message from one ling to another (fire-and-forget)"
+                          :severity    :info
+                          :slave-status :idle
+                          :terminal?   false
+                          :mcp?        false
+                          :valid-next  nil
+                          :format      {:icon "→" :abbreviated "tell"}}
+
+   :conversation/ask     {:description "Question from one ling to another, expects :conversation/respond"
+                          :severity    :info
+                          :slave-status :idle
+                          :terminal?   false
+                          :mcp?        false
+                          :valid-next  nil
+                          :format      {:icon "?" :abbreviated "ask"}}
+
+   :conversation/respond {:description "Response to a prior :conversation/ask, correlated by :ask-id"
+                          :severity    :info
+                          :slave-status :idle
+                          :terminal?   true
+                          :mcp?        false
+                          :valid-next  nil
+                          :format      {:icon "!" :abbreviated "resp"}}))
 
 ;; =============================================================================
 ;; Derived views (computed once at load time)

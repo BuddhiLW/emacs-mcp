@@ -31,7 +31,8 @@
             [hive-mcp.swarm.datascript.schema :as schema]
             [hive-mcp.agent.headless :as headless]
             [hive-mcp.agent.context-envelope :as envelope]
-            [hive-mcp.tools.memory.scope :as scope]))
+            [hive-mcp.tools.memory.scope :as scope]
+            [hive-mcp.tools.consolidated.workflow.forge-cycle :as forge-cycle]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -187,7 +188,7 @@
 
 (deftest build-fsm-resources-headless-config
   (testing "build-fsm-resources maps spawn_mode 'headless' to :spawn-mode :headless"
-    (let [resources (workflow/build-fsm-resources
+    (let [resources (forge-cycle/build-fsm-resources
                      {:directory "/tmp/test"
                       :max_slots 5
                       :spawn_mode "headless"
@@ -201,7 +202,7 @@
 
 (deftest build-fsm-resources-headless-with-model
   (testing "build-fsm-resources passes model through to config"
-    (let [resources (workflow/build-fsm-resources
+    (let [resources (forge-cycle/build-fsm-resources
                      {:directory "/tmp/test"
                       :spawn_mode "headless"
                       :model "deepseek/deepseek-chat"})]
@@ -210,7 +211,7 @@
 
 (deftest build-fsm-resources-nil-spawn-mode
   (testing "build-fsm-resources with nil spawn_mode produces nil :spawn-mode"
-    (let [resources (workflow/build-fsm-resources {:directory "/tmp/test"})]
+    (let [resources (forge-cycle/build-fsm-resources {:directory "/tmp/test"})]
       (is (nil? (get-in resources [:config :spawn-mode]))
           "Nil spawn_mode should produce nil :spawn-mode (defaults to vterm in ling)"))))
 

@@ -22,6 +22,15 @@
 ;; Thread-safe via DataScript's internal atom.
 (defonce ^:private conn (atom nil))
 
+(def ^:dynamic *test-conn*
+  "Per-thread override for the global swarm connection.
+   When non-nil, get-conn returns this instead of the global atom.
+   Bound by hive-mcp.test-fixtures/with-isolated-swarm so tests run
+   against a fresh in-memory conn without polluting prod state when
+   evaluated inside the live MCP server's nREPL.
+   Honors axiom 20260122235103-7151cc29 (Test Isolation Silent Server Death)."
+  nil)
+
 (defn create-conn
   "Create a new DataScript connection with swarm schema.
    Returns the connection (atom wrapper around db)."
@@ -29,9 +38,11 @@
   (d/create-conn schema/schema))
 
 (defn get-conn
-  "Get the global swarm connection, creating if needed."
+  "Get the global swarm connection, creating if needed.
+   Returns *test-conn* when bound (test isolation override)."
   []
-  (or @conn
+  (or *test-conn*
+      @conn
       (do
         (reset! conn (create-conn))
         (log/info "Created swarm DataScript connection")

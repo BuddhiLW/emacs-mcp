@@ -122,7 +122,7 @@
                         (batch-fn {:tasks      tasks
                                    :scope      scope
                                    :file-hints []})))
-                    (catch Exception e
+                    (catch Throwable e
                       (log/warn "context-gather failed, proceeding without context:" (.getMessage e))
                       nil))]
     (log/info "CONTEXT-GATHER:" (count task-ids) "tasks →"

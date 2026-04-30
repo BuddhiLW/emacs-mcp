@@ -1,0 +1,6 @@
+{:no-tags       true
+ :all-pass      true
+ :all-partial   false
+ :any-pass      true
+ :any-none      false
+ :empty-tags-on-entry false}

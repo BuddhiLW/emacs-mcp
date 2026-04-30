@@ -27,7 +27,7 @@
 ;; Protocol Satisfaction (runner-specific — verify Chroma implements all 3)
 ;; =============================================================================
 
-(deftest chroma-satisfies-all-protocols
+(deftest ^:integration chroma-satisfies-all-protocols
   (let [store (chroma-store/create-store)]
     (testing "ChromaMemoryStore satisfies IMemoryStore"
       (is (satisfies? proto/IMemoryStore store)))
@@ -40,99 +40,99 @@
 ;; Contract Test Invocations — IMemoryStore: Connection Lifecycle
 ;; =============================================================================
 
-(deftest chroma-lifecycle-connected
+(deftest ^:integration chroma-lifecycle-connected
   (contract/test-lifecycle-connected))
 
-(deftest chroma-lifecycle-health-check-shape
+(deftest ^:integration chroma-lifecycle-health-check-shape
   (contract/test-lifecycle-health-check-shape))
 
-(deftest chroma-lifecycle-store-status-shape
+(deftest ^:integration chroma-lifecycle-store-status-shape
   (contract/test-lifecycle-store-status-shape))
 
-(deftest chroma-lifecycle-connect-then-connected
+(deftest ^:integration chroma-lifecycle-connect-then-connected
   (contract/test-lifecycle-connect-then-connected))
 
-(deftest chroma-disconnect-shape
+(deftest ^:integration chroma-disconnect-shape
   (contract/test-disconnect-shape))
 
 ;; =============================================================================
 ;; Contract Test Invocations — IMemoryStore: CRUD
 ;; =============================================================================
 
-(deftest chroma-add-get-roundtrip
+(deftest ^:integration chroma-add-get-roundtrip
   (contract/test-add-get-roundtrip))
 
-(deftest chroma-add-delete-get
+(deftest ^:integration chroma-add-delete-get
   (contract/test-add-delete-get))
 
-(deftest chroma-add-update-get
+(deftest ^:integration chroma-add-update-get
   (contract/test-add-update-get))
 
-(deftest chroma-add-delete-count-invariant
+(deftest ^:integration chroma-add-delete-count-invariant
   (contract/test-add-delete-count-invariant))
 
 ;; =============================================================================
 ;; Contract Test Invocations — IMemoryStore: Query & Search
 ;; =============================================================================
 
-(deftest chroma-query-entries-by-type
+(deftest ^:integration chroma-query-entries-by-type
   (contract/test-query-entries-by-type))
 
-(deftest chroma-search-similar-behavioral
+(deftest ^:integration chroma-search-similar-behavioral
   (contract/test-search-similar-behavioral))
 
 ;; =============================================================================
 ;; Contract Test Invocations — IMemoryStore: Duplicate Detection
 ;; =============================================================================
 
-(deftest chroma-find-duplicate-same-content
+(deftest ^:integration chroma-find-duplicate-same-content
   (contract/test-find-duplicate-same-content))
 
-(deftest chroma-find-duplicate-different-content
+(deftest ^:integration chroma-find-duplicate-different-content
   (contract/test-find-duplicate-different-content))
 
 ;; =============================================================================
 ;; Contract Test Invocations — IMemoryStore: Expiration
 ;; =============================================================================
 
-(deftest chroma-expiration-cleanup
+(deftest ^:integration chroma-expiration-cleanup
   (contract/test-expiration-cleanup))
 
-(deftest chroma-cleanup-expired-idempotent
+(deftest ^:integration chroma-cleanup-expired-idempotent
   (contract/test-cleanup-expired-idempotent))
 
-(deftest chroma-entries-expiring-soon
+(deftest ^:integration chroma-entries-expiring-soon
   (contract/test-entries-expiring-soon))
 
 ;; =============================================================================
 ;; Contract Test Invocations — IMemoryStore: Reset
 ;; =============================================================================
 
-(deftest chroma-reset-store-idempotent
+(deftest ^:integration chroma-reset-store-idempotent
   (contract/test-reset-store-idempotent))
 
 ;; =============================================================================
 ;; Contract Test Invocations — IMemoryStoreWithAnalytics
 ;; =============================================================================
 
-(deftest chroma-analytics-log-access
+(deftest ^:integration chroma-analytics-log-access
   (contract/test-analytics-log-access))
 
-(deftest chroma-analytics-record-feedback
+(deftest ^:integration chroma-analytics-record-feedback
   (contract/test-analytics-record-feedback))
 
-(deftest chroma-analytics-helpfulness-ratio
+(deftest ^:integration chroma-analytics-helpfulness-ratio
   (contract/test-analytics-helpfulness-ratio))
 
 ;; =============================================================================
 ;; Contract Test Invocations — IMemoryStoreWithStaleness
 ;; =============================================================================
 
-(deftest chroma-staleness-update
+(deftest ^:integration chroma-staleness-update
   (contract/test-staleness-update))
 
-(deftest chroma-staleness-get-stale-entries
+(deftest ^:integration chroma-staleness-get-stale-entries
   (contract/test-staleness-get-stale-entries))
 
-(deftest chroma-staleness-propagate
+(deftest ^:integration chroma-staleness-propagate
   (contract/test-staleness-propagate))

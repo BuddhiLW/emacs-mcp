@@ -11,11 +11,14 @@
    - Edge cases (no overloaded, no targets, working lings skipped)"
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [hive-mcp.emacs.daemon-selection :as selection]
+            [hive-mcp.emacs.daemon-redistribution :as redist]
             [hive-mcp.emacs.daemon :as proto]
             [hive-mcp.emacs.daemon-ds :as daemon-ds]
             [hive-mcp.swarm.datascript.connection :as conn]
             [hive-mcp.swarm.datascript.lings :as lings]
-            [datascript.core :as d]))
+            [datascript.core :as d]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
@@ -23,13 +26,7 @@
 
 (def ^:private store (daemon-ds/create-store))
 
-(defn reset-db-fixture
-  "Reset DataScript database before each test."
-  [f]
-  (conn/reset-conn!)
-  (f))
-
-(use-fixtures :each reset-db-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds))
 
 ;;; =============================================================================
 ;;; Helper Functions
@@ -61,11 +58,11 @@
 
 (deftest constants-sanity-test
   (testing "W4 constants have sane values"
-    (is (pos? selection/redistribution-score-threshold)
+    (is (pos? redist/redistribution-score-threshold)
         "Score threshold should be positive")
-    (is (pos? selection/max-migrations-per-cycle)
+    (is (pos? redist/max-migrations-per-cycle)
         "Max migrations should be positive")
-    (is (<= selection/overloaded-ling-threshold selection/max-lings-per-daemon)
+    (is (<= redist/overloaded-ling-threshold selection/max-lings-per-daemon)
         "Overloaded threshold should be <= max lings")))
 
 ;;; =============================================================================
@@ -74,19 +71,19 @@
 
 (deftest find-overloaded-no-daemons-test
   (testing "find-overloaded-daemons returns nil when no daemons exist"
-    (is (nil? (selection/find-overloaded-daemons store)))))
+    (is (nil? (redist/find-overloaded-daemons store)))))
 
 (deftest find-overloaded-all-healthy-test
   (testing "find-overloaded-daemons returns nil when all daemons are healthy and light"
     (setup-daemon! "healthy-d" :health-score 90)
     (setup-ling! "ling-1" "healthy-d")
-    (is (nil? (selection/find-overloaded-daemons store)))))
+    (is (nil? (redist/find-overloaded-daemons store)))))
 
 (deftest find-overloaded-degraded-health-test
   (testing "find-overloaded-daemons detects degraded health daemons"
     (setup-daemon! "degraded-d" :health-score 50)
     (setup-ling! "ling-1" "degraded-d")
-    (let [overloaded (selection/find-overloaded-daemons store)]
+    (let [overloaded (redist/find-overloaded-daemons store)]
       (is (= 1 (count overloaded)))
       (is (= "degraded-d" (:emacs-daemon/id (first overloaded)))))))
 
@@ -94,9 +91,9 @@
   (testing "find-overloaded-daemons detects daemons at overloaded threshold"
     (setup-daemon! "busy-d" :health-score 90)
     ;; Bind 4 lings (= overloaded-ling-threshold)
-    (doseq [i (range selection/overloaded-ling-threshold)]
+    (doseq [i (range redist/overloaded-ling-threshold)]
       (setup-ling! (str "busy-ling-" i) "busy-d"))
-    (let [overloaded (selection/find-overloaded-daemons store)]
+    (let [overloaded (redist/find-overloaded-daemons store)]
       (is (= 1 (count overloaded)))
       (is (= "busy-d" (:emacs-daemon/id (first overloaded)))))))
 
@@ -104,13 +101,13 @@
   (testing "find-overloaded-daemons ignores non-active daemons (W3 handles those)"
     (setup-daemon! "stale-d" :status :stale :health-score 20)
     (setup-ling! "orphan" "stale-d")
-    (is (nil? (selection/find-overloaded-daemons store)))))
+    (is (nil? (redist/find-overloaded-daemons store)))))
 
 (deftest find-overloaded-ignores-empty-degraded-test
   (testing "find-overloaded-daemons ignores degraded daemons with no lings"
     (setup-daemon! "empty-degraded" :health-score 40)
     ;; No lings bound — nothing to offload
-    (is (nil? (selection/find-overloaded-daemons store)))))
+    (is (nil? (redist/find-overloaded-daemons store)))))
 
 (deftest find-overloaded-ignores-healthy-unhealthy-test
   (testing "find-overloaded-daemons: unhealthy daemons (< 30) are NOT overloaded targets
@@ -122,7 +119,7 @@
     (setup-daemon! "sick-d" :health-score 20)
     (setup-ling! "sick-ling" "sick-d")
     ;; 1 ling < threshold (4), and :unhealthy ≠ :degraded — should NOT be overloaded
-    (is (nil? (selection/find-overloaded-daemons store)))))
+    (is (nil? (redist/find-overloaded-daemons store)))))
 
 ;;; =============================================================================
 ;;; Find Migration Candidates Tests
@@ -134,7 +131,7 @@
     (setup-ling! "idle-1" "d1" :status :idle)
     (setup-ling! "idle-2" "d1" :status :idle)
     (let [daemon (proto/get-daemon store "d1")
-          candidates (selection/find-migration-candidates daemon)]
+          candidates (redist/find-migration-candidates daemon)]
       (is (= 2 (count candidates)))
       (is (every? #(= :idle (:ling-status %)) candidates)))))
 
@@ -145,7 +142,7 @@
     (setup-ling! "working-1" "d1" :status :working)
     (setup-ling! "blocked-1" "d1" :status :blocked)
     (let [daemon (proto/get-daemon store "d1")
-          candidates (selection/find-migration-candidates daemon)]
+          candidates (redist/find-migration-candidates daemon)]
       (is (= 1 (count candidates)))
       (is (= "idle-1" (:ling-id (first candidates)))))))
 
@@ -153,7 +150,7 @@
   (testing "find-migration-candidates returns empty for daemon with no lings"
     (setup-daemon! "empty-d")
     (let [daemon (proto/get-daemon store "empty-d")
-          candidates (selection/find-migration-candidates daemon)]
+          candidates (redist/find-migration-candidates daemon)]
       (is (empty? candidates)))))
 
 (deftest find-migration-candidates-includes-project-id-test
@@ -161,7 +158,7 @@
     (setup-daemon! "d1" :health-score 50)
     (setup-ling! "ling-1" "d1" :status :idle :project-id "my-project")
     (let [daemon (proto/get-daemon store "d1")
-          candidates (selection/find-migration-candidates daemon)]
+          candidates (redist/find-migration-candidates daemon)]
       (is (= "my-project" (:project-id (first candidates)))))))
 
 ;;; =============================================================================
@@ -172,7 +169,7 @@
   (testing "plan-redistribution returns nil when no daemons are overloaded"
     (setup-daemon! "healthy" :health-score 90)
     (setup-ling! "ling-1" "healthy")
-    (is (nil? (selection/plan-redistribution store)))))
+    (is (nil? (redist/plan-redistribution store)))))
 
 (deftest plan-redistribution-no-better-target-test
   (testing "plan-redistribution returns nil when no target is significantly better"
@@ -192,7 +189,7 @@
     ;; d1 source: health=55 + capacity=(5-4)*10=10 = 65
     ;; d2 target: health=60 + capacity=(5-4)*10=10 + affinity=0 = 70
     ;; Improvement: 70 - 65 = 5 < threshold(20) → no migration
-    (is (nil? (selection/plan-redistribution store)))))
+    (is (nil? (redist/plan-redistribution store)))))
 
 (deftest plan-redistribution-creates-plan-test
   (testing "plan-redistribution creates migration plan when improvement is significant"
@@ -202,7 +199,7 @@
     (setup-ling! "migrant-2" "degraded" :status :idle)
     ;; Healthy empty daemon
     (setup-daemon! "healthy" :health-score 95)
-    (let [plan (selection/plan-redistribution store)]
+    (let [plan (redist/plan-redistribution store)]
       (is (some? plan) "Should produce a migration plan")
       (is (pos? (count plan)))
       ;; Check plan structure
@@ -210,7 +207,7 @@
         (is (= "degraded" (:source-daemon m)))
         (is (= "healthy" (:target-daemon m)))
         (is (pos? (:improvement m)))
-        (is (>= (:improvement m) selection/redistribution-score-threshold))))))
+        (is (>= (:improvement m) redist/redistribution-score-threshold))))))
 
 (deftest plan-redistribution-caps-migrations-test
   (testing "plan-redistribution caps at max-migrations-per-cycle"
@@ -220,9 +217,9 @@
       (setup-ling! (str "migrant-" i) "degraded" :status :idle))
     ;; Healthy empty daemon
     (setup-daemon! "healthy" :health-score 95)
-    (let [plan (selection/plan-redistribution store)]
+    (let [plan (redist/plan-redistribution store)]
       (is (some? plan))
-      (is (<= (count plan) selection/max-migrations-per-cycle)
+      (is (<= (count plan) redist/max-migrations-per-cycle)
           "Should not exceed max migrations per cycle"))))
 
 (deftest plan-redistribution-skips-working-lings-test
@@ -232,7 +229,7 @@
     (doseq [i (range 4)]
       (setup-ling! (str "worker-" i) "overloaded" :status :working))
     (setup-daemon! "healthy" :health-score 95)
-    (is (nil? (selection/plan-redistribution store))
+    (is (nil? (redist/plan-redistribution store))
         "No plan when all lings are working")))
 
 ;;; =============================================================================
@@ -247,7 +244,7 @@
     (let [migration {:ling-id "migrant"
                      :source-daemon "source"
                      :target-daemon "target"}
-          result (selection/migrate-ling! store migration)]
+          result (redist/migrate-ling! store migration)]
       (is (true? (:success? result)))
       (is (= "migrant" (:ling-id result)))
       ;; Verify binding moved
@@ -266,7 +263,7 @@
     (let [migration {:ling-id "worker"
                      :source-daemon "source"
                      :target-daemon "target"}
-          result (selection/migrate-ling! store migration)]
+          result (redist/migrate-ling! store migration)]
       (is (false? (:success? result)))
       (is (= :no-longer-idle (:reason result)))
       ;; Verify ling stayed on source
@@ -281,7 +278,7 @@
     (let [migration {:ling-id "ghost"
                      :source-daemon "source"
                      :target-daemon "target"}
-          result (selection/migrate-ling! store migration)]
+          result (redist/migrate-ling! store migration)]
       (is (false? (:success? result)))
       (is (= :ling-not-found (:reason result))))))
 
@@ -295,7 +292,7 @@
     (setup-daemon! "d2" :health-score 85)
     (setup-ling! "ling-1" "d1")
     (setup-ling! "ling-2" "d2")
-    (is (nil? (selection/redistribute-lings! store)))))
+    (is (nil? (redist/redistribute-lings! store)))))
 
 (deftest redistribute-lings-executes-test
   (testing "redistribute-lings! moves idle lings from degraded to healthy daemon"
@@ -307,7 +304,7 @@
     (setup-ling! "worker-2" "degraded" :status :working)
     ;; Healthy empty daemon
     (setup-daemon! "healthy" :health-score 95)
-    (let [result (selection/redistribute-lings! store)]
+    (let [result (redist/redistribute-lings! store)]
       (is (some? result))
       (is (pos? (:migrations-planned result)))
       (is (pos? (:migrations-executed result)))
@@ -326,7 +323,7 @@
     (setup-ling! "idle-1" "degraded" :status :idle)
     ;; Healthy target
     (setup-daemon! "healthy" :health-score 95)
-    (let [result (selection/redistribute-lings! store)]
+    (let [result (redist/redistribute-lings! store)]
       (is (some? result))
       (is (= (:migrations-planned result)
              (+ (:migrations-executed result) (:migrations-failed result)))
@@ -340,7 +337,7 @@
   (testing "redistribution-status returns nil when balanced"
     (setup-daemon! "d1" :health-score 90)
     (setup-ling! "ling-1" "d1")
-    (is (nil? (selection/redistribution-status store)))))
+    (is (nil? (redist/redistribution-status store)))))
 
 (deftest redistribution-status-shows-overloaded-test
   (testing "redistribution-status shows overloaded daemons and planned migrations"
@@ -348,7 +345,7 @@
     (setup-ling! "idle-1" "degraded" :status :idle)
     (setup-ling! "idle-2" "degraded" :status :idle)
     (setup-daemon! "healthy" :health-score 95)
-    (let [status (selection/redistribution-status store)]
+    (let [status (redist/redistribution-status store)]
       (is (some? status))
       (is (pos? (:overloaded-count status)))
       (is (seq (:overloaded-daemons status)))
@@ -380,14 +377,14 @@
     (setup-ling! "d3-ling-1" "d3" :status :idle)
 
     ;; Verify overloaded detection
-    (let [overloaded (selection/find-overloaded-daemons store)]
+    (let [overloaded (redist/find-overloaded-daemons store)]
       (is (= 1 (count overloaded)))
       (is (= "d1" (:emacs-daemon/id (first overloaded)))))
 
     ;; Execute redistribution
-    (let [result (selection/redistribute-lings! store)]
+    (let [result (redist/redistribute-lings! store)]
       (is (some? result))
-      (is (<= (:migrations-executed result) selection/max-migrations-per-cycle)
+      (is (<= (:migrations-executed result) redist/max-migrations-per-cycle)
           "Should respect max migrations per cycle")
       ;; After redistribution, d1 should have fewer lings
       (let [d1 (proto/get-daemon store "d1")
@@ -403,7 +400,7 @@
     (setup-daemon! "healthy" :health-score 95)
 
     ;; No redistribution should happen (no idle candidates)
-    (is (nil? (selection/redistribute-lings! store)))
+    (is (nil? (redist/redistribute-lings! store)))
 
     ;; All workers still on degraded daemon
     (let [degraded (proto/get-daemon store "degraded")]
@@ -416,12 +413,12 @@
     (setup-daemon! "healthy" :health-score 95)
 
     ;; First run
-    (let [result1 (selection/redistribute-lings! store)]
+    (let [result1 (redist/redistribute-lings! store)]
       (is (some? result1))
       (is (pos? (:migrations-executed result1))))
 
     ;; Second run — should be nil (system now balanced)
-    (let [result2 (selection/redistribute-lings! store)]
+    (let [result2 (redist/redistribute-lings! store)]
       ;; Either nil (no overloaded) or no migrations planned
       (is (or (nil? result2)
               (zero? (:migrations-executed result2)))

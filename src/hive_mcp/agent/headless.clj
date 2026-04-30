@@ -3,16 +3,16 @@
   (:require [clojure.string :as str]
             [hive-mcp.agent.ring-buffer :as rb]
             [hive-dsl.result :as result]
+            [hive-mcp.protocols.lifecycle :as lifecycle]
             [hive-mcp.server.guards :as guards]
+            [hive-mcp.system.registry :as reg]
             [taoensso.timbre :as log])
   (:import [java.lang ProcessBuilder]
            [java.io BufferedReader InputStreamReader BufferedWriter OutputStreamWriter]
-           [java.util.concurrent ConcurrentHashMap Executors ScheduledExecutorService TimeUnit]))
+           [java.util.concurrent ConcurrentHashMap]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 
 (declare dispatch-via-stdin!)
-(declare stop-watchdog!)
-(declare start-watchdog!)
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -42,18 +42,6 @@
          :sweep-count 0
          :last-sweep-at nil
          :last-cleaned []}))
-
-;; Holds the ScheduledFuture returned by scheduleAtFixedRate.
-(defonce ^:private watchdog-handle
-  (atom nil))
-
-(defonce ^:private watchdog-executor
-  (delay
-    (Executors/newSingleThreadScheduledExecutor
-     (reify java.util.concurrent.ThreadFactory
-       (newThread [_ r]
-         (doto (Thread. r "hive-headless-watchdog")
-           (.setDaemon true)))))))
 
 (def ^:private ^:const watchdog-interval-s
   "Watchdog sweep interval in seconds."
@@ -122,7 +110,6 @@
      (Runtime/getRuntime)
      (Thread.
       (fn []
-        (stop-watchdog!)
         (log/info "JVM shutdown hook: killing" (.size process-registry) "headless processes")
         (doseq [[ling-id entry] process-registry]
           (let [res (result/guard Exception nil
@@ -345,7 +332,6 @@
                  buffer-capacity default-buffer-capacity}}]
   (result/let-ok [_ (require-not-registered ling-id)]
                  (register-shutdown-hook!)
-                 (start-watchdog!)
                  (let [cmd-parts (build-command-parts claude-cmd model task system-prompt)
                        pb (create-process-builder cmd-parts cwd)]
                    (configure-process-env! pb ling-id {:cwd cwd :env-extra env-extra :model model})
@@ -403,9 +389,26 @@
 ;; Watchdog — periodic dead-process cleanup
 ;; ===========================================================================
 
+(defn- mark-slave-zombie!
+  "Best-effort DataScript stamp: :slave/alive? false, status :zombie.
+   Resolved via requiring-resolve to avoid a hard load-order coupling
+   (datascript layer is loaded later in some boot paths)."
+  [ling-id]
+  (result/guard Throwable nil
+                (when-let [update-fn (requiring-resolve
+                                      'hive-mcp.swarm.datascript.lings/update-slave!)]
+                  (update-fn ling-id {:slave/alive? false
+                                      :slave/status :zombie
+                                      :slave/status-changed-at (System/currentTimeMillis)}))))
+
 (defn- watchdog-sweep!
   "Scan process-registry for dead processes and clean them up.
-   Called periodically by the ScheduledExecutorService."
+   Invoked by sweep-coordinator via the HeadlessWatchdog ISweepable impl.
+
+   Also transacts :slave/alive? false on the DataScript registry so the
+   default `agent_status` view hides ghosts. Without this stamp, dead
+   headless lings linger as alive in the registry forever — only the
+   process-registry side was being cleaned previously."
   []
   (try
     (let [dead-ids (reduce-kv
@@ -421,7 +424,8 @@
                   {:ling-id ling-id
                    :pid (:pid (.get process-registry ling-id))})
         (result/guard Exception nil
-                      (kill-headless!* ling-id {:force? true})))
+                      (kill-headless!* ling-id {:force? true}))
+        (mark-slave-zombie! ling-id))
       (swap! watchdog-state
              (fn [s]
                (-> s
@@ -431,29 +435,32 @@
     (catch Exception e
       (log/error "Watchdog sweep error" {:error (.getMessage e)}))))
 
+(defrecord HeadlessWatchdog []
+  lifecycle/ISweepable
+  (sweep-interval-s [_] watchdog-interval-s)
+  (sweep-name [_] "headless/watchdog")
+  (sweep! [_ _ctx]
+    (watchdog-sweep!)
+    {:swept (count (:last-cleaned @watchdog-state))
+     :errors []}))
+
+(defonce ^:private -watchdog-registered?
+  (do (reg/register-sweep! (->HeadlessWatchdog)) true))
+
+;; -----------------------------------------------------------------------------
+;; Deprecated compatibility shims — sweep-coordinator now drives the watchdog.
+;; -----------------------------------------------------------------------------
+
 (defn start-watchdog!
-  "Start the periodic watchdog sweep. Idempotent — no-op if already running."
+  "DEPRECATED: sweep-coordinator now drives the headless watchdog. No-op shim
+   retained for REPL / external callers that still invoke the old API."
   []
-  (when-not (:running? @watchdog-state)
-    (let [^ScheduledExecutorService exec @watchdog-executor
-          handle (.scheduleAtFixedRate
-                  exec
-                  ^Runnable watchdog-sweep!
-                  (long watchdog-interval-s)
-                  (long watchdog-interval-s)
-                  TimeUnit/SECONDS)]
-      (reset! watchdog-handle handle)
-      (swap! watchdog-state assoc :running? true)
-      (log/info "Headless watchdog started" {:interval-s watchdog-interval-s}))))
+  (log/warn "start-watchdog! deprecated — sweep-coordinator drives watchdog now"))
 
 (defn stop-watchdog!
-  "Stop the periodic watchdog sweep."
+  "DEPRECATED: use hive-mcp.system.sweep-coordinator/stop! to halt all sweeps."
   []
-  (when-let [^java.util.concurrent.ScheduledFuture handle @watchdog-handle]
-    (.cancel handle false)
-    (reset! watchdog-handle nil)
-    (swap! watchdog-state assoc :running? false)
-    (log/info "Headless watchdog stopped")))
+  (log/warn "stop-watchdog! deprecated — use system/sweep-coordinator/stop!"))
 
 ;; ===========================================================================
 ;; Public API

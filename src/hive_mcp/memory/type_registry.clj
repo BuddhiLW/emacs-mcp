@@ -71,6 +71,17 @@
                 :mcp? true
                 :catchup nil}
 
+   ;; === Ingestion pipeline (reference material, abstraction 2-3) ===
+   :knowledge  {:description "Curated passage from an external source (book, paper, talk). Tag with source:<name>, chapter:<n>."
+                :abstraction 3 :duration :long
+                :mcp? true
+                :catchup nil}
+
+   :ingestion  {:description "Raw, unprocessed dump from the ingestion pipeline. Promotable to :knowledge / :principle / :note."
+                :abstraction 2 :duration :medium
+                :mcp? true
+                :catchup nil}
+
    ;; === Extended types (Malli-valid, not first-class in MCP) ===
    :doc        {:description "Documentation" :abstraction 2 :duration :medium :mcp? false :catchup nil}
    :todo       {:description "TODO items" :abstraction 2 :duration :short :mcp? false :catchup nil}

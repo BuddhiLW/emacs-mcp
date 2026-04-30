@@ -18,7 +18,9 @@
   (:require [clojure.string :as str]
             [clojure.edn :as edn]
             [hive-mcp.dns.result :as result]
-            [hive-mcp.plan.schema :as schema]))
+            [hive-mcp.plan.schema :as schema]
+            [clojure.tools.logging :as log]
+            [clojure.set :as set]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -38,31 +40,136 @@
   (->> (re-seq edn-block-pattern content)
        (mapv second)))
 
-(def ^:private edn-plan-pattern
-  "Regex to detect {:steps [...] or {:plan/steps [...] in content."
-  #"\{[^}]*:(?:plan/)?steps\s*\[")
-
-(def ^:private edn-phase-pattern
-  "Regex to detect {:phase N :tasks [...] blocks."
-  #"\{[^}]*:(?:phase/)?(?:phase|id)\s+\d+[^}]*:(?:phase/)?tasks\s*\[")
-
 ;; =============================================================================
 ;; Detection Predicates
 ;; =============================================================================
+;;
+;; Detection is AST-based, not regex-based. Regex on EDN is fragile —
+;; nested maps before :steps, multi-line forms with reader macros, and
+;; namespaced map literals all defeat naïve patterns. Instead we extract
+;; candidate substrings, parse each with clojure.edn/read-string, and walk
+;; the resulting AST looking for plan-shape (:steps / :plan/steps) or
+;; phase-shape (:phase + :tasks) maps.
+;;
+;; References:
+;;   - clojure.edn API:  https://clojure.github.io/clojure/clojure.edn-api.html
+;;   - EDN spec:         https://edn-format.dev/
 
 (defn contains-edn-block?
   "Check if content contains any ```edn ... ``` blocks."
   [content]
   (boolean (re-find edn-block-pattern content)))
 
-(defn contains-edn-plan?
-  "Check if content contains EDN plan (raw or in blocks).
+(def ^:private edn-read-opts
+  "Pass-through opts for clojure.edn reads. `:default` swallows unknown
+   reader tags (returning their value) so user-tagged literals like
+   `#myapp/Foo {...}` do not abort parsing during detection."
+  {:default (fn [_tag v] v)})
 
-   Detects ```edn blocks, raw :steps structures, and phase-based blocks."
+(defn- safe-read-edn
+  "Parse a string as a single EDN form. Returns the value or nil on error."
+  [s]
+  (try
+    (edn/read-string edn-read-opts s)
+    (catch Exception _ nil)))
+
+(defn- read-all-forms
+  "Sequentially read every top-level EDN form from `content` using
+   clojure.edn/read against a PushbackReader. The EDN reader natively
+   handles every spec feature — commas as whitespace, `;` line comments,
+   `#_` discard, character literals (`\\}`), tagged elements (`#inst`,
+   `#uuid`, user `#ns/tag`), namespaced maps (`#:ns{...}`), sets
+   (`#{...}`), lists, and nested collections. Stops on EOF or first
+   parse failure (read advances past whitespace/comments between forms)."
   [content]
-  (boolean
-   (when-let [s (and (string? content) content)]
-     (some #(re-find % s) [edn-block-pattern edn-plan-pattern edn-phase-pattern]))))
+  (when (string? content)
+    (let [rdr (java.io.PushbackReader. (java.io.StringReader. content))
+          eof ::eof]
+      (loop [acc []]
+        (let [form (try
+                     (edn/read (assoc edn-read-opts :eof eof) rdr)
+                     (catch Exception _ eof))]
+          (if (= form eof)
+            acc
+            (recur (conj acc form))))))))
+
+;; Forward declaration — implementation below in the Balanced Brace section.
+;; Needed here because candidate-parsed-forms uses balanced extraction as a
+;; fallback when prose-prefixed EDN (e.g. memory-stored plans wrapped with
+;; "Plan Entry [draft]\nType: plan\n...\n\n{:plan/steps [...]}") trips up the
+;; top-level reader on non-EDN preamble tokens.
+(declare find-balanced-edn)
+
+(defn- balanced-edn-substrings
+  "Yield every balanced `{...}` substring found in `content`, in left-to-right
+   order. For each `{` position, attempt `find-balanced-edn` and skip past it
+   on success; otherwise advance one char. Returns a vector of substrings."
+  [content]
+  (when (string? content)
+    (let [len (count content)]
+      (loop [idx 0
+             acc (transient [])]
+        (if (>= idx len)
+          (persistent! acc)
+          (if (= \{ (.charAt ^String content idx))
+            (if-let [edn-str (find-balanced-edn content idx)]
+              (recur (+ idx (count edn-str))
+                     (conj! acc edn-str))
+              (recur (inc idx) acc))
+            (recur (inc idx) acc)))))))
+
+(defn- candidate-parsed-forms
+  "Return all parseable EDN forms found anywhere in `content`:
+     - top-level forms (sequential reads against the whole content);
+     - the body of every ```edn fenced block (parsed independently);
+     - every balanced `{...}` substring (handles prose-wrapped EDN — e.g.
+       memory-stored plans with a `Plan Entry [draft]\\n…` preamble that
+       would otherwise abort the top-level reader before it reaches the
+       map literal).
+   Returns empty seq for non-strings."
+  [content]
+  (when (string? content)
+    (concat (read-all-forms content)
+            (mapcat read-all-forms (extract-edn-blocks content))
+            (keep safe-read-edn (balanced-edn-substrings content)))))
+
+(defn- is-plan-shape?
+  "True iff `x` is a map carrying :steps or :plan/steps with a sequential value.
+   Accepts vectors and lists — EDN authored with parens (`:steps (...)`) is
+   normalized to a vector downstream by `normalize-edn-plan`'s `mapv`."
+  [x]
+  (and (map? x)
+       (let [steps (or (:steps x) (:plan/steps x))]
+         (sequential? steps))))
+
+(defn- is-phase-shape?
+  "True iff `x` is a map carrying both a phase identifier and a :tasks
+   sequential. Accepts vectors and lists — list `:tasks` are normalized
+   to a vector by `phase-tasks->steps`'s `map-indexed`/`vec`."
+  [x]
+  (and (map? x)
+       (or (contains? x :phase) (contains? x :phase/id))
+       (or (sequential? (:tasks x)) (sequential? (:phase/tasks x)))))
+
+(defn- plan-or-phase-anywhere?
+  "Walk the parsed AST and return true if any subform is plan- or phase-shaped."
+  [parsed]
+  (some (some-fn is-plan-shape? is-phase-shape?)
+        (tree-seq coll? seq parsed)))
+
+(defn contains-edn-plan?
+  "Check if content contains an EDN plan or phase block.
+
+   AST-based: read every parseable EDN form from the content (top-level
+   forms + bodies of ```edn fenced blocks) using `clojure.edn/read`, then
+   walk each AST via `tree-seq` looking for a plan-shape map (:steps or
+   :plan/steps with vector value) or a phase-shape map (:phase + :tasks).
+
+   The EDN reader handles all spec features for us — comments, `#_`
+   discard, namespaced maps, sets, tagged literals (unknown tags are
+   passed through via `:default`). Returns false on non-strings."
+  [content]
+  (boolean (some plan-or-phase-anywhere? (candidate-parsed-forms content))))
 
 ;; =============================================================================
 ;; Safe EDN Parsing
@@ -135,11 +242,13 @@
   (if-let [steps (:steps data)] steps (:plan/steps data)))
 
 (defn- is-plan-edn?
-  "Check if parsed EDN looks like a plan (has :steps or :plan/steps key)."
+  "Check if parsed EDN looks like a plan (has :steps or :plan/steps key).
+   Accepts sequential values (vectors or lists); normalization upstream
+   coerces lists to vectors before schema validation."
   [data]
   (when-let [_ (map? data)]
     (when-let [steps (get-steps-key data)]
-      (vector? steps))))
+      (sequential? steps))))
 
 (defn- is-phase-edn?
   "Check if parsed EDN looks like a phase block ({:phase N :tasks [...]})."
@@ -177,11 +286,16 @@
     step))
 
 (defn- alias-dependencies
-  "Normalize :dependencies alias -> :depends-on (SAA plans use :dependencies)."
+  "Normalize :dependencies / :blockedBy alias -> :depends-on.
+   SAA plans use :dependencies; some EDN dialects emit :blockedBy.
+   Canonical key is :depends-on; existing :depends-on takes precedence."
   [step]
-  (if-let [deps (when-not (contains? step :depends-on) (:dependencies step))]
-    (-> step (assoc :depends-on deps) (dissoc :dependencies))
-    step))
+  (if-let [deps (when-not (contains? step :depends-on)
+                  (or (:dependencies step) (:blockedBy step)))]
+    (-> step
+        (assoc :depends-on deps)
+        (dissoc :dependencies :blockedBy))
+    (dissoc step :blockedBy)))
 
 (defn- coerce-depends-on
   "Coerce :depends-on items from keywords to strings."
@@ -199,12 +313,31 @@
         (dissoc :file))
     step))
 
+(def ^:private known-step-keys
+  "Step keys recognized by the parser (post strip-namespaces, post-aliasing).
+   Anything outside this set triggers a warn — surfaces silent drops like :wave."
+  #{:id :title :description :depends-on :priority :files :estimate :tags
+    :dependencies :blockedBy :file
+    :why :validation :details :deliverable :est-tokens
+    :files-read :files-write})
+
+(defn- warn-unknown-keys
+  "Log warn for step keys not in `known-step-keys`. Pure pass-through."
+  [step]
+  (let [unknown (remove known-step-keys (keys step))]
+    (when (seq unknown)
+      (clojure.tools.logging/warn
+       "[plan-parser] step has unknown keys (silently dropped):"
+       {:step-id (:id step) :unknown (vec unknown)}))
+    step))
+
 (defn- normalize-edn-step
   "Normalize an EDN step map via composable transform pipeline.
-
-   Pipeline: strip-namespaces -> coerce-id -> alias-deps -> coerce-deps -> alias-file"
+   Pipeline: warn-unknown -> strip-namespaces -> coerce-id ->
+             alias-deps -> coerce-deps -> alias-file"
   [step]
   (-> step
+      warn-unknown-keys
       strip-all-namespaces
       coerce-id
       alias-dependencies
@@ -215,11 +348,59 @@
 ;; Plan Normalization
 ;; =============================================================================
 
+(def ^:private known-plan-keys
+  "Top-level plan keys recognized by the parser + downstream consumers.
+
+   Keys outside this set trigger a warn — surfaces silent drops at the
+   plan boundary (audit kanban 20260429203446). Keys present here that
+   are NOT yet consumed (see `recognized-but-unused-plan-keys`) get a
+   distinct warn so the user knows the parser saw them but the kanban
+   pipeline ignored them."
+  #{:id :plan/id :title :description :steps :plan/steps :decision-id})
+
+(def ^:private recognized-but-unused-plan-keys
+  "Plan keys the user reasonably expects the parser to honor, but which
+   the current kanban pipeline silently ignores. Warn distinctly so the
+   user sees \"recognized, not yet wired\" instead of \"unknown, dropped\"
+   and can avoid hand-writing them until they flow through."
+  #{:waves :objective :non-goals :validation-strategy})
+
+(defn- warn-unknown-plan-keys
+  "Log warn for plan-level keys not in `known-plan-keys`. Pure pass-through.
+
+   Two warning classes:
+     - :recognized-but-unused — listed in recognized-but-unused-plan-keys;
+       parser sees them but downstream (plan-to-kanban, KG) ignores them.
+     - :unknown — outside both sets; almost certainly a typo or stale field."
+  [plan]
+  (let [present-keys (set (keys plan))
+        recognized   (set/intersection
+                       present-keys recognized-but-unused-plan-keys)
+        unknown      (set/difference
+                       present-keys known-plan-keys
+                       recognized-but-unused-plan-keys)]
+    (when (seq recognized)
+      (log/warn
+       "[plan-parser] plan has recognized-but-unused keys (parser saw, kanban ignored):"
+       {:plan-id (or (:id plan) (:plan/id plan)) :keys (vec recognized)}))
+    (when (seq unknown)
+      (log/warn
+       "[plan-parser] plan has unknown keys (silently dropped):"
+       {:plan-id (or (:id plan) (:plan/id plan)) :keys (vec unknown)}))
+    plan))
+
 (defn- normalize-edn-plan
   "Normalize an EDN plan map, converting namespaced keys to non-namespaced.
-   Also normalizes nested step maps and coerces plan-level :id to string."
+
+   Also normalizes nested step maps, coerces plan-level :id to string, and
+   warns on plan-level keys outside the known set (audit kanban
+   20260429203446) — surfaces silent drops at the plan boundary the way
+   step-level `warn-unknown-keys` does for steps."
   [data]
-  (let [base-map (-> data strip-all-namespaces coerce-id)
+  (let [base-map (-> data
+                     strip-all-namespaces
+                     coerce-id
+                     warn-unknown-plan-keys)
         steps (get-steps-key data)]
     (cond-> base-map
       steps (assoc :steps (mapv normalize-edn-step steps)))))

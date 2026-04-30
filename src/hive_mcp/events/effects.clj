@@ -29,6 +29,7 @@
             [hive-mcp.events.effects.kg :as kg-effects]
             [hive-mcp.events.effects.drone-loop :as drone-loop-effects]
             [hive-mcp.events.effects.lifecycle :as lifecycle-effects]
+            [hive-mcp.server.guards :as guards]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -107,6 +108,12 @@
     true))
 
 (defn reset-registration!
-  "Reset registration state. Primarily for testing."
+  "Reset registration state. Primarily for testing.
+
+   Guarded by `when-not-coordinator` — no-op when the live coordinator
+   is running so test fixtures cannot reset effect registration while
+   the live registry is in use."
   []
-  (reset! *registered false))
+  (guards/when-not-coordinator
+   "events.effects/reset-registration! blocked"
+   (reset! *registered false)))

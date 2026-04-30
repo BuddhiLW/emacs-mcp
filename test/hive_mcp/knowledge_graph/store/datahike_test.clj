@@ -87,23 +87,54 @@
           snap (proto/db-snapshot store)]
       (is (some? snap)))))
 
-(deftest reset-conn-clears-data-test
-  (testing "reset-conn! clears all data [datahike]"
+(deftest reset-conn-is-non-destructive-test
+  (testing "reset-conn! preserves on-disk data [datahike] — close + reopen, NOT delete"
+    ;; Regression for 2026-04-28 incident where reset-conn! deleted the live KG.
+    ;; See AXIOM "Never NUKE Data — Destruction Requires Explicit, Loud, Guarded Consent".
+    (let [store (proto/get-store)
+          edge-id (str (random-uuid))]
+      (proto/transact! store [{:kg-edge/id edge-id
+                               :kg-edge/from "a"
+                               :kg-edge/to "b"
+                               :kg-edge/relation :implements
+                               :kg-edge/confidence 1.0}])
+      (let [before (proto/query store '[:find ?e :where [?e :kg-edge/id]])]
+        (is (= 1 (count before)) "data exists pre-reset"))
+      (proto/reset-conn! store)
+      (let [after (proto/query store '[:find ?e :where [?e :kg-edge/id]])]
+        (is (= 1 (count after))
+            "reset-conn! MUST preserve on-disk data — close + reopen, never delete")))))
+
+(deftest datahike-extends-persistent-protocol-test
+  (testing "Datahike satisfies IPersistentKGStore (has on-disk state)"
+    (is (proto/persistent-store? (proto/get-store)))))
+
+(deftest delete-database-requires-confirm-guard-test
+  (testing "delete-database! throws unless confirm=:i-mean-it"
     (let [store (proto/get-store)]
-      ;; Add data
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"requires confirm=:i-mean-it"
+                            (proto/delete-database! store nil)))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"requires confirm=:i-mean-it"
+                            (proto/delete-database! store :yes)))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"requires confirm=:i-mean-it"
+                            (proto/delete-database! store true))))))
+
+(deftest delete-database-with-confirm-actually-deletes-test
+  (testing "delete-database! with :i-mean-it actually wipes (against temp store from fixture)"
+    (let [store (proto/get-store)]
       (proto/transact! store [{:kg-edge/id (str (random-uuid))
                                :kg-edge/from "a"
                                :kg-edge/to "b"
                                :kg-edge/relation :implements
                                :kg-edge/confidence 1.0}])
-      ;; Verify data exists
       (let [before (proto/query store '[:find ?e :where [?e :kg-edge/id]])]
-        (is (= 1 (count before))))
-      ;; Reset
-      (proto/reset-conn! store)
-      ;; Verify data is gone
+        (is (= 1 (count before)) "data exists pre-delete"))
+      (proto/delete-database! store :i-mean-it)
       (let [after (proto/query store '[:find ?e :where [?e :kg-edge/id]])]
-        (is (= 0 (count after)))))))
+        (is (= 0 (count after)) "data wiped after explicit delete-database! call")))))
 
 ;; =============================================================================
 ;; Edge Operations

@@ -35,16 +35,24 @@
 
 (defn get-current-project-name
   "Get current project name from .hive-project.edn or directory path
-   (no Emacs dependency)."
+   (no Emacs dependency).
+
+   Resolution priority:
+     1. :name or :project-id from .hive-project.edn in the exact dir
+     2. Walk up to the nearest .hive-project.edn (covers deep subdirs)
+     3. Last path segment (legacy fallback)"
   ([] (get-current-project-name nil))
   ([directory]
    (rescue nil
            (when directory
              (or
-              ;; Priority 1: :name from .hive-project.edn
+              ;; Priority 1: :name from .hive-project.edn in exact dir
               (let [config (kg-scope/read-direct-project-config directory)]
                 (or (:name config) (:project-id config)))
-              ;; Priority 2: last path segment
+              ;; Priority 2: walk up for nearest .hive-project.edn
+              (let [walked (kg-scope/infer-scope-from-path directory)]
+                (when (and walked (not= walked "global")) walked))
+              ;; Priority 3: last path segment
               (let [parts (str/split (str directory) #"/")]
                 (last parts)))))))
 

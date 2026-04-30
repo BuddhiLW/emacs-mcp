@@ -83,7 +83,7 @@
           (if (= (:status result) :completed)
             {:response (:result result)}
             {:error (or (:message result) "Drone delegation failed")}))
-        (catch Exception e
+        (catch Throwable e
           (log/error e "Drone delegation failed")
           {:error (str "Delegation failed: " (.getMessage e))}))))
 
@@ -244,7 +244,7 @@
          :confidence (:strength signal-map)
          :target (:target signal-map)
          :evidence (:evidence signal-map)}))
-    (catch Exception e
+    (catch Throwable e
       (log/warn "Failed to parse drone response:" (.getMessage e))
       {:error (str "JSON parse error: " (.getMessage e))
        :raw response})))
@@ -373,7 +373,7 @@
                 (try
                   (ev/dispatch [:agora/consensus {:dialogue-id dialogue-id
                                                   :turns turn-num}])
-                  (catch Exception e
+                  (catch Throwable e
                     (log/warn "Event dispatch failed for consensus:" (.getMessage e)))))
 
               ;; Dispatch turn-completed through event system for auto-continuation
@@ -381,7 +381,7 @@
               (when-not reached?
                 (try
                   (ev/dispatch [:agora/turn-completed turn-data])
-                  (catch Exception e
+                  (catch Throwable e
                     (log/warn "Event dispatch failed for turn-completed:" (.getMessage e)))))
 
               {:success true
@@ -458,7 +458,7 @@
         (ev/dispatch [:agora/debate-started {:dialogue-id id
                                              :topic topic
                                              :participants participant-info}])
-        (catch Exception e
+        (catch Throwable e
           (log/warn "Event dispatch failed for debate-started:" (.getMessage e)))))
     {:dialogue-id id
      :participants (mapv (fn [p]

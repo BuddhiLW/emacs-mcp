@@ -70,6 +70,16 @@
    :ling/model            {:db/valueType :db.type/string
                            :db/index     true}
 
+   ;; Universal lifecycle metadata (added 2026-04-27 — registry-ghost fix).
+   ;; Indexed: :slave/last-active-at + :slave/alive? for stale-sweep query speed.
+   :slave/spawned-at        {:db/valueType :db.type/long}
+   :slave/last-active-at    {:db/valueType :db.type/long
+                             :db/index     true}
+   :slave/status-changed-at {:db/valueType :db.type/long}
+   :slave/process-pid       {:db/valueType :db.type/long}
+   :slave/alive?            {:db/valueType :db.type/boolean
+                             :db/index     true}
+
    ;;; Task Entity
    :task/id               {:db/valueType :db.type/string
                            :db/unique    :db.unique/identity}

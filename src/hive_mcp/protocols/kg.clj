@@ -30,14 +30,57 @@
   (pull-entity [this pattern eid]
     "Pull an entity with a pull pattern.")
 
+  (eids-by-attr [this attr]
+    "Return a lazy sequence of entity IDs for all entities that have the
+     given attribute. Backed by the attribute-first index on each backend
+     (DataScript `:aevt`, Datalevin `:ave`, Datahike `:aevt`). Cheap to
+     enumerate — does not materialize full entities. Used to drive
+     batched pulls over large attribute sets without OOM.")
+
   (db-snapshot [this]
     "Get the current database snapshot value.")
 
   (reset-conn! [this]
-    "Reset the connection to a fresh empty database.")
+    "Close and re-open the connection. NON-DESTRUCTIVE — implementations
+     must NOT delete persistent data. For persistent backends, the same
+     underlying state is re-attached. For ephemeral backends, this returns
+     a fresh conn since there is no persistent backing to preserve.
+
+     Destructive operations live on the optional `IPersistentKGStore`
+     extension — they only make sense for backends that actually persist.
+
+     Renamed semantics 2026-04-28: prior impl deleted on-disk data, which
+     wiped the live KG when called from test fixtures. See AXIOM
+     'Never NUKE Data — Destruction Requires Explicit, Loud, Guarded Consent'.")
 
   (close! [this]
-    "Close the connection and release resources."))
+    "Close the connection and release resources. NON-DESTRUCTIVE — does
+     NOT delete data on disk."))
+
+;;; ============================================================================
+;;; IPersistentKGStore Protocol (Optional — Backends With On-Disk State)
+;;; ============================================================================
+
+(defprotocol IPersistentKGStore
+  "Optional extension for KG backends that persist data outside the JVM
+   (Datahike, Datalevin, etc.). Ephemeral backends (DataScript) do NOT
+   satisfy this protocol — destruction is meaningless when there is no
+   on-disk state to destroy. ISP-compliant: callers can detect support
+   via `(satisfies? IPersistentKGStore store)` before invoking.
+
+   Required by AXIOM 'Never NUKE Data': any function that removes data
+   from disk must live behind this protocol AND require an explicit
+   confirmation guard at the call site."
+
+  (delete-database! [this confirm]
+    "DESTRUCTIVE — delete the underlying on-disk database. Requires
+     `confirm` to be the keyword `:i-mean-it`; any other value MUST throw.
+     Implementations MUST log a high-severity event before AND after
+     deletion fires (`[storage/destruction-fired]` / `[storage/destruction-completed]`).
+
+     Use ONLY when you genuinely want the data gone. Test fixtures must
+     never invoke this against a production data path — only against a
+     temp directory the fixture itself created."))
 
 ;;; ============================================================================
 ;;; Active Store Management
@@ -98,6 +141,14 @@
   [store]
   (satisfies? ITemporalKGStore store))
 
+(defn persistent-store?
+  "Check if the given store has on-disk state that can be destroyed.
+   Ephemeral backends (DataScript) return false; persistent backends
+   (Datahike, Datalevin) return true. Callers that need to invoke
+   `delete-database!` MUST gate on this predicate."
+  [store]
+  (satisfies? IPersistentKGStore store))
+
 (defn active-temporal?
   "Check if the active store supports temporal queries."
   []
@@ -122,6 +173,7 @@
   (entity [_this _eid] nil)
   (entid [_this _lookup-ref] nil)
   (pull-entity [_this _pattern _eid] nil)
+  (eids-by-attr [_this _attr] ())
   (db-snapshot [_this] nil)
   (reset-conn! [_this] nil)
   (close! [_this] nil))

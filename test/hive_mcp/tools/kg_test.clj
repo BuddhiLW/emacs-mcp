@@ -42,10 +42,11 @@
 
 (deftest facade-re-exports-command-handlers
   (testing "Facade re-exports all command handler vars"
-    (is (fn? kg/handle-kg-add-edge)           "add-edge re-exported")
-    (is (fn? kg/handle-kg-promote)            "promote re-exported")
-    (is (fn? kg/handle-kg-reground)           "reground re-exported")
-    (is (fn? kg/handle-kg-backfill-grounding) "backfill-grounding re-exported")))
+    (is (fn? kg/handle-kg-add-edge)            "add-edge re-exported")
+    (is (fn? kg/handle-kg-promote)             "promote re-exported")
+    (is (fn? kg/handle-kg-reground)            "reground re-exported")
+    (is (fn? kg/handle-kg-backfill-grounding)  "backfill-grounding re-exported")
+    (is (fn? kg/handle-kg-cleanup-synthetics)  "cleanup-synthetics re-exported")))
 
 (deftest facade-re-exports-point-to-sub-namespaces
   (testing "Facade vars delegate to sub-namespace implementations"
@@ -58,10 +59,11 @@
     (is (= kg/handle-kg-node-context    kg-queries/handle-kg-node-context))
     (is (= kg/handle-kg-stats           kg-queries/handle-kg-stats))
     ;; Command handlers should be the same fn objects as in kg.commands
-    (is (= kg/handle-kg-add-edge           kg-commands/handle-kg-add-edge))
-    (is (= kg/handle-kg-promote            kg-commands/handle-kg-promote))
-    (is (= kg/handle-kg-reground           kg-commands/handle-kg-reground))
-    (is (= kg/handle-kg-backfill-grounding kg-commands/handle-kg-backfill-grounding))))
+    (is (= kg/handle-kg-add-edge            kg-commands/handle-kg-add-edge))
+    (is (= kg/handle-kg-promote             kg-commands/handle-kg-promote))
+    (is (= kg/handle-kg-reground            kg-commands/handle-kg-reground))
+    (is (= kg/handle-kg-backfill-grounding  kg-commands/handle-kg-backfill-grounding))
+    (is (= kg/handle-kg-cleanup-synthetics  kg-commands/handle-kg-cleanup-synthetics))))
 
 ;;; =============================================================================
 ;;; CQRS Separation Tests
@@ -86,7 +88,8 @@
       (is (contains? command-names "kg_promote"))
       (is (contains? command-names "kg_reground"))
       (is (contains? command-names "kg_backfill_grounding"))
-      (is (= 4 (count command-names)) "exactly 4 command tools"))))
+      (is (contains? command-names "kg_cleanup_synthetics"))
+      (is (= 5 (count command-names)) "exactly 5 command tools"))))
 
 (deftest no-overlap-between-queries-and-commands
   (testing "No tool appears in both queries and commands"
@@ -106,7 +109,7 @@
           command-names (set (map :name kg-commands/command-tools))]
       (is (= facade-names (clojure.set/union query-names command-names))
           "facade tools = queries ∪ commands")
-      (is (= 11 (count kg/tools)) "11 core tools total (7 queries + 4 commands)"))))
+      (is (= 12 (count kg/tools)) "12 core tools total (7 queries + 5 commands)"))))
 
 (deftest all-tools-includes-versioning-and-migration
   (testing "all-tools includes core + versioning + migration"
@@ -128,7 +131,7 @@
       (is (contains? all-names "kg_import"))
       (is (contains? all-names "kg_validate_migration"))
       ;; Total
-      (is (= 22 (count kg/all-tools)) "22 total tools (11 core + 7 versioning + 4 migration)"))))
+      (is (= 23 (count kg/all-tools)) "23 total tools (12 core + 7 versioning + 4 migration)"))))
 
 (deftest every-tool-has-handler
   (testing "Every tool definition has a :handler function"
@@ -149,7 +152,7 @@
 ;;; =============================================================================
 
 (deftest consolidated-handlers-map-complete
-  (testing "Consolidated KG handler map wires all 9 commands"
+  (testing "Consolidated KG handler map wires all commands"
     (let [commands (set (keys consolidated-kg/handlers))]
       (is (contains? commands :traverse))
       (is (contains? commands :edge))
@@ -160,7 +163,10 @@
       (is (contains? commands :context))
       (is (contains? commands :promote))
       (is (contains? commands :reground))
-      (is (= 9 (count commands)) "9 consolidated commands"))))
+      (is (contains? commands :cleanup-synthetics))
+      (is (contains? commands :batch-edge))
+      (is (contains? commands :batch-traverse))
+      (is (= 12 (count commands)) "12 consolidated commands"))))
 
 (deftest consolidated-handlers-resolve-correctly
   (testing "Consolidated handler map resolves to sub-namespace fns"

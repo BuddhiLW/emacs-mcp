@@ -328,7 +328,7 @@
        (try
          (handler effect-data)
          (swap! *metrics update :effects-executed inc)
-         (catch Exception e
+         (catch Throwable e
            (swap! *metrics update :errors inc)
            (log/error "Effect" effect-id "failed:" (.getMessage e))))
        (log/warn "No effect handler for" effect-id)))

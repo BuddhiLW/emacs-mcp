@@ -19,6 +19,50 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;;; =============================================================================
+;;; Stale-Slave Filtering (registry-ghost fix, 2026-04-27)
+;;; =============================================================================
+
+(def ^:private default-stale-threshold-ms
+  "Default activity-staleness threshold (30 minutes)."
+  (* 30 60 1000))
+
+(defn- stale-threshold-ms
+  "Resolve stale threshold from config, fall back to default."
+  []
+  (or (try (when-let [r (requiring-resolve 'hive-mcp.config.core/get-config-value)]
+             (r "swarm.stale-threshold-ms"))
+           (catch Throwable _ nil))
+      default-stale-threshold-ms))
+
+(defn- alive-and-fresh?
+  "Slave row should be visible by default agent_status query.
+
+   A row is visible only when:
+     1. `:slave/alive?` is not explicitly false, AND
+     2. `:slave/last-active-at` is within the staleness window.
+
+   Legacy rows missing both attrs are treated as STALE (hidden by default).
+   This prevents pre-sweep ghost rows from polluting agent_status output
+   indefinitely; the terminal/headless sweeps will re-classify on next pass.
+   Use `:include-stale? true` to surface them for diagnostics."
+  [slave now-ms threshold-ms]
+  (let [alive?   (:slave/alive? slave)
+        last-act (:slave/last-active-at slave)]
+    (cond
+      (false? alive?) false
+      (nil? last-act) false
+      :else           (>= last-act (- now-ms threshold-ms)))))
+
+(defn- maybe-filter-stale
+  "Apply stale filter unless :include-stale? true."
+  [slaves include-stale?]
+  (if include-stale?
+    slaves
+    (let [now (System/currentTimeMillis)
+          thr (stale-threshold-ms)]
+      (filter #(alive-and-fresh? % now thr) slaves))))
+
+;;; =============================================================================
 ;;; Slave Query Functions
 ;;; =============================================================================
 
@@ -172,21 +216,27 @@
 (defn get-all-slaves
   "Get all slaves in the swarm.
 
+   Options:
+     :include-stale? — when true, returns ALL rows (incl. :alive? false + activity-stale).
+                       Default false: filters out zombies + stale rows.
+                       Legacy rows (no :slave/alive? attr) treated as alive.
+
    Returns:
      Seq of maps with slave attributes"
-  []
+  [& {:keys [include-stale?] :or {include-stale? false}}]
   (let [c (conn/ensure-conn)
         db @c
         eids (d/q '[:find [?e ...]
                     :where [?e :slave/id _]]
-                  db)]
-    (->> eids
-         (map #(d/entity db %))
-         (map (fn [e]
-                (-> (into {} e)
-                    (dissoc :db/id)
-                    (update :slave/parent #(when % (:slave/id %)))
-                    (update :slave/current-task #(when % (:task/id %)))))))))
+                  db)
+        all (->> eids
+                 (map #(d/entity db %))
+                 (map (fn [e]
+                        (-> (into {} e)
+                            (dissoc :db/id)
+                            (update :slave/parent #(when % (:slave/id %)))
+                            (update :slave/current-task #(when % (:task/id %)))))))]
+    (maybe-filter-stale all include-stale?)))
 
 (defn get-slaves-by-status
   "Get slaves filtered by status.
@@ -219,9 +269,12 @@
    Arguments:
      project-id - Project ID to filter by
 
+   Options:
+     :include-stale? — bypass alive/last-active filter (default false). See get-all-slaves.
+
    Returns:
      Seq of slave maps belonging to the project"
-  [project-id]
+  [project-id & {:keys [include-stale?] :or {include-stale? false}}]
   (let [c (conn/ensure-conn)
         db @c
         eids (d/q '[:find [?e ...]
@@ -229,14 +282,15 @@
                     :where
                     [?e :slave/id _]
                     [?e :slave/project-id ?project-id]]
-                  db project-id)]
-    (->> eids
-         (map #(d/entity db %))
-         (map (fn [e]
-                (-> (into {} e)
-                    (dissoc :db/id)
-                    (update :slave/parent #(when % (:slave/id %)))
-                    (update :slave/current-task #(when % (:task/id %)))))))))
+                  db project-id)
+        all (->> eids
+                 (map #(d/entity db %))
+                 (map (fn [e]
+                        (-> (into {} e)
+                            (dissoc :db/id)
+                            (update :slave/parent #(when % (:slave/id %)))
+                            (update :slave/current-task #(when % (:task/id %)))))))]
+    (maybe-filter-stale all include-stale?)))
 
 (defn get-child-project-ids
   "Get unique project-ids of slaves whose parent belongs to the given project.
@@ -556,9 +610,10 @@
      :completed-tasks (count (d/q '[:find ?e :where [?e :completed-task/id _]] db))}))
 
 (defn dump-db
-  "Dump the current database state for debugging."
+  "Dump the current database state for debugging.
+   Includes stale/zombie slaves so the dump is exhaustive."
   []
-  {:slaves (get-all-slaves)
+  {:slaves (get-all-slaves :include-stale? true)
    :tasks (d/q '[:find [(pull ?e [*]) ...]
                  :where [?e :task/id _]]
                @(conn/ensure-conn))

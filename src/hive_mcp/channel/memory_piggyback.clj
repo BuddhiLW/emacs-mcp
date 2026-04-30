@@ -3,7 +3,8 @@
   (:require [taoensso.timbre :as log]
             [hive-dsl.bounded-atom :refer [bounded-atom bput! bget bounded-swap!
                                            bclear! register-sweepable!]]
-            [hive-dsl.context.identity :as ctx-id]))
+            [hive-dsl.context.identity :as ctx-id]
+            [hive-mcp.server.guards :as guards]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -111,9 +112,14 @@
     (bounded-swap! buffers dissoc buffer-key)))
 
 (defn reset-all!
-  "Reset all buffers. For testing."
+  "Reset all buffers. For testing.
+
+   Guarded by `when-not-coordinator` — no-op when the live coordinator
+   is running so test fixtures cannot wipe live piggyback buffers."
   []
-  (bclear! buffers))
+  (guards/when-not-coordinator
+   "channel.memory-piggyback/reset-all! blocked"
+   (bclear! buffers)))
 
 (defn adopt-buffer!
   "Adopt an orphaned buffer from a previous coordinator instance.

@@ -11,6 +11,7 @@
   (:require [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.tools.memory-kanban :as mem-kanban]
             [hive-mcp.plan.fsm :as plan-fsm]
+            [hive-mcp.plan.kg-degraded :as kg-degraded]
             [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.plan.plans :as plans]
             [hive-mcp.knowledge-graph.connection :as kg-conn]
@@ -84,9 +85,19 @@
         {:error (:text result)}
         ;; Parse the result to get the task ID
         (let [parsed (rescue nil (json/read-str (:text result) :key-fn keyword))]
-          (if-let [task-id (or (:id parsed) (get parsed "id"))]
-            {:ok task-id}
-            {:error "Failed to get task ID from kanban create response"}))))
+          (cond
+            ;; Backend returned structured failure JSON (e.g. circuit-open)
+            (and (map? parsed) (false? (:success? parsed)))
+            {:error (str "kanban backend rejected: " (:error parsed)
+                         (when-let [r (:retry-after parsed)]
+                           (str " (retry after " r "ms)")))}
+
+            (or (:id parsed) (get parsed "id"))
+            {:ok (or (:id parsed) (get parsed "id"))}
+
+            :else
+            {:error (str "Failed to get task ID from kanban create response: "
+                         (pr-str (:text result)))}))))
     (catch Exception e
       {:error (str "Failed to create kanban task: " (.getMessage e))})))
 
@@ -204,27 +215,33 @@
             task-ids (mapv :task-id successes)
             decision-id (:decision-id plan)
 
-            ;; Plan --derived-from--> Decision (if decision-id present)
-            decision-edge (create-plan-decision-edge!
-                           plan-memory-id decision-id project-id agent-id)
+            ;; KG enrichment is best-effort. Each batch is wrapped in a
+            ;; hard timeout + rescue via hive-weave (see kg-degraded ns).
+            ;; A wedged KG store cannot block kanban task creation —
+            ;; tasks are load-bearing, edges are backfillable.
+            kg-result (kg-degraded/apply-kg-calls
+                       [["decision-edge"
+                         #(create-plan-decision-edge!
+                           plan-memory-id decision-id project-id agent-id)]
+                        ["plan-task-edges"
+                         #(create-plan-task-edges!
+                           plan-memory-id task-ids project-id agent-id
+                           waves step-id-to-task-id)]
+                        ["task-dep-edges"
+                         #(create-task-dependency-edges!
+                           step-id-to-task-id steps project-id agent-id waves)]])]
 
-            ;; Plan --depends-on--> Task edges
-            plan-task-edges (create-plan-task-edges!
-                             plan-memory-id task-ids project-id agent-id
-                             waves step-id-to-task-id)
-
-            ;; Task --depends-on--> Task dependency edges
-            task-dep-edges (create-task-dependency-edges!
-                            step-id-to-task-id steps project-id agent-id waves)
-
-            all-edges (cond-> (vec (concat plan-task-edges task-dep-edges))
-                        decision-edge (conj decision-edge))]
+        (when (:degraded? kg-result)
+          (kg-degraded/log-degradation!
+           kg-result {:plan-id plan-memory-id :task-count (count task-ids)}))
 
         {:task-ids task-ids
-         :kg-edges all-edges
+         :kg-edges (:edges kg-result)
          :waves waves
          :step-mapping step-id-to-task-id
-         :decision-id decision-id}))))
+         :decision-id decision-id
+         :kg-degraded? (:degraded? kg-result)
+         :kg-warnings (:warnings kg-result)}))))
 
 (defn plan-to-kanban
   "Convert a plan memory entry (or file) to kanban tasks with KG edges.
@@ -292,6 +309,8 @@
                      :max-wave (when (seq (:waves result)) (apply max (vals (:waves result))))
                      :kg-edges (:kg-edges result)
                      :edge-count (count (:kg-edges result))
+                     :kg-degraded? (boolean (:kg-degraded? result))
+                     :kg-warnings (:kg-warnings result)
                      :step-mapping (:step-mapping result)}))))
 
     (catch clojure.lang.ExceptionInfo e

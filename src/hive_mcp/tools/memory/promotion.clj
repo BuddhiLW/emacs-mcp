@@ -11,7 +11,8 @@
             [hive-mcp.crystal.core :as crystal]
             [hive-mcp.memory.temporal :as temporal]
             [hive-mcp.protocols.memory :as mem-proto]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -60,8 +61,9 @@
   "Persist a tier promotion to Chroma. Returns result map."
   [id original-duration final-duration tiers-promoted]
   (let [expires (dur/calculate-expires final-duration)]
-    (mem-proto/update-entry! (mem-proto/get-store) id {:duration final-duration
-                                                       :expires (or expires "")})
+    (with-resilience
+      (mem-proto/update-entry! (mem-proto/get-store) id {:duration final-duration
+                                                         :expires (or expires "")}))
     ;; Temporal dual-write: record duration promotion
     (temporal/record-mutation-silent!
      {:entry-id       id
@@ -99,33 +101,34 @@
   [{:keys [_directory min_projects limit dry_run]}]
   (log/info "mcp-memory-xpoll-promote: scanning for cross-project knowledge")
   (with-store
-    (let [limit-val   (or (some-> limit int) 500)
-          opts        {:min-projects (or (some-> min_projects int) 2)}
-          store (mem-proto/get-store)
-          all-entries (mem-proto/query-entries store {:limit limit-val
-                                                      :include-expired? false})
-          candidates  (filter #(crystal/scope-eligible? % opts) all-entries)
-          plans       (mapv build-xpoll-plan candidates)
-          results     (if dry_run
-                        plans
-                        (vec (for [plan plans
-                                   :let [entry (mem-proto/get-entry store (:id plan))]
-                                   :when entry]
-                               (promote-entry-by-tiers! entry (:tiers_to_promote plan)))))
-          promoted-ct (count (filter :promoted results))
-          plan-keys   [:id :duration :cross_projects :cross_project_count :next_duration]
-          result-keys [:id :promoted :old_duration :new_duration :tiers_promoted]
-          summary     {:promoted       (if dry_run 0 promoted-ct)
-                       :candidates     (count candidates)
-                       :total_scanned  (count all-entries)
-                       :dry_run        (boolean dry_run)
-                       :entries        (mapv #(select-keys % (if dry_run plan-keys result-keys))
-                                             results)}]
-      (log/info "mcp-memory-xpoll-promote:"
-                (:promoted summary) "promoted of" (:candidates summary)
-                "candidates from" (:total_scanned summary) "entries"
-                (when dry_run "(dry run)"))
-      (mcp-json summary))))
+    (with-resilience
+      (let [limit-val   (or (some-> limit int) 500)
+            opts        {:min-projects (or (some-> min_projects int) 2)}
+            store (mem-proto/get-store)
+            all-entries (mem-proto/query-entries store {:limit limit-val
+                                                        :include-expired? false})
+            candidates  (filter #(crystal/scope-eligible? % opts) all-entries)
+            plans       (mapv build-xpoll-plan candidates)
+            results     (if dry_run
+                          plans
+                          (vec (for [plan plans
+                                     :let [entry (mem-proto/get-entry store (:id plan))]
+                                     :when entry]
+                                 (promote-entry-by-tiers! entry (:tiers_to_promote plan)))))
+            promoted-ct (count (filter :promoted results))
+            plan-keys   [:id :duration :cross_projects :cross_project_count :next_duration]
+            result-keys [:id :promoted :old_duration :new_duration :tiers_promoted]
+            summary     {:promoted       (if dry_run 0 promoted-ct)
+                         :candidates     (count candidates)
+                         :total_scanned  (count all-entries)
+                         :dry_run        (boolean dry_run)
+                         :entries        (mapv #(select-keys % (if dry_run plan-keys result-keys))
+                                               results)}]
+        (log/info "mcp-memory-xpoll-promote:"
+                  (:promoted summary) "promoted of" (:candidates summary)
+                  "candidates from" (:total_scanned summary) "entries"
+                  (when dry_run "(dry run)"))
+        (mcp-json summary)))))
 
 ;; =============================================================================
 ;; Hook Handler (crystallize-session)
@@ -139,8 +142,9 @@
       {:promoted 0 :candidates 0 :total-scanned 0 :error "store-not-configured"}
       (let [limit-val     (or (some-> limit int) 100)
             store         (mem-proto/get-store)
-            all-entries   (mem-proto/query-entries store {:limit limit-val
-                                                          :include-expired? false})
+            all-entries   (with-resilience
+                            (mem-proto/query-entries store {:limit limit-val
+                                                            :include-expired? false}))
             candidates    (filter #(crystal/scope-eligible? %) all-entries)
             results       (vec (for [entry candidates
                                      :let [tiers (crystal/scope-tiers entry)]

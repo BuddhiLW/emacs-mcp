@@ -132,7 +132,7 @@
            :metadata    {:engine :fsm :compiled? false}
            :loaded?     false
            :errors      [(str "Workflow not found in registry: " wf-name)]}))
-      (catch Exception e
+      (catch Throwable e
         (let [workflow-id (generate-workflow-id (or workflow-name "unknown"))]
           {:workflow-id workflow-id
            :name        (str workflow-name)
@@ -173,7 +173,7 @@
              :errors           errors
              :warnings         warnings
              :dependency-order (mapv str user-states)})))
-      (catch Exception e
+      (catch Throwable e
         {:valid?           false
          :errors           [(str "Validation error: " (ex-message e))]
          :warnings         []
@@ -198,7 +198,7 @@
            :duration-ms duration
            :errors      []
            :context     (:data result result)})
-        (catch Exception e
+        (catch Throwable e
           {:success?    false
            :step-id     step-id
            :result      nil
@@ -253,7 +253,7 @@
              :duration-ms    duration
              :errors         []
              :final-context  result}))
-        (catch Exception e
+        (catch Throwable e
           (let [duration (- (System/currentTimeMillis) start-time)]
             ;; Update status to failed
             (update-status! workflow-id
@@ -306,7 +306,7 @@
            :status         :unknown
            :steps-completed 0
            :errors         ["Unknown workflow-id"]}))
-      (catch Exception e
+      (catch Throwable e
         {:success?       false
          :workflow-id    workflow-id
          :status         :unknown

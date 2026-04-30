@@ -12,7 +12,8 @@
             [hive-mcp.memory.temporal :as temporal]
             [hive-mcp.tools.core :refer [mcp-json]]
             [hive-mcp.agent.context :as ctx]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -25,9 +26,10 @@
   "Query Chroma entries filtered by project scope.
    Shared pipeline for decay and promotion handlers."
   [directory limit-val]
-  (let [all-entries (mem-proto/query-entries (mem-proto/get-store)
-                                             {:limit limit-val
-                                              :include-expired? false})
+  (let [all-entries (with-resilience
+                      (mem-proto/query-entries (mem-proto/get-store)
+                                               {:limit limit-val
+                                                :include-expired? false}))
         project-id (scope/get-current-project-id directory)
         scope-filter (scope/make-scope-tag project-id)]
     (filterv #(scope/matches-scope? % scope-filter) all-entries)))
@@ -56,9 +58,10 @@
   [entry opts]
   (when (crystal/decay-candidate? entry opts)
     (when-let [plan (build-decay-plan entry opts)]
-      (mem-proto/update-staleness! (mem-proto/get-store) (:id entry)
-                                   {:beta (:new-beta plan)
-                                    :source :time-decay})
+      (with-resilience
+        (mem-proto/update-staleness! (mem-proto/get-store) (:id entry)
+                                     {:beta (:new-beta plan)
+                                      :source :time-decay}))
       ;; Temporal dual-write: record decay event
       (temporal/record-mutation-silent!
        {:entry-id   (:id entry)
@@ -97,7 +100,10 @@
           plans         (keep #(build-decay-plan % opts) candidates)
           applied       (if dry_run
                           (vec plans)
-                          (vec (keep #(apply-decay! (mem-proto/get-entry (mem-proto/get-store) (:id %)) opts)
+                          (vec (keep #(apply-decay!
+                                       (with-resilience
+                                         (mem-proto/get-entry (mem-proto/get-store) (:id %)))
+                                       opts)
                                      plans)))
           summary       {:decayed        (count applied)
                          :skipped        (- (count scoped) (count (vec plans)))
@@ -120,7 +126,8 @@
     (let [directory       (resolve-directory directory)
           limit-val       (coerce-limit limit 50)
           cleanup-result  (try
-                            (mem-proto/cleanup-expired! (mem-proto/get-store))
+                            (with-resilience
+                              (mem-proto/cleanup-expired! (mem-proto/get-store)))
                             (catch Exception e
                               {:count 0 :deleted-ids []
                                :error (.getMessage e)}))

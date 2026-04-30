@@ -114,7 +114,7 @@
           (do
             (log/trace "[channel-bridge] No handler for:" event-id)
             nil))))
-    (catch Exception e
+    (catch Throwable e
       (log/error "[channel-bridge] Error handling event:" (.getMessage e))
       nil)))
 

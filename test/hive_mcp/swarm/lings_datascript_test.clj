@@ -12,20 +12,16 @@
 
    SOLID: Tests guide implementation via TDD (red-green-refactor)."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [hive-mcp.swarm.datascript :as ds]))
+            [hive-mcp.swarm.datascript :as ds]
+            [hive-mcp.test-fixtures :as tf]
+            [hive-test.isolation :as iso]
+            hive-mcp.isolation-methods))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn reset-datascript-fixture
-  "Reset DataScript state before each test."
-  [f]
-  (ds/reset-conn!)
-  (f)
-  (ds/reset-conn!))
-
-(use-fixtures :each reset-datascript-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds))
 
 ;; =============================================================================
 ;; SECTION 1: Ling Registration (register-ling! → add-slave!)
@@ -148,14 +144,14 @@
     (ds/add-slave! "ling-c" {:name "c"})
     (is (= 3 (count (ds/get-all-slaves))) "Should have 3 before reset")
 
-    ;; Reset
-    (ds/reset-conn!)
+    ;; Reset (test-local conn — see hive-test.isolation)
+    (tf/reset-isolated-swarm!)
     (is (empty? (ds/get-all-slaves)) "Should be empty after reset")))
 
 (deftest clear-registry-idempotent-test
   (testing "Resetting an empty registry is safe"
-    (ds/reset-conn!)
-    (ds/reset-conn!) ;; Double reset
+    (tf/reset-isolated-swarm!)
+    (tf/reset-isolated-swarm!) ;; Double reset
     (is (empty? (ds/get-all-slaves)) "Should remain empty")))
 
 ;; =============================================================================

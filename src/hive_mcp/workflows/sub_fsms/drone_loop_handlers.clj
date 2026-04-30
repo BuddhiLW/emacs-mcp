@@ -170,7 +170,7 @@
         context (if (and reconstruct-fn session-store (pos? (or turn 0)))
                   (try
                     (reconstruct-fn session-store task turn)
-                    (catch Exception e
+                    (catch Throwable e
                       (log/debug "Context reconstruction failed, using raw task"
                                  {:turn turn :error (.getMessage e)})
                       task))
@@ -261,7 +261,7 @@
             ;; Execute via resource fn (value-producing — stays inline)
             tool-results (try
                            (execute-tools-fn agent-id tool-calls (or permissions #{}))
-                           (catch Exception e
+                           (catch Throwable e
                              (log/error e "Tool execution failed"
                                         {:drone-id drone-id :turn turn})
                              ;; Return error results for each call

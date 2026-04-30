@@ -16,21 +16,23 @@
             [hive-mcp.agent.ling :as ling]
             [hive-mcp.agent.protocol :as proto]
             [hive-mcp.swarm.datascript :as ds]
-            [hive-mcp.swarm.datascript.queries :as ds-queries]))
+            [hive-mcp.swarm.datascript.queries :as ds-queries]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn with-fresh-state [f]
-  "Reset DataScript and kill all headless processes between tests."
-  (ds/reset-conn!)
+(defn- kill-headless-fixture
+  "Kill all headless processes around each test."
+  [f]
   (headless/kill-all-headless!)
-  (f)
-  ;; Cleanup after test
-  (headless/kill-all-headless!))
+  (try (f) (finally (headless/kill-all-headless!))))
 
-(use-fixtures :each with-fresh-state)
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  kill-headless-fixture)
 
 (defn gen-ling-id []
   (str "test-headless-" (java.util.UUID/randomUUID)))

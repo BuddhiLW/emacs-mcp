@@ -10,8 +10,9 @@
   (:require [hive-mcp.hooks.core :as hooks]
             [hive-mcp.crystal.hooks :as crystal-hooks]
             [hive-mcp.dns.result :as result]
+            [hive-mcp.protocols.lifecycle :as lifecycle]
             [hive-mcp.swarm.sync :as sync]
-            [hive-mcp.transport.olympus :as olympus-ws]
+            [hive-mcp.system.registry :as reg]
             [taoensso.timbre :as log]
             [clojure.edn :as edn]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -32,9 +33,10 @@
 ;; Session End / Shutdown
 ;; =============================================================================
 
-(defn- trigger-session-end!
+(defn trigger-session-end!
   "Trigger session-end hooks for auto-wrap.
-   Called by JVM shutdown hook."
+   Called by the SessionEndHooks IShutdownHook impl during orchestrated
+   shutdown (and, historically, directly by the JVM shutdown hook)."
 
   [hooks-registry-atom reason]
   (log/info "Triggering session-end hooks:" reason)
@@ -47,11 +49,49 @@
                      (log/info "Session-end hooks completed:" (count results) "handlers executed")
                      results))))
 
+(defn run-shutdown-sequence!
+  "Run all registered IShutdownHook impls in priority order.
+   Each impl gets a budget (default 5000ms). Exceptions rescued per-impl
+   so one failure does not block subsequent hooks.
+
+   Params:
+     ctx — {:reason :jvm-shutdown | :repl | ...
+            :timeout-ms int (default 5000, per-impl)
+            :coordinator-id string (optional)
+            :hooks-registry-atom atom (optional)}
+   Returns: {:ran N :errors [{:name :error ex}]}"
+  [ctx]
+  (let [hooks      (reg/registered-shutdown-hooks)
+        timeout-ms (or (:timeout-ms ctx) 5000)
+        results    (atom {:ran 0 :errors []})]
+    (log/info "Shutdown sequence starting"
+              {:hook-count (count hooks) :reason (:reason ctx)})
+    (doseq [impl hooks]
+      (let [hname    (lifecycle/shutdown-name impl)
+            priority (lifecycle/shutdown-priority impl)
+            fut      (future
+                       (try
+                         (lifecycle/shutdown! impl ctx)
+                         :ok
+                         (catch Throwable t
+                           (swap! results update :errors conj
+                                  {:name hname :error t})
+                           :err)))]
+        (log/info "shutdown:" hname {:priority priority})
+        (let [outcome (deref fut timeout-ms :timeout)]
+          (when (= outcome :timeout)
+            (log/warn "shutdown timeout" {:name hname :timeout-ms timeout-ms})
+            (swap! results update :errors conj
+                   {:name hname :error :timeout})))
+        (swap! results update :ran inc)))
+    (log/info "Shutdown sequence finished" @results)
+    @results))
+
 (defn register-shutdown-hook!
-  "Register JVM shutdown hook to trigger session-end for auto-wrap.
+  "Register JVM shutdown hook that runs the registry-driven shutdown
+   sequence.
 
    Only registers once. Safe to call multiple times.
-
 
    Parameters:
      shutdown-hook-registered? - atom tracking registration state
@@ -64,20 +104,13 @@
      (Thread.
       (fn []
         (log/info "JVM shutdown detected - running shutdown sequence")
-        ;; Stop Olympus WebSocket server first (close client connections cleanly)
-        (result/rescue nil
-                       (olympus-ws/stop!)
-                       (log/info "Olympus WebSocket server stopped"))
-        ;; Mark coordinator as terminated in DataScript (Phase 4)
-        (when-let [coord-id @coordinator-id-atom]
-          (result/rescue nil
-                         (require 'hive-mcp.swarm.datascript)
-                         (let [mark-terminated! (resolve 'hive-mcp.swarm.datascript/mark-coordinator-terminated!)]
-                           (mark-terminated! coord-id)
-                           (log/info "Coordinator marked terminated:" coord-id))))
-        (trigger-session-end! hooks-registry-atom "jvm-shutdown"))))
+        (run-shutdown-sequence!
+         {:reason              :jvm-shutdown
+          :timeout-ms          5000
+          :coordinator-id      @coordinator-id-atom
+          :hooks-registry-atom hooks-registry-atom}))))
     (reset! shutdown-hook-registered? true)
-    (log/info "JVM shutdown hook registered for auto-wrap")))
+    (log/info "JVM shutdown hook registered (registry-driven)")))
 
 ;; =============================================================================
 ;; Project Configuration

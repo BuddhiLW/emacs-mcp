@@ -10,9 +10,14 @@
 
    These tests verify the pure helper functions using mock data,
    without requiring a live Chroma connection."
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+  (:require [clojure.data.json :as json]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.project.tree :as tree]
-            [hive-mcp.tools.memory-kanban]))
+            [hive-mcp.protocols.memory :as mem-proto]
+            [hive-mcp.tools.kanban.predicates :as kp]
+            [hive-mcp.tools.kanban.transitions :as kt]
+            [hive-mcp.tools.memory-kanban :as mem-kanban]
+            [hive-mcp.tools.memory.scope :as scope]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -20,18 +25,16 @@
 ;; =============================================================================
 ;; Private fn accessors
 ;; =============================================================================
+;; Helpers extracted to hive-mcp.tools.kanban.{predicates,transitions} as part
+;; of the event-driven kanban refactor; resolve-project-ids-with-descendants
+;; remains a private query helper inside memory-kanban.
 
 (def ^:private resolve-project-ids
   @(resolve 'hive-mcp.tools.memory-kanban/resolve-project-ids-with-descendants))
 
-(def ^:private extract-project-id
-  @(resolve 'hive-mcp.tools.memory-kanban/extract-project-id-from-tags))
-
-(def ^:private task->slim
-  @(resolve 'hive-mcp.tools.memory-kanban/task->slim))
-
-(def ^:private kanban-entry?
-  @(resolve 'hive-mcp.tools.memory-kanban/kanban-entry?))
+(def ^:private extract-project-id kt/extract-project-id-from-tags)
+(def ^:private task->slim         kt/task->slim)
+(def ^:private kanban-entry?      kp/kanban-entry?)
 
 ;; =============================================================================
 ;; Test Fixtures: Inject mock tree cache
@@ -273,3 +276,344 @@
 (deftest test-descendant-scope-tags-global-returns-nil
   (testing "Global project-id returns nil scope tags"
     (is (nil? (tree/get-descendant-scope-tags "global")))))
+
+;; =============================================================================
+;; REGRESSION — Soft-deleted (done) tasks must remain visible across descendant
+;; traversal AND when explicitly status-filtered.
+;;
+;; Bug (kanban id 20260428091102-558757f7): after `kanban soft-delete on done`
+;; landed (commit e78a18c, event-driven move + soft-delete when tasks complete),
+;; calling `kanban list` with `directory` scope and `include_descendants=true`
+;; returned empty for done tasks.
+;;
+;; ROOT CAUSE: `query-kanban-entries` previously fetched with
+;; `:tags ["kanban"]` (status NOT pushed down) and a `:limit` of 100/500.
+;; The store's CRUD query sorts by `:created` desc and takes `:limit` rows.
+;; Soft-deleted (done) tasks retain their original (older) `:created`
+;; timestamp, so once active todo/doing/review tasks accumulated past the
+;; window, done tasks were truncated BEFORE the post-fetch status filter
+;; ran. Status="done" → empty results. Worse, on leaf projects the limit
+;; was 100 (no descendants → fall-through `:else` branch with raw `limit`),
+;; making the bug strictly worse for child projects where the user
+;; explicitly asked for descendant aggregation.
+;;
+;; FIX: push status-tag into the store query (server-side AND-filter on
+;; tags) so status-restricted lookups don't get truncated by the active-
+;; task window. Bump leaf-project limit to `effective-limit` whenever the
+;; caller requested `include-descendants?`.
+;; =============================================================================
+
+(defn- make-store
+  "Reified IMemoryStore that mirrors the Chroma/Milvus pathology:
+   sort returned rows by `:created` desc and apply `:limit` BEFORE the
+   caller's post-filter. Honours the `:tags` AND-filter pushdown so the
+   fix is observable: with status='done' pushed in, only the 1 done entry
+   is fetched and returned — without the pushdown, it would be truncated."
+  [entries-atom]
+  (reify mem-proto/IMemoryStore
+    (connect! [_ _] nil)
+    (disconnect! [_] nil)
+    (connected? [_] true)
+    (health-check [_] {:healthy? true})
+    (add-entry! [_ _] nil)
+    (get-entry [_ id] (first (filter #(= id (:id %)) @entries-atom)))
+    (update-entry! [_ _ _] nil)
+    (delete-entry! [_ _] true)
+    (query-entries [_ opts]
+      (let [{:keys [type tags project-id project-ids limit]} opts]
+        (->> @entries-atom
+             (filter (fn [e]
+                       (and (or (nil? type) (= type (:type e)))
+                            (or (nil? project-id)
+                                (= project-id (:project-id e)))
+                            (or (nil? project-ids)
+                                (some #{(:project-id e)} project-ids))
+                            (or (nil? tags)
+                                (every? (set (:tags e)) tags)))))
+             (sort-by :created #(compare %2 %1))
+             (take (or limit 100))
+             vec)))
+    (search-similar [_ _ _] [])
+    (supports-semantic-search? [_] false)
+    (cleanup-expired! [_] 0)
+    (entries-expiring-soon [_ _ _] [])
+    (find-duplicate [_ _ _ _] nil)
+    (store-status [_] {:backend "kanban-soft-delete-mock"})
+    (reset-store! [_] (reset! entries-atom []))))
+
+(defn- iso [n-mins-ago]
+  (.toString (.minusSeconds (java.time.Instant/now) (* 60 n-mins-ago))))
+
+(defn- kanban-entry
+  "Build a kanban-shaped memory entry. `mins-ago` controls `:created` so
+   we can deterministically bury done tasks behind newer active tasks."
+  [{:keys [id title status priority project-id mins-ago]}]
+  {:id         id
+   :type       "note"
+   :project-id project-id
+   :tags       ["kanban" status (str "priority-" priority)
+                (str "scope:project:" project-id)]
+   :content    {:task-type "kanban" :title title :status status :priority priority}
+   :created    (iso mins-ago)})
+
+(defn- parse-list-result
+  "Decode the JSON payload from handle-mem-kanban-list-slim's mcp-json wrapper."
+  [resp]
+  (json/read-str (:text resp) :key-fn keyword))
+
+(deftest ^:regression done-tasks-visible-via-descendants-after-soft-delete-test
+  (testing "soft-deleted (done) child task surfaces when parent project lists with include_descendants"
+    ;; Topology: parent = hive-mcp, child = hive-agent-bridge.
+    ;; Seed: many newer active tasks in the child + 1 done task with old
+    ;; `:created`. Pre-fix, the store sorts created-desc and the limited
+    ;; window evicts the done task BEFORE the status post-filter runs.
+    ;; With the fix, status=done is pushed into the store query so only
+    ;; matching tasks are fetched — the active-task window is irrelevant.
+    (let [active-bursts
+          (vec (for [i (range 20)]
+                 (kanban-entry
+                  {:id         (str "kb-bridge-active-" i)
+                   :title      (str "Active task " i)
+                   :status     "todo"
+                   :priority   "medium"
+                   :project-id "hive-agent-bridge"
+                   :mins-ago   (- 300 i)})))   ;; recent
+          done-task
+          (kanban-entry
+           {:id         "kb-bridge-done-1"
+            :title      "Completed child task"
+            :status     "done"
+            :priority   "high"
+            :project-id "hive-agent-bridge"
+            :mins-ago   1000})                 ;; old
+          state (atom (conj active-bursts done-task))
+          store (make-store state)]
+      (with-redefs [mem-proto/store-set?           (constantly true)
+                    mem-proto/get-store            (constantly store)
+                    scope/get-current-project-id   (constantly "hive-mcp")]
+        (let [resp     (mem-kanban/handle-mem-kanban-list-slim
+                        {:status              "done"
+                         :directory           "/fake/hive-mcp"
+                         :include_descendants true})
+              parsed   (parse-list-result resp)
+              ids      (set (map :id parsed))]
+          (is (vector? parsed) "list-slim returned a JSON array")
+          (is (contains? ids "kb-bridge-done-1")
+              (str "done child task missing from descendant traversal — "
+                   "soft-delete + active-task window truncation regressed; "
+                   "got: " (mapv :id parsed))))))))
+
+(deftest ^:regression done-tasks-visible-on-leaf-project-with-include-descendants-test
+  (testing "leaf project with include_descendants=true still surfaces old done tasks"
+    ;; Pre-fix: leaf branch used raw :limit (100), so a backlog of >100
+    ;; active tasks evicted older done ones. Fix bumps to effective-limit
+    ;; whenever the caller asked for descendants.
+    (let [actives  (vec (for [i (range 150)]
+                          (kanban-entry
+                           {:id         (str "kb-leaf-active-" i)
+                            :title      (str "Leaf active " i)
+                            :status     "todo"
+                            :priority   "medium"
+                            :project-id "hive-agent-bridge"
+                            :mins-ago   (- 500 i)})))
+          done-old (kanban-entry
+                    {:id         "kb-leaf-done-old"
+                     :title      "Old leaf done"
+                     :status     "done"
+                     :priority   "low"
+                     :project-id "hive-agent-bridge"
+                     :mins-ago   2000})
+          state (atom (conj actives done-old))
+          store (make-store state)]
+      (with-redefs [mem-proto/store-set?           (constantly true)
+                    mem-proto/get-store            (constantly store)
+                    scope/get-current-project-id   (constantly "hive-agent-bridge")]
+        (let [resp   (mem-kanban/handle-mem-kanban-list-slim
+                      {:status              "done"
+                       :directory           "/fake/hive-agent-bridge"
+                       :include_descendants true})
+              parsed (parse-list-result resp)
+              ids    (set (map :id parsed))]
+          (is (contains? ids "kb-leaf-done-old")
+              (str "old done task on leaf project missing — leaf-branch "
+                   "limit-100 truncated it before the status post-filter; "
+                   "got: " (mapv :id parsed))))))))
+
+(deftest ^:regression done-status-filter-pushed-into-store-query-test
+  (testing "status filter pushed down — store query receives [\"kanban\" \"done\"], not [\"kanban\"] alone"
+    ;; This is the surgical assertion: we observe the tag set the
+    ;; reified store sees. Pre-fix it was ["kanban"] and clojure-side
+    ;; post-filter cut to "done". Post-fix it's ["kanban" "done"] —
+    ;; the store filters server-side, no truncation possible.
+    (let [observed (atom [])
+          state    (atom [(kanban-entry
+                           {:id "kb-mcp-done-1" :title "Done"
+                            :status "done" :priority "high"
+                            :project-id "hive-mcp" :mins-ago 100})])
+          store    (reify mem-proto/IMemoryStore
+                     (connect! [_ _] nil) (disconnect! [_] nil)
+                     (connected? [_] true) (health-check [_] {:healthy? true})
+                     (add-entry! [_ _] nil)
+                     (get-entry [_ id] (first (filter #(= id (:id %)) @state)))
+                     (update-entry! [_ _ _] nil) (delete-entry! [_ _] true)
+                     (query-entries [_ opts]
+                       (swap! observed conj (:tags opts))
+                       (vec (filter (fn [e]
+                                      (every? (set (:tags e))
+                                              (or (:tags opts) [])))
+                                    @state)))
+                     (search-similar [_ _ _] [])
+                     (supports-semantic-search? [_] false)
+                     (cleanup-expired! [_] 0)
+                     (entries-expiring-soon [_ _ _] [])
+                     (find-duplicate [_ _ _ _] nil)
+                     (store-status [_] {:backend "tag-observer"})
+                     (reset-store! [_] (reset! state [])))]
+      (with-redefs [mem-proto/store-set?           (constantly true)
+                    mem-proto/get-store            (constantly store)
+                    scope/get-current-project-id   (constantly "hive-mcp")]
+        (mem-kanban/handle-mem-kanban-list-slim
+         {:status              "done"
+          :directory           "/fake/hive-mcp"
+          :include_descendants true})
+        (is (some #(= ["kanban" "done"] %) @observed)
+            (str "store query did NOT receive status-tag pushed down; "
+                 "observed tag-sets: " (pr-str @observed)))))))
+
+;; =============================================================================
+;; List filter regression tests (token-budget filters)
+;; =============================================================================
+
+(defn- seed-store
+  "Mock store seeded with diverse kanban entries spanning priorities,
+   statuses, and projects so list filters have real data."
+  []
+  (atom
+   [(kanban-entry {:id "kb-q-1" :title "Refactor auth flow"
+                   :status "todo" :priority "high"
+                   :project-id "hive-mcp" :mins-ago 60})
+    (kanban-entry {:id "kb-q-2" :title "Add login retry"
+                   :status "todo" :priority "low"
+                   :project-id "hive-mcp" :mins-ago 30})
+    (kanban-entry {:id "kb-q-3" :title "Fix indexing crash"
+                   :status "doing" :priority "high"
+                   :project-id "hive-mcp" :mins-ago 10})
+    (kanban-entry {:id "kb-q-4" :title "Bridge ping handler"
+                   :status "todo" :priority "medium"
+                   :project-id "hive-agent-bridge" :mins-ago 5})]))
+
+(defmacro ^:private with-list-fixtures
+  [state pid & body]
+  `(let [store# (make-store ~state)]
+     (with-redefs [mem-proto/store-set?         (constantly true)
+                   mem-proto/get-store          (constantly store#)
+                   scope/get-current-project-id (constantly ~pid)]
+       ~@body)))
+
+;; Pure-predicate behavior is pinned via deftrifecta in
+;; hive-mcp.tools.kanban.list-filter-trifecta-test. The integration tests
+;; below cover orchestration concerns that the trifecta cannot: store
+;; query observation, project-id override semantics, and end-to-end shape.
+
+(deftest ^:regression list-filter-tag-match-all-pushed-to-store-test
+  (testing "tag_match=all pushes extra tags into store query"
+    (let [observed (atom [])
+          state    (atom [(kanban-entry
+                           {:id "kb-tag-pushed" :title "T"
+                            :status "todo" :priority "high"
+                            :project-id "hive-mcp" :mins-ago 5})])
+          store    (reify mem-proto/IMemoryStore
+                     (connect! [_ _] nil) (disconnect! [_] nil)
+                     (connected? [_] true) (health-check [_] {:healthy? true})
+                     (add-entry! [_ _] nil)
+                     (get-entry [_ id] (first (filter #(= id (:id %)) @state)))
+                     (update-entry! [_ _ _] nil) (delete-entry! [_ _] true)
+                     (query-entries [_ opts]
+                       (swap! observed conj (:tags opts))
+                       (vec (filter (fn [e]
+                                      (every? (set (:tags e))
+                                              (or (:tags opts) [])))
+                                    @state)))
+                     (search-similar [_ _ _] [])
+                     (supports-semantic-search? [_] false)
+                     (cleanup-expired! [_] 0)
+                     (entries-expiring-soon [_ _ _] [])
+                     (find-duplicate [_ _ _ _] nil)
+                     (store-status [_] {:backend "tag-pushdown-observer"})
+                     (reset-store! [_] (reset! state [])))]
+      (with-redefs [mem-proto/store-set?         (constantly true)
+                    mem-proto/get-store          (constantly store)
+                    scope/get-current-project-id (constantly "hive-mcp")]
+        (mem-kanban/handle-mem-kanban-list-slim
+         {:tags ["priority-high"] :tag_match "all"
+          :directory "/fake/hive-mcp"
+          :include_descendants false})
+        (is (some #(and (some #{"kanban"} %)
+                        (some #{"priority-high"} %))
+                  @observed)
+            (str "extra AND-tag NOT pushed to store query; "
+                 "observed tag-sets: " (pr-str @observed)))))))
+
+(deftest ^:regression list-filter-pagination-test
+  (testing "limit caps result count"
+    (with-list-fixtures (seed-store) "hive-mcp"
+      (let [resp (mem-kanban/handle-mem-kanban-list-slim
+                  {:limit 1 :directory "/fake/hive-mcp"
+                   :include_descendants false})
+            parsed (parse-list-result resp)]
+        (is (= 1 (count parsed))
+            (str "limit=1 should return 1 task; got " (count parsed))))))
+  (testing "offset skips first N (sort: priority asc, then id asc)"
+    (with-list-fixtures (seed-store) "hive-mcp"
+      (let [resp (mem-kanban/handle-mem-kanban-list-slim
+                  {:offset 2 :directory "/fake/hive-mcp"
+                   :include_descendants false})
+            ids  (mapv :id (parse-list-result resp))]
+        (is (= ["kb-q-2"] ids)
+            (str "offset=2 should skip two high-priority tasks; got: " ids))))))
+
+(deftest ^:regression list-filter-fields-projection-test
+  (testing "fields projects each task to a subset"
+    (with-list-fixtures (seed-store) "hive-mcp"
+      (let [resp (mem-kanban/handle-mem-kanban-list-slim
+                  {:fields ["id" "title"]
+                   :limit 1
+                   :directory "/fake/hive-mcp"
+                   :include_descendants false})
+            parsed (parse-list-result resp)
+            row (first parsed)]
+        (is (= #{:id :title} (set (keys row)))
+            (str "row keys should be only id+title; got: " (keys row)))))))
+
+(deftest ^:regression list-filter-project-id-override-test
+  (testing "project_id overrides directory-derived scope"
+    (with-list-fixtures (seed-store) "hive-mcp"
+      (let [resp (mem-kanban/handle-mem-kanban-list-slim
+                  {:project_id "hive-agent-bridge"
+                   :include_descendants false
+                   :directory "/fake/hive-mcp"})
+            ids  (set (map :id (parse-list-result resp)))]
+        (is (= #{"kb-q-4"} ids)
+            (str "explicit project_id should scope to bridge; got: " ids))))))
+
+(deftest ^:regression list-filter-combo-test
+  (testing "query + status + priority intersect"
+    (with-list-fixtures (seed-store) "hive-mcp"
+      (let [resp (mem-kanban/handle-mem-kanban-list-slim
+                  {:query "fix" :status "inprogress" :priority "high"
+                   :directory "/fake/hive-mcp"
+                   :include_descendants false})
+            ids  (set (map :id (parse-list-result resp)))]
+        (is (= #{"kb-q-3"} ids)
+            (str "expected only kb-q-3; got: " ids))))))
+
+(deftest ^:regression list-filter-no-args-backwards-compat-test
+  (testing "no filters preserves prior list-slim behavior"
+    (with-list-fixtures (seed-store) "hive-mcp"
+      (let [resp (mem-kanban/handle-mem-kanban-list-slim
+                  {:directory "/fake/hive-mcp"
+                   :include_descendants false})
+            parsed (parse-list-result resp)]
+        (is (vector? parsed))
+        (is (= 3 (count parsed))
+            (str "expected 3 hive-mcp tasks; got: " (count parsed)))))))

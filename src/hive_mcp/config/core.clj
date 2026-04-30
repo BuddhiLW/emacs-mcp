@@ -198,11 +198,14 @@
                      :default "devstral-small:24b"))
 
 (defn default-drone-backend
-  "Resolve default drone backend from config, env, or hardcoded fallback."
+  "Resolve default drone backend from config, env, or hardcoded fallback.
+   Falls back to :openrouter when no config/env value is set so that
+   downstream dispatch always has a usable backend keyword."
   []
   (get-service-value :drone :default-backend
                      :env "DRONE_DEFAULT_BACKEND"
-                     :default nil))
+                     :parse keyword
+                     :default :openrouter))
 
 ;; =============================================================================
 ;; Dotted Key Path Access
@@ -237,6 +240,27 @@
        (config-io/write-config! updated path)
        (log/info "Config updated:" key-str "=" value)
        updated))))
+
+;; =============================================================================
+;; Runtime Mutation (in-memory only — does NOT persist to disk)
+;; =============================================================================
+
+(defn update-in-config!
+  "In-memory `update-in` on the cached global config.
+   Loads defaults if config is unloaded. Does NOT persist to disk —
+   use `set-config-value!` for that. Intended for runtime overrides
+   like service-driven embedder routing wiring.
+
+   IMPORTANT: this bypasses `~/.config/hive-mcp/config.edn`, so the
+   change is per-JVM. On the next boot, `load-global-config!` deep-
+   merges the on-disk user config over defaults — meaning any value
+   the user explicitly placed at `path` via `hive config set` will
+   resurface. Treat this fn as a guarded-override mechanism, not a
+   substitute for persisted user intent."
+  [path f & args]
+  (when-not @global-config
+    (reset! global-config merge/default-config))
+  (apply swap! global-config update-in path f args))
 
 ;; =============================================================================
 ;; Reset (for testing)

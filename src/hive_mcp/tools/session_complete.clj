@@ -34,6 +34,7 @@
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.vectordb.facade :as facade]
+            [hive-mcp.server.guards :as guards]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -288,9 +289,15 @@
     true))
 
 (defn reset-registration!
-  "Reset registration state. For testing."
+  "Reset registration state. For testing.
+
+   Guarded by `when-not-coordinator` — no-op when the live coordinator
+   is running so test fixtures cannot flip `*handler-registered` to
+   false while the :ling/session-complete handler remains installed."
   []
-  (reset! *handler-registered false))
+  (guards/when-not-coordinator
+   "tools.session-complete/reset-registration! blocked"
+   (reset! *handler-registered false)))
 
 ;; =============================================================================
 ;; Core Logic (Result-returning)

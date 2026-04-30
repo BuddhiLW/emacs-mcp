@@ -19,7 +19,9 @@
             [hive-mcp.tools.diff :as diff]
             [hive-mcp.events.core :as ev]
             [hive-mcp.events.handlers :as handlers]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;; =============================================================================
 ;; Test Infrastructure (SOLID-I: Small focused helpers)
@@ -33,26 +35,6 @@
 ;; -----------------------------------------------------------------------------
 ;; Fixture: DataScript Reset (SOLID-S: Single responsibility)
 ;; -----------------------------------------------------------------------------
-
-(defn- reset-datascript! []
-  (ds/reset-conn!))
-
-(defn- reset-events! []
-  (handlers/reset-registration!)
-  (ev/reset-all!)
-  (ev/init!)
-  (handlers/register-handlers!))
-
-(defn datascript-fixture
-  "Reset DataScript state before each test.
-   CLARITY-L: Infrastructure setup separate from test logic."
-  [f]
-  (reset-datascript!)
-  (reset-events!)
-  (try
-    (f)
-    (finally
-      (reset-datascript!))))
 
 ;; -----------------------------------------------------------------------------
 ;; Fixture: Temporary Project Directory
@@ -80,7 +62,9 @@
         (finally
           (cleanup-temp-dir temp-dir))))))
 
-(use-fixtures :each datascript-fixture project-dir-fixture)
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds :events)
+  project-dir-fixture)
 
 ;; =============================================================================
 ;; Test Helpers (SOLID-I: Focused, composable helpers)

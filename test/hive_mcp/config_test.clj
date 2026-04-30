@@ -1,35 +1,157 @@
 (ns hive-mcp.config-test
   "Unit tests for global config loader (hive-mcp.config.core).
 
+   TEST ISOLATION GUARANTEES (kanban 20260403150842-665be79c):
+
+   The production `global-config` is a `defonce` atom shared with a running
+   MCP server. A test that naively `reset!`s it to nil silently kills server
+   state (see convention 20260122235103-7151cc29). The real config file at
+   `~/.config/hive-mcp/config.edn` is the user's live, irreplaceable config —
+   tests must NEVER touch it.
+
+   This namespace enforces a trifecta of safety nets:
+
+   1. snapshot+restore (snapshot-config-fixture): captures `@global-config`
+      before each test and restores bit-identical after, regardless of test
+      outcome. Production atom is guaranteed pristine post-suite.
+
+   2. write-guard (guard-real-config-fixture): redefines
+      `config-io/write-config!` to throw if any test ever targets the real
+      `config-path` or `legacy-config-path`. Writes to temp paths are allowed
+      but also tracked for assertion.
+
+   3. file-mtime snapshot (mtime-guard-fixture, :once): records mtime + sha256
+      of the real config file before the suite and re-asserts after. Any
+      byte-level mutation fails the suite.
+
    Tests cover:
    - Loading config from file with defaults merge
    - Missing file handling (returns defaults)
    - Malformed file handling (returns defaults)
    - Accessor functions (project-roots, defaults, overrides)
    - Parent rule resolution via path prefix matching
-   - Reset/reload behavior"
+   - Reset/reload behavior
+   - Roundtrip property: forall config-shape, isolated path read/write returns
+     same data and real path is never touched.
+   - Integration: full read/write cycle through public API on temp dir."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.java.io :as io]
-            [hive-mcp.config.core :as config]))
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [hive-mcp.config.core :as config]
+            [hive-mcp.config.io :as config-io]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
-;; Test Fixtures
+;; Safety-net helpers — hash/mtime of real config file
 ;; =============================================================================
 
-(defn reset-config-fixture
-  "Reset config state before each test."
+(defn- sha256-hex
+  "SHA-256 hex digest of a file, or nil if file does not exist."
+  [^String path]
+  (let [f (io/file path)]
+    (when (.exists f)
+      (let [md (java.security.MessageDigest/getInstance "SHA-256")
+            bytes (with-open [in (io/input-stream f)]
+                    (let [baos (java.io.ByteArrayOutputStream.)]
+                      (io/copy in baos)
+                      (.toByteArray baos)))
+            digest (.digest md bytes)]
+        (apply str (map #(format "%02x" %) digest))))))
+
+(defn- file-fingerprint
+  "Return {:exists?, :mtime, :size, :sha256} for the given path."
+  [^String path]
+  (let [f (io/file path)]
+    (if (.exists f)
+      {:exists? true
+       :mtime   (.lastModified f)
+       :size    (.length f)
+       :sha256  (sha256-hex path)}
+      {:exists? false})))
+
+(defn- real-config-paths
+  "The set of production config paths that must never be written during tests."
+  []
+  #{config-io/config-path config-io/legacy-config-path})
+
+;; =============================================================================
+;; Fixture 1 (:once): real-config mtime+sha256 snapshot
+;; =============================================================================
+
+(def ^:private real-config-fingerprint-pre (atom nil))
+
+(defn- mtime-guard-fixture
+  "Snapshot the real config file fingerprint before the suite, verify
+   bit-exact identity after. Fails the suite if any test mutated the real
+   config file."
   [f]
-  (config/reset-config!)
-  (f)
-  (config/reset-config!))
-
-(use-fixtures :each reset-config-fixture)
+  (let [pre (into {}
+                  (map (juxt identity file-fingerprint))
+                  (real-config-paths))]
+    (reset! real-config-fingerprint-pre pre)
+    (try
+      (f)
+      (finally
+        (doseq [p (real-config-paths)]
+          (let [before (get pre p)
+                after  (file-fingerprint p)]
+            (when (not= before after)
+              (throw (ex-info
+                      (str "TEST ISOLATION VIOLATION: real config file "
+                           "was mutated during test suite: " p)
+                      {:path p :before before :after after})))))))))
 
 ;; =============================================================================
-;; Helper: Create temp config files
+;; Fixture 2 (:each): snapshot + restore production atom; install write-guard
+;; =============================================================================
+
+(def ^:private forbidden-write-occurrences
+  "Collected write attempts to the real config path during a test. Must stay
+   empty; checked after each test."
+  (atom []))
+
+(defn- snapshot-and-guard-fixture
+  "For each test:
+     - snapshot @global-config,
+     - redef `config-io/write-config!` so it throws if path is production,
+     - run test,
+     - restore atom bit-identical,
+     - assert no forbidden writes were attempted."
+  [f]
+  (let [global-atom @#'config/global-config
+        snapshot    @global-atom
+        real-write  config-io/write-config!
+        forbidden   (real-config-paths)]
+    (reset! forbidden-write-occurrences [])
+    (with-redefs [config-io/write-config!
+                  (fn guarded-write!
+                    ([cfg] (guarded-write! cfg config-io/config-path))
+                    ([cfg path]
+                     (if (contains? forbidden path)
+                       (do
+                         (swap! forbidden-write-occurrences conj path)
+                         (throw (ex-info
+                                 (str "TEST ISOLATION VIOLATION: attempted "
+                                      "write to real config path " path)
+                                 {:path path})))
+                       (real-write cfg path))))]
+      (try
+        (f)
+        (finally
+          (reset! global-atom snapshot)
+          (is (empty? @forbidden-write-occurrences)
+              (str "Test attempted forbidden writes to: "
+                   (pr-str @forbidden-write-occurrences))))))))
+
+(use-fixtures :once mtime-guard-fixture)
+(use-fixtures :each snapshot-and-guard-fixture)
+
+;; =============================================================================
+;; Helper: Create temp config files (isolated from real config dir)
 ;; =============================================================================
 
 (defn- write-temp-config!
@@ -40,13 +162,23 @@
     (spit f (pr-str config-map))
     (.getAbsolutePath f)))
 
+(defn- temp-path
+  "Generate a temp-only path for negative/nonexistent-file tests.
+   Guaranteed NOT to equal production `config-path`/`legacy-config-path`."
+  [suffix]
+  (str (System/getProperty "java.io.tmpdir")
+       "/hive-mcp-config-test-"
+       (System/currentTimeMillis) "-"
+       (rand-int 1000000) "-"
+       suffix))
+
 ;; =============================================================================
 ;; Test: load-global-config!
 ;; =============================================================================
 
 (deftest test-load-missing-file
   (testing "Loading from non-existent file returns defaults"
-    (let [result (config/load-global-config! "/tmp/nonexistent-hive-config-xyz.edn")]
+    (let [result (config/load-global-config! (temp-path "missing.edn"))]
       (is (map? result))
       (is (= [] (:project-roots result)))
       (is (= :datahike (get-in result [:defaults :kg-backend])))
@@ -77,9 +209,7 @@
     (let [user-config {:project-roots ["/home/user/projects"]}
           path (write-temp-config! user-config)
           result (config/load-global-config! path)]
-      ;; User value preserved
       (is (= ["/home/user/projects"] (:project-roots result)))
-      ;; Defaults filled in for missing keys
       (is (= :datahike (get-in result [:defaults :kg-backend])))
       (is (= {} (:project-overrides result)))
       (is (= [] (:parent-rules result))))))
@@ -89,9 +219,7 @@
     (let [user-config {:defaults {:hot-reload true}}
           path (write-temp-config! user-config)
           result (config/load-global-config! path)]
-      ;; User override
       (is (= true (get-in result [:defaults :hot-reload])))
-      ;; Default preserved (not wiped by user :defaults)
       (is (= :datahike (get-in result [:defaults :kg-backend]))))))
 
 (deftest test-load-malformed-file
@@ -118,6 +246,7 @@
 
 (deftest test-get-global-config-before-load
   (testing "get-global-config returns defaults when not loaded"
+    ;; Local reset is fine — the fixture will restore afterwards.
     (config/reset-config!)
     (let [result (config/get-global-config)]
       (is (map? result))
@@ -137,6 +266,7 @@
 
 (deftest test-get-project-roots-default
   (testing "Project roots default to empty vector"
+    (config/reset-config!)
     (is (= [] (config/get-project-roots)))))
 
 (deftest test-get-project-roots-loaded
@@ -155,7 +285,6 @@
       (config/load-global-config! path)
       (let [defaults (config/get-defaults)]
         (is (= :datascript (:kg-backend defaults)))
-        ;; Other defaults preserved
         (is (= false (:hot-reload defaults)))))))
 
 ;; =============================================================================
@@ -213,7 +342,6 @@
                                 {:path-prefix "/home/user/PP/"
                                  :parent-id "root-project"}]})]
       (config/load-global-config! path)
-      ;; Should match first rule (more specific)
       (is (= "hive-mcp"
              (config/get-parent-for-path "/home/user/PP/hive/hive-hot"))))))
 
@@ -225,7 +353,6 @@
                                 {:path-prefix "/home/user/PP/"
                                  :parent-id "root-project"}]})]
       (config/load-global-config! path)
-      ;; Not in /hive/ subtree, matches second rule
       (is (= "root-project"
              (config/get-parent-for-path "/home/user/PP/funeraria"))))))
 
@@ -251,7 +378,6 @@
       (config/load-global-config! path)
       (is (= ["/test"] (config/get-project-roots)))
       (config/reset-config!)
-      ;; After reset, returns defaults
       (is (= [] (config/get-project-roots))))))
 
 (deftest test-reload-after-reset
@@ -281,7 +407,6 @@
   (testing "default-drone-model falls back to hardcoded default when :drone missing"
     (let [path (write-temp-config! {:services {}})]
       (config/load-global-config! path)
-      ;; deep-merge fills :drone from defaults
       (is (= "devstral-small:24b" (config/default-drone-model))))))
 
 (deftest test-default-drone-model-returns-string
@@ -309,3 +434,102 @@
                 {:services {:drone {:default-model "my-org/my-model:latest"}}})]
       (config/load-global-config! path)
       (is (= "my-org/my-model:latest" (config/default-drone-model))))))
+
+;; =============================================================================
+;; Meta-test: prove the safety net itself works
+;; =============================================================================
+
+(deftest test-real-config-path-is-guarded
+  (testing "write-guard rejects writes to the real config path"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"TEST ISOLATION VIOLATION"
+         (config-io/write-config! {:dummy true} config-io/config-path)))
+    ;; The guard records the attempt; clear it so the :each post-check passes.
+    (reset! forbidden-write-occurrences [])))
+
+(deftest test-real-config-fingerprint-unchanged-during-suite
+  (testing "The real config file is not mutated by any test"
+    (doseq [p (real-config-paths)]
+      (let [before (get @real-config-fingerprint-pre p)
+            now    (file-fingerprint p)]
+        (is (= before now)
+            (str "Real config file " p " was mutated during suite; "
+                 "before=" (pr-str before) " now=" (pr-str now)))))))
+
+;; =============================================================================
+;; Property tests: roundtrip on isolated paths leaves real config untouched
+;; =============================================================================
+
+(def ^:private project-id-gen
+  (gen/such-that #(not (clojure.string/blank? %))
+                 (gen/fmap clojure.string/trim gen/string-alphanumeric)))
+
+(def ^:private config-shape-gen
+  "Generator for plausible config-map shapes (small, defaults-compatible)."
+  (gen/let [roots   (gen/vector (gen/fmap #(str "/tmp/fake/" %) project-id-gen) 0 3)
+            kgb     (gen/elements [:datahike :datascript :datalevin])
+            hot     gen/boolean
+            ov-keys (gen/vector project-id-gen 0 3)
+            ov-vals (gen/vector gen/boolean 0 3)]
+    {:project-roots roots
+     :defaults {:kg-backend kgb :hot-reload hot :presets-path nil}
+     :project-overrides (zipmap ov-keys
+                                (map (fn [b] {:hot-reload b}) ov-vals))
+     :parent-rules []}))
+
+(defspec property-roundtrip-isolated 20
+  (prop/for-all [shape config-shape-gen]
+    (let [pre-fp      (file-fingerprint config-io/config-path)
+          pre-legacy  (file-fingerprint config-io/legacy-config-path)
+          path        (write-temp-config! shape)
+          loaded      (config/load-global-config! path)
+          post-fp     (file-fingerprint config-io/config-path)
+          post-legacy (file-fingerprint config-io/legacy-config-path)]
+      (and
+       ;; Shape survived the roundtrip
+       (= (:project-roots shape) (:project-roots loaded))
+       (= (get-in shape [:defaults :kg-backend])
+          (get-in loaded [:defaults :kg-backend]))
+       (= (get-in shape [:defaults :hot-reload])
+          (get-in loaded [:defaults :hot-reload]))
+       (= (:project-overrides shape) (:project-overrides loaded))
+       ;; Real config files were NOT mutated
+       (= pre-fp post-fp)
+       (= pre-legacy post-legacy)))))
+
+;; =============================================================================
+;; Integration: public-API read/write cycle on a temp dir
+;; =============================================================================
+
+(deftest test-integration-full-cycle-on-temp-dir
+  (testing "Full read/write cycle through public API: temp mutated, real untouched"
+    (let [tmp-dir (io/file (System/getProperty "java.io.tmpdir")
+                           (str "hive-mcp-config-integration-"
+                                (System/currentTimeMillis)))
+          _ (.mkdirs tmp-dir)
+          tmp-path (str (.getAbsolutePath tmp-dir) "/config.edn")
+          real-pre (file-fingerprint config-io/config-path)
+          legacy-pre (file-fingerprint config-io/legacy-config-path)]
+      (try
+        ;; 1. Write initial config via raw spit (public API does not expose
+        ;;    unguarded write; load! will persist only when path = config-path).
+        (spit tmp-path (pr-str {:project-roots ["/int/one"]
+                                :defaults {:kg-backend :datalevin}}))
+        ;; 2. Load via public API, pointed at the temp path.
+        (config/load-global-config! tmp-path)
+        (is (= ["/int/one"] (config/get-project-roots)))
+        (is (= :datalevin (get-in (config/get-defaults) [:kg-backend])))
+        ;; 3. Mutate on disk, reset, reload — verify we see new content.
+        (spit tmp-path (pr-str {:project-roots ["/int/two"]}))
+        (config/reset-config!)
+        (config/load-global-config! tmp-path)
+        (is (= ["/int/two"] (config/get-project-roots)))
+        ;; 4. Temp file mutated (content just written).
+        (is (.exists (io/file tmp-path)))
+        ;; 5. Real config untouched.
+        (is (= real-pre   (file-fingerprint config-io/config-path)))
+        (is (= legacy-pre (file-fingerprint config-io/legacy-config-path)))
+        (finally
+          (doseq [f (.listFiles tmp-dir)] (.delete f))
+          (.delete tmp-dir))))))

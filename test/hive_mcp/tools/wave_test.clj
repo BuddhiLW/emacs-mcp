@@ -14,24 +14,15 @@
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.tools.swarm.wave :as wave]
             [hive-mcp.events.core :as ev]
-            [hive-mcp.events.handlers :as handlers]))
+            [hive-mcp.events.handlers :as handlers]
+            [hive-test.isolation :as iso]
+            hive-mcp.isolation-methods))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(defn reset-db-fixture
-  "Reset DataScript and event system before each test."
-  [f]
-  (ds/reset-conn!)
-  (handlers/reset-registration!)
-  (ev/reset-all!)
-  (ev/init!)
-  (handlers/register-handlers!)
-  (f)
-  (ds/reset-conn!))
-
-(use-fixtures :each reset-db-fixture)
+(use-fixtures :each (iso/with-isolations :swarm-ds :events))
 
 ;; =============================================================================
 ;; Plan Creation Tests

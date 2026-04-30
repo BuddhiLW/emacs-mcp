@@ -2,8 +2,11 @@
   "Datahike implementation of IKGStore protocol."
   (:require [datahike.api :as d]
             [datahike.norm.norm :as norm]
+            [hive-mcp.knowledge-graph.store.datahike-config :as dhc]
             [hive-mcp.protocols.kg :as kg]
             [hive-mcp.dns.result :refer [rescue]]
+            [hive-dsl.result :as r]
+            [hive-weave.safe :as weave-safe]
             [clojure.java.io :as io]
             [taoensso.timbre :as log]))
 
@@ -11,7 +14,11 @@
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-(def ^:private default-db-path "data/kg/datahike")
+(def ^:private default-db-path
+  "Final fallback only — DatahikeKGConfig owns env/config.edn resolution.
+   Kept for safety if hive-di resolution itself fails (shouldn't happen).
+   XDG-conformant; no CWD relativity."
+  (str (System/getProperty "user.home") "/.local/share/hive-mcp/datahike"))
 
 ;; =============================================================================
 ;; Addon Norms Registry (OCP — addons register their norm resource paths)
@@ -19,6 +26,11 @@
 
 (defonce ^:private addon-norms-registry
   (atom []))
+
+(def ^:private read-timeout-ms
+  "Upper bound for Datahike read operations. Datahike itself may deref
+   internal futures; keep that async boundary bounded and recoverable."
+  10000)
 
 (defn register-norms!
   "Register a classpath resource path for addon Datahike norms.
@@ -29,6 +41,93 @@
   [resource-path]
   (swap! addon-norms-registry conj resource-path)
   (log/info "Registered addon KG norms" {:path resource-path}))
+
+(defn- result-error
+  "Normalize hive-weave/hive-dsl Result failure shape for ex-info."
+  [result]
+  (select-keys result [:error :message :class :timeout-ms :name]))
+
+(defn- throw-read-failed!
+  [label result]
+  (throw (ex-info (str "Datahike KG read failed: " label)
+                  (assoc (result-error result) :operation label))))
+
+(defn- read-call
+  "Run Datahike read thunk through hive-weave. Returns Result."
+  [label f]
+  (weave-safe/safe-future-call
+   {:timeout-ms read-timeout-ms
+    :name       label}
+   f))
+
+(defn- read-with-retry
+  "Run bounded Datahike read. If the connection is stale/corrupt, reopen
+   once and retry. This specifically guards Datahike's internal Future deref
+   failures such as a nil `fut` inside `datahike.api/db`."
+  [label reopen! f]
+  (let [first-result (read-call label f)]
+    (if (r/ok? first-result)
+      (:ok first-result)
+      (do
+        (log/warn "Datahike KG read failed; reopening connection and retrying once"
+                  {:operation label
+                   :error     (result-error first-result)})
+        (reopen!)
+        (let [retry-result (read-call (str label "/retry") f)]
+          (if (r/ok? retry-result)
+            (:ok retry-result)
+            (throw-read-failed! label retry-result)))))))
+
+(declare validate-config!)
+
+(defn- validate-config-result
+  [cfg]
+  (r/try-effect* :datahike/invalid-config
+    (validate-config! cfg)
+    cfg))
+
+(defn- ensure-database-result
+  [cfg]
+  (r/let-ok [cfg     (validate-config-result cfg)
+             exists? (r/try-effect* :datahike/database-exists-check-failed
+                       (d/database-exists? cfg))
+             cfg     (if exists?
+                       (r/ok cfg)
+                       (r/try-effect* :datahike/create-database-failed
+                         (log/info "Creating new Datahike database" {:cfg cfg})
+                         (d/create-database cfg)
+                         cfg))]
+    (r/ok cfg)))
+
+(defn- connect-result
+  [cfg]
+  (r/try-effect* :datahike/connect-failed
+    (d/connect cfg)))
+
+(defn- ensure-core-norms-result
+  [conn]
+  (r/try-effect* :datahike/ensure-core-norms-failed
+    (log/info "Applying KG norms" {:path "hive_mcp/norms/kg"})
+    (norm/ensure-norms! conn (io/resource "hive_mcp/norms/kg"))
+    conn))
+
+(defn- ensure-addon-norms-result
+  [conn]
+  (r/try-effect* :datahike/ensure-addon-norms-failed
+    (doseq [norms-path @addon-norms-registry]
+      (when-let [resource (io/resource norms-path)]
+        (log/info "Applying addon KG norms" {:path norms-path})
+        (norm/ensure-norms! conn resource)))
+    conn))
+
+(defn- init-conn-result
+  [cfg]
+  (log/info "Initializing Datahike KG store" {:cfg cfg})
+  (r/let-ok [cfg  (ensure-database-result cfg)
+             conn (connect-result cfg)
+             conn (ensure-core-norms-result conn)
+             conn (ensure-addon-norms-result conn)]
+    (r/ok conn)))
 
 (defn- make-writer-config
   "Build the :writer section of Datahike config.
@@ -50,16 +149,48 @@
     ;; Unknown writer backend — default to local
     {:backend :self}))
 
+(defn- coerce-uuid
+  "Accept a UUID, a UUID-formatted string, or nil. Return UUID or nil."
+  [v]
+  (cond
+    (uuid? v)   v
+    (string? v) (try (java.util.UUID/fromString v) (catch Throwable _ nil))
+    :else       nil))
+
+(defn- resolve-typed-config
+  "Resolve DatahikeKGConfig via hive-di. Returns map with :db-path, :store-id,
+   :backend (resolved across env > config.edn > defaults). Falls back to
+   bare defaults if resolution itself errors (defensive — should not happen)."
+  []
+  (let [result (dhc/resolve-DatahikeKGConfig)]
+    (if (r/ok? result)
+      (:ok result)
+      (do (log/warn "DatahikeKGConfig resolution failed; using bare defaults"
+                    {:errors (:errors result)})
+          {:db-path default-db-path :backend :file :store-id nil}))))
+
+(defn- store-id-from-typed
+  "Coerce typed-config :store-id (string from env / UUID from EDN) to a UUID,
+   or derive the legacy v3 name UUID from 'hive-mcp-kg' when unset.
+   Mirrors the prior resolve-default-store-id contract."
+  [typed-id]
+  (or (coerce-uuid typed-id)
+      (java.util.UUID/nameUUIDFromBytes (.getBytes "hive-mcp-kg"))))
+
 (defn- make-config
   "Create Datahike configuration map.
+   Resolution order for :db-path / :backend / :store-id:
+     1. Explicit caller args (:db-path, :backend, :id)
+     2. DatahikeKGConfig resolver (env var, then config.edn, then default)
    Accepts optional :writer key for distributed write backends:
      {:writer {:backend :datahike-server :url \"http://...\" :token \"...\"}}
      {:writer {:backend :kabel :peer-id #uuid \"...\" :local-peer peer-atom}}"
   [& [{:keys [db-path backend index id writer]
-       :or {db-path default-db-path
-            backend :file
-            index :datahike.index/persistent-set}}]]
-  (let [store-id (or id (java.util.UUID/nameUUIDFromBytes (.getBytes "hive-mcp-kg")))
+       :or {index :datahike.index/persistent-set}}]]
+  (let [typed     (resolve-typed-config)
+        db-path   (or db-path (:db-path typed))
+        backend   (or backend (:backend typed) :file)
+        store-id  (or id (store-id-from-typed (:store-id typed)))
         store-cfg (case backend
                     :file {:store {:backend :file
                                    :path db-path
@@ -103,60 +234,78 @@
 
   (ensure-conn! [_this]
     (when (nil? @conn-atom)
-      (rescue nil
-              (log/info "Initializing Datahike KG store" {:cfg cfg})
-              (validate-config! cfg)
-              (when-not (d/database-exists? cfg)
-                (when (= :file (get-in cfg [:store :backend]))
-                  (let [dir (io/file (get-in cfg [:store :path]))]
-                    (when (and (.exists dir) (empty? (.listFiles dir)))
-                      (.delete dir))))
-                (log/info "Creating new Datahike database" {:cfg cfg})
-                (d/create-database cfg))
-              (let [conn (d/connect cfg)]
-                (log/info "Applying KG norms" {:path "hive_mcp/norms/kg"})
-                (norm/ensure-norms! conn (io/resource "hive_mcp/norms/kg"))
-                ;; Apply addon-registered norms (OCP: addons own their schema).
-                (doseq [norms-path @addon-norms-registry]
-                  (when-let [resource (io/resource norms-path)]
-                    (log/info "Applying addon KG norms" {:path norms-path})
-                    (rescue nil (norm/ensure-norms! conn resource))))
-                (reset! conn-atom conn))))
+      (let [result (init-conn-result cfg)]
+        (when (r/err? result)
+          (throw (ex-info "Datahike KG connection initialization failed"
+                          (assoc result :cfg cfg))))
+        (reset! conn-atom (:ok result))))
+    (when (nil? @conn-atom)
+      (throw (ex-info "Datahike KG connection is nil after initialization"
+                      {:cfg cfg})))
     @conn-atom)
 
   (transact! [this tx-data]
-    (d/transact! (kg/ensure-conn! this) tx-data))
+    ;; NOTE: In Datahike 0.8+, `d/transact!` is ASYNC — it returns a
+    ;; throwable-promise that must be deref'd for the write to block until
+    ;; committed. Without the deref, subsequent queries on the same connection
+    ;; see a pre-transact db snapshot (root cause of "KG traverse not
+    ;; returning results" — edges were enqueued but not yet committed).
+    ;; The sync variant in Datahike is the bangless `d/transact`.
+    @(d/transact! (kg/ensure-conn! this) tx-data))
 
   (query [this q]
-    (d/q q (d/db (kg/ensure-conn! this))))
+    (read-with-retry "query"
+                     #(kg/reset-conn! this)
+                     #(d/q q (d/db (kg/ensure-conn! this)))))
 
   (query [this q inputs]
-    (apply d/q q (d/db (kg/ensure-conn! this)) inputs))
+    (read-with-retry "query-with-inputs"
+                     #(kg/reset-conn! this)
+                     #(apply d/q q (d/db (kg/ensure-conn! this)) inputs)))
 
   (entity [this eid]
-    (d/entity (d/db (kg/ensure-conn! this)) eid))
+    (read-with-retry "entity"
+                     #(kg/reset-conn! this)
+                     #(d/entity (d/db (kg/ensure-conn! this)) eid)))
 
   (entid [this lookup-ref]
-    (let [[attr val] lookup-ref
-          results (d/q '[:find ?e .
-                         :in $ ?attr ?val
-                         :where [?e ?attr ?val]]
-                       (d/db (kg/ensure-conn! this))
-                       attr val)]
-      results))
+    (read-with-retry "entid"
+                     #(kg/reset-conn! this)
+                     #(let [[attr val] lookup-ref]
+                        (d/q '[:find ?e .
+                               :in $ ?attr ?val
+                               :where [?e ?attr ?val]]
+                             (d/db (kg/ensure-conn! this))
+                             attr val))))
 
   (pull-entity [this pattern eid]
-    (d/pull (d/db (kg/ensure-conn! this)) pattern eid))
+    (read-with-retry "pull-entity"
+                     #(kg/reset-conn! this)
+                     #(d/pull (d/db (kg/ensure-conn! this)) pattern eid)))
+
+  (eids-by-attr [this attr]
+    ;; Datahike supports the same :aevt / :avet / :eavt index taxonomy as
+    ;; Datomic/DataScript. `(d/datoms db :aevt attr)` walks the attribute-first
+    ;; persistent index without materializing datoms eagerly. We pull :e out
+    ;; of each datom and let the caller batch pulls.
+    (read-with-retry "eids-by-attr"
+                     #(kg/reset-conn! this)
+                     #(mapv :e (d/datoms (d/db (kg/ensure-conn! this)) :aevt attr))))
 
   (db-snapshot [this]
-    (d/db (kg/ensure-conn! this)))
+    (read-with-retry "db-snapshot"
+                     #(kg/reset-conn! this)
+                     #(d/db (kg/ensure-conn! this))))
 
   (reset-conn! [this]
-    (log/info "Resetting Datahike KG store" {:cfg cfg})
+    ;; NON-DESTRUCTIVE — close conn and reopen against the SAME on-disk DB.
+    ;; Renamed semantics 2026-04-28: prior impl called (d/delete-database cfg),
+    ;; which silently wiped the live KG when invoked via test fixtures. See
+    ;; AXIOM "Never NUKE Data — Destruction Requires Explicit, Loud, Guarded
+    ;; Consent". Destructive wipe lives on IPersistentKGStore/delete-database!.
+    (log/info "Reopening Datahike KG store (non-destructive)" {:cfg cfg})
     (when-let [c @conn-atom]
       (rescue nil (d/release c)))
-    (when (d/database-exists? cfg)
-      (d/delete-database cfg))
     (reset! conn-atom nil)
     (kg/ensure-conn! this))
 
@@ -165,6 +314,32 @@
       (log/info "Closing Datahike KG store" {:cfg cfg})
       (rescue nil (d/release c))
       (reset! conn-atom nil)))
+
+  kg/IPersistentKGStore
+
+  (delete-database! [_this confirm]
+    ;; DESTRUCTIVE — guard required. Datahike has on-disk state, so this
+    ;; backend extends IPersistentKGStore. Ephemeral backends (DataScript)
+    ;; do not extend this protocol; callers must `(satisfies?
+    ;; IPersistentKGStore store)` before invoking.
+    (when-not (= confirm :i-mean-it)
+      (throw (ex-info "delete-database! requires confirm=:i-mean-it"
+                      {:passed-confirm confirm
+                       :hint "This call deletes the database from disk. Pass :i-mean-it explicitly to proceed."
+                       :backend :datahike
+                       :db-path (get-in cfg [:store :path])})))
+    (log/error "[storage/destruction-fired] Datahike delete-database! invoked"
+               {:backend :datahike
+                :db-path (get-in cfg [:store :path])
+                :stacktrace (mapv str (.getStackTrace (Throwable.)))})
+    (when-let [c @conn-atom]
+      (rescue nil (d/release c)))
+    (when (d/database-exists? cfg)
+      (d/delete-database cfg))
+    (reset! conn-atom nil)
+    (log/error "[storage/destruction-completed] Datahike database deleted"
+               {:backend :datahike :db-path (get-in cfg [:store :path])})
+    nil)
 
   kg/ITemporalKGStore
 

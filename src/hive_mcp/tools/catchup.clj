@@ -37,7 +37,8 @@
             [hive-dsl.context.identity :as ctx-id]
             [hive-ttracking.core :as tt]
             [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.tools.catchup.relevance :as relevance]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -88,6 +89,50 @@
    until the Milvus batch-get path is itself optimized."
   300000)
 
+(defn- gather-kanban-summary
+  "Direct memory query for kanban summary scoped to project-id.
+   Returns {:counts {:todo n :inprogress n :inreview n :done n}
+            :recent-todos [{:id :title} ...] (top 10 by updated desc)}.
+   Catchup's bundle path doesn't surface kanban notes (hierarchy fairness
+   cap drops them in favor of session-summaries). This is a dedicated
+   query mirroring the kanban-tag scope-filter pattern."
+  [project-id]
+  (rescue {:counts {} :recent-todos [] :scope-tag nil}
+          (let [store (mem-proto/get-store)
+                scope-tag (when project-id (str "scope:project:" project-id))
+                base-tags (cond-> ["kanban"] scope-tag (conj scope-tag))
+                count-status (fn [status]
+                               (count (mem-proto/query-entries
+                                       store
+                                       {:type "note"
+                                        :tags (conj base-tags status)
+                                        :limit 200
+                                        :output-fields ["id"]})))
+                recent-todos (->> (mem-proto/query-entries
+                                   store
+                                   {:type "note"
+                                    :tags (conj base-tags "todo")
+                                    :limit 10
+                                    :order-by [:updated :desc]
+                                    :output-fields ["id" "content" "tags"]})
+                                  (mapv (fn [e]
+                                          {:id    (:id e)
+                                           :title (or (get-in e [:content :title])
+                                                      (when (string? (:content e))
+                                                        (first (clojure.string/split-lines (:content e))))
+                                                      "(no title)")
+                                           :tags  (:tags e)})))]
+            ;; Internal status tags are 'todo' / 'doing' / 'review' / 'done'
+            ;; (see hive-mcp.tools.kanban.predicates/status-enum->tag).
+            ;; Counts are exposed under their MCP-facing names so the catchup
+            ;; block matches what users would pass to `kanban list status=…`.
+            {:counts {:todo       (count-status "todo")
+                      :inprogress (count-status "doing")
+                      :inreview   (count-status "review")
+                      :done       (count-status "done")}
+             :recent-todos recent-todos
+             :scope-tag scope-tag})))
+
 ;; =============================================================================
 ;; Main Catchup Handler
 ;; =============================================================================
@@ -100,19 +145,34 @@
    If an enrichment addon is registered via :cu/a, it runs
    fire-and-forget. Results arrive via piggyback on subsequent calls."
   [args]
-  (let [directory (or (:directory args)
-                      (ctx/current-directory)
-                      (:_caller_cwd args))]
-    (log/info "native-catchup: querying memory store with project scope" {:directory directory})
+  ;; HCR directory resolution: explicit :directory > :_caller_cwd (bb-mcp) >
+  ;; request-ctx :directory > server user.dir. Matches handle-native-wrap so
+  ;; catchup auto-resolves scope from caller's bash pwd when :directory absent.
+  (let [directory (ctx/resolve-caller-directory args)
+        dir-source (ctx/caller-directory-source args)]
+    (log/info "native-catchup: querying memory store with project scope"
+              {:directory directory :source dir-source})
     ;; Guard: early return if no store registered
     (if-not (mem-proto/store-set?)
       (fmt/store-not-configured-error)
       (try
-        ;; Prefer the project-id already resolved by wrap-handler-context
-        ;; (which considers :_caller_cwd / user.dir fallbacks). Only recompute
-        ;; from directory when ctx is unbound (e.g. direct repl call).
-        (let [project-id (or (ctx/current-project-id)
-                             (scope/get-current-project-id directory))
+        ;; Project-id resolution priority:
+        ;;   1. request-ctx project-id (pre-resolved by wrap-handler-context)
+        ;;   2. :project-id from .hive-project.edn in the exact dir
+        ;;   3. Walk up the path finding the nearest .hive-project.edn
+        ;;      (covers calls from deep subdirs of a hive project — without
+        ;;      this, scope/get-current-project-id returns the last path
+        ;;      segment, producing a bogus project scope like "catchup".)
+        ;;   4. Legacy fallback: last-path-segment / "global"
+        (let [ctx-pid          (ctx/current-project-id)
+              direct-cfg-pid   (when directory
+                                 (rescue nil (:project-id (kg-scope/read-direct-project-config directory))))
+              walked-pid       (when (and directory (not direct-cfg-pid))
+                                 (rescue nil (kg-scope/infer-scope-from-path directory)))
+              project-id       (or ctx-pid
+                                   direct-cfg-pid
+                                   (when (and walked-pid (not= walked-pid "global")) walked-pid)
+                                   (scope/get-current-project-id directory))
               project-name (catchup-scope/get-current-project-name directory)
               scopes (fmt/build-scopes project-name project-id)
 
@@ -131,15 +191,21 @@
                                                       #(catchup-git/gather-git-info directory))))
               f-carto  (pool/with-io ((tt/timed-query "catchup/carto-total"
                                                       #(catchup-carto/get-status project-id))))
+              f-kanban (pool/with-io ((tt/timed-query "catchup/kanban-summary-total"
+                                                      #(gather-kanban-summary project-id))))
 
               bundle        (safe-deref f-bundle query-timeout-ms {} "bundle")
               git-info      (safe-deref f-git query-timeout-ms {} "git-info")
               carto-status  (safe-deref f-carto query-timeout-ms nil "carto-status")
+              kanban-summary (safe-deref f-kanban query-timeout-ms
+                                          {:counts {} :recent-todos []}
+                                          "kanban-summary")
 
               axioms               (:axioms bundle [])
               principles           (:principles bundle [])
               priority-conventions (:priority-conventions bundle [])
               sessions             (:sessions bundle [])
+              recent-wraps-raw     (:recent-wraps bundle [])
               decisions            (:decisions bundle [])
               snippets             (:snippets bundle [])
               expiring             (:expiring bundle [])
@@ -150,6 +216,7 @@
               principles-meta (mapv #(fmt/entry->catchup-meta % 80) principles)
               priority-meta (mapv fmt/entry->priority-meta priority-conventions)
               sessions-meta (mapv #(fmt/entry->catchup-meta % 80) sessions)
+              recent-wraps (mapv #(select-keys % [:id :created :tags :content]) recent-wraps-raw)
               decisions-base (mapv #(fmt/entry->catchup-meta % 80) decisions)
               conventions-base (mapv #(fmt/entry->catchup-meta % 80) conventions)
               snippets-meta (mapv #(fmt/entry->catchup-meta % 60) snippets)
@@ -165,6 +232,7 @@
                               :conventions conventions-base
                               :conventions-raw conventions
                               :sessions sessions-meta
+                              :sessions-raw sessions
                               :axioms axioms
                               :principles principles
                               :priority-conventions priority-conventions}))
@@ -192,9 +260,22 @@
                           (memory-piggyback/adopt-buffer! raw-caller-id)))
 
               ;; Scope-filter piggyback: keep entries relevant to this agent's
-              ;; project hierarchy. Axioms pierce scope (always included).
+              ;; project hierarchy. Axioms used to ALWAYS pierce scope which
+              ;; flooded sessions with off-topic axioms (windows-ntlm,
+              ;; bufferbloat, JMM, typography). Now axioms must also pass a
+              ;; tag-overlap relevance score against the project's vocabulary
+              ;; — `catchup-priority` and `scope:project:<current>` still
+              ;; pierce. See `hive-mcp.tools.catchup.relevance`.
               ;; Entries without scope tags pass through (global by convention).
-              piggyback-raw (into (into (vec axioms) principles) priority-conventions)
+              relevance-ctx
+              (relevance/build-context
+               {:project-id project-id
+                :co-loaded-entries (concat priority-conventions
+                                           decisions
+                                           sessions)})
+              relevant-axioms
+              (relevance/filter-by-relevance (vec axioms) relevance-ctx)
+              piggyback-raw (into (into (vec relevant-axioms) principles) priority-conventions)
               piggyback-entries
               (let [in-project? (and project-id (not= project-id "global"))]
                 (if-not in-project?
@@ -207,7 +288,8 @@
                                (let [tags (set (or (:tags entry) []))
                                      entry-type (str (or (:type entry) ""))]
                                  (or
-                                  ;; Axioms always pierce scope
+                                  ;; Axioms already filtered above by relevance —
+                                  ;; survivors continue to pierce the scope filter.
                                   (= entry-type "axiom")
                                   ;; catchup-priority entries pierce scope
                                   (contains? tags "catchup-priority")
@@ -265,7 +347,9 @@
             :sessions-meta sessions-meta :decisions-meta decisions-base
             :conventions-meta conventions-base :snippets-meta snippets-meta
             :expiring-meta expiring-meta
+            :recent-wraps recent-wraps
             :carto-status carto-status
+            :kanban-summary kanban-summary
             :context-refs context-refs}))
         (catch Exception e
           (fmt/catchup-error e))))))

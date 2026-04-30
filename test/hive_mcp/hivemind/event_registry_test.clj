@@ -9,8 +9,9 @@
 (deftest registry-structure
   (testing "Registry is an ordered map with expected keys"
     (is (map? er/registry))
-    (is (= 6 (count er/registry)))
-    (is (= [:started :progress :completed :error :blocked :wrap_notify]
+    (is (= 9 (count er/registry)))
+    (is (= [:started :progress :completed :error :blocked :wrap_notify
+            :conversation/tell :conversation/ask :conversation/respond]
            (keys er/registry))))
 
   (testing "Each entry has required metadata keys"
@@ -31,12 +32,14 @@
 
 (deftest all-event-types-test
   (testing "all-event-types is the complete set"
-    (is (= #{:started :progress :completed :error :blocked :wrap_notify}
+    (is (= #{:started :progress :completed :error :blocked :wrap_notify
+             :conversation/tell :conversation/ask :conversation/respond}
            er/all-event-types))))
 
 (deftest all-event-type-strings-test
   (testing "all-event-type-strings matches keyword names"
-    (is (= #{"started" "progress" "completed" "error" "blocked" "wrap_notify"}
+    (is (= #{"started" "progress" "completed" "error" "blocked" "wrap_notify"
+             "tell" "ask" "respond"}
            er/all-event-type-strings))))
 
 (deftest mcp-event-types-test
@@ -48,7 +51,11 @@
     (is (contains? (set er/mcp-event-types) "completed"))
     (is (contains? (set er/mcp-event-types) "error"))
     (is (contains? (set er/mcp-event-types) "blocked"))
-    (is (not (contains? (set er/mcp-event-types) "wrap_notify")))))
+    (is (not (contains? (set er/mcp-event-types) "wrap_notify")))
+    (testing "Conversation events are NOT in MCP enum"
+      (is (not (contains? (set er/mcp-event-types) "tell")))
+      (is (not (contains? (set er/mcp-event-types) "ask")))
+      (is (not (contains? (set er/mcp-event-types) "respond"))))))
 
 (deftest event-type->slave-status-test
   (testing "Slave status mapping matches messaging.clj's original case statement"
@@ -57,7 +64,11 @@
     (is (= :idle    (get er/event-type->slave-status :completed)))
     (is (= :error   (get er/event-type->slave-status :error)))
     (is (= :blocked (get er/event-type->slave-status :blocked)))
-    (is (= :idle    (get er/event-type->slave-status :wrap_notify)))))
+    (is (= :idle    (get er/event-type->slave-status :wrap_notify))))
+  (testing "Conversation events default to :idle (orthogonal axis)"
+    (is (= :idle (get er/event-type->slave-status :conversation/tell)))
+    (is (= :idle (get er/event-type->slave-status :conversation/ask)))
+    (is (= :idle (get er/event-type->slave-status :conversation/respond)))))
 
 (deftest terminal-event-types-test
   (testing "Terminal events end workflows"
@@ -66,7 +77,11 @@
     (is (contains? er/terminal-event-types :wrap_notify))
     (is (not (contains? er/terminal-event-types :started)))
     (is (not (contains? er/terminal-event-types :progress)))
-    (is (not (contains? er/terminal-event-types :blocked)))))
+    (is (not (contains? er/terminal-event-types :blocked))))
+  (testing "Conversation: respond is terminal, tell/ask are not"
+    (is (contains? er/terminal-event-types :conversation/respond))
+    (is (not (contains? er/terminal-event-types :conversation/tell)))
+    (is (not (contains? er/terminal-event-types :conversation/ask)))))
 
 (deftest severity-levels-test
   (testing "Severity mapping"
@@ -88,7 +103,10 @@
     (is (true? (er/valid-event-type? :completed)))
     (is (true? (er/valid-event-type? :error)))
     (is (true? (er/valid-event-type? :blocked)))
-    (is (true? (er/valid-event-type? :wrap_notify))))
+    (is (true? (er/valid-event-type? :wrap_notify)))
+    (is (true? (er/valid-event-type? :conversation/tell)))
+    (is (true? (er/valid-event-type? :conversation/ask)))
+    (is (true? (er/valid-event-type? :conversation/respond))))
 
   (testing "Strings"
     (is (true? (er/valid-event-type? "started")))
@@ -178,14 +196,22 @@
     (is (= "⏸" (er/format-icon :blocked))))
 
   (testing "Unknown defaults to bullet"
-    (is (= "•" (er/format-icon :unknown)))))
+    (is (= "•" (er/format-icon :unknown))))
+
+  (testing "Conversation icons"
+    (is (= "→" (er/format-icon :conversation/tell)))
+    (is (= "?" (er/format-icon :conversation/ask)))
+    (is (= "!" (er/format-icon :conversation/respond)))))
 
 (deftest mcp-enum-test
   (testing "mcp-enum returns the MCP-visible event type strings"
     (let [enum (er/mcp-enum)]
       (is (vector? enum))
       (is (= 5 (count enum)))
-      (is (not (contains? (set enum) "wrap_notify"))))))
+      (is (not (contains? (set enum) "wrap_notify")))
+      (is (not (contains? (set enum) "tell")))
+      (is (not (contains? (set enum) "ask")))
+      (is (not (contains? (set enum) "respond"))))))
 
 ;; =============================================================================
 ;; Backward Compatibility Tests

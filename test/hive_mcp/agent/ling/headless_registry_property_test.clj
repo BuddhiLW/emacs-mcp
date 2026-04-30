@@ -138,13 +138,24 @@
 ;; =============================================================================
 
 (deftest best-headless-prefers-claude-sdk
-  (testing "best-headless-for-provider prefers :claude-sdk over :claude-process"
+  (testing "best-headless-for-provider prefers :claude-sdk over :claude-process and :hive-agent"
     (reg/clear-registry!)
+    (reg/register-headless! :hive-agent
+                            (make-mock-backend :hive-agent #{:cap/subagents}))
     (reg/register-headless! :claude-process
                             (make-mock-backend :claude-process #{:cap/streaming}))
     (reg/register-headless! :claude-sdk
                             (make-mock-backend :claude-sdk #{:cap/hooks :cap/interrupts}))
     (is (= :claude-sdk (reg/best-headless-for-provider :claude)))))
+
+(deftest best-headless-hive-agent-does-not-override-process
+  (testing "META-INF-loaded :hive-agent remains explicit when process backend exists"
+    (reg/clear-registry!)
+    (reg/register-headless! :hive-agent
+                            (make-mock-backend :hive-agent #{:cap/subagents}))
+    (reg/register-headless! :claude-process
+                            (make-mock-backend :claude-process #{:cap/streaming}))
+    (is (= :claude-process (reg/best-headless-for-provider :claude)))))
 
 (deftest best-headless-falls-back-to-process
   (testing "best-headless-for-provider falls back to :claude-process when no SDK"

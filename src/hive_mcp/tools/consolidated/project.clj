@@ -122,11 +122,11 @@
                               "force" {:type "boolean"
                                        :description "Force rescan even if fresh"}
                               "project_id" {:type "string"
-                                            :description "Project ID to query tree for"}
+                                            :description "Project ID to query tree for / [kanban list] exact-match project filter"}
                               ;; Kanban params
                               "title" {:type "string" :description "[kanban create] Task title"}
                               "description" {:type "string" :description "[kanban create] Task description"}
-                              "task_id" {:type "string" :description "[kanban update] Task ID"}
+                              "task_id" {:type "string" :description "[kanban update|delete] Task ID"}
                               "new_status" {:type "string"
                                             :enum ["todo" "inprogress" "inreview" "done"]
                                             :description "[kanban update] Target status"}
@@ -137,6 +137,27 @@
                                                      :description "[kanban] Include child project tasks (HCR). Default true."}
                               "plan_id" {:type "string" :description "[kanban plan-to-kanban] Memory plan entry ID"}
                               "plan_path" {:type "string" :description "[kanban plan-to-kanban] File path to plan"}
+                              ;; Kanban list filters (token-flood reduction)
+                              "query" {:type "string"
+                                       :description "[kanban list] Case-insensitive substring match on title + description"}
+                              "tags" {:type "array" :items {:type "string"}
+                                      :description "[kanban list] Extra required tags beyond ['kanban' status]"}
+                              "tag_match" {:type "string"
+                                           :enum ["any" "all"]
+                                           :description "[kanban list] Tag match semantics for `tags` (default 'all')"}
+                              "priority" {:type "string"
+                                          :enum ["high" "medium" "low"]
+                                          :description "[kanban list] Filter by exact priority"}
+                              "created_after" {:type "string"
+                                               :description "[kanban list] ISO-8601 timestamp; only entries with content :created >= this"}
+                              "updated_after" {:type "string"
+                                               :description "[kanban list] ISO-8601 timestamp; only entries with :updated >= this"}
+                              "limit" {:type "integer"
+                                       :description "[kanban list] Cap result count after sort (pagination)"}
+                              "offset" {:type "integer"
+                                        :description "[kanban list] Skip first N results after sort (pagination)"}
+                              "fields" {:type "array" :items {:type "string"}
+                                        :description "[kanban list] Project each result to a subset of fields (e.g. ['id' 'title'])"}
                               ;; Config params
                               "key" {:type "string" :description "[config] Dotted key path (e.g. \"embeddings.ollama.host\")"}
                               "value" {:description "[config set] Value to set"}

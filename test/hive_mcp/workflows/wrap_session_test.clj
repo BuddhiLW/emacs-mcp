@@ -101,28 +101,88 @@
 ;; Error Handling Tests
 ;; =============================================================================
 
-(deftest test-wrap-session-harvest-error-propagates
-  (testing "Harvest failure propagates as exception"
-    ;; handle-gather calls harvest-fn directly without try-catch,
-    ;; so if harvest-fn throws, it propagates up through the FSM
+(deftest test-wrap-session-harvest-error-degraded
+  (testing "Harvest failure is caught; wrap continues in degraded mode"
+    ;; Mirrors 'Git Commit Optional in Wrap Flow' decision (20260213005110):
+    ;; a failing harvest (e.g. nREPL/HTTP down) must not abort wrap.
     (let [resources (make-test-resources
-                     {:harvest-fn (fn [_] (throw (ex-info "Harvest boom" {})))})]
-      (is (thrown? Exception
-                   (wrap/run-wrap-session
-                    resources
-                    {:agent-id "test-ling" :directory "/test"}))))))
+                     {:harvest-fn (fn [_] (throw (ex-info "Harvest boom" {})))})
+          result (wrap/run-wrap-session
+                  resources
+                  {:agent-id "test-ling" :directory "/test"})]
+      ;; Wrap still succeeds end-to-end.
+      (is (some? result))
+      (is (= "test-ling" (:agent-id result)))
+      ;; Crystallize ran against the degraded harvested map (from make-test-resources
+      ;; :crystallize-fn which ignores input) — still produces a summary.
+      (is (some? (:crystal-result result))))))
 
 (deftest test-wrap-session-crystallize-error-transitions-to-error
-  (testing "Crystallize error with :error key transitions to FSM error state"
+  (testing "Crystallize returning a fatal :error (no :degraded) still transitions to FSM error"
     (let [resources (make-test-resources
                      {:crystallize-fn (fn [_] {:error "Chroma down"})})]
-      ;; The FSM checks crystal-error? which looks for :crystal-result :error
-      ;; If found, transitions to ::fsm/error which throws
+      ;; Explicit domain error without :degraded marker stays fatal.
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"Wrap session workflow error"
                             (wrap/run-wrap-session
                              resources
                              {:agent-id "test-ling" :directory "/test"}))))))
+
+;; =============================================================================
+;; nREPL / HTTP Down — Degraded Mode Tests (task 20260404141548-1c053836)
+;; =============================================================================
+
+(deftest test-wrap-session-nrepl-http-down-degraded
+  (testing "Wrap still succeeds when crystallize (nREPL HTTP call) throws.
+            Pattern ref: 'Git Commit Optional in Wrap Flow' (20260213005110)."
+    (let [resources (make-test-resources
+                     {:crystallize-fn (fn [_]
+                                        (throw (ex-info "HTTP Error: nREPL down"
+                                                        {:status 0
+                                                         :reason "Connection refused"})))})
+          result (wrap/run-wrap-session
+                  resources
+                  {:agent-id "test-ling" :directory "/test"})]
+      ;; Wrap returns normally (no exception).
+      (is (some? result))
+      (is (= "test-ling" (:agent-id result)))
+      ;; Crystallize step marked degraded/skipped.
+      (is (true? (get-in result [:crystal-result :skipped])))
+      (is (true? (get-in result [:crystal-result :degraded])))
+      (is (re-find #"(?i)nrepl|http" (str (get-in result [:crystal-result :error]))))
+      ;; Downstream steps still ran.
+      (is (true? (get-in result [:kg-result :skipped])))  ; no summary-id
+      (is (true? (:notify-sent? result)))
+      (is (= 3 (get-in result [:eviction :evicted]))))))
+
+(deftest test-wrap-session-kg-edges-degraded-when-http-error
+  (testing "KG edges failure (e.g. HTTP error) marks step :degraded and continues."
+    (let [resources (make-test-resources
+                     {:kg-edge-fn (fn [& _]
+                                    (throw (ex-info "HTTP Error: nREPL down" {})))})
+          result (wrap/run-wrap-session
+                  resources
+                  {:agent-id "test-ling" :directory "/test"})]
+      (is (some? result))
+      (is (true? (get-in result [:kg-result :skipped])))
+      (is (true? (get-in result [:kg-result :degraded])))
+      ;; Notify and evict still executed.
+      (is (true? (:notify-sent? result)))
+      (is (= 3 (get-in result [:eviction :evicted]))))))
+
+(deftest test-wrap-session-notify-degraded-when-http-error
+  (testing "Notify failure (e.g. HTTP error to hivemind) marks :notify-degraded and continues."
+    (let [resources (make-test-resources
+                     {:notify-fn (fn [& _]
+                                   (throw (ex-info "HTTP Error: hivemind unreachable" {})))})
+          result (wrap/run-wrap-session
+                  resources
+                  {:agent-id "test-ling" :directory "/test"})]
+      (is (some? result))
+      (is (false? (:notify-sent? result)))
+      (is (true? (:notify-degraded result)))
+      ;; Evict still ran.
+      (is (= 3 (get-in result [:eviction :evicted]))))))
 
 ;; =============================================================================
 ;; Compilation Tests

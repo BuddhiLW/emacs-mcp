@@ -17,31 +17,29 @@
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.data.json :as json]
             [hive-mcp.hivemind.core :as hivemind]
-            [hive-mcp.swarm.datascript :as ds]))
+            [hive-mcp.swarm.datascript :as ds]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
 ;;; =============================================================================
 
-(defn reset-all-state
-  "Reset both DataScript and hivemind state for clean tests."
+(defn- hivemind-atoms-fixture
+  "Reset hivemind agent-registry and message-history atoms before/after."
   [f]
-  ;; Reset DataScript
-  (ds/reset-conn!)
-  ;; Reset hivemind atoms (message-history or legacy agent-registry)
-  (when-let [agent-reg (resolve 'hive-mcp.hivemind.core/agent-registry)]
-    (reset! @agent-reg {}))
-  (when-let [msg-history (resolve 'hive-mcp.hivemind.core/message-history)]
-    (reset! @msg-history {}))
-  (f)
-  ;; Cleanup
-  (ds/reset-conn!)
-  (when-let [agent-reg (resolve 'hive-mcp.hivemind.core/agent-registry)]
-    (reset! @agent-reg {}))
-  (when-let [msg-history (resolve 'hive-mcp.hivemind.core/message-history)]
-    (reset! @msg-history {})))
+  (let [reset-atoms!
+        (fn []
+          (when-let [agent-reg (resolve 'hive-mcp.hivemind.core/agent-registry)]
+            (reset! @agent-reg {}))
+          (when-let [msg-history (resolve 'hive-mcp.hivemind.core/message-history)]
+            (reset! @msg-history {})))]
+    (reset-atoms!)
+    (try (f) (finally (reset-atoms!)))))
 
-(use-fixtures :each reset-all-state)
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  hivemind-atoms-fixture)
 
 ;;; =============================================================================
 ;;; Helper Functions
