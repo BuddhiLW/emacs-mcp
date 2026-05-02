@@ -137,32 +137,46 @@
 ;; Deterministic unit tests
 ;; =============================================================================
 
-(deftest best-headless-prefers-claude-sdk
-  (testing "best-headless-for-provider prefers :claude-sdk over :claude-process and :hive-agent"
+(deftest best-headless-prefers-higher-priority-for-provider
+  (testing "best-headless-for-provider ranks by :priority among candidates that :provides the requested provider"
     (reg/clear-registry!)
     (reg/register-headless! :hive-agent
-                            (make-mock-backend :hive-agent #{:cap/subagents}))
+                            (make-mock-backend :hive-agent #{:cap/subagents})
+                            {:provides #{:claude} :priority 5})
     (reg/register-headless! :claude-process
-                            (make-mock-backend :claude-process #{:cap/streaming}))
+                            (make-mock-backend :claude-process #{:cap/streaming})
+                            {:provides #{:claude} :priority 20})
     (reg/register-headless! :claude-sdk
-                            (make-mock-backend :claude-sdk #{:cap/hooks :cap/interrupts}))
+                            (make-mock-backend :claude-sdk #{:cap/hooks :cap/interrupts})
+                            {:provides #{:claude} :priority 30})
     (is (= :claude-sdk (reg/best-headless-for-provider :claude)))))
 
-(deftest best-headless-hive-agent-does-not-override-process
-  (testing "META-INF-loaded :hive-agent remains explicit when process backend exists"
+(deftest best-headless-priority-ordering
+  (testing "Lower-priority backend wins when higher-priority absent"
     (reg/clear-registry!)
     (reg/register-headless! :hive-agent
-                            (make-mock-backend :hive-agent #{:cap/subagents}))
+                            (make-mock-backend :hive-agent #{:cap/subagents})
+                            {:provides #{:claude} :priority 5})
     (reg/register-headless! :claude-process
-                            (make-mock-backend :claude-process #{:cap/streaming}))
+                            (make-mock-backend :claude-process #{:cap/streaming})
+                            {:provides #{:claude} :priority 20})
     (is (= :claude-process (reg/best-headless-for-provider :claude)))))
 
-(deftest best-headless-falls-back-to-process
-  (testing "best-headless-for-provider falls back to :claude-process when no SDK"
+(deftest best-headless-single-candidate
+  (testing "Single :provides-tagged backend wins regardless of priority"
     (reg/clear-registry!)
     (reg/register-headless! :claude-process
-                            (make-mock-backend :claude-process #{:cap/streaming}))
+                            (make-mock-backend :claude-process #{:cap/streaming})
+                            {:provides #{:claude} :priority 1})
     (is (= :claude-process (reg/best-headless-for-provider :claude)))))
+
+(deftest best-headless-nil-provider-priority-only
+  (testing "nil provider ranks all registered backends by priority alone (provider-agnostic resolution)"
+    (reg/clear-registry!)
+    (reg/register-headless! :low (make-mock-backend :low #{}) {:priority 1})
+    (reg/register-headless! :high (make-mock-backend :high #{}) {:priority 50})
+    (reg/register-headless! :mid (make-mock-backend :mid #{}) {:priority 10})
+    (is (= :high (reg/best-headless-for-provider nil)))))
 
 (deftest best-headless-nil-when-empty
   (testing "best-headless-for-provider returns nil when registry empty"

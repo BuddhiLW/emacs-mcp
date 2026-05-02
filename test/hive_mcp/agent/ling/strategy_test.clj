@@ -237,15 +237,17 @@
             (is (some? slave))
             (is (= :claude-sdk (:ling/spawn-mode slave)))))))))
 
-(deftest facade-auto-openrouter-for-non-claude
-  (testing "Non-claude models automatically use openrouter strategy"
+(deftest facade-non-claude-model-does-not-mutate-spawn-mode
+  (testing "Non-claude models no longer auto-mutate spawn-mode (seam cleanup)"
     (let [ling (ling/->ling "deepseek-ling"
                             {:cwd "/tmp" :project-id "test"
                              :model "deepseek/deepseek-v3.2"})]
-      (is (= :openrouter (:spawn-mode ling))
-          "Non-claude model should force openrouter")
+      (is (= :claude (:spawn-mode ling))
+          "Without explicit :spawn-mode, defaults to :claude; the model name no longer leaks into spawn-mode resolution.")
+      (is (not= :openrouter (:spawn-mode ling))
+          "The legacy non-claude→:openrouter auto-mapping is removed (provider is infrastructure, not a spawn-mode).")
       (is (= "deepseek/deepseek-v3.2" (:model ling))
-          "Model should be preserved"))))
+          "Model is preserved as orthogonal config consumed by the LLM router."))))
 
 (deftest facade-dispatch-delegates-to-strategy
   (testing "Dispatch delegates to correct strategy based on registered headless backend"
@@ -311,15 +313,15 @@
         (is (= "claude" (:model ling))
             "model should be preserved from DataScript"))))
 
-  (testing "get-ling overrides spawn-mode to :openrouter for non-claude models"
-    (ds-lings/add-slave! "mode-override" {:status :idle :depth 1})
-    (ds-lings/update-slave! "mode-override" {:ling/spawn-mode :headless
-                                             :ling/model "deepseek/deepseek-v3.2"})
+  (testing "get-ling does NOT override spawn-mode for non-claude models (seam cleanup)"
+    (ds-lings/add-slave! "mode-no-override" {:status :idle :depth 1})
+    (ds-lings/update-slave! "mode-no-override" {:ling/spawn-mode :headless
+                                                :ling/model "deepseek/deepseek-v3.2"})
 
-    (let [ling (ling/get-ling "mode-override")]
+    (let [ling (ling/get-ling "mode-no-override")]
       (is (some? ling))
-      (is (= :openrouter (:spawn-mode ling))
-          "Non-claude model should override to :openrouter regardless of DataScript")
+      (is (not= :openrouter (:spawn-mode ling))
+          "spawn-mode no longer leaks from model — provider routing is the LLM router's job")
       (is (= "deepseek/deepseek-v3.2" (:model ling))
           "model should be preserved from DataScript"))))
 

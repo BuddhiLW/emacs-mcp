@@ -24,7 +24,11 @@
    Each type has:
    - :description     Human-readable description
    - :depth           DataScript slave depth (0=coordinator, 1=ling, 2+=drone)
-   - :spawn-modes     Set of supported spawn modes (nil = not spawnable)
+   - :spawn-modes     Set of statically-known supported spawn modes
+                      (nil = not spawnable). Addon-contributed modes
+                      (e.g. :hive-agent, :tmux) are also accepted at
+                      runtime via valid-spawn-mode? consulting
+                      hive-mcp.agent.spawn-mode-registry/valid-mode?.
    - :capabilities    Set of capability keywords
    - :permissions     Map of permission rules
    - :slot-limit      Max concurrent instances (nil = unlimited)
@@ -50,7 +54,7 @@
                  :readiness    {:requires-emacs? false}}
 
    ;; === Ling (depth 1) — worker agent ===
-   :ling        {:description  "Worker agent spawned by coordinator (Claude Code instance)"
+   :ling        {:description  "Worker agent spawned by coordinator"
                  :depth        1
                  :spawn-modes  #{:claude :vterm :headless :agent-sdk}
                  :capabilities #{:read :write :delegate :eval :search :commit :propose-diff}
@@ -66,9 +70,9 @@
                  :readiness    {:requires-emacs? false}}
 
    ;; === Drone (depth 2+) — leaf worker ===
-   :drone       {:description  "Lightweight leaf worker (OpenRouter model)"
+   :drone       {:description  "Lightweight leaf worker"
                  :depth        2
-                 :spawn-modes  #{:openrouter :headless}
+                 :spawn-modes  #{:headless}
                  :capabilities #{:read :propose-diff :search}
                  :permissions  {:can-spawn?        false
                                 :can-delegate?     false
@@ -160,10 +164,34 @@
   (some? (get type->spawn-modes (keyword agent-type))))
 
 (defn valid-spawn-mode?
-  "Check if spawn-mode is valid for the given agent type."
+  "Check if spawn-mode is valid for the given agent type.
+
+   Two acceptance paths:
+   1. Static membership: mode is declared in the type's :spawn-modes set
+      (the per-type allow-list). E.g., :ling accepts :claude, :vterm, …
+   2. Addon-contributed mode: mode is registered via
+      hive-mcp.agent.spawn-mode-registry/register-mode! AND is NOT
+      claimed by any OTHER type's static set. Addon modes are global —
+      they're not pinned to one type — but a mode statically owned by
+      :ling (e.g., :claude) does not implicitly become valid for :drone.
+
+   Coordinator stays restricted (its :spawn-modes is nil → not spawnable).
+
+   The requiring-resolve keeps this ns dependency-free of
+   spawn-mode-registry."
   [agent-type spawn-mode]
-  (let [modes (get type->spawn-modes (keyword agent-type))]
-    (boolean (and modes (contains? modes (keyword spawn-mode))))))
+  (let [type-kw (keyword agent-type)
+        mode-kw (keyword spawn-mode)
+        modes   (get type->spawn-modes type-kw)
+        static-set-of-mode (some (fn [s] (when (and s (contains? s mode-kw)) s))
+                                 (vals type->spawn-modes))]
+    (boolean
+     (and modes
+          (or (contains? modes mode-kw)
+              (and (nil? static-set-of-mode)
+                   (when-let [addon-valid? (requiring-resolve
+                                            'hive-mcp.agent.spawn-mode-registry/valid-mode?)]
+                     (addon-valid? mode-kw))))))))
 
 (defn has-capability?
   "Check if an agent type has a specific capability."

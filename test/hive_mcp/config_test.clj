@@ -423,10 +423,10 @@
       (is (= :custom-backend (config/default-drone-backend))))))
 
 (deftest test-default-drone-backend-fallback
-  (testing "default-drone-backend falls back to :openrouter when :drone missing"
+  (testing "default-drone-backend falls back to :agentic-loop when :drone missing"
     (let [path (write-temp-config! {:services {}})]
       (config/load-global-config! path)
-      (is (= :openrouter (config/default-drone-backend))))))
+      (is (= :agentic-loop (config/default-drone-backend))))))
 
 (deftest test-default-drone-model-config-override
   (testing "User config.edn :drone :default-model overrides defaults"

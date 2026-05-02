@@ -134,14 +134,21 @@
      :headless-id headless-id}))
 
 (defn best-headless-for-provider
-  "Return the best headless-id for a provider keyword (:claude, :openai, etc.).
+  "Return the best headless-id for a provider keyword (:claude, :openai, etc.),
+   or for any provider when called with nil.
 
    Pure metadata-driven selection — hive-mcp source contains no literal
-   reference to any concrete backend keyword. Candidates are filtered by
-   `:provides` set declared at registration, then ranked by `:priority`
-   (higher first). Ties broken by registration insertion order.
+   reference to any concrete backend keyword. Selection rules:
 
-   Returns nil if no metadata-bearing backend serves the provider. Falls
+   - With non-nil provider-kw: candidates are filtered by `:provides` set
+     declared at registration, then ranked by `:priority` (higher first).
+   - With nil provider-kw: ALL registered backends are candidates, ranked
+     by `:priority` only. Use this when the caller is provider-agnostic
+     (e.g. an LLM-router-fronted backend that handles any provider).
+
+   Ties broken by registration insertion order.
+
+   Returns nil if no candidate exists. With non-nil provider-kw, falls
    back to namespace-match (provider-kw == (namespace headless-id))
    when no metadata-driven candidate exists, preserving the prior
    behavior for ad-hoc provider-namespaced ids."
@@ -149,18 +156,21 @@
   (let [meta-snap @metadata
         candidates (->> meta-snap
                         (filter (fn [[_id m]]
-                                  (and (:provides m)
-                                       (contains? (:provides m) provider-kw))))
+                                  (or (nil? provider-kw)
+                                      (and (:provides m)
+                                           (contains? (:provides m) provider-kw)))))
                         (sort-by (fn [[_id m]] (- (or (:priority m) 0)))))]
     (if-let [picked (ffirst candidates)]
       picked
-      ;; No metadata candidate — try namespace-match fallback (legacy).
-      (first (filter #(= (some-> provider-kw name)
-                         (namespace %))
-                     (registered-headless))))))
+      ;; No metadata candidate — namespace-match fallback only when a
+      ;; provider was actually requested.
+      (when provider-kw
+        (first (filter #(= (some-> provider-kw name)
+                           (namespace %))
+                       (registered-headless)))))))
 
 (defn resolve-default-backend
-  "Resolve the configured default headless-backend keyword for a provider.
+  "Resolve the configured default headless-backend keyword.
 
    Order of precedence:
      1. HeadlessDefaultsConfig :default-backend if a concrete keyword is
@@ -172,15 +182,19 @@
         value is the :auto sentinel, an unregistered keyword, or
         unresolvable.
 
-   This keeps hive-mcp DIP-clean: no concrete backend identifier
-   (e.g. :hive-agent, :openrouter, :claude-sdk) is referenced in source.
-   Addons contribute their backends via classpath META-INF discovery and
-   `register-headless!`; the operator picks among them in config.edn."
+   `provider-kw` may be nil when the caller is provider-agnostic (the
+   resolved backend's LLM router handles all providers). With nil,
+   best-headless-for-provider selects by priority alone.
+
+   This keeps hive-mcp DIP-clean: no concrete backend identifier is
+   referenced in source. Addons contribute their backends via classpath
+   META-INF discovery and `register-headless!`; the operator picks
+   among them in config.edn."
   [provider-kw]
   (let [configured (try (headless-defaults/default-backend)
                         (catch Throwable _ nil))]
     (cond
-      ;; :auto sentinel — registry-driven preference for the provider.
+      ;; :auto sentinel — registry-driven preference.
       (or (nil? configured) (headless-defaults/auto? configured))
       (best-headless-for-provider provider-kw)
 
