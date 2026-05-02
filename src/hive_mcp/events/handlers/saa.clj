@@ -11,7 +11,8 @@
    with the hive-events system for observability and composition."
 
   (:require [hive-mcp.events.core :as ev]
-            [hive-mcp.events.interceptors :as interceptors]))
+            [hive-mcp.events.interceptors :as interceptors]
+            [hive-mcp.events.handlers.saa-config :as saa-config]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -36,9 +37,7 @@
    - :log   - Log SAA start
    - :shout - Broadcast SAA start to hivemind coordinator"
   [_coeffects [_ {:keys [agent-id task directory plan-only?]}]]
-  (let [effective-id (or agent-id
-                         (System/getenv "CLAUDE_SWARM_SLAVE_ID")
-                         "unknown-agent")
+  (let [effective-id (saa-config/effective-agent-id agent-id)
         mode (if plan-only? "plan-only" "full")]
     {:log {:level :info
            :message (str "SAA workflow started: " effective-id
@@ -76,9 +75,7 @@
    - :channel-publish - Emit to WebSocket for Olympus visibility"
   [_coeffects [_ {:keys [agent-id phase grounding-score plan-valid?
                           silence-iterations abstract-retries] :as data}]]
-  (let [effective-id (or agent-id
-                         (System/getenv "CLAUDE_SWARM_SLAVE_ID")
-                         "unknown-agent")
+  (let [effective-id (saa-config/effective-agent-id agent-id)
         phase-name (if (keyword? phase) (name phase) (str phase))
         detail (cond
                  (and grounding-score (#{:silence-review} phase))
@@ -131,9 +128,7 @@
    - :channel-publish - Emit completion event"
   [_coeffects [_ {:keys [agent-id task plan-memory-id kanban-task-ids
                           plan-only? tests-passed? grounding-score] :as data}]]
-  (let [effective-id (or agent-id
-                         (System/getenv "CLAUDE_SWARM_SLAVE_ID")
-                         "unknown-agent")
+  (let [effective-id (saa-config/effective-agent-id agent-id)
         mode (if plan-only? "plan-only" "full")
         summary (str "SAA complete (" mode ")"
                      (when plan-memory-id (str " plan=" plan-memory-id))
@@ -180,9 +175,7 @@
    - :emit-system-error - Structured error telemetry
    - :channel-publish   - Emit error event"
   [_coeffects [_ {:keys [agent-id task phase error] :as data}]]
-  (let [effective-id (or agent-id
-                         (System/getenv "CLAUDE_SWARM_SLAVE_ID")
-                         "unknown-agent")
+  (let [effective-id (saa-config/effective-agent-id agent-id)
         phase-name (if (keyword? phase) (name phase) (str phase))]
     {:log {:level :error
            :message (str "SAA workflow failed at phase " phase-name

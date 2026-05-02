@@ -323,6 +323,23 @@
                                       :content-hash (facade/content-hash content)}))
         lifecycle (deref lifecycle-fut op-timeout
                          {:lifecycle-error "timeout"})]
+    (when (result/ok? store-r)
+      ;; Re-anchor any placeholder claim-sets persisted by the wrap-time
+      ;; claim-extract pipeline (which only knew the session-id) to this
+      ;; canonical wrap memory id. Fire-and-forget — claim-set lookup is
+      ;; rescued in hive-knowledge; misses are surfaced at catchup-time
+      ;; via find-placeholder-claim-sets.
+      (try
+        (when-let [rewrite-fn
+                   (try (requiring-resolve
+                          'hive-knowledge.crystal.claims/rewrite-placeholder-claim-sets-for-session!)
+                        (catch Throwable _ nil))]
+          (future
+            (try (rewrite-fn (crystal/session-id) (:ok store-r) project-id)
+                 (catch Throwable t
+                   (log/warn "claim-set rewrite hook failed:" (ex-message t))))))
+        (catch Throwable t
+          (log/warn "claim-set rewrite hook launch failed:" (ex-message t)))))
     (if (result/ok? store-r)
       (merge {:summary-id (:ok store-r)
               :session (crystal/session-id)
