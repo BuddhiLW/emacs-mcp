@@ -20,8 +20,8 @@
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.memory.temporal :as temporal]
             [hive-mcp.swarm.datascript :as ds]
-            [hive-mcp.vectordb.facade :as facade]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.vectordb.kanban-facade :as kanban-facade]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -84,9 +84,11 @@
 
 (defn- facade-update!
   "Apply a soft-mutation to the underlying memory store.
+   Routes via kanban-facade so the write lands in the configured slot
+   (`:default` legacy / `:kanban` post-cutover / both during dual-read).
    This is the COMMIT — preserves entry id, content, KG edges."
   [{:keys [task-id payload]}]
-  (facade/update-entry! task-id payload))
+  (kanban-facade/update-entry! task-id payload))
 
 (defn register-all!
   "Idempotent registration of every kanban effect interpreter.

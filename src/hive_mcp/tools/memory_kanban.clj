@@ -25,9 +25,9 @@
             [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.crud :as mem-crud]
             [hive-mcp.tools.memory.scope :as scope]
-            [hive-mcp.vectordb.facade :as facade]
             [taoensso.timbre :as log]
-            [hive-mcp.tools.kanban.filters :as kf]))
+            [hive-mcp.tools.kanban.filters :as kf]
+            [hive-mcp.vectordb.kanban-facade :as kanban-facade]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -71,6 +71,11 @@
 (defn- query-kanban-entries
   "Fetch kanban entries from the underlying memory store.
 
+   Routes via `kanban-facade` so reads honor the `:memory/kanban-store`
+   config toggle: `:default` keeps milvus behavior, `:dual-read` merges
+   :kanban + :default with kanban-first preference, `:kanban` reads
+   only the dedicated qdrant collection.
+
    `query-tags` are pushed into the store query (server-side AND-filter),
    so a status-restricted lookup like ['kanban' 'done'] doesn't get
    truncated by the store's `:limit + sort-by :created desc` window.
@@ -98,16 +103,16 @@
         single-limit (if include-descendants? effective-limit limit)
         entries (cond
                   (and global? include-descendants?)
-                  (facade/query-entries :type "note" :tags query-tags
-                                        :limit effective-limit)
+                  (kanban-facade/query-entries :type "note" :tags query-tags
+                                                :limit effective-limit)
                   all-project-ids
-                  (facade/query-entries :type "note" :tags query-tags
-                                        :project-ids all-project-ids
-                                        :limit effective-limit)
+                  (kanban-facade/query-entries :type "note" :tags query-tags
+                                                :project-ids all-project-ids
+                                                :limit effective-limit)
                   :else
-                  (facade/query-entries :type "note" :tags query-tags
-                                        :project-id project-id
-                                        :limit single-limit))]
+                  (kanban-facade/query-entries :type "note" :tags query-tags
+                                                :project-id project-id
+                                                :limit single-limit))]
     {:entries entries :multi-project? multi-project?}))
 
 (defn- filter-kanban-by-tags [entries required-tags]
@@ -140,10 +145,16 @@
                      (filterv string? tags))
         tags (vec (distinct (concat (kt/build-kanban-tags "todo" priority project-id)
                                     (or extra-tags []))))
+        ;; Thread the kanban-store toggle's active key into the generic
+        ;; memory-add pipeline. Embedding + duplicate detection + KG
+        ;; edges all stay on `mem-crud/handle-add`; only the IMemoryStore
+        ;; slot routing changes. :default in legacy mode, :kanban after
+        ;; the cutover flag flips.
         crud-result (mem-crud/handle-add {:type "note"
                                           :content (json/write-str content)
                                           :tags tags :directory eff-dir
-                                          :agent_id eff-agent :duration "short"})]
+                                          :agent_id eff-agent :duration "short"
+                                          :store-key (kanban-facade/active-key)})]
     (log/info "kanban-create result:" crud-result)
     (when-not (:isError crud-result)
       (track-movement! {:task-id (or (:text crud-result) "unknown")
@@ -225,7 +236,11 @@
 
 (defn- delete!
   "Hard-delete a kanban entry. Records :kanban-delete temporal mutation
-   with previous-value for audit before removal."
+   with previous-value for audit before removal.
+
+   Delete routes via kanban-facade so the entry leaves whichever
+   slot(s) the toggle currently writes to — :kanban-only post-cutover,
+   both during dual-read soak."
   [entry task-id]
   (let [content    (:content entry)
         old-status (kt/content-val content :status nil)
@@ -240,12 +255,12 @@
     (track-movement! {:task-id task-id :title title
                       :from old-status :to "deleted"
                       :project-id project-id})
-    (facade/delete-entry! task-id)
+    (kanban-facade/delete-entry! task-id)
     (mcp-json {:deleted true :id task-id :previous-status old-status})))
 
 (defn- delete* [{:keys [task_id id]}]
   (let [task-id (or task_id id)]
-    (if-let [entry (facade/get-entry-by-id task-id)]
+    (if-let [entry (kanban-facade/get-entry-by-id task-id)]
       (if (kp/kanban-task-type? (:content entry))
         (delete! entry task-id)
         (mcp-error (str "Entry is not a kanban task: " task-id)))

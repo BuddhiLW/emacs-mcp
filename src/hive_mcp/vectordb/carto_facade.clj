@@ -59,9 +59,11 @@
 
 (defn query-entries
   "Query carto snippets with filtering.
-   Accepts keyword args for backward compat with chroma API."
-  [& {:keys [type project-id project-ids tags exclude-tags limit include-expired?]
-      :or {limit 100 include-expired? false}}]
+   Accepts keyword args for backward compat with chroma API.
+   Pass :include-content? true to opt in to the :content payload field —
+   default omits it so catchup metadata reads stay cheap."
+  [& {:keys [type project-id project-ids tags exclude-tags limit include-expired? include-content?]
+      :or {limit 100 include-expired? false include-content? false}}]
   (proto/query-entries (proto/get-store :carto)
                        {:type             type
                         :project-id       project-id
@@ -69,7 +71,8 @@
                         :tags             tags
                         :exclude-tags     exclude-tags
                         :limit            limit
-                        :include-expired? include-expired?}))
+                        :include-expired? include-expired?
+                        :include-content? include-content?}))
 
 (defn find-duplicate
   "Find carto snippet with matching content-hash in the given type.
