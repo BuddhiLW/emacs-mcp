@@ -1,5 +1,6 @@
-(ns hive-mcp.agent.drone.backend.openrouter-loop-test
-  "Tests for OpenRouterLoopBackend — IDroneExecutionBackend wrapping OpenRouter drone loop.
+(ns hive-mcp.agent.drone.backend.agentic-loop-test
+  "Tests for AgenticLoopBackend — IDroneExecutionBackend wrapping the
+   provider-agnostic drone agentic loop.
 
    Tests cover:
    - Protocol satisfaction and contract compliance
@@ -10,7 +11,7 @@
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.string]
             [hive-mcp.agent.drone.backend :as backend]
-            [hive-mcp.agent.drone.backend.openrouter-loop :as openrouter-loop]
+            [hive-mcp.agent.drone.backend.agentic-loop :as agentic-loop]
             [hive-mcp.agent.drone.loop]
             [hive-mcp.agent.registry]))
 
@@ -19,13 +20,13 @@
 ;; =============================================================================
 
 (defn ensure-registered-fixture
-  "Re-register :openrouter-loop defmethod before each test (require is no-op
+  "Re-register :agentic-loop defmethod before each test (require is no-op
    if ns already loaded, so we must explicitly eval the defmethod)."
   [f]
-  (defmethod backend/resolve-backend :openrouter-loop [context]
-    (openrouter-loop/->openrouter-loop-backend {:model (:model context)}))
+  (defmethod backend/resolve-backend :agentic-loop [context]
+    (agentic-loop/->agentic-loop-backend {:model (:model context)}))
   (f)
-  (remove-method backend/resolve-backend :openrouter-loop))
+  (remove-method backend/resolve-backend :agentic-loop))
 
 (use-fixtures :each ensure-registered-fixture)
 
@@ -34,8 +35,8 @@
 ;; =============================================================================
 
 (deftest protocol-satisfaction-test
-  (testing "OpenRouterLoopBackend satisfies IDroneExecutionBackend"
-    (let [b (openrouter-loop/->openrouter-loop-backend)]
+  (testing "AgenticLoopBackend satisfies IDroneExecutionBackend"
+    (let [b (agentic-loop/->agentic-loop-backend)]
       (is (satisfies? backend/IDroneExecutionBackend b)
           "Should satisfy the protocol"))))
 
@@ -44,10 +45,10 @@
 ;; =============================================================================
 
 (deftest backend-type-test
-  (testing "backend-type returns :openrouter-loop"
-    (let [b (openrouter-loop/->openrouter-loop-backend)]
-      (is (= :openrouter-loop (backend/backend-type b))
-          "backend-type should return :openrouter-loop"))))
+  (testing "backend-type returns :agentic-loop"
+    (let [b (agentic-loop/->agentic-loop-backend)]
+      (is (= :agentic-loop (backend/backend-type b))
+          "backend-type should return :agentic-loop"))))
 
 ;; =============================================================================
 ;; Section 3: supports-validation?
@@ -55,9 +56,9 @@
 
 (deftest supports-validation-test
   (testing "supports-validation? returns true"
-    (let [b (openrouter-loop/->openrouter-loop-backend)]
+    (let [b (agentic-loop/->agentic-loop-backend)]
       (is (true? (backend/supports-validation? b))
-          "OpenRouter loop backend should support validation"))))
+          "Agentic-loop backend should support validation"))))
 
 ;; =============================================================================
 ;; Section 4: Constructor
@@ -65,12 +66,12 @@
 
 (deftest constructor-defaults-test
   (testing "Default constructor has nil model-override"
-    (let [b (openrouter-loop/->openrouter-loop-backend)]
+    (let [b (agentic-loop/->agentic-loop-backend)]
       (is (nil? (:model-override b))
           "Default model-override should be nil")))
 
   (testing "Constructor with model override"
-    (let [b (openrouter-loop/->openrouter-loop-backend {:model "custom-model"})]
+    (let [b (agentic-loop/->agentic-loop-backend {:model "custom-model"})]
       (is (= "custom-model" (:model-override b))
           "model-override should be set"))))
 
@@ -79,17 +80,17 @@
 ;; =============================================================================
 
 (deftest resolve-backend-registration-test
-  (testing ":openrouter-loop backend is resolved correctly"
-    (let [resolved (backend/resolve-backend {:backend :openrouter-loop
+  (testing ":agentic-loop backend is resolved correctly"
+    (let [resolved (backend/resolve-backend {:backend :agentic-loop
                                              :model "test-model"})]
       (is (satisfies? backend/IDroneExecutionBackend resolved)
           "Resolved backend should satisfy protocol")
-      (is (= :openrouter-loop (backend/backend-type resolved))
-          "Resolved backend should be :openrouter-loop"))))
+      (is (= :agentic-loop (backend/backend-type resolved))
+          "Resolved backend should be :agentic-loop"))))
 
 (deftest resolve-backend-passes-model-test
   (testing "resolve-backend passes model from context to backend"
-    (let [resolved (backend/resolve-backend {:backend :openrouter-loop
+    (let [resolved (backend/resolve-backend {:backend :agentic-loop
                                              :model "devstral-small:24b"})]
       (is (= "devstral-small:24b" (:model-override resolved))
           "Model should be passed through from context"))))
@@ -100,7 +101,7 @@
 
 (deftest execute-drone-with-mock-test
   (testing "execute-drone returns standardized result with mocked LLM"
-    (let [b (openrouter-loop/->openrouter-loop-backend {:model "mock-model"})
+    (let [b (agentic-loop/->agentic-loop-backend {:model "mock-model"})
           ;; Mock the agentic loop to return a successful result
           mock-loop-result {:status :completed
                             :result "Task completed successfully"
@@ -118,10 +119,11 @@
 
                     ;; Mock requiring-resolve for auto-backend
                     requiring-resolve
-                    (fn [sym]
-                      (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
-                        (fn [_opts] :mock-backend)
-                        (clojure.core/requiring-resolve sym)))]
+                    (let [orig (.getRawRoot #'clojure.core/requiring-resolve)]
+                      (fn [sym]
+                        (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
+                          (fn [_opts] :mock-backend)
+                          (orig sym))))]
 
         (let [result (backend/execute-drone b {:task "Fix null pointer"
                                                :model "mock-model"
@@ -143,7 +145,7 @@
 
 (deftest execute-drone-max-steps-status-test
   (testing "execute-drone normalizes :max_steps to :completed"
-    (let [b (openrouter-loop/->openrouter-loop-backend)]
+    (let [b (agentic-loop/->agentic-loop-backend)]
       (with-redefs [hive-mcp.agent.drone.loop/run-agentic-loop
                     (fn [_ts _ctx _opts]
                       {:status :max_steps :result "Ran out of steps"
@@ -152,9 +154,10 @@
                     hive-mcp.agent.registry/ensure-registered! (fn [] nil)
 
                     requiring-resolve
-                    (fn [sym]
-                      (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
-                        (fn [_] :mock) (clojure.core/requiring-resolve sym)))]
+                    (let [orig (.getRawRoot #'clojure.core/requiring-resolve)]
+                      (fn [sym]
+                        (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
+                          (fn [_] :mock) (orig sym))))]
 
         (let [result (backend/execute-drone b {:task "test" :model "m"})]
           (is (= :completed (:status result))
@@ -162,7 +165,7 @@
 
 (deftest execute-drone-noop-status-test
   (testing "execute-drone normalizes :noop to :failed"
-    (let [b (openrouter-loop/->openrouter-loop-backend)]
+    (let [b (agentic-loop/->agentic-loop-backend)]
       (with-redefs [hive-mcp.agent.drone.loop/run-agentic-loop
                     (fn [_ts _ctx _opts]
                       {:status :noop :result "No backend"
@@ -171,9 +174,10 @@
                     hive-mcp.agent.registry/ensure-registered! (fn [] nil)
 
                     requiring-resolve
-                    (fn [sym]
-                      (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
-                        (fn [_] :mock) (clojure.core/requiring-resolve sym)))]
+                    (let [orig (.getRawRoot #'clojure.core/requiring-resolve)]
+                      (fn [sym]
+                        (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
+                          (fn [_] :mock) (orig sym))))]
 
         (let [result (backend/execute-drone b {:task "test" :model "m"})]
           (is (= :failed (:status result))
@@ -185,7 +189,7 @@
 
 (deftest execute-drone-handles-backend-creation-error-test
   (testing "execute-drone returns :failed when LLM backend creation throws"
-    (let [b (openrouter-loop/->openrouter-loop-backend {:model "bad-model"})]
+    (let [b (agentic-loop/->agentic-loop-backend {:model "bad-model"})]
       (with-redefs [requiring-resolve
                     (fn [sym]
                       (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
@@ -202,7 +206,7 @@
 
 (deftest execute-drone-handles-loop-exception-test
   (testing "execute-drone returns :failed when agentic loop throws"
-    (let [b (openrouter-loop/->openrouter-loop-backend)]
+    (let [b (agentic-loop/->agentic-loop-backend)]
       (with-redefs [hive-mcp.agent.drone.loop/run-agentic-loop
                     (fn [_ts _ctx _opts]
                       (throw (ex-info "Connection timeout" {:type :timeout})))
@@ -210,9 +214,10 @@
                     hive-mcp.agent.registry/ensure-registered! (fn [] nil)
 
                     requiring-resolve
-                    (fn [sym]
-                      (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
-                        (fn [_] :mock) (clojure.core/requiring-resolve sym)))]
+                    (let [orig (.getRawRoot #'clojure.core/requiring-resolve)]
+                      (fn [sym]
+                        (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
+                          (fn [_] :mock) (orig sym))))]
 
         (let [result (backend/execute-drone b {:task "test" :model "m"})]
           (is (= :failed (:status result))
@@ -222,4 +227,4 @@
 
 (comment
   ;; Run all tests
-  (clojure.test/run-tests 'hive-mcp.agent.drone.backend.openrouter-loop-test))
+  (clojure.test/run-tests 'hive-mcp.agent.drone.backend.agentic-loop-test))

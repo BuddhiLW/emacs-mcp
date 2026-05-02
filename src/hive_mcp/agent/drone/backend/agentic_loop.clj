@@ -1,5 +1,12 @@
-(ns hive-mcp.agent.drone.backend.openrouter-loop
-  "OpenRouterLoopBackend -- IDroneExecutionBackend wrapping the OpenRouter drone loop."
+(ns hive-mcp.agent.drone.backend.agentic-loop
+  "AgenticLoopBackend — IDroneExecutionBackend wrapping the provider-agnostic
+   drone agentic loop.
+
+   Provider-agnostic: the loop's underlying LLM backend is selected from
+   the OpenAI-compat provider registry (`hive-mcp.agent.openrouter/auto-backend`)
+   based on configured API keys and the requested model. hive-mcp source
+   contains no per-provider branching here — the provider is infrastructure
+   resolved by `auto-backend`, not a backend-naming concern."
   (:require [hive-mcp.agent.drone.backend :as backend]
             [hive-mcp.agent.drone.tool-allowlist :as allowlist]
             [hive-mcp.agent.registry :as registry]
@@ -57,15 +64,15 @@
    :steps      0
    :tool-calls 0})
 
-(defrecord OpenRouterLoopBackend [model-override]
+(defrecord AgenticLoopBackend [model-override]
   backend/IDroneExecutionBackend
 
   (execute-drone [_this task-context]
     (let [{:keys [task model preset tools max-steps trace drone-id cwd]} task-context
           effective-model (or model-override model (config/default-drone-model))
-          effective-id    (or drone-id "openrouter-drone")]
+          effective-id    (or drone-id "agentic-drone")]
       (try
-        (log/info "OpenRouterLoopBackend executing"
+        (log/info "AgenticLoopBackend executing"
                   {:drone-id effective-id :model effective-model :max-steps max-steps})
 
         (let [llm-backend     (create-llm-backend effective-model preset)
@@ -82,7 +89,7 @@
                                 :trace?       (boolean trace)
                                 :agent-id     effective-id})]
 
-          (log/info "OpenRouterLoopBackend completed"
+          (log/info "AgenticLoopBackend completed"
                     {:drone-id effective-id
                      :status   (:status loop-result)
                      :turns    (:turns loop-result)})
@@ -90,7 +97,7 @@
           (build-result loop-result effective-model))
 
         (catch Exception e
-          (log/error {:event      :openrouter-loop/execution-failed
+          (log/error {:event      :agentic-loop/execution-failed
                       :drone-id   effective-id
                       :model      effective-model
                       :error      (ex-message e)})
@@ -100,12 +107,12 @@
     true)
 
   (backend-type [_this]
-    :openrouter-loop))
+    :agentic-loop))
 
-(defn ->openrouter-loop-backend
-  "Create an OpenRouterLoopBackend instance."
+(defn ->agentic-loop-backend
+  "Create an AgenticLoopBackend instance."
   [& [{:keys [model]}]]
-  (->OpenRouterLoopBackend model))
+  (->AgenticLoopBackend model))
 
-(defmethod backend/resolve-backend :openrouter-loop [context]
-  (->openrouter-loop-backend {:model (:model context)}))
+(defmethod backend/resolve-backend :agentic-loop [context]
+  (->agentic-loop-backend {:model (:model context)}))

@@ -180,7 +180,7 @@
           "Should return structured error, not throw")
       (is (= :openrouter (:key result))
           "Error should identify the bad key")
-      (is (= :use-openrouter-loop-or-omit (:fix result))
+      (is (= :use-agentic-loop-or-omit (:fix result))
           "Error should suggest the fix")
       (is (string? (:hint result))
           "Error should include a human-readable hint"))))

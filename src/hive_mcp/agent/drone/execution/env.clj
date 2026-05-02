@@ -132,5 +132,5 @@
         (do (log/warn {:event   :drone/preferred-backend-unavailable
                        :preferred best
                        :error   (:message r)
-                       :message "Falling back to :openrouter-loop backend"})
-            (backend/resolve-backend (assoc task-context :backend :openrouter-loop)))))))
+                       :message "Falling back to :agentic-loop backend"})
+            (backend/resolve-backend (assoc task-context :backend :agentic-loop)))))))

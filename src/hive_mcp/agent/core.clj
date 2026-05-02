@@ -9,7 +9,7 @@
 
 (defn delegate-drone!
   "Delegate a task to a drone. Backend resolved via best-backend() priority
-   (fsm-agentic → sdk-drone → openrouter-loop) when no explicit backend specified."
+   (fsm-agentic → sdk-drone → agentic-loop) when no explicit backend specified."
   [opts]
   (drone/delegate-agentic! opts))
 

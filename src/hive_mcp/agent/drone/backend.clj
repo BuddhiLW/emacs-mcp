@@ -26,8 +26,8 @@
     (if (= k :openrouter)
       {:error :unknown-backend
        :key :openrouter
-       :fix :use-openrouter-loop-or-omit
-       :hint "Use :openrouter-loop explicitly or omit :backend to use best-backend() priority (fsm-agentic → sdk-drone → openrouter-loop)"}
+       :fix :use-agentic-loop-or-omit
+       :hint "':openrouter' is a provider, not a backend. Use :agentic-loop explicitly, or omit :backend to use best-backend() priority (fsm-agentic → sdk-drone → agentic-loop)."}
       (throw (IllegalArgumentException.
               (str "No IDroneExecutionBackend registered for backend: "
                    (pr-str k)
