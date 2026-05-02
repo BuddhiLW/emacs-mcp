@@ -31,32 +31,34 @@
             [hive-mcp.tools.core :refer [mcp-error]]
             [hive-mcp.dns.result :refer [rescue]]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.tools.consolidated.migrate-kanban :as c-migrate-kanban]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (def ^:private tool-handlers
-  {:agent     c-agent/handle-agent
-   :memory    c-memory/handle-memory
-   :kg        c-kg/handle-kg
-   :hivemind  c-hivemind/handle-hivemind
-   :magit     c-magit/handle-magit
-   :cider     c-cider/handle-cider
-   :kanban    c-kanban/handle-kanban
-   :preset    c-preset/handle-preset
-   :olympus   c-olympus/handle-olympus
-   :agora     c-agora/handle-agora
-   :analysis  (composite/build-composite-handler "analysis")
-   :project   c-project/handle-project
-   :session   c-session/handle-session
-   :emacs     c-emacs/handle-emacs
-   :wave      c-wave/handle-wave
-   :migration c-migration/handle-migration
-   :config     c-config/handle-config
-   :workflow   c-workflow/handle-workflow
-   :transcript c-transcript/handle-transcript
-   :events     c-events/handle})
+  {:agent           c-agent/handle-agent
+   :memory          c-memory/handle-memory
+   :kg              c-kg/handle-kg
+   :hivemind        c-hivemind/handle-hivemind
+   :magit           c-magit/handle-magit
+   :cider           c-cider/handle-cider
+   :kanban          c-kanban/handle-kanban
+   :preset          c-preset/handle-preset
+   :olympus         c-olympus/handle-olympus
+   :agora           c-agora/handle-agora
+   :analysis        (composite/build-composite-handler "analysis")
+   :project         c-project/handle-project
+   :session         c-session/handle-session
+   :emacs           c-emacs/handle-emacs
+   :wave            c-wave/handle-wave
+   :migration       c-migration/handle-migration
+   :migrate-kanban  c-migrate-kanban/handle-migrate-kanban
+   :config          c-config/handle-config
+   :workflow        c-workflow/handle-workflow
+   :transcript      c-transcript/handle-transcript
+   :events          c-events/handle})
 
 (def ^:private tool-names
   (sort (map name (keys tool-handlers))))
