@@ -555,6 +555,12 @@
 
 (def batch-get-edges-to hive-mcp.knowledge-graph.edges.batch/batch-get-edges-to)
 
+(def batch-get-edges-from-with-db
+  hive-mcp.knowledge-graph.edges.batch/batch-get-edges-from-with-db)
+
+(def batch-get-edges-to-with-db
+  hive-mcp.knowledge-graph.edges.batch/batch-get-edges-to-with-db)
+
 (def batch-get-co-accessed hive-mcp.knowledge-graph.edges.batch/batch-get-co-accessed)
 
 (def migrate-edge-scopes! hive-mcp.knowledge-graph.edges.migration/migrate-edge-scopes!)

@@ -13,7 +13,11 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defonce ^:private cache
+  ;; :scanned? — set ONLY by refresh!. Distinct from :initialized? (which
+  ;; tracks "writable" state) so that events firing before the first scan
+  ;; can't lock the cache into delta-only mode without a baseline.
   (atom {:initialized? false
+         :scanned?     false
          :total-edges  0
          :by-relation  {}
          :by-scope     {}}))
@@ -41,7 +45,8 @@
    Call on startup or after bulk operations that bypass the event-driven
    CRUD path."
   []
-  (reset! cache (compute-from-db!))
+  (let [computed (compute-from-db!)]
+    (reset! cache (assoc computed :scanned? true)))
   nil)
 
 (defn reset-cache!
@@ -49,13 +54,14 @@
    when the underlying store is swapped mid-process."
   []
   (reset! cache {:initialized? false
+                 :scanned?     false
                  :total-edges  0
                  :by-relation  {}
                  :by-scope     {}})
   nil)
 
 (defn- ensure! []
-  (when-not (:initialized? @cache)
+  (when-not (:scanned? @cache)
     (refresh!)))
 
 (defn- bump

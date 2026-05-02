@@ -530,6 +530,29 @@
   []
   (proto/db-snapshot (ensure-store!)))
 
+(defn query-with-db
+  "Execute a Datalog query against an EXPLICIT db value (snapshot)
+   instead of the live conn — enables branch-compare verification by
+   running the same query against pre-tx and post-tx db snapshots.
+
+   Backends that share Datalog query shape (Datahike / DataScript /
+   Datalevin) all expose `q` as a static fn that takes a db-value as
+   first arg. We dispatch via requiring-resolve so this ns stays
+   compile-time-decoupled from the chosen backend.
+
+   Returns the query result, or falls back to the live `query` when no
+   backend `q` fn can be resolved (no-op test stores)."
+  [db q & inputs]
+  (let [resolve-q (fn [sym]
+                    (try (requiring-resolve sym) (catch Exception _ nil)))
+        q-fn      (or (resolve-q 'datahike.api/q)
+                      (resolve-q 'datascript.core/q)
+                      (resolve-q 'datalevin.core/q))]
+    (if (and q-fn db)
+      (apply q-fn q db inputs)
+      ;; Fallback: ignore db, query live store.
+      (apply query q inputs))))
+
 (defn close!
   "Close the active store connection.
    Required for Datalevin to flush LMDB."

@@ -1,4 +1,11 @@
 (ns hive-mcp.knowledge-graph.edges.batch
+  "Batch edge queries.
+
+   Each accessor has two arities: one against the live KG conn, one
+   against an explicit db value (snapshot). The db-aware variants enable
+   branch-compare verification (capture db-pre / db-post around a tx,
+   diff the two edge sets) without forcing callers to reach into the
+   backend-specific Datalog API."
   (:require [hive-mcp.knowledge-graph.connection :as conn]))
 
 (declare batch-get-edges-from batch-get-edges-to batch-get-co-accessed)
@@ -52,6 +59,49 @@
            all-edges (if scope
                        (conn/query scoped-q ids-vec scope)
                        (conn/query base-q ids-vec))]
+       (group-by :kg-edge/to all-edges)))))
+
+(defn batch-get-edges-from-with-db
+  "Like `batch-get-edges-from`, but queries against an EXPLICIT db value
+   (snapshot). Used by carto verify-isomorphism's branch-compare path
+   to query db-pre / db-post without the live conn racing the rescan."
+  ([db node-ids] (batch-get-edges-from-with-db db node-ids nil))
+  ([db node-ids scope]
+   (if (empty? node-ids)
+     {}
+     (let [ids-vec (vec (distinct node-ids))
+           base-q '[:find [(pull ?e [*]) ...]
+                    :in $ [?from ...]
+                    :where [?e :kg-edge/from ?from]]
+           scoped-q '[:find [(pull ?e [*]) ...]
+                      :in $ [?from ...] ?scope
+                      :where
+                      [?e :kg-edge/from ?from]
+                      [?e :kg-edge/scope ?scope]]
+           all-edges (if scope
+                       (conn/query-with-db db scoped-q ids-vec scope)
+                       (conn/query-with-db db base-q ids-vec))]
+       (group-by :kg-edge/from all-edges)))))
+
+(defn batch-get-edges-to-with-db
+  "Like `batch-get-edges-to`, but queries against an EXPLICIT db value
+   (snapshot). Used by carto verify-isomorphism's branch-compare path."
+  ([db node-ids] (batch-get-edges-to-with-db db node-ids nil))
+  ([db node-ids scope]
+   (if (empty? node-ids)
+     {}
+     (let [ids-vec (vec (distinct node-ids))
+           base-q '[:find [(pull ?e [*]) ...]
+                    :in $ [?to ...]
+                    :where [?e :kg-edge/to ?to]]
+           scoped-q '[:find [(pull ?e [*]) ...]
+                      :in $ [?to ...] ?scope
+                      :where
+                      [?e :kg-edge/to ?to]
+                      [?e :kg-edge/scope ?scope]]
+           all-edges (if scope
+                       (conn/query-with-db db scoped-q ids-vec scope)
+                       (conn/query-with-db db base-q ids-vec))]
        (group-by :kg-edge/to all-edges)))))
 
 (defn batch-get-co-accessed
