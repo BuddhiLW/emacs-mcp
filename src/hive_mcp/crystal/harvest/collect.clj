@@ -14,7 +14,7 @@
    DDD: Infrastructure service — IO collection from multiple sources."
   (:require [hive-mcp.crystal.core :as crystal]
             [hive-mcp.crystal.recall :as recall]
-            [hive-mcp.emacs.client :as ec]
+            [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.tools.memory.scope :as scope]

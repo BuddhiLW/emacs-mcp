@@ -2,7 +2,7 @@
   "Shared helper functions for agent tool handlers."
   (:require [hive-mcp.tools.swarm.core :as swarm-core]
             [hive-mcp.agent.type-registry :as agent-type-registry]
-            [hive-mcp.emacs.client :as ec]
+            [hive-mcp.emacs-ext.client :as ec]
             [taoensso.timbre :as log]
             [clojure.data.json :as json]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>

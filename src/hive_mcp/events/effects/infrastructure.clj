@@ -18,7 +18,7 @@
   (:require [hive-mcp.events.core :as ev]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.channel.core :as channel]
-            [hive-mcp.emacs.client :as ec]
+            [hive-mcp.emacs-ext.client :as ec]
             [clojure.java.shell :as shell]
             [datascript.core :as d]
             [taoensso.timbre :as log]))

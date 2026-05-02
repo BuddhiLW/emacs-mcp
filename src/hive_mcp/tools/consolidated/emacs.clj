@@ -7,8 +7,8 @@
   (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
             [hive-mcp.tools.result-bridge :as rb]
             [hive-mcp.dns.result :as result]
-            [hive-mcp.emacs.client :as ec]
-            [hive-mcp.emacs.elisp :as el]
+            [hive-mcp.emacs-ext.client :as ec]
+            [hive-mcp.emacs-ext.elisp :as el]
             [hive-mcp.tools.buffer :as buffer]
             [hive-mcp.tools.docs :as docs]
             [taoensso.timbre :as log]))

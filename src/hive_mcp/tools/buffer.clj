@@ -2,12 +2,13 @@
   "Buffer and Emacs interaction tools.
 
    Handles buffer operations, file operations, and hive-mcp.el integration."
-  (:require [hive-mcp.emacs.client :as ec]
+  (:require [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.tools.core :refer [mcp-error]]
             [hive-mcp.telemetry.core :as telemetry]
             [hive-mcp.dns.validation :as v]
             [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.emacs-ext.notify :as en]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -153,10 +154,9 @@
   (log/info "mcp-notify:" message)
   (let [type-str (or type "info")]
     ;; Send desktop notification (primary - catches attention)
-    (require 'hive-mcp.emacs.notify)
-    ((resolve 'hive-mcp.emacs.notify/notify!) {:summary "Hive-MCP"
-                                               :body message
-                                               :type type-str})
+    (en/notify! {:summary "Hive-MCP"
+                 :body message
+                 :type type-str})
     ;; Also send to Emacs echo-area (secondary - visible if Emacs focused)
     (let [elisp (format "(hive-mcp-api-notify %s %s)"
                         (pr-str message)

@@ -1,6 +1,6 @@
 (ns hive-mcp.tools.swarm.core
   "Core utilities for swarm tool handlers including response builders and swarm availability check."
-  (:require [hive-mcp.emacs.client :as ec]
+  (:require [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.dns.validation :as v]
             [clojure.data.json :as json]
             [clojure.string :as str]))

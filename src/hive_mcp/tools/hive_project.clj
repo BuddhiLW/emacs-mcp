@@ -13,8 +13,8 @@
    - :hot-reload - enabled by default for Clojure
    - :presets-path - project-local presets directory"
   (:require [hive-mcp.tools.core :refer [mcp-json mcp-error]]
-            [hive-mcp.emacs.client :as ec]
-            [hive-mcp.emacs.elisp :as el]
+            [hive-mcp.emacs-ext.client :as ec]
+            [hive-mcp.emacs-ext.elisp :as el]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.config.core :as config]
             [clojure.data.json :as json]

@@ -11,8 +11,8 @@
    Single try-result boundary at each handler level. Zero nested try-catch."
   (:require [hive-mcp.dns.result :as result]
             [hive-mcp.tools.core :refer [mcp-success mcp-error]]
-            [hive-mcp.emacs.client :as ec]
-            [hive-mcp.emacs.elisp :as el]
+            [hive-mcp.emacs-ext.client :as ec]
+            [hive-mcp.emacs-ext.elisp :as el]
             [hive-mcp.telemetry.core :as telemetry]
             [hive-mcp.dns.validation :as v]
             [hive-mcp.schema.cider :as cider-schema]

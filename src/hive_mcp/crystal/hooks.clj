@@ -11,7 +11,7 @@
             [hive-mcp.crystal.recall :as recall]
             [hive-mcp.crystal.synthesis :as synthesis]
             [hive-mcp.crystal.harvest.collect :as collect]
-            [hive-mcp.emacs.client :as ec]       ;; eval-elisp-safe
+            [hive-mcp.emacs-ext.client :as ec]       ;; eval-elisp-safe
             [hive-mcp.channel.core :as channel]   ;; on-kanban-done, on-session-end
             [hive-mcp.hooks.core :as hooks]       ;; register-hooks!
             [hive-mcp.swarm.datascript :as ds]    ;; on-kanban-done

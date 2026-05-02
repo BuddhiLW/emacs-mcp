@@ -3,7 +3,7 @@
   (:require [hive-mcp.tools.swarm.core :as core]
             [hive-mcp.tools.swarm.registry :as registry]
             [hive-mcp.tools.swarm.state :as state]
-            [hive-mcp.emacs.client :as ec]
+            [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.dns.validation :as v]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]

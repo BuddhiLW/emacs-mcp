@@ -9,7 +9,7 @@
    Single try-result boundary at each handler level. Zero nested try-catch."
   (:require [hive-mcp.dns.result :as result]
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
-            [hive-mcp.emacs.client :as ec]
+            [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.crystal.core :as crystal]
             [hive-mcp.crystal.hooks :as crystal-hooks]
             [hive-mcp.swarm.datascript :as ds]

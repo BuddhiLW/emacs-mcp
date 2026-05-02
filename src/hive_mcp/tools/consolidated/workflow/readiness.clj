@@ -8,7 +8,7 @@
    - openrouter: always ready (stateless API)
 
    Extracted from workflow.clj to reduce cyclomatic complexity."
-  (:require [hive-mcp.emacs.client :as ec]
+  (:require [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.agent.headless :as headless]
             [hive-mcp.swarm.datascript.queries :as queries]
             [hive-mcp.config.core :as config]
