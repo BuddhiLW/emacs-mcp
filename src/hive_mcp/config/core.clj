@@ -152,6 +152,14 @@
   [store-kw]
   (get-in (get-memory-config) [:stores store-kw]))
 
+(defn get-kanban-store-mode
+  "Return the kanban-store routing mode (:default | :dual-read | :kanban).
+   Drives hive-mcp.vectordb.kanban-facade backend selection. Defaults to
+   :default when the key is absent so legacy configs keep routing through
+   the :default slot (milvus)."
+  []
+  (or (:kanban-store (get-memory-config)) :default))
+
 ;; =============================================================================
 ;; Generic Path Accessor
 ;; =============================================================================
@@ -199,13 +207,14 @@
 
 (defn default-drone-backend
   "Resolve default drone backend from config, env, or hardcoded fallback.
-   Falls back to :openrouter when no config/env value is set so that
-   downstream dispatch always has a usable backend keyword."
+   Falls back to :agentic-loop (the provider-agnostic drone execution
+   backend, post-:openrouter-loop rename) when no config/env value is
+   set so that downstream dispatch always has a usable backend keyword."
   []
   (get-service-value :drone :default-backend
                      :env "DRONE_DEFAULT_BACKEND"
                      :parse keyword
-                     :default :openrouter))
+                     :default :agentic-loop))
 
 ;; =============================================================================
 ;; Dotted Key Path Access

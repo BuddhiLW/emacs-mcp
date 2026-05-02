@@ -23,6 +23,17 @@
    :project-overrides {}
    :parent-rules []
    :memory {:default-store :chroma
+            ;; Kanban-store routing toggle. Decouples kanban from the
+            ;; :default slot so it can be served by a dedicated qdrant
+            ;; collection (sub-10ms tag-filtered queries). Values:
+            ;;   :default    — kanban reads/writes go through :default
+            ;;                 (current milvus path; backward compat).
+            ;;   :dual-read  — read :kanban first, fall back to :default
+            ;;                 on miss. Writes fan out to both for soak.
+            ;;   :kanban     — read+write only the :kanban slot.
+            ;; Cutover sequence: :default → migrate → :dual-read →
+            ;; :kanban. Each flip is config-only; no code change.
+            :kanban-store  :default
             :routes {:decision    :chroma
                      :snippet     :chroma
                      :preference  :chroma
@@ -50,20 +61,29 @@
                          :model "nomic-embed-text"}
                 :openrouter {:model "qwen/qwen3-embedding-8b"}}
    :embedder {:default :ollama-nomic
-              :routes {:type/conversation-turn :openrouter-qwen3
-                       :type/turn-summary      :openrouter-qwen3
-                       :type/decision          :openrouter-qwen3
-                       :type/plan              :openrouter-qwen3
-                       :type/session-summary   :openrouter-qwen3
-                       :type/convention        :openrouter-qwen3
-                       :type/axiom             :ollama-nomic
-                       :type/principle         :ollama-nomic
-                       :type/snippet           :ollama-nomic
-                       :type/note              :ollama-nomic}
+              :routes {:type/conversation-turn :venice-qwen3
+                       :type/turn-summary      :venice-qwen3
+                       :type/decision          :venice-qwen3
+                       :type/plan              :venice-qwen3
+                       :type/session-summary   :venice-qwen3
+                       :type/convention        :venice-qwen3
+                       :type/axiom             :ollama-qwen3-local
+                       :type/principle         :ollama-qwen3-local
+                       :type/snippet           :ollama-qwen3-local
+                       :type/note              :ollama-qwen3-local}
               :providers {:ollama-nomic     {:impl :ollama
                                              :model "nomic-embed-text"
                                              :max-tokens 2048
                                              :dimension 768}
+                          ;; Local Ollama qwen3-embedding:0.6b — 1024-d, 32k ctx.
+                          ;; Replaces nomic for note-class types (note/principle/
+                          ;; snippet/axiom) which routinely exceed nomic's 2048
+                          ;; ceiling. Lives in `hive-mcp-memory-1024d` collection.
+                          ;; Migration plan: /home/leibniz/.claude/plans/let-s-do-what-s-needed-velvety-lemur.md
+                          :ollama-qwen3-local {:impl :ollama
+                                               :model "qwen3-embedding:0.6b"
+                                               :max-tokens 32768
+                                               :dimension 1024}
                           :openrouter-qwen3 {:impl :openrouter
                                              :model "qwen/qwen3-embedding-8b"
                                              :max-tokens 32768
@@ -129,7 +149,6 @@
                                 :secret-key    :openrouter-api-key
                                 :default-model "anthropic/claude-opus-4-7"
                                 :available-models ["moonshotai/kimi-k2.5"
-                                                   "minimax/minimax-m2.7"
                                                    "qwen/qwen3.6-plus"
                                                    "z-ai/glm-5.1"
                                                    "xiaomi/mimo-v2-pro"
@@ -173,23 +192,23 @@
               ;; are inert operator data.
               :default-backend :auto}
    :agent-defaults {:ling       {:provider :openrouter :model "anthropic/claude-opus-4-7"}
-                    :drone      {:provider :openrouter :model "minimax/minimax-m2.7"}
+                    :drone      {:provider :openrouter :model "qwen/qwen3.6-plus"}
                     :compressor {:provider :venice     :model "venice-uncensored"}}
    :models {:task-models {:coding     "moonshotai/kimi-k2.5"
-                          :coding-alt "minimax/minimax-m2.7"
+                          :coding-alt "qwen/qwen3.6-plus"
                           :testing    "moonshotai/kimi-k2.5"
                           :bugfix     "moonshotai/kimi-k2.5"
                           :general    "moonshotai/kimi-k2.5"
                           :arch       "qwen/qwen3.6-plus"
                           :docs       "z-ai/glm-5.1"}
             :routing {:testing        {:primary "moonshotai/kimi-k2.5"
-                                       :secondary "minimax/minimax-m2.7"}
+                                       :secondary "qwen/qwen3.6-plus"}
                       :refactoring    {:primary "moonshotai/kimi-k2.5"
-                                       :secondary "minimax/minimax-m2.7"}
+                                       :secondary "qwen/qwen3.6-plus"}
                       :implementation {:primary "moonshotai/kimi-k2.5"
-                                       :secondary "minimax/minimax-m2.7"}
+                                       :secondary "qwen/qwen3.6-plus"}
                       :bugfix         {:primary "moonshotai/kimi-k2.5"
-                                       :secondary "minimax/minimax-m2.7"}
+                                       :secondary "qwen/qwen3.6-plus"}
                       :documentation  {:primary "z-ai/glm-5.1"
                                        :secondary "qwen/qwen3.6-plus"}
                       :general        {:primary "moonshotai/kimi-k2.5"
