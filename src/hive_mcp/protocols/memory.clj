@@ -249,6 +249,53 @@
   (satisfies? IMemoryStoreWithAnalytics store))
 
 ;;; ============================================================================
+;;; IMemoryStoreMetadataWrite Protocol (Optional Extension)
+;;; ============================================================================
+;;; Reload-safe: see note on IMemoryStore above.
+;;;
+;;; ISP split for the write surface: the base IMemoryStore/update-entry! is a
+;;; one-size-fits-all method whose default implementation re-runs the embedder
+;;; on every field change (see `hive-milvus.store.entries/update-entry!` →
+;;; `relocate.pipeline/relocate-update` → `relocate.promoters.record/build-target-record`
+;;; → `embedder/embed-for-entry`). That makes pure-metadata updates (e.g.
+;;; appending an edge id to :kg-incoming, bumping :access-count) pay the
+;;; full HTTP-embedding cost — a 4096d Venice round-trip — for nothing.
+;;;
+;;; This optional extension provides a metadata-only write surface that
+;;; preserves the existing embedding. Stores that satisfy it should reuse
+;;; the entry's stored vector verbatim; stores that don't satisfy it fall
+;;; back to update-entry! (slow path).
+;;;
+;;; Architectural rule (idempotence law for compound writes):
+;;;   add(content, refs=[r1...rN]) ≡ add(content) ; for r in refs: edge(r)
+;;; Both forms must produce the same final state at the same (or lower)
+;;; cost. The base IMemoryStore made the compound form strictly worse by
+;;; re-embedding once per back-edge; this protocol is the proper fix.
+
+(defonce ^:private -imetawrite-defined? (atom false))
+
+(when (compare-and-set! -imetawrite-defined? false true)
+  (defprotocol IMemoryStoreMetadataWrite
+    "Optional extension for metadata-only writes that preserve the
+     existing embedding. Implementors MUST NOT re-run the embedder."
+
+    (update-metadata! [this id updates]
+      "Update non-content fields on entry `id` without re-embedding.
+
+       `updates` is a map of fields to merge into the existing entry —
+       must NOT contain :content or :type (those change embedding
+       identity; use update-entry! instead). Implementations are
+       expected to read the existing record (including its :embedding
+       vector), merge `updates`, and upsert with the retrieved vector.
+
+       Returns the merged entry on success, nil if id not found.")))
+
+(defn metadata-write-store?
+  "Check if the store supports the no-embed metadata write surface."
+  [store]
+  (satisfies? IMemoryStoreMetadataWrite store))
+
+;;; ============================================================================
 ;;; IMemoryStoreWithStaleness Protocol (Optional Extension)
 ;;; ============================================================================
 ;;; Reload-safe: see note on IMemoryStore above.
@@ -314,6 +361,50 @@
        (let [ks (set (map keyword output-fields))]
          (mapv #(select-keys % ks) entries))
        entries))))
+
+;;; ============================================================================
+;;; IMemoryStoreWithRouting Protocol (Optional)
+;;; ============================================================================
+;;;
+;;; Backends that shard entries across multiple physical containers (Milvus
+;;; per-dimension collections, Pinecone indexes, sharded Postgres tables)
+;;; declare their routing rules here so callers can ask:
+;;;   - Where SHOULD this entry live now? (target-collection-for)
+;;;   - Move it if it's in the wrong place. (relocate-entry!)
+;;;
+;;; Backends with no sharding (Datalevin, single-collection Chroma) need not
+;;; implement this protocol; routing-aware callers must check `routing-store?`
+;;; before invoking. Reload-safe: see note on IMemoryStore above.
+
+(defonce ^:private -iwithrouting-defined? (atom false))
+
+(when (compare-and-set! -iwithrouting-defined? false true)
+  (defprotocol IMemoryStoreWithRouting
+    "Optional extension for backends with multi-container routing.
+
+     Routing rules are owned by the backend; callers ask 'where should this
+     entry live according to current config?' and 'move it if it is in the
+     wrong place.' Used to recover from embedder/dimension drift without a
+     manual collection-by-collection migration."
+
+    (target-collection-for [this entry]
+      "Resolve the canonical container (collection / index / shard / table)
+       where `entry` should live according to current routing config.
+       Returns a backend-specific identifier (string for Milvus, etc.) or
+       nil when the backend has no routing concept.")
+
+    (relocate-entry! [this id]
+      "If the entry's current physical location differs from its target
+       (per `target-collection-for`), move it: read existing, re-vectorize
+       under the target's embedder, write to target, delete from source.
+       No-op when entry is already canonical or when no entry exists for
+       `id`. Returns {:moved? bool :from container :to container :id id}
+       for observability.")))
+
+(defn routing-store?
+  "Check if the store supports container-routing introspection + relocation."
+  [store]
+  (satisfies? IMemoryStoreWithRouting store))
 
 ;;; ============================================================================
 ;;; IMemoryStoreTemporal Protocol (Bitemporal Extension)

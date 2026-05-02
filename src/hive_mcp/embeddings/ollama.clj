@@ -38,7 +38,8 @@
   {"nomic-embed-text" 768 ; Good balance of speed/quality
    "mxbai-embed-large" 1024 ; Higher quality, slower
    "all-minilm" 384 ; Fastest, lower quality
-   "snowflake-arctic-embed" 1024})
+   "snowflake-arctic-embed" 1024
+   "qwen3-embedding:0.6b" 1024}) ; Local Qwen3 — 32k ctx, dual-run with nomic
 
 (defn- resolve-config!
   "Resolve Ollama host + model via hive-di (env → overrides → defaults).
@@ -90,11 +91,12 @@
    Throws helpful error when content exceeds embedding token limit."
   [host model text]
   (try
-    (let [response (make-request host "/api/embeddings"
+    (let [response (make-request host "/api/embed"
                                  {:model model
-                                  :prompt text
-                                  :keep_alive "24h"})]
-      (:embedding response))
+                                  :input text
+                                  :keep_alive "24h"
+                                  :options {:num_ctx 8192}})]
+      (first (:embeddings response)))
     (catch Exception e
       (if (context-length-error? e)
         (throw (ex-info

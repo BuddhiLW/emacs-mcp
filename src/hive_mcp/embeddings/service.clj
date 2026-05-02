@@ -292,7 +292,9 @@
   [memory-type]
   (if memory-type
     [(-> (resolve-provider-for-type memory-type) :collection-name)]
-    [base-collection-name (str base-collection-name "-4096d")]))
+    [base-collection-name
+     (str base-collection-name "-1024d")
+     (str base-collection-name "-4096d")]))
 
 (defn reset-service!
   "Reset all service state. For testing."

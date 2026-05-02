@@ -3,7 +3,8 @@
   (:require [hive-mcp.tools.memory.crud.write :as write]
             [hive-mcp.tools.memory.crud.query :as query]
             [hive-mcp.tools.memory.crud.retrieve :as retrieve]
-            [hive-mcp.tools.memory.crud.edit :as edit]))
+            [hive-mcp.tools.memory.crud.edit :as edit]
+            [hive-mcp.tools.memory.crud.reembed :as reembed]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -47,3 +48,11 @@
 (def handle-batch-edit
   "Apply a batch of edits sequentially. Per-op results + summary tally."
   edit/handle-batch-edit)
+
+(def handle-reembed
+  "Re-embed a memory entry by id without rewriting content. Preserves id → preserves KG edges."
+  reembed/handle-reembed)
+
+(def handle-batch-reembed
+  "Re-embed a batch of entries by ids. Sequential per-op; summary + per-op results."
+  reembed/handle-batch-reembed)

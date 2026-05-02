@@ -50,6 +50,14 @@
   "Batch memory edit. Sequential per-op; summary + per-op results."
   crud/handle-batch-edit)
 
+(def handle-mcp-memory-reembed
+  "Re-embed a memory entry by id without rewriting content."
+  crud/handle-reembed)
+
+(def handle-mcp-memory-batch-reembed
+  "Batch re-embed; sequential per-op; summary + per-op results."
+  crud/handle-batch-reembed)
+
 ;; Search Operations
 (def handle-mcp-memory-search-semantic search/handle-search-semantic)
 

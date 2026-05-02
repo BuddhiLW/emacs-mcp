@@ -19,7 +19,8 @@
             [hive-mcp.crystal.recall :as recall]
             [clojure.string :as str]
             [taoensso.timbre :as log]
-            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]
+            [hive-weave.core :as weave]))
 
 (def ^:const ^:private memory-write-timeout-ms
   "Timeout budget for a single memory write (Chroma add + KG tx + fetch).
@@ -29,42 +30,103 @@
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
+(defn- find-target-store
+  "Probe each registered IMemoryStore for `target-id`. Returns the
+   first store whose `get-entry` returns a non-nil record, paired
+   with the entry itself so callers don't pay a second read.
+
+   Cross-slot routing: a `:default` (milvus) entry that depends-on a
+   target living in `:kanban` (qdrant-local) needs its back-edge
+   metadata write routed to the qdrant slot. Probing the registry
+   resolves the target's actual slot regardless of which slot the
+   source entry was written to.
+
+   :default is probed first when present so the common case (axioms,
+   principles, conventions all in :default) costs exactly one read.
+   Returns `[slot store entry]` on hit, `nil` on miss."
+  [target-id]
+  (let [registry (mem-proto/registered-stores)
+        ordered (concat (when-let [s (:default registry)] [[:default s]])
+                        (filter (fn [[k _]] (not= k :default)) registry))]
+    (some (fn [[slot store]]
+            (when-let [entry (with-resilience (mem-proto/get-entry store target-id))]
+              [slot store entry]))
+          ordered)))
+
 (defn- update-target-incoming!
-  "Append edge-id to target entry's kg-incoming field.
-   Wraps the store read+write pair in `with-resilience` so the KG
-   back-edge bookkeeping survives a transient Milvus transport drop."
+  "Append edge-id to target entry's kg-incoming field, preserving the
+   existing embedding.
+
+   Cross-slot routing: probes `(registered-stores)` to locate the slot
+   that actually owns `target-id`. Without this, a back-edge from a
+   :default entry to a target living in :kanban (or vice-versa) would
+   read+write the wrong slot — the read returns nil, the write is a
+   silent no-op, and the kg-incoming bookkeeping drifts.
+
+   Uses the IMemoryStoreMetadataWrite protocol (`update-metadata!`)
+   when the resolved store satisfies it — the no-embed fast path. Falls
+   back to the slow `update-entry!` for stores that don't implement
+   metadata writes (re-embeds on every field change).
+
+   Each store probe + the final write are wrapped in `with-resilience`
+   so KG back-edge bookkeeping survives a transient transport drop."
   [target-id edge-id]
-  (let [store (mem-proto/get-store)]
-    (when-let [target-entry (with-resilience (mem-proto/get-entry store target-id))]
-      (let [existing-incoming (or (:kg-incoming target-entry) [])
-            updated-incoming (conj existing-incoming edge-id)]
-        (with-resilience
-          (mem-proto/update-entry! store target-id {:kg-incoming updated-incoming}))))))
+  (when-let [[_slot store target-entry] (find-target-store target-id)]
+    (let [existing-incoming (or (:kg-incoming target-entry) [])
+          updated-incoming  (conj existing-incoming edge-id)
+          updates           {:kg-incoming updated-incoming}]
+      (with-resilience
+        (if (mem-proto/metadata-write-store? store)
+          (mem-proto/update-metadata! store target-id updates)
+          (mem-proto/update-entry!    store target-id updates))))))
 
 (defn- create-kg-edges!
   "Create KG edges for the given relationships and update target entries.
-   Uses conn/with-tx-batch to coalesce all edge transact! calls."
+
+   Two-phase to honour the idempotence law for compound writes
+   (add(c, refs=[r1...rN]) ≡ add(c) ; for r in refs: edge(r)):
+
+     Phase 1 — KG transact (synchronous, batched). All `kg-edges/add-edge!`
+       calls coalesce into a single Datahike tx via `kg-conn/with-tx-batch`.
+       Fast (in-process Datahike) so sequential is fine.
+
+     Phase 2 — Milvus back-edge writes (fan-out via hive-weave). The
+       :kg-incoming bookkeeping on each target is one Milvus read + one
+       upsert; no embed cost (see IMemoryStoreMetadataWrite). Running
+       these in parallel under `weave/fork-join` collapses wall-clock
+       latency from sum(per-target) → max(per-target), keeping the
+       compound add safely under `memory-write-timeout-ms`."
   [entry-id {:keys [kg_implements kg_supersedes kg_depends_on kg_refines]} project-id agent-id]
-  (kg-conn/with-tx-batch
-    (let [created-by (when agent-id (str "agent:" agent-id))
-          create-edges (fn [targets relation]
-                         (when (seq targets)
-                           (mapv (fn [target-id]
-                                   (let [edge-id (kg-edges/add-edge!
-                                                  {:from entry-id
-                                                   :to target-id
-                                                   :relation relation
-                                                   :scope project-id
-                                                   :confidence 1.0
-                                                   :created-by created-by})]
-                                     (update-target-incoming! target-id edge-id)
-                                     edge-id))
-                                 targets)))]
-      (vec (concat
-            (create-edges kg_implements :implements)
-            (create-edges kg_supersedes :supersedes)
-            (create-edges kg_depends_on :depends-on)
-            (create-edges kg_refines :refines))))))
+  (let [created-by   (when agent-id (str "agent:" agent-id))
+        edge-records
+        (kg-conn/with-tx-batch
+          (let [add-edges (fn [targets relation]
+                            (when (seq targets)
+                              (mapv (fn [target-id]
+                                      (let [edge-id (kg-edges/add-edge!
+                                                      {:from       entry-id
+                                                       :to         target-id
+                                                       :relation   relation
+                                                       :scope      project-id
+                                                       :confidence 1.0
+                                                       :created-by created-by})]
+                                        {:target-id target-id :edge-id edge-id}))
+                                    targets)))]
+            (vec (concat
+                   (add-edges kg_implements :implements)
+                   (add-edges kg_supersedes :supersedes)
+                   (add-edges kg_depends_on :depends-on)
+                   (add-edges kg_refines    :refines)))))
+        tasks
+        (into [] (map-indexed
+                   (fn [i {:keys [target-id edge-id]}]
+                     [(keyword (str "back-edge-" i))
+                      #(update-target-incoming! target-id edge-id)
+                      nil])
+                   edge-records))]
+    (when (seq tasks)
+      (apply weave/fork-join {:budget-ms 25000} tasks))
+    (mapv :edge-id edge-records)))
 
 (defn- build-entry-tags
   "Build complete tags vector: base, agent, KG markers, and scope."
@@ -111,12 +173,17 @@
    stored via the same `add-entry!` path as every other type — there
    is no separate plans collection.
 
+   `:store-key` selects the multi-store registry slot. Defaults to
+   `:default` (legacy). Kanban writes thread `:kanban` through so the
+   entry lands in the dedicated qdrant collection instead of milvus.
+
    Wraps the store add-entry! in `with-resilience` so a dropped
    HTTP transport (selector-manager-closed IOException surfaced as
    ExecutionException) kicks the heal loop and retries once before
    surfacing the failure to the caller."
   [{:keys [type content tags-with-scope content-hash duration-str
-           expires project-id abstraction-level knowledge-gaps]}]
+           expires project-id abstraction-level knowledge-gaps store-key]
+    :or   {store-key :default}}]
   (let [base-entry {:type type :content content :tags tags-with-scope
                     :content-hash content-hash :duration duration-str
                     :expires (or expires "") :project-id project-id
@@ -128,7 +195,7 @@
                   (assoc :steps-count (plans/count-plan-steps content)))
                 base-entry)]
     (with-resilience
-      (mem-proto/add-entry! (mem-proto/get-store) entry))))
+      (mem-proto/add-entry! (mem-proto/get-store store-key) entry))))
 
 (def ^:private ^:const read-after-write-attempts 6)
 (def ^:private ^:const read-after-write-base-ms 40)
@@ -159,13 +226,26 @@
 (defn- finalize-entry!
   "Wire KG edges, fetch created entry, notify channel, and format response.
 
+   `:store-key` (passed via `entry-ctx`) routes the read-after-write +
+   `:kg-outgoing` link write to the same slot the entry was indexed in.
+   Defaults to `:default` (legacy / milvus). Kanban writes thread
+   `:kanban` so the back-link update lands in the same qdrant
+   collection that `index-entry!` wrote to.
+
+   Note: `create-kg-edges!` does back-edge bookkeeping on entries that
+   may live in *other* slots (e.g. an axiom in :default that a kanban
+   entry depends-on). That cross-slot scan is a known soft-edge for
+   the cutover window — see plan section D.5. KG edges themselves
+   live in Datahike, unaffected by the IMemoryStore slot.
+
    The KG outgoing-edge update is wrapped in `with-resilience` so a
    transient Milvus transport drop during the edge-link write kicks
    the heal loop instead of poisoning KG edges. All types — plans
    included — flow through the single IMemoryStore."
   [entry-id kg-params project-id agent-id
-   {:keys [tags-with-scope type knowledge-gaps]}]
-  (let [store (mem-proto/get-store)
+   {:keys [tags-with-scope type knowledge-gaps store-key]
+    :or   {store-key :default}}]
+  (let [store (mem-proto/get-store store-key)
         edge-ids (create-kg-edges! entry-id kg-params project-id agent-id)
         _ (when (seq edge-ids)
             (with-resilience
@@ -188,8 +268,12 @@
 
 (defn- do-add!
   "Inner core of handle-add. Runs the memory-store/KG IO path through
-   the single IMemoryStore — no per-type collection branching.
-   Intended to be submitted to the memory pool for isolation.
+   the IMemoryStore registered under `:store-key` (default `:default`).
+
+   `:store-key` propagates to dedup find/update, primary index, and
+   finalize. Kanban callers thread `:kanban` (or `:dual-read`-resolved)
+   to land in the dedicated qdrant collection without disturbing the
+   generic memory-add surface used by axiom/principle/snippet writes.
 
    Both the duplicate-detection read and the duplicate-tag-merge write
    are wrapped in `with-resilience`: if the Milvus HTTP transport drops
@@ -197,7 +281,9 @@
    fires and the call retries once — otherwise transient failures here
    would leak through `with-store`'s generic try/catch as errors."
   [{:keys [type content tags duration directory agent_id
-           kg_implements kg_supersedes kg_depends_on kg_refines abstraction_level]}]
+           kg_implements kg_supersedes kg_depends_on kg_refines abstraction_level
+           store-key]
+    :or   {store-key :default}}]
   (let [tags-vec (coerce-vec! tags :tags [])
         kg-vecs {:kg-implements-vec (coerce-vec! kg_implements :kg_implements [])
                  :kg-supersedes-vec (coerce-vec! kg_supersedes :kg_supersedes [])
@@ -207,13 +293,14 @@
         abstraction-level (or abstraction_level
                               (classify/classify-abstraction-level type content tags-vec))
         knowledge-gaps (gaps/extract-knowledge-gaps content)]
-    (log/info "mcp-memory-add:" type "directory:" directory "agent_id:" agent_id)
+    (log/info "mcp-memory-add:" type "directory:" directory "agent_id:" agent_id
+              "store-key:" store-key)
     (with-store
       (let [project-id (scope/get-current-project-id directory)
             agent-id (or agent_id (ctx/current-agent-id)
                          (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
             tags-with-scope (build-entry-tags tags-vec agent-id kg-vecs project-id)
-            store (mem-proto/get-store)
+            store (mem-proto/get-store store-key)
             content-hash (mem-proto/content-hash content)
             duration-str (or duration "long")
             expires (dur/calculate-expires duration-str)
@@ -230,7 +317,8 @@
                            :content-hash content-hash :duration-str duration-str
                            :expires expires :project-id project-id
                            :abstraction-level abstraction-level
-                           :knowledge-gaps knowledge-gaps :agent-id agent-id}
+                           :knowledge-gaps knowledge-gaps :agent-id agent-id
+                           :store-key store-key}
                 raw-id (index-entry! entry-ctx)]
             ;; Contract guard: IMemoryStore/add-entry! must return a non-blank
             ;; id string. Some backends (e.g. Milvus under circuit-breaker

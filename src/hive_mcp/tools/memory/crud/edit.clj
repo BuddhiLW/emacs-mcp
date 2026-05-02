@@ -18,7 +18,6 @@
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.memory.type-registry :as type-registry]
-            [hive-mcp.plan.plans :as plans]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -59,8 +58,7 @@
    when the entry is not found. Does not build MCP-shaped responses — leaves
    that to the caller so batch ops can aggregate cleanly."
   [store {:keys [id reason] :as params}]
-  (when-let [existing (or (mem-proto/get-entry store id)
-                          (plans/get-plan id))]
+  (when-let [existing (mem-proto/get-entry store id)]
     (let [[updates content-changed?] (build-updates existing params)]
       (if (empty? updates)
         {:id id :noop true :existing existing}

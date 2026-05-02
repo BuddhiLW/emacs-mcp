@@ -13,7 +13,6 @@
             [hive-mcp.plan.fsm :as plan-fsm]
             [hive-mcp.plan.kg-degraded :as kg-degraded]
             [hive-mcp.vectordb.facade :as facade]
-            [hive-mcp.plan.plans :as plans]
             [hive-mcp.knowledge-graph.connection :as kg-conn]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.agent.context :as ctx]
@@ -331,8 +330,7 @@
                 [(slurp plan-path)
                  (ctx/current-project-id)
                  (str "file:" plan-path)])
-            (when-let [entry (or (plans/get-plan plan-memory-id)
-                                 (facade/get-entry-by-id plan-memory-id))]
+            (when-let [entry (facade/get-entry-by-id plan-memory-id)]
               [(:content entry)
                (:project-id entry)
                plan-memory-id]))]

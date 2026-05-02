@@ -1,0 +1,17 @@
+{:err-keyword {:phase :err-short-circuit, :error :validation/bad},
+ :err-with-data {:phase :err-short-circuit, :error :io/timeout},
+ :nil-val {:phase :throw-non-result, :binding x, :type nil},
+ :ok-int {:phase :body-ran, :bound 7},
+ :ok-nil {:phase :body-ran, :bound nil},
+ :raw-int
+ {:phase :throw-non-result, :binding x, :type "java.lang.Long"},
+ :raw-map
+ {:phase :throw-non-result,
+  :binding x,
+  :type "clojure.lang.PersistentArrayMap"},
+ :raw-string
+ {:phase :throw-non-result, :binding x, :type "java.lang.String"},
+ :raw-vector
+ {:phase :throw-non-result,
+  :binding x,
+  :type "clojure.lang.PersistentVector"}}

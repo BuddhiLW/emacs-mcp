@@ -49,7 +49,8 @@
   {"nomic-embed-text" 768
    "mxbai-embed-large" 1024
    "all-minilm" 384
-   "snowflake-arctic-embed" 1024})
+   "snowflake-arctic-embed" 1024
+   "qwen3-embedding:0.6b" 1024})
 
 (def ^:private openai-models
   "OpenAI embedding models with dimensions."

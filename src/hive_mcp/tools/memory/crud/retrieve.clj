@@ -5,7 +5,6 @@
             [hive-mcp.tools.memory.format :as fmt]
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.protocols.memory :as mem-proto]
-            [hive-mcp.plan.plans :as plans]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [taoensso.timbre :as log]
             [hive-mcp.vectordb.resilience :refer [with-resilience]]))
@@ -43,8 +42,7 @@
   (log/info "mcp-memory-get-full:" id)
   (with-store
     (let [store (mem-proto/get-store)]
-      (if-let [entry (or (with-resilience (mem-proto/get-entry store id))
-                         (plans/get-plan id))]
+      (if-let [entry (with-resilience (mem-proto/get-entry store id))]
         (let [base-result (fmt/entry->json-alist entry)
               {:keys [outgoing incoming]}
               (try (get-kg-edges-for-entry id)
@@ -67,8 +65,7 @@
     (with-store
       (let [store (mem-proto/get-store)
             results (mapv (fn [id]
-                            (if-let [entry (or (with-resilience (mem-proto/get-entry store id))
-                                               (plans/get-plan id))]
+                            (if-let [entry (with-resilience (mem-proto/get-entry store id))]
                               (let [base (fmt/entry->json-alist entry)
                                     {:keys [outgoing incoming]}
                                     (try (get-kg-edges-for-entry id)
