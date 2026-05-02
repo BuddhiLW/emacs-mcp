@@ -7,7 +7,8 @@
             [hive-mcp.swarm.datascript.queries :as queries]
             [hive-mcp.swarm.datascript.lings :as ds-lings]
             [hive-mcp.tools.memory.scope :as scope]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.emacs-ext.client :as ec]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -17,14 +18,13 @@
    Fallback when headless strategy can't reach the Emacs buffer."
   [agent-id]
   (try
-    (when-let [eval-fn (requiring-resolve 'hive-mcp.emacs.client/eval-elisp)]
-      (let [elisp (format "(when (fboundp 'hive-mcp-swarm-slaves-kill) (hive-mcp-swarm-slaves-kill \"%s\"))"
-                          agent-id)
-            result (eval-fn elisp)]
-        (log/info "Emacs kill result" {:agent-id agent-id :result result})
-        (when (:success result)
-          (try (ds-lings/remove-slave! agent-id) (catch Exception _))
-          {:killed? true :id agent-id :via :emacs})))
+    (let [elisp (format "(when (fboundp 'hive-mcp-swarm-slaves-kill) (hive-mcp-swarm-slaves-kill \"%s\"))"
+                        agent-id)
+          result (ec/eval-elisp elisp)]
+      (log/info "Emacs kill result" {:agent-id agent-id :result result})
+      (when (:success result)
+        (try (ds-lings/remove-slave! agent-id) (catch Exception _))
+        {:killed? true :id agent-id :via :emacs}))
     (catch Exception e
       (log/warn "Emacs kill fallback failed" {:agent-id agent-id :error (ex-message e)})
       nil)))

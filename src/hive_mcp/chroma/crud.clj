@@ -108,6 +108,10 @@
         results (gate/deref-read (chroma/get coll :ids [id] :include #{:documents :metadatas}))
         entry (some-> (first results) h/metadata->entry)]
     (or entry
+        ;; Try local 1024-d (qwen3-embedding:0.6b) collection
+        (rescue nil (let [md-coll (conn/get-or-create-named-collection "hive-mcp-memory-1024d" 1024)
+                          md-results (gate/deref-read (chroma/get md-coll :ids [id] :include #{:documents :metadatas}))]
+                      (some-> (first md-results) h/metadata->entry)))
         ;; Try large-content collection if not found in default
         (rescue nil (let [lg-coll (conn/get-or-create-named-collection "hive-mcp-memory-4096d" 4096)
                 lg-results (gate/deref-read (chroma/get lg-coll :ids [id] :include #{:documents :metadatas}))]
@@ -192,10 +196,13 @@
     (update-entry! entry-id updates)))
 
 (defn delete-entry!
-  "Delete a memory entry from the Chroma index. Tries both collections."
+  "Delete a memory entry from the Chroma index. Tries all collections."
   [id]
   (let [coll (conn/get-or-create-collection)]
     (gate/deref-write (chroma/delete coll :ids [id]))
+    ;; Also try local 1024-d collection (qwen3-embedding:0.6b)
+    (rescue nil (let [md-coll (conn/get-or-create-named-collection "hive-mcp-memory-1024d" 1024)]
+                  (gate/deref-write (chroma/delete md-coll :ids [id]))))
     ;; Also try deleting from large collection (entry might be there)
     (rescue nil (let [lg-coll (conn/get-or-create-named-collection "hive-mcp-memory-4096d" 4096)]
         (gate/deref-write (chroma/delete lg-coll :ids [id]))))

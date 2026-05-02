@@ -1,0 +1,5 @@
+{:flat
+ [{:adt/variant :patch/delete-form, :qn "app.core/old"}
+  {:adt/variant :patch/replace-form,
+   :qn "app.core/x",
+   :new-body "(defn x [] 2)"}]}
