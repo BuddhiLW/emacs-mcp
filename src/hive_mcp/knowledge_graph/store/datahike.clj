@@ -27,10 +27,18 @@
 (defonce ^:private addon-norms-registry
   (atom []))
 
-(def ^:private read-timeout-ms
+(def ^:dynamic *read-timeout-ms*
   "Upper bound for Datahike read operations. Datahike itself may deref
-   internal futures; keep that async boundary bounded and recoverable."
-  10000)
+   internal futures; keep that async boundary bounded and recoverable.
+
+   60s tolerates cold-cache reads on 28M-datom stores at boot; the prior
+   10s value caused query-with-inputs failures whenever the schema cache
+   was empty (e.g. first query after JVM start).
+
+   Dynamic so callers with known-slow workloads (e.g. cold-start full-table
+   aggregations from edges/stats) can `binding` a longer ceiling at the
+   call site without inflating the global default for every entity lookup."
+  60000)
 
 (defn register-norms!
   "Register a classpath resource path for addon Datahike norms.
@@ -53,10 +61,13 @@
                   (assoc (result-error result) :operation label))))
 
 (defn- read-call
-  "Run Datahike read thunk through hive-weave. Returns Result."
+  "Run Datahike read thunk through hive-weave. Returns Result.
+   Honors `*read-timeout-ms*` so callers can `binding` a longer ceiling
+   for known-slow workloads (e.g. cold-cache full-table aggregations)
+   without inflating the global default for fast lookups."
   [label f]
   (weave-safe/safe-future-call
-   {:timeout-ms read-timeout-ms
+   {:timeout-ms *read-timeout-ms*
     :name       label}
    f))
 

@@ -16,38 +16,80 @@
   ;; :scanned? — set ONLY by refresh!. Distinct from :initialized? (which
   ;; tracks "writable" state) so that events firing before the first scan
   ;; can't lock the cache into delta-only mode without a baseline.
+  ;;
+  ;; :scan-delay — single-flight guard. When non-nil, an in-flight cold scan
+  ;; is running; concurrent ensure! callers piggyback on that delay instead
+  ;; of fanning out duplicate scans against a 3M-edge store.
   (atom {:initialized? false
          :scanned?     false
+         :scan-delay   nil
          :total-edges  0
          :by-relation  {}
          :by-scope     {}}))
 
 (defn- compute-from-db!
   "Full scan of the KG to compute edge aggregates. Expensive on large graphs;
-   only used for cold start and explicit refresh."
+   only used for cold start and explicit refresh.
+
+   Cold reads on a multi-million-edge Datahike store can blow past the
+   60s default read-timeout when the schema/AVET page cache is empty.
+   When the active backend exposes `*read-timeout-ms*` (currently the
+   Datahike store), `binding` it up to 5 minutes scoped to this call
+   only — so entity lookups and other fast paths keep their tight bound."
   []
-  (let [total (or (conn/query '[:find (count ?e) . :where [?e :kg-edge/id]]) 0)
-        by-relation-q '[:find ?rel (count ?e)
-                        :where
-                        [?e :kg-edge/id]
-                        [?e :kg-edge/relation ?rel]]
-        by-scope-q '[:find ?scope (count ?e)
-                     :where
-                     [?e :kg-edge/id]
-                     [?e :kg-edge/scope ?scope]]]
-    {:initialized? true
-     :total-edges  total
-     :by-relation  (into {} (conn/query by-relation-q))
-     :by-scope     (into {} (conn/query by-scope-q))}))
+  (let [run #(let [total (or (conn/query '[:find (count ?e) . :where [?e :kg-edge/id]]) 0)
+                   by-relation-q '[:find ?rel (count ?e)
+                                   :where
+                                   [?e :kg-edge/id]
+                                   [?e :kg-edge/relation ?rel]]
+                   by-scope-q '[:find ?scope (count ?e)
+                                :where
+                                [?e :kg-edge/id]
+                                [?e :kg-edge/scope ?scope]]]
+               {:initialized? true
+                :total-edges  total
+                :by-relation  (into {} (conn/query by-relation-q))
+                :by-scope     (into {} (conn/query by-scope-q))})
+        timeout-var (try (requiring-resolve
+                          'hive-mcp.knowledge-graph.store.datahike/*read-timeout-ms*)
+                         (catch Throwable _ nil))]
+    (if timeout-var
+      (with-bindings* {timeout-var 300000} run)
+      (run))))
 
 (defn refresh!
   "Rebuild the edge-stats cache from a full DB scan.
    Call on startup or after bulk operations that bypass the event-driven
-   CRUD path."
+   CRUD path.
+
+   Single-flight: a cold scan over 3M+ edges is expensive; concurrent
+   callers piggyback on the same in-flight delay rather than fanning out
+   duplicate scans against the same Datahike connection. The delay clears
+   on success (so a later refresh! can re-scan) and on failure (so retry
+   isn't permanently shadowed by a poisoned delay)."
   []
-  (let [computed (compute-from-db!)]
-    (reset! cache (assoc computed :scanned? true)))
-  nil)
+  (let [d (delay
+            (try
+              (let [computed (compute-from-db!)]
+                (swap! cache
+                       (fn [s]
+                         (-> s
+                             (merge computed)
+                             (assoc :scanned? true :scan-delay nil))))
+                :ok)
+              (catch Throwable t
+                (swap! cache assoc :scan-delay nil)
+                (throw t))))
+        installed
+        (-> (swap-vals! cache
+                        (fn [s]
+                          (if (:scan-delay s)
+                            s
+                            (assoc s :scan-delay d))))
+            second
+            :scan-delay)]
+    @installed
+    nil))
 
 (defn reset-cache!
   "Reset the cache to its uninitialized state. Used by test fixtures
@@ -55,6 +97,7 @@
   []
   (reset! cache {:initialized? false
                  :scanned?     false
+                 :scan-delay   nil
                  :total-edges  0
                  :by-relation  {}
                  :by-scope     {}})

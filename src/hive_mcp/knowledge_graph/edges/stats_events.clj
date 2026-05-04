@@ -32,14 +32,30 @@
   (stats/migrate-scope! old-scope new-scope n)
   {})
 
+(defn- on-store-ready [_coeffects [_ payload]]
+  ;; Cold full-table aggregations on a multi-million-edge store can take
+  ;; minutes; run async so backend init never blocks boot. Single-flight
+  ;; in `stats/refresh!` collapses redundant warm-ups if the store is
+  ;; (re)initialized multiple times in quick succession.
+  (future
+    (try
+      (stats/refresh!)
+      (log/info "KG edge-stats cache warmed" {:trigger :kg.store/ready
+                                              :backend (:backend payload)})
+      (catch Throwable t
+        (log/warn t "KG edge-stats warm-up failed; first stats request will retry"
+                  {:backend (:backend payload)}))))
+  {})
+
 (defn register-handlers!
-  "Idempotent registration of the kg.edges/* event handlers."
+  "Idempotent registration of the kg.edges/* and kg.store/* event handlers."
   []
   (events/reg-event :kg.edges/added         [] on-edge-added)
   (events/reg-event :kg.edges/removed       [] on-edge-removed)
   (events/reg-event :kg.edges/scope-migrated [] on-scope-migrated)
+  (events/reg-event :kg.store/ready          [] on-store-ready)
   (log/debug "KG edge stats event handlers registered:"
-             ":kg.edges/added :kg.edges/removed :kg.edges/scope-migrated"))
+             ":kg.edges/added :kg.edges/removed :kg.edges/scope-migrated :kg.store/ready"))
 
 ;; Eager registration on namespace load. edges.clj requires this ns for
 ;; its side-effect; the moment it loads, any subsequent dispatch from
