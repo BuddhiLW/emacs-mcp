@@ -78,6 +78,40 @@
 (defn current-priority [entry] (content-val (:content entry) :priority "medium"))
 (defn current-title [entry] (content-val (:content entry) :title nil))
 
+(defn- scope-project-tag?
+  "True when tag string starts with `scope:project:`."
+  [tag]
+  (and (some? tag)
+       (.startsWith ^String (str tag) "scope:project:")))
+
+(defn retag-transition
+  "Pure: derive the tag-only mutation for a scope retag.
+
+   Strips every existing `scope:project:*` tag, splices the new scope,
+   then applies optional `±tags` deltas. Preserves status, priority,
+   content — only tags change.
+
+   Returns {:old-project-id .. :new-project-id .. :old-tags .. :new-tags ..
+            :status .. :priority .. :title ..}."
+  [entry new-project-id {:keys [add-tags remove-tags]}]
+  (let [old-tags    (vec (or (:tags entry) []))
+        old-pid     (extract-project-id-from-tags entry)
+        status      (current-status entry)
+        priority    (current-priority entry)
+        title       (current-title entry)
+        without-scope (filterv (complement scope-project-tag?) old-tags)
+        with-new      (conj without-scope (scope/make-scope-tag new-project-id))
+        with-add      (into with-new (filter string? (or add-tags [])))
+        remove-set    (set (or remove-tags []))
+        new-tags      (vec (distinct (remove #(contains? remove-set %) with-add)))]
+    {:old-project-id old-pid
+     :new-project-id new-project-id
+     :old-tags       old-tags
+     :new-tags       new-tags
+     :status         status
+     :priority       priority
+     :title          title}))
+
 (defn transition
   "Pure: derive {:old-status :new-status :new-content :new-tags :title :project-id}.
    Caller supplies project-id (typically from coeffect)."

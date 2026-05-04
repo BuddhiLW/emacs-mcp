@@ -1,0 +1,56 @@
+{:add-and-remove
+ {:old-project-id "hive",
+  :new-project-id "probe",
+  :old-tags ["kanban" "todo" "priority-medium" "scope:project:hive"],
+  :new-tags
+  ["kanban" "priority-medium" "scope:project:probe" "epic:adapter"],
+  :status "todo",
+  :priority "medium",
+  :title "x"},
+ :add-tags
+ {:old-project-id "hive",
+  :new-project-id "probe",
+  :old-tags ["kanban" "todo" "priority-medium" "scope:project:hive"],
+  :new-tags
+  ["kanban"
+   "todo"
+   "priority-medium"
+   "scope:project:probe"
+   "epic:adapter"
+   "wave:1"],
+  :status "todo",
+  :priority "medium",
+  :title "x"},
+ :duplicate-tags-deduped
+ {:old-project-id "hive",
+  :new-project-id "probe",
+  :old-tags ["kanban" "todo" "priority-medium" "scope:project:hive"],
+  :new-tags
+  ["kanban" "todo" "priority-medium" "scope:project:probe" "epic:foo"],
+  :status "todo",
+  :priority "medium",
+  :title "x"},
+ :no-existing-scope
+ {:old-project-id nil,
+  :new-project-id "probe",
+  :old-tags ["kanban" "todo" "priority-medium"],
+  :new-tags ["kanban" "todo" "priority-medium" "scope:project:probe"],
+  :status "todo",
+  :priority "medium",
+  :title "x"},
+ :remove-tags
+ {:old-project-id "hive",
+  :new-project-id "probe",
+  :old-tags ["kanban" "todo" "priority-medium" "scope:project:hive"],
+  :new-tags ["kanban" "todo" "scope:project:probe"],
+  :status "todo",
+  :priority "medium",
+  :title "x"},
+ :scope-only
+ {:old-project-id "hive",
+  :new-project-id "probe",
+  :old-tags ["kanban" "todo" "priority-medium" "scope:project:hive"],
+  :new-tags ["kanban" "todo" "priority-medium" "scope:project:probe"],
+  :status "todo",
+  :priority "medium",
+  :title "x"}}

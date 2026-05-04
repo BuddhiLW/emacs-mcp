@@ -29,6 +29,24 @@
                     [(keyword cmd) handler])
                   commands))))
 
+(defn lazy-resolve-handlers
+  "Lazily resolve a consolidated tool's `handlers` map by fully-qualified
+   symbol, triggering ns load on first access (DIP).
+
+   Replaces the static `c-X/handlers` reference pattern in domain-root
+   consolidators (project, memory, code, swarm). Drops the compile-time
+   coupling between a domain root and every subdomain ns it merges in —
+   moving / renaming a subdomain consolidator no longer breaks compile,
+   it just yields an empty handler tree at runtime.
+
+   Returns the handlers tree on success, `{}` on miss. Caller merges
+   into its canonical-handlers tree the same way the literal reference
+   would have."
+  [sym]
+  (or (try (some-> (requiring-resolve sym) deref)
+           (catch Throwable _ nil))
+      {}))
+
 ;; =============================================================================
 ;; Composite Handler Builder
 ;; =============================================================================

@@ -32,13 +32,14 @@
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.concurrency.pool :as pool]
             [hive-mcp.project.tree :as project-tree]
-            [hive-mcp.dns.result :refer [rescue]]
+            [hive-mcp.dns.result :refer [rescue ok ok? let-ok try-effect* ok->]]
             [hive-mcp.agent.context :as ctx]
             [hive-dsl.context.identity :as ctx-id]
             [hive-ttracking.core :as tt]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]
-            [hive-mcp.tools.catchup.relevance :as relevance]))
+            [hive-mcp.tools.catchup.relevance :as relevance]
+            [hive-mcp.vectordb.kanban-facade :as kanban-facade]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -90,48 +91,60 @@
   300000)
 
 (defn- gather-kanban-summary
-  "Direct memory query for kanban summary scoped to project-id.
+  "Direct kanban-facade query for catchup summary scoped to project-id.
    Returns {:counts {:todo n :inprogress n :inreview n :done n}
-            :recent-todos [{:id :title} ...] (top 10 by updated desc)}.
-   Catchup's bundle path doesn't surface kanban notes (hierarchy fairness
-   cap drops them in favor of session-summaries). This is a dedicated
-   query mirroring the kanban-tag scope-filter pattern."
+            :recent-todos [{:id :title} ...] (top 10 by updated desc)
+            :scope-tag str-or-nil}.
+
+   Routes via `kanban-facade/query-entries` so the active store-routing
+   mode is honored (`:default` legacy milvus, `:kanban` qdrant cutover,
+   `:dual-read` soak). Reaching past the facade is a DIP one-seam
+   violation and was the 2026-05-04 catchup regression: the call site
+   read milvus while live writes had moved to qdrant, producing stale
+   bucket counts that did not reconcile with `kanban list`.
+
+   Railway-ROP: each facade query is wrapped in `try-effect*` so a
+   single bad query short-circuits via `ok->` rather than throwing
+   through the whole computation. The full empty result is the
+   fallback when any leg errors. The caller (safe-deref) still expects
+   a plain map, so the Result is unwrapped at the seam."
   [project-id]
-  (rescue {:counts {} :recent-todos [] :scope-tag nil}
-          (let [store (mem-proto/get-store)
-                scope-tag (when project-id (str "scope:project:" project-id))
-                base-tags (cond-> ["kanban"] scope-tag (conj scope-tag))
-                count-status (fn [status]
-                               (count (mem-proto/query-entries
-                                       store
-                                       {:type "note"
-                                        :tags (conj base-tags status)
-                                        :limit 200
-                                        :output-fields ["id"]})))
-                recent-todos (->> (mem-proto/query-entries
-                                   store
-                                   {:type "note"
-                                    :tags (conj base-tags "todo")
-                                    :limit 10
-                                    :order-by [:updated :desc]
-                                    :output-fields ["id" "content" "tags"]})
-                                  (mapv (fn [e]
-                                          {:id    (:id e)
-                                           :title (or (get-in e [:content :title])
-                                                      (when (string? (:content e))
-                                                        (first (clojure.string/split-lines (:content e))))
-                                                      "(no title)")
-                                           :tags  (:tags e)})))]
-            ;; Internal status tags are 'todo' / 'doing' / 'review' / 'done'
-            ;; (see hive-mcp.tools.kanban.predicates/status-enum->tag).
-            ;; Counts are exposed under their MCP-facing names so the catchup
-            ;; block matches what users would pass to `kanban list status=…`.
-            {:counts {:todo       (count-status "todo")
-                      :inprogress (count-status "doing")
-                      :inreview   (count-status "review")
-                      :done       (count-status "done")}
-             :recent-todos recent-todos
-             :scope-tag scope-tag})))
+  (let [scope-tag    (when project-id (str "scope:project:" project-id))
+        base-tags    (cond-> ["kanban"] scope-tag (conj scope-tag))
+        empty-result {:counts {} :recent-todos [] :scope-tag scope-tag}
+        count-into   (fn [acc bucket tag]
+                       (let-ok [n (try-effect* :kanban/count-failed
+                                    (count (kanban-facade/query-entries
+                                            :type "note"
+                                            :tags (conj base-tags tag)
+                                            :limit 200
+                                            :output-fields ["id"])))]
+                         (ok (assoc-in acc [:counts bucket] n))))
+        attach-recent (fn [acc]
+                        (let-ok [rows (try-effect* :kanban/recent-failed
+                                        (kanban-facade/query-entries
+                                         :type "note"
+                                         :tags (conj base-tags "todo")
+                                         :limit 10
+                                         :order-by [:updated :desc]
+                                         :output-fields ["id" "content" "tags"]
+                                         :include-content? true))]
+                          (ok (assoc acc :recent-todos
+                                     (mapv (fn [e]
+                                             {:id    (:id e)
+                                              :title (or (get-in e [:content :title])
+                                                         (when (string? (:content e))
+                                                           (first (clojure.string/split-lines (:content e))))
+                                                         "(no title)")
+                                              :tags  (:tags e)})
+                                           rows)))))
+        result (ok-> (ok empty-result)
+                     (count-into :todo       "todo")
+                     (count-into :inprogress "doing")
+                     (count-into :inreview   "review")
+                     (count-into :done       "done")
+                     attach-recent)]
+    (if (ok? result) (:ok result) empty-result)))
 
 ;; =============================================================================
 ;; Main Catchup Handler

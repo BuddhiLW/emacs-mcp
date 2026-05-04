@@ -103,6 +103,28 @@
   "Result from metadata query - vector of metadata records."
   [:vector MemoryMetadata])
 
+(def QueryEntriesOpts
+  "Closed Malli schema for IMemoryStore.query-entries opts.
+
+   Closed (`{:closed true}`) — every key the protocol contract honors is
+   listed below; unknown keys fail validation. Backends adding new opts
+   MUST update this schema, otherwise generators will not exercise them
+   and the LSP property test will not pin them to the contract.
+
+   Mirror of the docstring on hive-mcp.protocols.memory/query-entries."
+  [:map {:closed true}
+   [:type             {:optional true} [:maybe :string]]
+   [:project-id       {:optional true} [:maybe :string]]
+   [:project-ids      {:optional true} [:maybe [:vector :string]]]
+   [:tags             {:optional true} [:vector :string]]
+   [:exclude-tags     {:optional true} [:vector :string]]
+   [:limit            {:optional true} [:int {:min 0}]]
+   [:include-expired? {:optional true} :boolean]
+   [:include-content? {:optional true} :boolean]
+   [:output-fields    {:optional true} [:vector :string]]
+   [:order-by         {:optional true}
+    [:tuple :keyword [:enum :asc :desc]]]])
+
 ;; =============================================================================
 ;; Validators
 ;; =============================================================================
@@ -141,7 +163,8 @@
    :memory/entry-minimal MemoryEntryMinimal
    :memory/metadata MemoryMetadata
    :memory/abstraction-level AbstractionLevel
-   :memory/project-scope ProjectScope})
+   :memory/project-scope ProjectScope
+   :memory/query-entries-opts QueryEntriesOpts})
 
 ;; =============================================================================
 ;; Boundary Validation
