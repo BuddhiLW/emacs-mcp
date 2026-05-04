@@ -1,0 +1,31 @@
+{:all-fields
+ {:by-scope {},
+  :umbrella
+  {:cross-pid-edges [],
+   :cross-cutting-decisions [],
+   :session-timing nil,
+   :session-temporal nil,
+   :hivemind-shouts-global []},
+  :errors [],
+  :session "20260504",
+  :directory "/x",
+  :agent-id "ag1"},
+ :no-args
+ {:by-scope {},
+  :umbrella
+  {:cross-pid-edges [],
+   :cross-cutting-decisions [],
+   :session-timing nil,
+   :session-temporal nil,
+   :hivemind-shouts-global []},
+  :errors []},
+ :session
+ {:by-scope {},
+  :umbrella
+  {:cross-pid-edges [],
+   :cross-cutting-decisions [],
+   :session-timing nil,
+   :session-temporal nil,
+   :hivemind-shouts-global []},
+  :errors [],
+  :session "20260504"}}
