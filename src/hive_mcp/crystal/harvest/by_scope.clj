@@ -74,39 +74,45 @@
 
 (def ScopeSlice
   "Per-scope slice — same conceptual shape as the legacy monolithic harvest
-   result but constrained to one project's activity.
+   result but constrained to one project's activity AND flattened: every
+   field is a sequential collection of datums (legacy harvest-all wrapped
+   some sources in `{:edges [...] :count N}` style maps; the partitioned
+   shape stores the inner items directly so per-scope counts compose).
 
    All fields default to empty so a slice with no activity in a given
-   dimension serialises cleanly. The shape mirrors what `synthesize-wrap`
-   already consumes, so step-5 fan-out can call the existing synthesiser
-   per slice without translation."
+   dimension serialises cleanly."
   [:map {:closed false}
    [:progress-notes      {:default []} [:sequential :map]]
    [:completed-tasks     {:default []} [:sequential :map]]
    [:git-commits         {:default []} [:sequential :string]]
-   [:recalls             {:default {}} [:map-of :string :any]]
+   [:recalls             {:default []} [:sequential :any]]
    [:hivemind-messages   {:default []} [:sequential :map]]
-   [:kanban-activity     {:default {}} [:map-of :keyword :any]]
-   [:kg-edges-created    {:default {}} [:map-of :keyword :any]]
-   [:kanban-movements    {:default {}} [:map-of :keyword :any]]
+   [:kanban-activity     {:default []} [:sequential :map]]
+   [:kg-edges-created    {:default []} [:sequential :map]]
+   [:kanban-movements    {:default []} [:sequential :map]]
    [:memory-ids-created  {:default []} [:sequential :any]]
    [:memory-ids-accessed {:default []} [:sequential :string]]])
 
 (def UmbrellaSlice
   "Cross-cutting harvest facts.
 
-   - `:cross-pid-edges`         — KG edges whose endpoints' scopes differ.
-   - `:cross-cutting-decisions` — decisions/conventions tagged
-                                  scope:multi-project at the source.
+   - `:cross-pid-edges`         — KG edges whose endpoints' scopes differ
+                                  (or whose scope is missing entirely).
+   - `:cross-cutting-decisions` — catch-all bucket for any datum routed to
+                                  the umbrella with no typed home (e.g.
+                                  weak-attribution commits whose source-pid
+                                  was nil; progress notes with no scope
+                                  signal). Heterogeneous on purpose —
+                                  validates as :any.
    - `:session-timing`          — whole-session timing (single value).
    - `:session-temporal`        — whole-session temporal metadata.
    - `:hivemind-shouts-global`  — shouts not attributable to a project."
   [:map {:closed false}
-   [:cross-pid-edges         {:default []}        [:sequential :map]]
-   [:cross-cutting-decisions {:default []}        [:sequential :map]]
+   [:cross-pid-edges         {:default []}        [:sequential :any]]
+   [:cross-cutting-decisions {:default []}        [:sequential :any]]
    [:session-timing          {:optional true}     [:maybe :map]]
    [:session-temporal        {:optional true}     [:maybe :map]]
-   [:hivemind-shouts-global  {:default []}        [:sequential :map]]])
+   [:hivemind-shouts-global  {:default []}        [:sequential :any]]])
 
 (def HarvestByScope
   "Top-level shape returned by step-3 partitioner. Consumed by step-5
@@ -156,15 +162,17 @@
 
 (def empty-scope-slice
   "Zero-activity ScopeSlice. Use as accumulator seed when partitioning a
-   per-source datum into a freshly-discovered pid bucket."
+   per-source datum into a freshly-discovered pid bucket. All fields are
+   empty vectors — the partitioned shape uses vectors uniformly so a per-
+   scope datum-count is a simple sum of `(count v)` across the slice."
   {:progress-notes      []
    :completed-tasks     []
    :git-commits         []
-   :recalls             {}
+   :recalls             []
    :hivemind-messages   []
-   :kanban-activity     {}
-   :kg-edges-created    {}
-   :kanban-movements    {}
+   :kanban-activity     []
+   :kg-edges-created    []
+   :kanban-movements    []
    :memory-ids-created  []
    :memory-ids-accessed []})
 

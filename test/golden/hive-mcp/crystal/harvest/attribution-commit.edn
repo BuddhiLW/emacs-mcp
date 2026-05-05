@@ -1,0 +1,4 @@
+{:funeraria
+ {:pid "funeraria", :datum "def2 wip", :inherits-source? true},
+ :hive {:pid "hive", :datum "abc1 fix bug", :inherits-source? true},
+ :nil-pid {:pid :umbrella, :datum "ghi3 docs", :inherits-source? false}}
