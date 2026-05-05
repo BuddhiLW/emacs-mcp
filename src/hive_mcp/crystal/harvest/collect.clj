@@ -26,7 +26,9 @@
             [clojure.data.json :as json]
             [clojure.java.shell :refer [sh]]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.crystal.harvest.attribution :as attr]
+            [hive-mcp.crystal.harvest.partition :as part]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -492,3 +494,52 @@
                       :effective-agent     effective-agent
                       :errors              errors
                       :session             session})))))
+
+(defn harvest-all-by-scope
+  "Per-scope variant of `harvest-all`. Returns a `HarvestByScope` shape
+   (`hive-mcp.crystal.harvest.by-scope/HarvestByScope`) — every datum
+   tagged with the project-id it belongs to.
+
+   Pipeline:
+     1. `harvest-all` collects flat session data (current legacy path).
+     2. `attribution/attribute-harvest` tags each datum with its pid;
+        weak-attribution datums (commits, accessed-ids) inherit the
+        harvest-context pid.
+     3. `partition/partition-harvest-by-scope` distributes attributed
+        datums into ScopeSlice buckets per pid + UmbrellaSlice for
+        cross-cutting facts.
+
+   Step 4 of the per-scope wrap emission plan
+   (memory `20260504173159-46dc47f1`).
+
+   Note: today's harvest sources still pre-filter by single project-id,
+   so a single-scope session produces a `HarvestByScope` with one entry
+   in `:by-scope` and the harvest-context pid as that entry's key. The
+   shape contract is in place for step-5 fan-out; full multi-scope
+   collection (dropping per-source filters or running harvest-all once
+   per touched pid) lands as a step-4a follow-up after step-12 measures
+   the gap on real sessions.
+
+   Opts (forwarded to harvest-all):
+     :directory  -- working directory for project scoping
+     :agent-id   -- agent identity for per-agent session timing"
+  ([] (harvest-all-by-scope nil))
+  ([{:keys [directory agent-id] :as opts}]
+   (let [legacy     (harvest-all opts)
+         dir        (or directory (:directory legacy))
+         source-pid (when dir (scope/get-current-project-id dir))
+         attribution (attr/attribute-harvest legacy source-pid)
+         hbs        (part/partition-harvest-by-scope attribution)]
+     (log/info "harvest-all-by-scope:"
+               "scopes:" (count (:by-scope hbs))
+               "scope-datums:" (part/scope-datum-count hbs)
+               "umbrella-datums:" (part/umbrella-datum-count hbs)
+               "source-pid:" source-pid)
+     (assoc hbs
+            :directory dir
+            :agent-id  (or agent-id (:agent-id legacy))
+            :session   (:session legacy)
+            ;; Carry the legacy summary alongside HarvestByScope for any
+            ;; consumer that still wants flat counts during the migration
+            ;; window. Step-5 may drop this once synthesis is fan-out.
+            :summary   (:summary legacy)))))

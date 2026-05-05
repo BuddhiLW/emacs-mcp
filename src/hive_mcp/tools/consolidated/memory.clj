@@ -7,8 +7,6 @@
   (:require [hive-mcp.tools.cli :refer [make-cli-handler make-batch-handler]]
             [hive-mcp.tools.composite :as composite]
             [hive-mcp.tools.memory :as mem]
-            [hive-mcp.tools.consolidated.kg :as c-kg]
-            [hive-mcp.tools.consolidated.migration :as c-mig]
             [hive-mcp.memory.type-registry :as type-registry]
             [hive-mcp.events.core :as ev]))
 
@@ -80,9 +78,11 @@
           :batch-duration (make-single-command-batch :duration (:duration handlers))
           :batch-promote  (make-single-command-batch :promote (:promote handlers))
           :batch-demote   (make-single-command-batch :demote (:demote handlers))
-          ;; Nested subdomains (core-owned only — OCP compliant)
-          :kg         c-kg/handlers
-          :migration  c-mig/handlers}))
+          ;; Nested subdomains resolved lazily via composite/lazy-resolve-handlers
+          ;; — drops the static `c-kg`/`c-mig` :requires that previously
+          ;; coupled this ns to those consolidators (DIP).
+          :kg         (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.kg/handlers)
+          :migration  (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.migration/handlers)}))
 
 (def write-commands
   "Memory commands that default to :async true."

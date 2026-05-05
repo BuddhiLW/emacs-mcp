@@ -1,0 +1,4 @@
+{:all-scoped {:flat 2, :total 2, :conserved? true},
+ :all-umbrella {:flat 2, :total 2, :conserved? true},
+ :empty {:flat 0, :total 0, :conserved? true},
+ :mixed-with-recalls {:flat 3, :total 3, :conserved? true}}

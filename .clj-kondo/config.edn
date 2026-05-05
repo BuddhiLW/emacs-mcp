@@ -3,7 +3,13 @@
  ;; hive-di defconfig macro hook — expands to <Name>-fields / -schema /
  ;; resolve-<Name> defs so generated symbols resolve.
  :hooks {:analyze-call {hive-dsl.adt/defadt hive-dsl.hooks.defadt/defadt
-                        hive-di.core/defconfig hive-di.hooks.defconfig/defconfig}}
+                        hive-di.core/defconfig hive-di.hooks.defconfig/defconfig
+                        hive-dsl.result/guard            hooks.hive-dsl.result/guard
+                        hive-dsl.result/rescue           hooks.hive-dsl.result/rescue
+                        hive-dsl.result/rescue-log       hooks.hive-dsl.result/rescue-log
+                        hive-dsl.result/rescue-interrupt hooks.hive-dsl.result/rescue-interrupt
+                        hive-dsl.result/try-effect       hooks.hive-dsl.result/try-effect
+                        hive-dsl.result/try-effect*      hooks.hive-dsl.result/try-effect*}}
 
  :lint-as {;; multi_dsl_e2e_test when-resolved macro binds a single symbol like if-let
            hive-mcp.tools.multi-dsl-e2e-test/when-resolved clojure.core/if-let

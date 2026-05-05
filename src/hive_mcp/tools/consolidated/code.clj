@@ -12,7 +12,6 @@
 
    Addon-contributed subdomains appear dynamically at runtime."
   (:require [hive-mcp.tools.composite :as composite]
-            [hive-mcp.tools.consolidated.cider :as c-cider]
             [clojure.string :as str]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -49,8 +48,10 @@
 ;; =============================================================================
 
 (def canonical-handlers
-  "Core handler tree. Addons extend at runtime via contribute-commands! \"code\"."
-  {:cider    c-cider/handlers
+  "Core handler tree. Addons extend at runtime via contribute-commands! \"code\".
+   Subdomain handler trees resolved lazily via composite/lazy-resolve-handlers
+   to drop the static `c-cider` :require coupling (DIP)."
+  {:cider    (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.cider/handlers)
    :clojure  {:_handler (make-delegating-handler "clojure" handle-clojure)}})
 
 (def handlers canonical-handlers)

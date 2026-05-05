@@ -119,7 +119,7 @@
 
       :else
       (do
-        (when (not exists?)
+        (when-not exists?
           (add-warning! (str "File will be created: " file)))
         (when (and exists? (> (or (file-size file) 0) (* 100 1024)))
           (add-warning! (format "Large file (%d KB), may be slow to process"

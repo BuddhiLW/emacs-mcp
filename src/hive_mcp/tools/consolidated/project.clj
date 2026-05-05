@@ -8,10 +8,6 @@
             [hive-mcp.tools.composite :as composite]
             [hive-mcp.tools.result-bridge :as rb]
             [hive-mcp.tools.projectile :as projectile-handlers]
-            [hive-mcp.tools.consolidated.kanban :as c-kanban]
-            [hive-mcp.tools.consolidated.config :as c-config]
-            [hive-mcp.tools.consolidated.session :as c-session]
-            [hive-mcp.tools.consolidated.workflow :as c-workflow]
             [hive-mcp.project.tree :as tree]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.dns.result :as result]
@@ -87,11 +83,15 @@
 ;; =============================================================================
 
 (def canonical-handlers
+  ;; Subdomain handler trees resolved lazily via composite/lazy-resolve-handlers
+  ;; — the four `c-kanban`/`c-config`/`c-session`/`c-workflow` static :requires
+  ;; that previously coupled this ns to those consolidators are gone. Same
+  ;; nested handler-tree shape; same dispatch behaviour at runtime.
   (merge project-handlers
-         {:kanban   c-kanban/handlers
-          :config   c-config/handlers
-          :session  c-session/handlers
-          :workflow c-workflow/handlers}))
+         {:kanban   (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.kanban/handlers)
+          :config   (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.config/handlers)
+          :session  (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.session/handlers)
+          :workflow (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.workflow/handlers)}))
 
 ;; Keep backward compat alias
 (def handlers canonical-handlers)
@@ -109,7 +109,7 @@
    :description "Projectile project operations: info (project details), files (list files), search (content search), find (find by filename), recent (recently visited), list (all projects), scan (discover .hive-project.edn hierarchy), tree (query cached hierarchy), staleness (check if rescan needed). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :description "Project operation. Subdomains: 'kanban list', 'config get', 'session wrap', 'workflow forge strike'. Use command='help' to list all."}
+                                         :description "Project operation. Subdomains: 'kanban list', 'kanban retag', 'config get', 'session wrap', 'workflow forge strike'. Use command='help' to list all."}
                               ;; Project params
                               "pattern" {:type "string"
                                          :description "Glob pattern or search pattern"}
@@ -122,14 +122,20 @@
                               "force" {:type "boolean"
                                        :description "Force rescan even if fresh"}
                               "project_id" {:type "string"
-                                            :description "Project ID to query tree for / [kanban list] exact-match project filter"}
+                                            :description "Project ID to query tree for / [kanban list] exact-match project filter / [kanban retag] alias for new_project_id"}
                               ;; Kanban params
                               "title" {:type "string" :description "[kanban create] Task title"}
                               "description" {:type "string" :description "[kanban create] Task description"}
-                              "task_id" {:type "string" :description "[kanban update|delete] Task ID"}
+                              "task_id" {:type "string" :description "[kanban update|delete|retag] Task ID"}
                               "new_status" {:type "string"
                                             :enum ["todo" "inprogress" "inreview" "done"]
                                             :description "[kanban update] Target status"}
+                              "new_project_id" {:type "string"
+                                                :description "[kanban retag] Target project scope (preserves entry id + KG edges)"}
+                              "add_tags" {:type "array" :items {:type "string"}
+                                          :description "[kanban retag] Extra tags to add"}
+                              "remove_tags" {:type "array" :items {:type "string"}
+                                             :description "[kanban retag] Tags to remove"}
                               "status" {:type "string"
                                         :enum ["todo" "inprogress" "inreview" "done"]
                                         :description "[kanban list] Filter by status"}

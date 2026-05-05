@@ -27,10 +27,18 @@
 (defonce ^:private addon-norms-registry
   (atom []))
 
-(def ^:private read-timeout-ms
+(def ^:dynamic *read-timeout-ms*
   "Upper bound for Datahike read operations. Datahike itself may deref
-   internal futures; keep that async boundary bounded and recoverable."
-  10000)
+   internal futures; keep that async boundary bounded and recoverable.
+
+   60s tolerates cold-cache reads on 28M-datom stores at boot; the prior
+   10s value caused query-with-inputs failures whenever the schema cache
+   was empty (e.g. first query after JVM start).
+
+   Dynamic so callers with known-slow workloads (e.g. cold-start full-table
+   aggregations from edges/stats) can `binding` a longer ceiling at the
+   call site without inflating the global default for every entity lookup."
+  60000)
 
 (defn register-norms!
   "Register a classpath resource path for addon Datahike norms.
@@ -53,21 +61,33 @@
                   (assoc (result-error result) :operation label))))
 
 (defn- read-call
-  "Run Datahike read thunk through hive-weave. Returns Result."
+  "Run Datahike read thunk through hive-weave. Returns Result.
+   Honors `*read-timeout-ms*` so callers can `binding` a longer ceiling
+   for known-slow workloads (e.g. cold-cache full-table aggregations)
+   without inflating the global default for fast lookups."
   [label f]
   (weave-safe/safe-future-call
-   {:timeout-ms read-timeout-ms
+   {:timeout-ms *read-timeout-ms*
     :name       label}
    f))
 
 (defn- read-with-retry
-  "Run bounded Datahike read. If the connection is stale/corrupt, reopen
-   once and retry. This specifically guards Datahike's internal Future deref
-   failures such as a nil `fut` inside `datahike.api/db`."
+  "Run bounded Datahike read. On connection-level errors, reopen once and
+   retry. Timeouts surface immediately — retrying a cold-cache scan after
+   reopen drops the page-cache work in flight and compounds wall-clock
+   cost without changing the outcome."
   [label reopen! f]
   (let [first-result (read-call label f)]
-    (if (r/ok? first-result)
+    (cond
+      (r/ok? first-result)
       (:ok first-result)
+
+      ;; Timeout = legitimate slow read or cold cache. Retry won't help
+      ;; (the reopened conn starts colder) and burns budget. Surface it.
+      (= :weave/timeout (:error first-result))
+      (throw-read-failed! label first-result)
+
+      :else
       (do
         (log/warn "Datahike KG read failed; reopening connection and retrying once"
                   {:operation label

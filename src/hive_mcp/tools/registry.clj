@@ -32,7 +32,8 @@
             [hive-mcp.tools.composite :as composite]
             [hive-mcp.extensions.registry :as ext]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.tools.consolidated.migrate-kanban :as c-migrate-kanban]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -75,7 +76,8 @@
                                   c-emacs/tools
                                   c-preset/tools
                                   c-events/tools
-                                  c-multi/tools))
+                                  c-multi/tools
+                                  c-migrate-kanban/tools))
         domain-names   (into #{} (map :name) domain-roots)
         cfg-absorbed   (config-absorbed-names)
         addon-tools    (->> (ext/get-registered-tools)
@@ -173,19 +175,20 @@
    :emacs     c-emacs/handlers
    :preset    c-preset/handlers
    ;; Old tool names (backward compat via multi routing)
-   :agent     c-agent/handlers
-   :wave      c-wave/handlers
-   :hivemind  c-hivemind/handlers
-   :agora     c-agora/handlers
-   :olympus   c-olympus/handlers
-   :kanban    c-kanban/handlers
-   :config    c-config/handlers
-   :session   c-session/handlers
-   :workflow  c-workflow/handlers
-   :kg        c-kg/handlers
-   :migration c-migration/handlers
-   :cider     c-cider/handlers
-   :magit     c-magit/handlers
+   :agent          c-agent/handlers
+   :wave           c-wave/handlers
+   :hivemind       c-hivemind/handlers
+   :agora          c-agora/handlers
+   :olympus        c-olympus/handlers
+   :kanban         c-kanban/handlers
+   :config         c-config/handlers
+   :session        c-session/handlers
+   :workflow       c-workflow/handlers
+   :kg             c-kg/handlers
+   :migration      c-migration/handlers
+   :migrate-kanban c-migrate-kanban/handlers
+   :cider          c-cider/handlers
+   :magit          c-magit/handlers
    ;; events tool exposed as a flat dispatcher; expose only the tool def for help
    })
 

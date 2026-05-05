@@ -1,0 +1,11 @@
+{:empty-string false,
+ :funeraria true,
+ :keyword-input false,
+ :multi-project false,
+ :nested true,
+ :nil-input false,
+ :plain true,
+ :scope-global false,
+ :scope-prefix false,
+ :sisf-crm true,
+ :umbrella false}

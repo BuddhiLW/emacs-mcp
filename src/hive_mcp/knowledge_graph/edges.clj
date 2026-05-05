@@ -13,7 +13,10 @@
             [hive-mcp.knowledge-graph.edges.queries :as queries]
             [hive-mcp.events.core :as events]
             [hive-mcp.knowledge-graph.edges.stats :as stats]
-            [hive-mcp.knowledge-graph.edges.stats-events]))
+            [hive-mcp.knowledge-graph.edges.stats-events]
+            [hive-mcp.knowledge-graph.edges.decay :as decay]))
+
+(declare semantic-decay-rate edge-stale? decay-step! prune-threshold remove-edge! decay-rate-for-edge)
 
 (declare get-edge get-edges-from get-edges-to get-edges-by-relation get-edges-by-scope find-edge find-edges-between pull-edge-batch get-all-edges count-edges)
 
@@ -186,21 +189,6 @@
                              (min 1.0))]
       (update-edge-confidence! edge-id new-confidence)
       new-confidence)))
-
-(defn remove-edge!
-  "Delete an edge by its ID.
-   Returns true if edge was removed, false if not found."
-  [edge-id]
-  (if-let [eid (conn/entid [:kg-edge/id edge-id])]
-    (let [edge     (conn/pull-entity '[*] eid)
-          relation (:kg-edge/relation edge)
-          scope    (:kg-edge/scope edge)]
-      (conn/transact! [[:db/retractEntity eid]])
-      (emit-stats-event! :kg.edges/removed
-                         {:relation relation :scope scope}
-                         #(stats/apply-delta! relation scope -1))
-      true)
-    false))
 
 (defn remove-edges-for-node!
   "Remove all edges connected to a node (both incoming and outgoing).
@@ -415,57 +403,10 @@
    Edges verified within this window are untouched."
   30)
 
-(def ^:const co-access-decay-rate
-  "Confidence decay per wrap cycle for co-access edges.
-   Co-access edges are less intentional, so decay faster."
-  0.05)
-
-(def ^:const semantic-decay-rate
-  "Confidence decay per wrap cycle for semantic edges.
-   Semantic edges are more intentional (explicitly created), so decay slower."
-  0.02)
-
-(def ^:const prune-threshold
-  "Confidence below which edges are removed entirely.
-   Prevents near-zero ghost edges from accumulating."
-  0.1)
-
 (def ^:const default-decay-limit
   "Maximum edges to evaluate per decay cycle.
    Bounded to prevent long-running cycles on large graphs."
   100)
-
-(defn- edge-stale?
-  "Check if an edge's last-verified timestamp is older than staleness-days.
-
-   An edge is stale when:
-   1. It has a :kg-edge/last-verified timestamp
-   2. That timestamp is older than staleness-days ago
-
-   Edges without :last-verified are considered stale (they were never verified).
-
-   Pure predicate — no side effects."
-  [edge staleness-days now-millis]
-  (let [last-verified (:kg-edge/last-verified edge)]
-    (if (nil? last-verified)
-      true ;; Never verified = stale
-      (let [verified-millis (if (instance? java.util.Date last-verified)
-                              (.getTime ^java.util.Date last-verified)
-                              0)
-            staleness-millis (* staleness-days 24 60 60 1000)]
-        (> (- now-millis verified-millis) staleness-millis)))))
-
-(defn- decay-rate-for-edge
-  "Return the decay rate for an edge based on its relation type.
-
-   Co-access edges decay at co-access-decay-rate (faster).
-   All other edges (semantic) decay at semantic-decay-rate (slower).
-
-   Pure function — no side effects."
-  [edge]
-  (if (= :co-accessed (:kg-edge/relation edge))
-    co-access-decay-rate
-    semantic-decay-rate))
 
 (defn- last-verified-millis
   "Extract :kg-edge/last-verified as millis, 0 if missing/non-Date."
@@ -475,24 +416,6 @@
       (.getTime ^java.util.Date lv)
       0)
     0))
-
-(defn- decay-step!
-  "Per-edge step for decay. Returns :fresh, :decayed, or :pruned."
-  [staleness-days now-millis edge]
-  (if-not (edge-stale? edge staleness-days now-millis)
-    :fresh
-    (let [edge-id        (:kg-edge/id edge)
-          rate           (decay-rate-for-edge edge)
-          old-confidence (or (:kg-edge/confidence edge) 1.0)
-          new-confidence (- old-confidence rate)]
-      (if (< new-confidence prune-threshold)
-        (do (remove-edge! edge-id)
-            (log/debug "Pruned stale edge" edge-id
-                       "confidence:" old-confidence "->" new-confidence
-                       "relation:" (:kg-edge/relation edge))
-            :pruned)
-        (do (update-edge-confidence! edge-id new-confidence)
-            :decayed)))))
 
 (defn decay-unverified-edges!
   "Decay confidence of edges not verified within the staleness window.
@@ -584,3 +507,17 @@
 (def get-all-edges hive-mcp.knowledge-graph.edges.queries/get-all-edges)
 
 (def count-edges hive-mcp.knowledge-graph.edges.queries/count-edges)
+
+(def co-access-decay-rate hive-mcp.knowledge-graph.edges.decay/co-access-decay-rate)
+
+(def semantic-decay-rate hive-mcp.knowledge-graph.edges.decay/semantic-decay-rate)
+
+(def ^:private edge-stale? hive-mcp.knowledge-graph.edges.decay/edge-stale?)
+
+(def ^:private decay-step! hive-mcp.knowledge-graph.edges.decay/decay-step!)
+
+(def prune-threshold hive-mcp.knowledge-graph.edges.decay/prune-threshold)
+
+(def remove-edge! hive-mcp.knowledge-graph.edges.decay/remove-edge!)
+
+(def ^:private decay-rate-for-edge hive-mcp.knowledge-graph.edges.decay/decay-rate-for-edge)

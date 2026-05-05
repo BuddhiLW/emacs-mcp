@@ -84,10 +84,20 @@
                                        (if (vector? parsed) parsed (vec parsed))))))
 
 (defn- find-connected-session
-  "Find a session with status 'connected'. Returns session name or nil."
-  [sessions]
-  (some (fn [s] (when (= "connected" (:status s)) (:name s)))
-        sessions))
+  "Find a connected session. Returns session name or nil.
+   When project-dir is supplied, only matches sessions whose :project-dir
+   equals it (after trailing-slash normalization). Without project-dir,
+   falls back to first-connected behavior."
+  ([sessions] (find-connected-session sessions nil))
+  ([sessions project-dir]
+   (let [norm (fn [d] (some-> d str (str/replace #"/+$" "")))
+         target (norm project-dir)]
+     (some (fn [s]
+             (when (and (= "connected" (:status s))
+                        (or (nil? target)
+                            (= target (norm (:project-dir s)))))
+               (:name s)))
+           sessions))))
 
 (defn- spawn-session-internal
   "Internal call to spawn a new CIDER session. Returns true on success.
@@ -101,13 +111,19 @@
      success)))
 
 (defn- wait-for-session-ready
-  "Wait briefly for a session to become ready. Returns true if ready, false on timeout."
-  [_session-name max-attempts]
+  "Wait briefly for the named session to become connected. Returns true if
+   ready, false on timeout. Filters by session-name so prior unrelated
+   connected sessions don't trick us into returning early."
+  [session-name max-attempts]
   (loop [attempt 0]
     (if (>= attempt max-attempts)
       false
       (let [r (list-sessions*)]
-        (if (and (result/ok? r) (find-connected-session (:ok r)))
+        (if (and (result/ok? r)
+                 (some (fn [s]
+                         (and (= session-name (:name s))
+                              (= "connected" (:status s))))
+                       (:ok r)))
           true
           (do (Thread/sleep 500)
               (recur (inc attempt))))))))
@@ -127,31 +143,49 @@
   "Ensure CIDER is connected, auto-spawning a session if needed.
    Returns Result with session name.
 
-   When spawning a new session, uses the current project root to ensure
-   CIDER connects to the correct project's nREPL."
-  []
-  (log/debug "ensure-cider-connected: checking sessions")
-  (result/let-ok [sessions (list-sessions*)]
-                 (if-let [session (find-connected-session sessions)]
-                   (do (log/info "ensure-cider-connected: using existing session" session)
-                       (result/ok session))
-                   (let [project-dir (rescue nil (ec/project-root))]
-                     (log/info "ensure-cider-connected: spawning 'auto'" {:project-dir project-dir})
-                     (spawn-and-wait* "auto" project-dir)))))
+   project-dir is the caller's working directory (from MCP transport).
+   When supplied, session reuse is project-scoped — only sessions whose
+   :project-dir matches will be reused, and a new session named
+   auto-<hash> is spawned if none matches. Per-project naming prevents
+   collision across simultaneous projects sharing one daemon.
+
+   When project-dir is nil, falls back to legacy behavior:
+   reuse first connected session OR spawn 'auto' rooted at the Emacs
+   daemon's current project (ec/project-root). Legacy fallback keeps
+   tests + non-MCP callers working but leaks the daemon's project."
+  ([] (ensure-connected* nil))
+  ([project-dir]
+   (log/debug "ensure-cider-connected: checking sessions" {:project-dir project-dir})
+   (result/let-ok [sessions (list-sessions*)]
+                  (if-let [session (find-connected-session sessions project-dir)]
+                    (do (log/info "ensure-cider-connected: using existing session" session)
+                        (result/ok session))
+                    (if project-dir
+                      (let [auto-name (str "auto-" (Integer/toHexString
+                                                    (.hashCode ^String project-dir)))]
+                        (log/info "ensure-cider-connected: spawning session"
+                                  {:name auto-name :project-dir project-dir})
+                        (spawn-and-wait* auto-name project-dir))
+                      (let [fallback-dir (rescue nil (ec/project-root))]
+                        (log/info "ensure-cider-connected: spawning 'auto' (legacy)"
+                                  {:project-dir fallback-dir})
+                        (spawn-and-wait* "auto" fallback-dir)))))))
 
 (defn- with-auto-connect*
   "Execute eval-thunk with auto-connect retry on 'not connected' errors.
    eval-thunk should be a zero-arg fn that returns a Result.
+   project-dir scopes session reuse and auto-spawn (see ensure-connected*).
    Returns the Result from eval-thunk or retry."
-  [eval-thunk]
-  (let [r (eval-thunk)]
-    (if (result/ok? r)
-      r
-      (if (cider-not-connected-error? (:message r))
-        (result/let-ok [session (ensure-connected*)]
-                       (log/info "with-auto-connect: reconnected via session" session)
-                       (eval-thunk))
-        r))))
+  ([eval-thunk] (with-auto-connect* eval-thunk nil))
+  ([eval-thunk project-dir]
+   (let [r (eval-thunk)]
+     (if (result/ok? r)
+       r
+       (if (cider-not-connected-error? (:message r))
+         (result/let-ok [session (ensure-connected* project-dir)]
+                        (log/info "with-auto-connect: reconnected via session" session)
+                        (eval-thunk))
+         r)))))
 
 ;;; =============================================================================
 ;;; Eval Handlers (with validation + telemetry + auto-connect)
@@ -161,11 +195,15 @@
   "Common eval handler with validation, telemetry, and auto-connect retry.
    DRYs handle-cider-eval-silent and handle-cider-eval-explicit.
    elisp-fn: (fn [code] elisp-expression-string)
-   timeout-ms: optional emacsclient timeout override (default 5000)"
+   timeout-ms: optional emacsclient timeout override (default 5000)
+
+   When :directory is in params, eval is routed through the project-scoped
+   session (via eval-in-session) so the call lands on the right nREPL —
+   not whatever happens to be CIDER's default connection in the daemon."
   [params telemetry-key elisp-fn]
   (try
     (v/validate-cider-eval-request params)
-    (let [{:keys [code timeout]} params
+    (let [{:keys [code timeout directory]} params
           ;; Convert CIDER timeout (seconds) to emacsclient timeout (ms).
           ;; Add 2s buffer so emacsclient doesn't race the nREPL timeout.
           ;; Default: 62s (CIDER default nREPL timeout is 60s).
@@ -174,8 +212,19 @@
       (telemetry/with-eval-telemetry telemetry-key code nil
         (result->mcp
          (try-result :cider/eval-failed
-                     #(with-auto-connect*
-                        (fn [] (elisp->result (elisp-fn code) ec-timeout-ms)))))))
+                     (fn []
+                       (if directory
+                         ;; Project-scoped: ensure session exists + route eval through it.
+                         (result/let-ok [session (ensure-connected* directory)]
+                                        (elisp->result
+                                          (el/require-and-call-text
+                                            'hive-mcp-cider 'hive-mcp-cider-eval-in-session
+                                            session code (or timeout nil))
+                                          ec-timeout-ms))
+                         ;; No directory: legacy default-connection path with auto-retry.
+                         (with-auto-connect*
+                           (fn [] (elisp->result (elisp-fn code) ec-timeout-ms))
+                           nil)))))))
     (catch clojure.lang.ExceptionInfo e
       (if (= :validation (:type (ex-data e)))
         (v/wrap-validation-error e)
@@ -263,16 +312,19 @@
    Useful for connecting to shadow-cljs, lein, or other external nREPL servers.
    Dispatches to the correct CIDER connect function based on repl_type.
    Uses extended timeout (20s) because deferred connections poll in Emacs.
-   Coerces port from string to int (MCP JSON boundary)."
-  [{:keys [name host port repl_type agent_id] :as params}]
+   Coerces port from string to int (MCP JSON boundary).
+   project_dir (optional) labels the REPL buffer with the target project so
+   cross-project sessions don't collide under the daemon's current buffer."
+  [{:keys [name host port repl_type agent_id project_dir] :as params}]
   (try
     (let [port (cond-> port (string? port) parse-long)
           params (assoc params :port port)
           elisp (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-connect-session
                                           name (or host "localhost") port
-                                          (or repl_type "clj") agent_id)]
+                                          (or repl_type "clj") agent_id project_dir)]
       (cider-schema/validate-connect-params params)
-      (log/info "cider-connect-session" {:name name :host host :port port :repl_type repl_type})
+      (log/info "cider-connect-session" {:name name :host host :port port
+                                         :repl_type repl_type :project_dir project_dir})
       (result->mcp
        (try-result :cider/connect-failed
                    (fn []

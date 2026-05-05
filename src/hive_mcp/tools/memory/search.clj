@@ -55,9 +55,12 @@
 
 (def ^:const ^:private memory-search-timeout-ms
   "Overall timeout budget for a memory search (collective ceiling).
-   30s accommodates multi-project fan-out on cold Milvus paths; it
-   also matches the outer wpool/await! safety net."
-  30000)
+
+   90s (was 30s) accommodates multi-project fan-out on cold Milvus paths
+   plus the new 60s vectordb-timeout-ms; it also matches the outer
+   wpool/await! safety net (which the caller must bump separately if
+   tighter)."
+  90000)
 
 (def ^:const ^:private embed-timeout-ms
   "Per-stage timeout for an embedding round-trip. Embedding is nested
@@ -67,9 +70,14 @@
 
 (def ^:const ^:private vectordb-timeout-ms
   "Per-stage timeout for one vectordb query (store or ingest side).
-   15s covers embed→query→filter on the store; the two sides run
-   concurrently so the wall clock is 15s, not 30s."
-  15000)
+
+   60s (was 15s) covers cold-embed → milvus search → filter. Cold Ollama
+   /Venice embedding alone routinely takes 30–60s on the first call after
+   a JVM restart (model load + warm-up); 15s guaranteed-failed on every
+   first semantic search until the embedder warmed.
+
+   Two sides run concurrently so the wall clock is still 60s, not 120s."
+  60000)
 
 (def ^:const ^:private post-filter-timeout-ms
   "Per-stage timeout for merge/rerank/format. Pure CPU work; 5s is

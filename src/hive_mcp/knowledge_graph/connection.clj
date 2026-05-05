@@ -19,7 +19,8 @@
             [hive-dsl.batch :as dsl-batch]
             [clojure.core.async :as async]
             [clojure.java.io :as io]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.events.core :as events]))
 
 ;; =============================================================================
 ;; Config-based Backend Auto-detection
@@ -122,7 +123,11 @@
 (defn- ensure-store!
   "Ensure a store is configured. Auto-detects backend from config.
    Re-initializes when the current store is stale (see `store-live?`).
-   Returns *test-store* directly when bound (test-isolation override)."
+   Returns *test-store* directly when bound (test-isolation override).
+
+   Fires `:kg.store/ready` on every successful (re)initialization so
+   subscribers (e.g. edge-stats warm-up) can react without coupling
+   to the wiring path."
   []
   (or *test-store*
       (do
@@ -140,10 +145,12 @@
                                    (let [create-fn (resolve 'hive-mcp.knowledge-graph.store.datalevin/create-store)]
                                      (create-fn)))]
                 (if store
-                  (proto/set-store! store)
+                  (do (proto/set-store! store)
+                      (events/dispatch [:kg.store/ready {:backend :datalevin}]))
                   (do
                     (log/error "CRITICAL: Failed to initialize Datalevin, falling back to ephemeral DataScript. KG data on disk will NOT be accessible.")
-                    (proto/set-store! (ds-store/create-store)))))
+                    (proto/set-store! (ds-store/create-store))
+                    (events/dispatch [:kg.store/ready {:backend :datascript :fallback? true}]))))
 
               :datahike
               (let [writer-cfg (detect-writer-config)
@@ -166,7 +173,8 @@
                          (r/ok? (r/try-effect*
                                  :datahike/ensure-conn-failed
                                  (pkg/ensure-conn! store))))
-                  (proto/set-store! store)
+                  (do (proto/set-store! store)
+                      (events/dispatch [:kg.store/ready {:backend :datahike}]))
                   (do
                     (log/error "CRITICAL: Failed to initialize Datahike. Refusing to substitute another KG backend because :kg-backend requested :datahike.")
                     (throw (ex-info "Datahike KG backend unavailable"
@@ -174,7 +182,8 @@
                                      :hint "Check :services.datahike.path / HIVE_KG_DB_PATH. The configured path must be a Datahike database, not a container directory."})))))
 
               ;; Default: DataScript
-              (proto/set-store! (ds-store/create-store)))))
+              (do (proto/set-store! (ds-store/create-store))
+                  (events/dispatch [:kg.store/ready {:backend :datascript}])))))
         (proto/get-store))))
 
 ;; =============================================================================
