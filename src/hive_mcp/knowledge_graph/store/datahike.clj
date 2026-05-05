@@ -72,13 +72,22 @@
    f))
 
 (defn- read-with-retry
-  "Run bounded Datahike read. If the connection is stale/corrupt, reopen
-   once and retry. This specifically guards Datahike's internal Future deref
-   failures such as a nil `fut` inside `datahike.api/db`."
+  "Run bounded Datahike read. On connection-level errors, reopen once and
+   retry. Timeouts surface immediately — retrying a cold-cache scan after
+   reopen drops the page-cache work in flight and compounds wall-clock
+   cost without changing the outcome."
   [label reopen! f]
   (let [first-result (read-call label f)]
-    (if (r/ok? first-result)
+    (cond
+      (r/ok? first-result)
       (:ok first-result)
+
+      ;; Timeout = legitimate slow read or cold cache. Retry won't help
+      ;; (the reopened conn starts colder) and burns budget. Surface it.
+      (= :weave/timeout (:error first-result))
+      (throw-read-failed! label first-result)
+
+      :else
       (do
         (log/warn "Datahike KG read failed; reopening connection and retrying once"
                   {:operation label

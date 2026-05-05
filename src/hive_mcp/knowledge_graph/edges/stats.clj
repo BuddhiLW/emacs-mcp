@@ -35,9 +35,14 @@
    60s default read-timeout when the schema/AVET page cache is empty.
    When the active backend exposes `*read-timeout-ms*` (currently the
    Datahike store), `binding` it up to 5 minutes scoped to this call
-   only — so entity lookups and other fast paths keep their tight bound."
+   only — so entity lookups and other fast paths keep their tight bound.
+
+   Total-edges count walks the :aevt index directly via `eids-by-attr`
+   instead of `[:find (count ?e) ...]` — skips the datalog planner over
+   3M+ datoms. Per-relation/per-scope still need group-by aggregation,
+   so those stay as datalog queries."
   []
-  (let [run #(let [total (or (conn/query '[:find (count ?e) . :where [?e :kg-edge/id]]) 0)
+  (let [run #(let [total (or (some-> (conn/eids-by-attr :kg-edge/id) count) 0)
                    by-relation-q '[:find ?rel (count ?e)
                                    :where
                                    [?e :kg-edge/id]
