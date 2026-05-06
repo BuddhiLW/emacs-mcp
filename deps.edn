@@ -112,7 +112,7 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL, error taxonomy
         io.github.hive-agi/hive-dsl
-        {:git/tag "v0.4.1" :git/sha "07ab02a"}
+        {:git/tag "v0.5.1" :git/sha "335869e"}
 
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
@@ -124,10 +124,10 @@
         io.github.hive-agi/hive-milvus {:git/tag "v0.2.2" :git/sha "61c3aa8"}
 
         ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj
-        io.github.hive-agi/hive-weave {:git/tag "v0.2.2" :git/sha "7aa6234"}
+        io.github.hive-agi/hive-weave {:git/tag "v0.2.3" :git/sha "c9510b7"}
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
-        io.github.hive-agi/hive-emacs {:git/tag "v0.4.1" :git/sha "47e0f04"}
+        io.github.hive-agi/hive-emacs {:git/tag "v0.4.2" :git/sha "3b3b0f6"}
 
         ;; hive-proximum — temporal/bitemporal memory backend (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/hive-proximum.edn manifest.
@@ -143,7 +143,7 @@
         ;; truth for "is this pid alive?", `kill -0` semantics, etc.
         ;; NOTE: process.liveness ns is post-v0.2.1 — when the next tag is
         ;; cut, bump :git/sha here and drop the deps.local.edn override.
-        io.github.hive-agi/hive-system {:git/tag "v0.2.2" :git/sha "53524e3"}
+        io.github.hive-agi/hive-system {:git/tag "v0.2.3" :git/sha "8754bfc"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
