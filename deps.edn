@@ -121,7 +121,7 @@
         ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
         ;; Overrides default Chroma store when Milvus is reachable.
-        io.github.hive-agi/hive-milvus {:git/tag "v0.2.2" :git/sha "61c3aa8"}
+        io.github.hive-agi/hive-milvus {:git/tag "v0.2.3" :git/sha "aa0ebdf"}
 
         ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj
         io.github.hive-agi/hive-weave {:git/tag "v0.2.3" :git/sha "c9510b7"}
