@@ -32,11 +32,51 @@
 ;; Init pipeline — pure with respect to the registry atom
 ;; -----------------------------------------------------------------------------
 
+(defn- resolve-late
+  "Late-bound requiring-resolve. Used for cross-project protocol
+   probing (vec stores live in hive-proximum, kg stores in hive-mcp)."
+  [sym]
+  (r/rescue nil (requiring-resolve sym)))
+
+(defn- vec-store?
+  "Predicate via late-bind so this ns doesn't compile-couple to
+   hive-proximum.vec.protocol."
+  [s]
+  (when-let [pred (resolve-late 'hive-proximum.vec.protocol/vec-store?)]
+    (boolean (pred s))))
+
+(defn- vec-open!
+  [s]
+  (when-let [open-fn (resolve-late 'hive-proximum.vec.protocol/open!)]
+    (open-fn s)))
+
+(defn- vec-close!
+  [s]
+  (when-let [close-fn (resolve-late 'hive-proximum.vec.protocol/close!)]
+    (close-fn s)))
+
+(defn- open-store!
+  "Lifecycle dispatch. Vec stores (IVecStore) get `vec/open!`; KG
+   stores (IKGStore) get `pkg/ensure-conn!`. Vec is checked first
+   because some implementations satisfy BOTH protocols (legacy
+   bridge); the vec verb is the more specific one."
+  [store]
+  (cond
+    (vec-store? store)    (vec-open! store)
+    (pkg/kg-store? store) (pkg/ensure-conn! store)))
+
+(defn- close-store!
+  "Symmetric lifecycle close. Idempotent on both protocol families."
+  [store]
+  (cond
+    (vec-store? store)    (vec-close! store)
+    (pkg/kg-store? store) (pkg/close! store)))
+
 (defn- ensure-conn-result
-  "Run `pkg/ensure-conn!` under rescue. Returns SlotInit ADT."
+  "Run the appropriate lifecycle open under rescue. Returns SlotInit ADT."
   [slot backend store]
   (r/rescue (failed slot backend :ensure-conn-threw)
-            (do (pkg/ensure-conn! store)
+            (do (open-store! store)
                 (ok slot backend store))))
 
 (defn- build-slot
@@ -89,7 +129,7 @@
 
   (close-slot! [_ slot]
     (when-let [s (get @slot-stores slot)]
-      (r/rescue nil (pkg/close! s))
+      (r/rescue nil (close-store! s))
       (swap! slot-stores dissoc slot)
       (log/info "kg-slot closed" {:slot slot}))
     nil)
@@ -97,7 +137,7 @@
   (close-all! [_]
     ;; Snapshot before iteration so the doseq doesn't race against mutations.
     (doseq [[slot s] @slot-stores]
-      (r/rescue nil (pkg/close! s))
+      (r/rescue nil (close-store! s))
       (log/info "kg-slot closed" {:slot slot}))
     (reset! slot-stores {})
     nil))
