@@ -3,7 +3,8 @@
   (:require [datalevin.core :as dtlv]
             [hive-mcp.protocols.kg :as kg]
             [hive-mcp.knowledge-graph.schema :as schema]
-            [hive-mcp.dns.result :refer [rescue]]
+            [hive-mcp.knowledge-graph.store.datalevin-config :as dlc]
+            [hive-mcp.dns.result :as r :refer [rescue]]
             [clojure.java.io :as io]
             [taoensso.timbre :as log]))
 
@@ -160,12 +161,31 @@
                {:backend :datalevin :db-path db-path})
     nil))
 
-(def ^:private default-db-path "data/kg/datalevin")
+(def ^:private fallback-db-path
+  "Final fallback only — DatalevinKGConfig owns env/config.edn resolution.
+   Mirrors datahike.clj's bare-default safety net."
+  dlc/default-db-path)
+
+(defn- resolve-typed-config
+  "Resolve DatalevinKGConfig via hive-di. Returns map with :db-path resolved
+   across env > config.edn > XDG default. Falls back to bare default if
+   resolution itself errors (defensive — should not happen)."
+  []
+  (let [result (dlc/resolve-DatalevinKGConfig)]
+    (if (r/ok? result)
+      (:ok result)
+      (do (log/warn "DatalevinKGConfig resolution failed; using bare default"
+                    {:errors (:errors result)})
+          {:db-path fallback-db-path}))))
 
 (defn create-store
-  "Create a new Datalevin-backed graph store."
-  [& [{:keys [db-path extra-schema] :or {db-path default-db-path}}]]
+  "Create a new Datalevin-backed graph store.
+   Resolution order for :db-path:
+     1. Explicit caller arg
+     2. DatalevinKGConfig (env > config.edn > XDG default)"
+  [& [{:keys [db-path extra-schema]}]]
   (rescue nil
-          (log/info "Creating Datalevin graph store" {:path db-path
-                                                      :extra-schema? (some? extra-schema)})
-          (->DatalevinStore (atom nil) db-path extra-schema)))
+          (let [resolved-path (or db-path (:db-path (resolve-typed-config)))]
+            (log/info "Creating Datalevin graph store" {:path resolved-path
+                                                        :extra-schema? (some? extra-schema)})
+            (->DatalevinStore (atom nil) resolved-path extra-schema))))
