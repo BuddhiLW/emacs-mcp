@@ -228,6 +228,25 @@
 ;; Registration
 ;; =============================================================================
 
+(defn- handle-noop-drain
+  "No-op handler for cross-process transcript events that hive-mcp loads
+   on the classpath (via ../hive-agent :local/root) but intentionally
+   doesn't consume. Without registration the router warns + drops the
+   event AFTER `process-event` returns nil — but `dispatch` has already
+   queued via `async/put!` on the bounded event-queue. Under sustained
+   sweeper pressure the put accumulates pending-puts (an unbounded
+   internal core.async queue) and the JVM OOMs (incident 2026-05-08,
+   memory 20260508184719-1d968ea6). Registering this drain consumes
+   the events cleanly so the queue stays bounded.
+
+   The events drained:
+   - :transcript/embed-pending  fired by hive-agent sweeper for stuck rows
+   - :transcript/embed-ready    fired by hive-agent split-store post-embed
+   - :transcript/embed-failed   fired by hive-agent on embed failure"
+  [_coeffects [event-id _payload]]
+  (log/trace "transcript: drained cross-process event" event-id)
+  {})
+
 (defn register-handlers!
   "Register transcript event handlers and effects.
    Called from hive-mcp init or event system bootstrap."
@@ -235,6 +254,13 @@
   (ev/reg-event :transcript/entry-recorded  [] handle-entry-recorded)
   (ev/reg-event :transcript/session-started [] handle-session-started)
   (ev/reg-event :transcript/session-ended   [] handle-session-ended)
+
+  ;; Drain cross-process events from hive-agent's transcript pipeline so
+  ;; the router's bounded event-queue can't accumulate pending-puts under
+  ;; sustained sweeper pressure. See `handle-noop-drain` docstring.
+  (ev/reg-event :transcript/embed-pending [] handle-noop-drain)
+  (ev/reg-event :transcript/embed-ready   [] handle-noop-drain)
+  (ev/reg-event :transcript/embed-failed  [] handle-noop-drain)
 
   (ev/reg-fx :transcript-append!       handle-transcript-append!)
   (ev/reg-fx :transcript-ensure-store! handle-transcript-ensure-store!)

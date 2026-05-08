@@ -87,6 +87,7 @@
             [hive-mcp.events.handlers.saa :as saa]
             [hive-mcp.events.handlers.memory-read :as memory-read]
             [hive-mcp.events.handlers.lifecycle :as lifecycle]
+            [hive-mcp.events.handlers.transcript :as transcript]
             [hive-mcp.server.guards :as guards]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -140,6 +141,7 @@
     (saa/register-handlers!)
     (memory-read/register-handlers!)
     (lifecycle/register-handlers!)
+    (transcript/register-handlers!)
 
     (reset! *registered true)
     (println "[hive-events] Handlers registered: :task/complete :task/shout-complete :git/commit-modified :ling/started :ling/completed :ling/ready-for-wrap :session/end :session/wrap :kanban/sync :kanban/done :crystal/wrap-request :crystal/wrap-notify :wave/start :wave/item-done :wave/complete :validated-wave/start :validated-wave/iteration-start :validated-wave/success :validated-wave/partial :validated-wave/retry :drone/started :drone/completed :drone/failed :claim/file-released :claim/notify-waiting :system/error :hot/reload-start :hot/reload-success :file/changed :kg/edge-created :kg/edge-updated :kg/edge-removed :kg/node-promoted :agora/turn-dispatched :agora/timeout :agora/turn-completed :agora/dispatch-next :agora/execute-drone :agora/debate-started :agora/stage-transition :agora/consensus :saa/started :saa/phase-complete :saa/completed :saa/failed :memory/query :memory/search :memory/get :lifecycle/sweep")
