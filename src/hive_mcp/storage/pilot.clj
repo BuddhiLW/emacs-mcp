@@ -211,3 +211,159 @@
   (ev/reg-event :storage.pilot/session-wrapped
                 [interceptors/debug]
                 handle-session-wrap-coordinated-commit))
+
+;; ---------------------------------------------------------------------------
+;; Swarm-fork = workspace branch! — STORAGE-4.6
+;;
+;; Spawning a ling forks the workspace: every adapter under coordination
+;; gets a per-ling branch so the ling's writes land on an isolated
+;; commit graph. Wrap merges that branch back to :main where the
+;; adapter's Mergeable surface allows; backends that lack merge
+;; semantics (e.g. Datalevin in this iteration) keep the branch as a
+;; labelled snapshot for observability and skip the merge phase.
+;;
+;; Branch naming is structural: `(keyword (str "ling/" ling-id))`. The
+;; `ling/` prefix segregates ling branches from feature branches a
+;; human might create via `ws/branch!` directly.
+;; ---------------------------------------------------------------------------
+
+(defn ling-branch-name
+  "Derive the workspace branch keyword for `ling-id`. Pure — no side
+   effects. Always returns a namespaced keyword so dispatch is cheap
+   and the registry stays self-describing."
+  [ling-id]
+  (when-let [id (some-> ling-id str not-empty)]
+    (keyword "ling" id)))
+
+(defn- safe-branch!
+  "Call ygp/branch! on `adapter`, swallowing per-adapter failures so one
+   misbehaving backend can't poison the fan-out. Returns
+   `{:slot kw :system-id str :branch kw :ok? bool :error str?}`."
+  [slot-key adapter branch-kw]
+  (try
+    (ygp/branch! adapter branch-kw)
+    {:slot      slot-key
+     :system-id (ygp/system-id adapter)
+     :branch    branch-kw
+     :ok?       true}
+    (catch Throwable t
+      (log/warn t "pilot: branch! failed for slot — fan-out continues"
+                {:slot slot-key
+                 :system-id (ygp/system-id adapter)
+                 :branch branch-kw})
+      {:slot      slot-key
+       :system-id (ygp/system-id adapter)
+       :branch    branch-kw
+       :ok?       false
+       :error     (.getMessage t)})))
+
+(defn- safe-merge!
+  "Call ygp/merge! on `adapter` if it advertises :mergeable. Returns
+   `{:slot :system-id :branch :merged? :error?}`. Adapters without
+   Mergeable record `:merged? false` with a `:reason \"unsupported\"`."
+  [slot-key adapter branch-kw]
+  (let [caps (try (ygp/capabilities adapter) (catch Throwable _ #{}))]
+    (if-not (contains? caps :mergeable)
+      {:slot      slot-key
+       :system-id (ygp/system-id adapter)
+       :branch    branch-kw
+       :merged?   false
+       :reason    "unsupported"}
+      (try
+        (ygp/merge! adapter branch-kw)
+        {:slot      slot-key
+         :system-id (ygp/system-id adapter)
+         :branch    branch-kw
+         :merged?   true}
+        (catch Throwable t
+          (log/warn t "pilot: merge! failed for slot — fan-out continues"
+                    {:slot slot-key
+                     :system-id (ygp/system-id adapter)
+                     :branch branch-kw})
+          {:slot      slot-key
+           :system-id (ygp/system-id adapter)
+           :branch    branch-kw
+           :merged?   false
+           :error     (.getMessage t)})))))
+
+(defn branch-all-for-ling!
+  "Fan out `branch!` across every registered adapter for `ling-id`.
+   Returns a vector of per-system result maps. Returns
+   `:degraded/no-adapters` when nothing is registered (boot path
+   didn't wire) — caller decides whether that's fatal or expected."
+  [ling-id]
+  (let [systems @registered-systems
+        branch  (ling-branch-name ling-id)]
+    (cond
+      (nil? branch)
+      (do (log/warn "pilot: branch-all-for-ling! given empty ling-id" {:ling-id ling-id})
+          :degraded/empty-ling-id)
+
+      (empty? systems)
+      (do (log/debug "pilot: branch-all-for-ling! — no adapters" {:ling-id ling-id})
+          :degraded/no-adapters)
+
+      :else
+      (let [results (mapv (fn [[slot adapter]] (safe-branch! slot adapter branch))
+                          systems)]
+        (log/info "pilot: branched workspace for ling"
+                  {:ling-id ling-id :branch branch :results results})
+        results))))
+
+(defn merge-all-for-ling!
+  "Fan out `merge!` back to :main across every registered adapter for
+   `ling-id`. Adapters lacking :mergeable record `:merged? false
+   :reason \"unsupported\"` and the branch lingers as a labelled
+   snapshot. Returns vector of per-system result maps, or a
+   `:degraded/*` keyword."
+  [ling-id]
+  (let [systems @registered-systems
+        branch  (ling-branch-name ling-id)]
+    (cond
+      (nil? branch)        :degraded/empty-ling-id
+      (empty? systems)     :degraded/no-adapters
+      :else
+      (let [results (mapv (fn [[slot adapter]] (safe-merge! slot adapter branch))
+                          systems)]
+        (log/info "pilot: merged ling branch back to :main"
+                  {:ling-id ling-id :branch branch :results results})
+        results))))
+
+(defn handle-ling-started-fork
+  "Auxiliary handler for :ling/started — fans out workspace branching.
+   Mirrors `handle-session-wrap-coordinated-commit`'s log-only effect
+   shape; the existing primary handler still owns DataScript
+   registration."
+  [_coeffects [_ {:keys [slave-id name] :as ev-data}]]
+  (let [ling-id (or slave-id name)
+        outcome (branch-all-for-ling! ling-id)]
+    {:log {:level   :info
+           :message (str "pilot: branch-all-for-ling outcome=" (pr-str outcome)
+                         " for ling=" ling-id)}
+     :pilot/fork-outcome {:outcome outcome :event-data ev-data}}))
+
+(defn handle-ling-completed-merge
+  "Auxiliary handler for :ling/completed — fans out merge-back.
+   Failures don't propagate; the primary :ling/completed handler still
+   dispatches :session/end."
+  [_coeffects [_ {:keys [slave-id agent-id] :as ev-data}]]
+  (let [ling-id (or slave-id agent-id)
+        outcome (merge-all-for-ling! ling-id)]
+    {:log {:level   :info
+           :message (str "pilot: merge-all-for-ling outcome=" (pr-str outcome)
+                         " for ling=" ling-id)}
+     :pilot/merge-outcome {:outcome outcome :event-data ev-data}}))
+
+(defn register-ling-handlers!
+  "Register the swarm-fork handlers under distinct event-ids
+   `:storage.pilot/ling-started` and `:storage.pilot/ling-completed`.
+   Boot wiring is responsible for dispatching into them after the
+   primary `:ling/started` / `:ling/completed` handlers — same
+   ordering pattern as `register-wrap-handler!`."
+  []
+  (ev/reg-event :storage.pilot/ling-started
+                [interceptors/debug]
+                handle-ling-started-fork)
+  (ev/reg-event :storage.pilot/ling-completed
+                [interceptors/debug]
+                handle-ling-completed-merge))
