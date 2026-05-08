@@ -49,6 +49,13 @@
     (swap! store-registry dissoc agent-id)
     store))
 
+(defn store-registry-snapshot
+  "Return [[agent-id store] ...] snapshot of currently registered transcript
+   stores. Used by the SplitTranscriptStore sweeper to enumerate stores
+   without coupling to the private registry atom."
+  []
+  (vec @store-registry))
+
 ;; =============================================================================
 ;; Handler: :transcript/entry-recorded
 ;; =============================================================================
@@ -156,13 +163,58 @@
                                         :cost-usd (or cost-usd 0.0)})]
         (append-fn store entry)))))
 
+(defn- transcript-embed-fn
+  "Build the `:embed-fn` callback fed to QdrantTranscriptStore.
+   Soft-deps `hive-mcp.embeddings.service` so this ns stays importable
+   without it (returns nil → SplitTranscriptStore never picks split path)."
+  []
+  (when-let [emb (try (requiring-resolve 'hive-mcp.embeddings.service/embed-for-collection)
+                       (catch Throwable _ nil))]
+    (let [coll-fn (try (requiring-resolve 'hive-agent.config/resolve-transcript-embedding-collection)
+                       (catch Throwable _ nil))
+          coll    (or (when coll-fn (coll-fn)) "hive_mcp_memory")]
+      (fn embed [text] (emb coll (str text))))))
+
+(defn- make-store-from-config
+  "Resolve the backend per config.edn / env, construct via the canonical
+   tstore/make-store factory, and inject :embed-fn for the split path.
+
+   Falls back to the old datahike→datalevin chain on any Result/err so
+   existing deployments don't lose persistence."
+  [agent-id]
+  (let [resolve-backend! (try (requiring-resolve 'hive-agent.config/resolve-transcript-backend)
+                              (catch Throwable _ nil))
+        make-fn          (try (requiring-resolve 'hive-agent.loop.transcript.store/make-store)
+                              (catch Throwable _ nil))
+        resolve-coll!    (try (requiring-resolve 'hive-agent.config/resolve-transcript-qdrant-collection)
+                              (catch Throwable _ nil))
+        backend          (when resolve-backend! (resolve-backend! :datahike))
+        opts             (cond-> {:agent-id agent-id}
+                           (= backend :split-qdrant-datalevin)
+                           (assoc :embed-fn        (transcript-embed-fn)
+                                  :collection-name (when resolve-coll! (resolve-coll!))))
+        attempt          (when (and make-fn backend) (make-fn backend opts))]
+    (cond
+      (and (map? attempt) (contains? attempt :ok)) (:ok attempt)
+      :else
+      (do (log/warn "[transcript] split/preferred backend unavailable — falling back to datahike→datalevin"
+                    {:backend backend
+                     :error   (when (map? attempt) (:error attempt))})
+          (make-datahike-store agent-id)))))
+
 (defn handle-transcript-ensure-store!
-  "Effect: create/connect Datahike store and register it."
+  "Effect: construct the configured ITranscriptStore (per
+   `hive-agent.config/resolve-transcript-backend`) and register it.
+
+   Honors :split-qdrant-datalevin (injects :embed-fn from hive-mcp's
+   embedding service). Falls back to legacy datahike→datalevin on any
+   Result/err so existing deployments stay working."
   [{:keys [agent-id]}]
   (when (and agent-id (not (get-store agent-id)))
-    (when-let [store (make-datahike-store agent-id)]
+    (when-let [store (make-store-from-config agent-id)]
       (register-store! agent-id store)
-      (log/info "[transcript] Datahike store registered" {:agent-id agent-id}))))
+      (log/info "[transcript] store registered" {:agent-id agent-id
+                                                 :store    (some-> store class .getName)}))))
 
 (defn handle-transcript-close!
   "Effect: close and deregister store."
