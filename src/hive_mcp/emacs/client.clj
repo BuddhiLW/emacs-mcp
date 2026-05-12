@@ -39,6 +39,108 @@
 ;; Delegation core
 ;; ---------------------------------------------------------------------------
 
+(declare eval-elisp)
+
+(def ^:const symbol-void-strike-limit
+  "After this many `void-variable` / `void-function` failures for the same
+   elisp symbol, `probe-feature!` and `probe-fboundp!` short-circuit further
+   IPC round-trips and return cached failure (ENGINE-L0.2, incident 2026-05-11
+   — runaway emacsclient probes on a missing feature can stall the swarm)."
+  3)
+
+(defonce ^:private *symbol-strike-counts
+  ^{:doc "elisp-symbol → strike count. Reset on first successful probe."}
+  (atom {}))
+
+(defonce ^:private *symbol-disabled
+  ^{:doc "Set of elisp symbols whose probe path is shorted (strike limit hit)."}
+  (atom #{}))
+
+(defn symbol-strike-counts
+  "Diagnostic snapshot of the per-symbol probe miss counter."
+  []
+  @*symbol-strike-counts)
+
+(defn disabled-symbols
+  "Diagnostic snapshot of probe-disabled elisp symbols."
+  []
+  @*symbol-disabled)
+
+(defn reset-symbol-strikes!
+  "Clear strike counts and the disabled-symbol set. Test/diagnostic only."
+  []
+  (reset! *symbol-strike-counts {})
+  (reset! *symbol-disabled #{}))
+
+(defn- void-symbol-error?
+  "Return true if `error` is an elisp void-symbol failure for `sym`.
+   Matches both `void-function` and `void-variable` shapes."
+  [error sym]
+  (boolean
+   (and (string? error)
+        (re-find (re-pattern (str "void-(?:variable|function)\\s+" sym)) error))))
+
+(defn- record-symbol-strike!
+  "Increment the strike counter for `sym`. Disables further probes once
+   the count crosses `symbol-void-strike-limit`."
+  [sym]
+  (let [n (-> *symbol-strike-counts
+              (swap! update sym (fnil inc 0))
+              (get sym))]
+    (when (>= n symbol-void-strike-limit)
+      (swap! *symbol-disabled conj sym)
+      (log/warn "[emacsclient] Disabling probe of" sym
+                "— hit" n "void-symbol strikes (ENGINE-L0.2)"))
+    n))
+
+(defn- clear-symbol-strike!
+  "Drop the strike counter and disabled flag for `sym` after a healthy probe."
+  [sym]
+  (swap! *symbol-strike-counts dissoc sym)
+  (swap! *symbol-disabled disj sym))
+
+(defn probe-feature!
+  "Strike-tracked wrapper around (featurep '<feature>).
+   Returns true / false / :disabled — the :disabled response means the
+   3-strike limit has been hit; the caller MUST treat the feature as
+   unavailable without scheduling further probes (ENGINE-L0.2)."
+  [feature]
+  (if (contains? @*symbol-disabled feature)
+    :disabled
+    (let [code (format "(featurep '%s)" (name feature))
+          {:keys [success result error]} (eval-elisp code)]
+      (cond
+        (and success (= result "t"))
+        (do (clear-symbol-strike! feature) true)
+
+        (and success (= result "nil"))
+        (do (record-symbol-strike! feature) false)
+
+        (void-symbol-error? error feature)
+        (do (record-symbol-strike! feature) false)
+
+        :else false))))
+
+(defn probe-fboundp!
+  "Strike-tracked wrapper around (fboundp '<sym>).
+   Returns true / false / :disabled."
+  [sym]
+  (if (contains? @*symbol-disabled sym)
+    :disabled
+    (let [code (format "(fboundp '%s)" (name sym))
+          {:keys [success result error]} (eval-elisp code)]
+      (cond
+        (and success (= result "t"))
+        (do (clear-symbol-strike! sym) true)
+
+        (and success (= result "nil"))
+        (do (record-symbol-strike! sym) false)
+
+        (void-symbol-error? error sym)
+        (do (record-symbol-strike! sym) false)
+
+        :else false))))
+
 (defn- resolve-emacs-fn
   "Resolve a function from hive-emacs.client. Returns nil if not available."
   [sym]
