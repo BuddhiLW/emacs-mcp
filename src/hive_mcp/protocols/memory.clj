@@ -440,6 +440,9 @@
   [store]
   (satisfies? IMemoryStoreTemporal store))
 
+;;; IMemoryStoreLiveness lives in its own ns to keep this file from
+;;; needing reloads. See `hive-mcp.protocols.memory-liveness`.
+
 ;;; ============================================================================
 ;;; Utility Functions
 ;;; ============================================================================
