@@ -19,10 +19,12 @@
   (:require [hive-mcp.agent.context :as ctx]
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.tools.memory.scope :as scope]
+            [hive-mcp.crystal.harvest.collect :as coll]
+            [hive-mcp.crystal.fanout :as fan]
+            [hive-mcp.crystal.persist :as persist]
             [hive-mcp.tools.catchup.scope :as catchup-scope]
             [hive-mcp.tools.catchup.format :as fmt]
             [hive-mcp.tools.catchup.git :as catchup-git]
-            [hive-mcp.tools.catchup.carto :as catchup-carto]
             [hive-mcp.tools.catchup.spawn :as catchup-spawn]
             [hive-mcp.tools.catchup.scope-filter :as sf]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
@@ -33,7 +35,6 @@
             [hive-mcp.concurrency.pool :as pool]
             [hive-mcp.project.tree :as project-tree]
             [hive-mcp.dns.result :refer [rescue ok ok? let-ok try-effect* ok->]]
-            [hive-mcp.agent.context :as ctx]
             [hive-dsl.context.identity :as ctx-id]
             [hive-ttracking.core :as tt]
             [clojure.data.json :as json]
@@ -194,22 +195,30 @@
               ;; under child projects (e.g. hive-mcp under hive) are invisible.
               _ (rescue nil (project-tree/maybe-scan-project-tree! (or directory ".")))
 
-              ;; ── Wave 1: ONE memory bundle + git + carto in parallel ──
+              ;; ── Wave 1: ONE memory bundle + git + extension status in parallel ──
               ;; The bundle replaces 7 per-type Milvus RPCs with 2 queries
               ;; (hierarchy + global-pierce), grouped by :type in memory. Avoids
               ;; Milvus type-filter scalar-scan storms that blew the budget.
+              ;; The :catchup/status-providers extension lets registered
+              ;; addons attach status fields to the response without the
+              ;; core knowing about them — DIP.
               f-bundle (pool/with-io ((tt/timed-query "catchup/bundle-total"
                                                       #(catchup-scope/query-catchup-bundle project-id))))
               f-git    (pool/with-io ((tt/timed-query "catchup/git-total"
                                                       #(catchup-git/gather-git-info directory))))
-              f-carto  (pool/with-io ((tt/timed-query "catchup/carto-total"
-                                                      #(catchup-carto/get-status project-id))))
+              status-providers (or (ext/get-extension :catchup/status-providers) {})
+              f-status (pool/with-io ((tt/timed-query "catchup/status-providers-total"
+                                                      #(reduce-kv (fn [acc k provider-fn]
+                                                                    (assoc acc k
+                                                                           (rescue nil (provider-fn project-id))))
+                                                                  {} status-providers))))
               f-kanban (pool/with-io ((tt/timed-query "catchup/kanban-summary-total"
                                                       #(gather-kanban-summary project-id))))
 
               bundle        (safe-deref f-bundle query-timeout-ms {} "bundle")
               git-info      (safe-deref f-git query-timeout-ms {} "git-info")
-              carto-status  (safe-deref f-carto query-timeout-ms nil "carto-status")
+              addon-status  (safe-deref f-status query-timeout-ms {} "addon-status")
+              carto-status  (:carto-status addon-status)
               kanban-summary (safe-deref f-kanban query-timeout-ms
                                           {:counts {} :recent-todos []}
                                           "kanban-summary")
@@ -372,30 +381,50 @@
 ;; =============================================================================
 
 (defn handle-native-wrap
-  "Native Clojure wrap implementation that persists to the registered
-   IMemoryStore directly. Delegates to :catchup/wrap extension
-   (provided by addon) for harvesting and crystallization."
+  "Native multi-scope wrap implementation — Step 8 of plan
+   `20260504173159-46dc47f1`.
+
+   Pipeline (no extension delegation):
+     1. `coll/harvest-all-by-scope` — flat harvest → attribution → partition
+        → `HarvestByScope`.
+     2. `fan/synthesize-wraps` — fan-out one entry per touched scope plus
+        an umbrella; each entry carries an explicit `scope:project:<pid>`
+        (or `scope:multi-project`) tag from step-6 `with-scope-tag`.
+     3. `persist/persist-wraps!` — direct `mem-proto/add-entry!` per entry
+        with explicit `:project-id` from `:pid` (no pwd derivation).
+
+   Returns MCP text payload with aggregate shape:
+     {:session   <session-id>
+      :directory <dir>
+      :total     <count>
+      :persisted <count>
+      :failed    <count>
+      :wraps     [{:pid :project-id :id :success? :error?} ...]}"
   [args]
   (let [directory (ctx/resolve-caller-directory args)
         agent-id (:agent_id args)]
-    (log/info "native-wrap: crystallizing to memory store" {:directory directory :agent-id agent-id})
+    (log/info "native-wrap: per-scope chain" {:directory directory :agent-id agent-id})
     (if-not (mem-proto/store-set?)
       (fmt/store-not-configured-error)
-      (if-let [wrap-fn (ext/get-extension :catchup/wrap)]
-        (try
-          (let [result (wrap-fn {:directory directory :agent-id agent-id})
-                project-id (scope/get-current-project-id directory)]
-            (if (:error result)
-              {:type "text"
-               :text (json/write-str {:error (:error result) :session (:session result)})
-               :isError true}
-              {:type "text"
-               :text (json/write-str (assoc result :project-id project-id))}))
-          (catch Exception e
-            (log/error e "native-wrap failed")
-            {:type "text"
-             :text (json/write-str {:error (.getMessage e)})
-             :isError true}))
-        {:type "text"
-         :text (json/write-str {:error "Wrap extension not registered. Load the crystal addon."})
-         :isError true}))))
+      (try
+        (let [hbs            (coll/harvest-all-by-scope {:directory directory
+                                                          :agent-id  agent-id})
+              wraps          (fan/synthesize-wraps hbs)
+              persist-result (persist/persist-wraps! wraps)]
+          (log/info "native-wrap: completed"
+                    {:total     (:total persist-result)
+                     :persisted (:persisted persist-result)
+                     :failed    (:failed persist-result)})
+          {:type "text"
+           :text (json/write-str
+                   {:session   (:session hbs)
+                    :directory directory
+                    :total     (:total persist-result)
+                    :persisted (:persisted persist-result)
+                    :failed    (:failed persist-result)
+                    :wraps     (:results persist-result)})})
+        (catch Exception e
+          (log/error e "native-wrap failed")
+          {:type "text"
+           :text (json/write-str {:error (.getMessage e)})
+           :isError true})))))
