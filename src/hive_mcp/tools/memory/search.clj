@@ -354,14 +354,19 @@
 (defn- search-semantic*
   "Pure search logic returning Result. Validates inputs and dispatches to the
    default IMemoryStore via search-store*.
-   exclude_tags defaults to [\"carto\"] — pass [] to include carto snippets explicitly."
+   exclude_tags defaults to [\"carto\"] — pass [] to include carto snippets explicitly.
+   include_descendants defaults to true — pass false to restrict to current project."
   [{:keys [query limit type directory include_descendants scope exclude_tags]}]
   (let [directory (or directory (ctx/current-directory))
+        include-descendants? (if (some? include_descendants)
+                               (boolean include_descendants)
+                               true)
         limit-val (coerce-int! limit :limit 10)
         store-ready? (and (mem-proto/store-set?)
                           (mem-proto/supports-semantic-search? (mem-proto/get-store)))]
     (log/info "mcp-memory-search-semantic:" query "type:" type "directory:" directory
-              "scope:" scope "exclude_tags:" exclude_tags)
+              "scope:" scope "exclude_tags:" exclude_tags
+              "include_descendants:" include-descendants?)
     (if-not store-ready?
       (result/err :memory/store-not-configured
                   {:message (str "Semantic search not configured. "
@@ -370,9 +375,9 @@
             sf (domain/parse-scope scope project-id)
             [effective-pid in-project?] (domain/scope->effective sf)]
         (search-store* query limit-val type effective-pid in-project?
-                       include_descendants (if (some? exclude_tags)
-                                             exclude_tags
-                                             default-exclude-tags))))))
+                       include-descendants? (if (some? exclude_tags)
+                                              exclude_tags
+                                              default-exclude-tags))))))
 
 (defn handle-search-semantic
   "Search project memory using semantic similarity (vector search).

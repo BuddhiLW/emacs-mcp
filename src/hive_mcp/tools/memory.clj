@@ -125,7 +125,7 @@
     :handler handle-mcp-memory-add}
 
    {:name "mcp_memory_query"
-    :description "Query project memory by type with scope filtering (Chroma storage). Returns stored notes, snippets, conventions, decisions, axioms, or plans filtered by scope (auto-filters by current project + global unless specified). HCR Wave 4: Use include_descendants=true to also see child project memories."
+    :description "Query project memory by type with scope filtering (Chroma storage). Returns stored notes, snippets, conventions, decisions, axioms, or plans filtered by scope (auto-filters by current project + global unless specified). HCR Wave 4: include_descendants defaults to true (also surfaces child project memories); pass false to restrict to the current project."
     :inputSchema {:type "object"
                   :properties {"type" {:type "string"
                                        :enum (type-registry/mcp-enum {:include-conversation? true})
@@ -143,7 +143,7 @@
                                "directory" {:type "string"
                                             :description "Working directory to determine project scope (pass your cwd to ensure correct scoping)"}
                                "include_descendants" {:type "boolean"
-                                                      :description "HCR Wave 4: Include child project memories in results (default: false). Use for coordinator-level queries that need visibility into sub-project memories."}}
+                                                      :description "HCR Wave 4: Include child project memories in results (default: true). Pass false to restrict to the current project only."}}
                   :required ["type"]}
     :handler handle-mcp-memory-query}
 
@@ -199,7 +199,7 @@
                                "scope" {:type "string"
                                         :description "Scope filter: nil=auto (project+global), 'all'=no filter, 'global'=only global, or specific scope tag"}
                                "include_descendants" {:type "boolean"
-                                                      :description "Include child project memories in results (HCR Wave 4, default: false)"}}
+                                                      :description "Include child project memories in results (HCR Wave 4, default: true). Pass false to restrict to the current project only."}}
                   :required ["query"]}
     :handler handle-mcp-memory-search-semantic}
 

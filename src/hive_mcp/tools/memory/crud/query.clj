@@ -126,7 +126,9 @@
   "Query project memory by type with scope and verbosity filtering."
   [{:keys [type tags exclude_tags limit duration scope directory include_descendants verbosity]}]
   (let [directory (or directory (ctx/current-directory))
-        include-descendants? (boolean include_descendants)
+        include-descendants? (if (some? include_descendants)
+                               (boolean include_descendants)
+                               true)
         metadata-only? (not= verbosity "full")
         tags         (coerce-vec! tags :tags [])
         exclude-tags (coerce-vec! exclude_tags :exclude_tags [])]

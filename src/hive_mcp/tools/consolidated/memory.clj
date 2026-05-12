@@ -165,7 +165,7 @@
                               "days" {:type "integer"
                                       :description "[expiring] Days to look ahead (default: 7)"}
                               "include_descendants" {:type "boolean"
-                                                     :description "[query/search] Include child project memories (HCR). Default false."}
+                                                     :description "[query/search] Include child project memories (HCR). Default true — pass false to restrict to current project only."}
                               "force" {:type "boolean"
                                        :description "[reembed] Force re-embed even if content-hash unchanged (currently no-op; reserved)"}
                               ;; KG params
