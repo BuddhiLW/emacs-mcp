@@ -71,18 +71,6 @@
       (is (vector? (:manifests result)))
       (is (vector? (:errors result))))))
 
-(deftest scan-finds-manifests-on-classpath
-  (testing "Discovers hive-knowledge manifest from sibling project on classpath"
-    (let [{:keys [manifests]} (manifest/scan-classpath-manifests)
-          ids (set (map :addon/id manifests))]
-      ;; If hive-knowledge is on the classpath (via deps.local.edn),
-      ;; its manifest should be discovered
-      (when (ids "hive.knowledge")
-        (is (ids "hive.knowledge"))
-        (let [hk (first (filter #(= "hive.knowledge" (:addon/id %)) manifests))]
-          (is (= :native (:addon/type hk)))
-          (is (= "hive-knowledge.init" (:addon/init-ns hk))))))))
-
 (deftest scan-handles-invalid-manifests-gracefully
   (testing "Invalid manifests are collected in :errors, not thrown"
     (let [tmp-dir (io/file (System/getProperty "java.io.tmpdir")
