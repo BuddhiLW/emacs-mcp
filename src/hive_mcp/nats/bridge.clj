@@ -25,6 +25,30 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
+;; Self-publish loopback gate
+;; =============================================================================
+;;
+;; NATS fanout delivers our own publishes back to us, which used to cascade
+;; into a wrap_notify shout storm: publish → loopback receive → buffer →
+;; piggyback emit → publish → … (100Hz, OOMs the JVM within minutes).
+;;
+;; Solution: stamp every outbound payload with this process's `:node-id` and
+;; drop inbound payloads carrying the same id at the fanout boundary. Multi-
+;; coordinator setups still cross-talk because each instance gets a fresh UUID.
+
+(defonce ^:private node-id (str (random-uuid)))
+
+(defn- stamp-self
+  "Attach this process's node-id to an outbound payload."
+  [payload]
+  (assoc payload :nats/source-node node-id))
+
+(defn- self-publish?
+  "True when an inbound payload was emitted by this process."
+  [payload]
+  (= (:nats/source-node payload) node-id))
+
+;; =============================================================================
 ;; Subject Hierarchy — Canonical Subject Definitions
 ;; =============================================================================
 
@@ -142,7 +166,7 @@
   [{:keys [agent-id project-id] :as payload}]
   (let [backbone (eb/get-backbone)
         subject (shout-subject project-id agent-id)]
-    (eb/publish! backbone subject payload)
+    (eb/publish! backbone subject (stamp-self payload))
     (log/debug "[Bridge] Published shout on" subject)))
 
 ;; =============================================================================
@@ -160,7 +184,7 @@
   [{:keys [type] :as payload}]
   (let [backbone (eb/get-backbone)
         subject (event-subject type)]
-    (eb/publish! backbone subject payload)
+    (eb/publish! backbone subject (stamp-self payload))
     (log/debug "[Bridge] Published event on" subject)))
 
 ;; =============================================================================
@@ -177,9 +201,11 @@
     :timestamp  1234567890
     :data       {...}}"
   [{:keys [tool-name] :as payload}]
-  (let [backbone (eb/get-backbone)
-        subject (tool-subject (or tool-name "unknown"))]
-    (eb/publish! backbone subject payload)
+  (let [resolved-tool (let [s (some-> tool-name name)]
+                        (if (and s (not= s "")) s "unknown"))
+        backbone (eb/get-backbone)
+        subject (tool-subject resolved-tool)]
+    (eb/publish! backbone subject (stamp-self payload))
     (log/debug "[Bridge] Published tool notification on" subject)))
 
 ;; =============================================================================
@@ -433,9 +459,19 @@
 (defn- handle-shout-fanout!
   "Fanout a shout to all registered IDeliveryChannels.
    Single backbone subscription, multiple local deliveries via protocol registry.
-   Each delivery is independent and non-fatal."
+   Each delivery is independent and non-fatal.
+
+   Loopback gates (incident 2026-05-11):
+     1. `self-publish?` drops shouts we just emitted (NATS re-delivers our own
+        publishes back to us; the local atom path already feeds piggyback).
+     2. `:via :nats-inbound` marker propagates to NatsChannel.deliver! so it
+        does NOT re-publish; otherwise the channel ping-pongs to NATS, NATS
+        echoes back, fanout fans out, NatsChannel re-publishes — 100Hz
+        cascade that wedges the JVM in minutes."
   [payload]
-  (dc/fanout! payload))
+  (if (self-publish? payload)
+    (log/trace "[Bridge] dropping self-published shout")
+    (dc/fanout! (assoc payload :via :nats-inbound))))
 
 ;; =============================================================================
 ;; Subscriber Side — Tool Notification Fanout (M1)
@@ -443,9 +479,12 @@
 
 (defn- handle-tool-notification!
   "Fanout a tool notification to all registered IDeliveryChannels.
-   Same pattern as shout fanout — single backbone subscription, protocol registry fanout."
+   Same pattern as shout fanout — single backbone subscription, protocol registry fanout.
+   See `handle-shout-fanout!` for the two-gate loopback rationale."
   [payload]
-  (dc/fanout! payload))
+  (if (self-publish? payload)
+    (log/trace "[Bridge] dropping self-published tool notification")
+    (dc/fanout! (assoc payload :via :nats-inbound))))
 
 ;; =============================================================================
 ;; Lifecycle
@@ -459,15 +498,18 @@
   (let [backbone (eb/get-backbone)]
     (when (eb/connected? backbone)
       ;; Drone subscriptions (existing)
-      (eb/subscribe! backbone (wildcard-subject :completed) handle-drone-completed)
-      (eb/subscribe! backbone (wildcard-subject :failed) handle-drone-failed)
+      ;; Use var-deref (#'fn) so REPL :reload updates the live dispatcher
+      ;; behavior (incident 2026-05-11: subscriber closures captured pre-fix
+      ;; fanout fns and kept the wrap-loop alive after reload).
+      (eb/subscribe! backbone (wildcard-subject :completed) #'handle-drone-completed)
+      (eb/subscribe! backbone (wildcard-subject :failed) #'handle-drone-failed)
       ;; Shout fanout subscription (M1 — protocol-mediated)
-      (eb/subscribe! backbone (shout-wildcard) handle-shout-fanout!)
+      (eb/subscribe! backbone (shout-wildcard) #'handle-shout-fanout!)
       ;; Tool notification fanout subscription (M1)
-      (eb/subscribe! backbone (tool-wildcard) handle-tool-notification!)
+      (eb/subscribe! backbone (tool-wildcard) #'handle-tool-notification!)
       ;; Agent (headless ling) lifecycle subscriptions
-      (eb/subscribe! backbone (agent-wildcard :completed) handle-agent-completed)
-      (eb/subscribe! backbone (agent-wildcard :failed) handle-agent-failed)
+      (eb/subscribe! backbone (agent-wildcard :completed) #'handle-agent-completed)
+      (eb/subscribe! backbone (agent-wildcard :failed) #'handle-agent-failed)
       (log/info "[Bridge] Subscriptions started (drone + shout + tool + agent fanout)"))))
 
 (defn stop-subscriptions!
