@@ -152,7 +152,16 @@
         (contains? @addon-modes kw))))
 
 (defn resolve-alias
-  "Resolve a mode to its canonical form. :headless -> :agent-sdk, others unchanged."
+  "Resolve a mode to its canonical form via static :alias-of metadata.
+
+   :headless is ABSTRACT post-cleanup — it has no static :alias-of, so this
+   function returns :headless unchanged. The concrete backend (:agent-sdk,
+   :hive-agent, …) is resolved at spawn time via
+   `hive-mcp.agent.ling.headless-registry/resolve-default-backend` (operator
+   override + priority-ranked addon backends), NOT here.
+
+   Use this only for static alias resolution. For dynamic backend resolution
+   of :headless, call `hive-mcp.agent.ling.lifecycle/resolve-effective-mode`."
   [mode]
   (get alias-map mode mode))
 

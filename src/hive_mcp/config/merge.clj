@@ -61,12 +61,19 @@
                          :model "nomic-embed-text"}
                 :openrouter {:model "qwen/qwen3-embedding-8b"}}
    :embedder {:default :ollama-nomic
-              :routes {:type/conversation-turn :venice-qwen3
-                       :type/turn-summary      :venice-qwen3
-                       :type/decision          :venice-qwen3
-                       :type/plan              :venice-qwen3
-                       :type/session-summary   :venice-qwen3
-                       :type/convention        :venice-qwen3
+              ;; Defaults route the heavy 4096-dim types to OpenRouter (the
+              ;; "always available" 4096-d provider). `service/configure-defaults!`
+              ;; flips each of these to :venice-qwen3 at boot when VENICE_API_KEY
+              ;; is present and the user has not pinned a different route. Pre-2026-05
+              ;; these defaults pointed at :venice-qwen3 directly, which silently stalled
+              ;; memory writes for 30s+ whenever Venice was slow/unreachable — even
+              ;; with the key absent. See service/configure-defaults! for the flips.
+              :routes {:type/conversation-turn :openrouter-qwen3
+                       :type/turn-summary      :openrouter-qwen3
+                       :type/decision          :openrouter-qwen3
+                       :type/plan              :openrouter-qwen3
+                       :type/session-summary   :openrouter-qwen3
+                       :type/convention        :openrouter-qwen3
                        :type/axiom             :ollama-qwen3-local
                        :type/principle         :ollama-qwen3-local
                        :type/snippet           :ollama-qwen3-local

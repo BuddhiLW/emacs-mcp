@@ -43,6 +43,14 @@
         ;; Part of replikativ ecosystem (pairs with yggdrasil)
         org.replikativ/datahike {:mvn/version "0.8.1671"}
 
+        ;; Proximum — pure-JVM HNSW vector index with git-like versioning.
+        ;; STORAGE-2 phase 2: backs the :carto-vec / :memory-vec slots
+        ;; via hive-mcp.knowledge-graph.store.proximum/ProximumVecStore.
+        ;; SIMD via Java Vector API (--add-modules jdk.incubator.vector).
+        ;; Late-bound through requiring-resolve so a missing jar surfaces
+        ;; as :slot/factory-failed rather than a JVM crash.
+        org.replikativ/proximum {:mvn/version "0.1.24"}
+
         ;; Logging - SLF4J with Logback backend
         ;; clojure.tools.logging provides the Clojure facade
         ;; logback-classic is the SLF4J implementation
@@ -124,7 +132,7 @@
         io.github.hive-agi/hive-milvus {:git/tag "v0.2.3" :git/sha "aa0ebdf"}
 
         ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj
-        io.github.hive-agi/hive-weave {:git/tag "v0.2.3" :git/sha "c9510b7"}
+        io.github.hive-agi/hive-weave {:git/tag "v0.2.5" :git/sha "5895a2a"}
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
         io.github.hive-agi/hive-emacs {:git/tag "v0.4.2" :git/sha "3b3b0f6"}
@@ -143,7 +151,7 @@
         ;; truth for "is this pid alive?", `kill -0` semantics, etc.
         ;; NOTE: process.liveness ns is post-v0.2.1 — when the next tag is
         ;; cut, bump :git/sha here and drop the deps.local.edn override.
-        io.github.hive-agi/hive-system {:git/tag "v0.2.3" :git/sha "8754bfc"}
+        io.github.hive-agi/hive-system {:git/tag "v0.2.4" :git/sha "0706c57"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
@@ -160,7 +168,8 @@
                 cider/cider-nrepl {:mvn/version "0.58.0"}}
    ;; Heap cap, G1GC tuning, string dedup for prompt/response data,
    ;; bounded core.async pool, Netty access, aggressive GC return-to-OS
-   :jvm-opts ["-Xmx4g"
+   :jvm-opts ["-Xmx8g"
+              "-Xms4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
@@ -169,6 +178,8 @@
               "-XX:MinHeapFreeRatio=20"
               "-XX:MaxHeapFreeRatio=40"
               "-XX:G1HeapRegionSize=4m"
+              "-XX:+HeapDumpOnOutOfMemoryError"
+              "-XX:+ExitOnOutOfMemoryError"
               "-Dclojure.core.async.pool-size=8"
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
@@ -181,7 +192,8 @@
                 refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
    ;; Netty access, Proximum HNSW SIMD, aggressive GC return-to-OS
-   :jvm-opts ["-Xmx4g"
+   :jvm-opts ["-Xmx8g"
+              "-Xms4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
@@ -190,6 +202,8 @@
               "-XX:MinHeapFreeRatio=20"
               "-XX:MaxHeapFreeRatio=40"
               "-XX:G1HeapRegionSize=4m"
+              "-XX:+HeapDumpOnOutOfMemoryError"
+              "-XX:+ExitOnOutOfMemoryError"
               "-Dclojure.core.async.pool-size=8"
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
@@ -203,7 +217,8 @@
                 refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
    ;; Netty access, Proximum HNSW SIMD, aggressive GC return-to-OS
-   :jvm-opts ["-Xmx4g"
+   :jvm-opts ["-Xmx8g"
+              "-Xms4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
@@ -212,6 +227,8 @@
               "-XX:MinHeapFreeRatio=20"
               "-XX:MaxHeapFreeRatio=40"
               "-XX:G1HeapRegionSize=4m"
+              "-XX:+HeapDumpOnOutOfMemoryError"
+              "-XX:+ExitOnOutOfMemoryError"
               "-Dclojure.core.async.pool-size=8"
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"

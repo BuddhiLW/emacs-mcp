@@ -6,7 +6,8 @@
             [hive-mcp.config.core :as config]
             [hive-mcp.config.schema :as schema]
             [clojure.java.io :as io]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [clojure.edn :as edn]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -19,14 +20,47 @@
     (result/err :config/get {:message "Missing required parameter: key. Example: config get {\"key\": \"embeddings.ollama.host\"}"})
     (result/ok {:key key :value (config/get-config-value key)})))
 
+(defn- coerce-value
+  "EDN-aware coercion for `config set value=...`. MCP transports often
+   stringify scalars — `true` arrives as `\"true\"`, `:foo` as `\":foo\"`.
+   Without coercion, downstream resolvers comparing `(true? v)` or
+   `(= :foo v)` silently fail. This helper restores intent:
+
+     \"true\"/\"false\"        → boolean
+     \":kw\"                 → keyword
+     numeric string         → long/double
+     EDN collection literal → vector/map/set/list
+     anything else          → unchanged string
+
+   Non-string inputs pass through untouched (booleans/numbers arriving
+   typed already from a richer transport)."
+  [v]
+  (if-not (string? v)
+    v
+    (cond
+      (= "true" v)               true
+      (= "false" v)              false
+      (re-matches #"-?\d+" v)    (try (Long/parseLong v) (catch Throwable _ v))
+      (re-matches #"-?\d+\.\d+" v) (try (Double/parseDouble v) (catch Throwable _ v))
+      (.startsWith ^String v ":") (keyword (subs v 1))
+      (re-matches #"^[\[(\{#].*" v) (try (edn/read-string v) (catch Throwable _ v))
+      :else                      v)))
+
 (defn- set*
   [{:keys [key value]}]
   (if (or (nil? key) (= "" key))
-    (result/err :config/set {:message "Missing required parameter: key. Example: config set {\"key\": \"embeddings.ollama.host\", \"value\": \"http://new:11434\"}"})
-    (do
-      (config/set-config-value! key value)
-      (log/info "Config set:" key "=" value)
-      (result/ok {:key key :value value :status "updated"}))))
+    (result/err :config/set
+                {:message (str "Missing required parameter: key. Example: "
+                               "config set {\"key\": \"embeddings.ollama.host\", "
+                               "\"value\": \"http://new:11434\"}")})
+    (let [coerced (coerce-value value)]
+      (config/set-config-value! key coerced)
+      (log/info "Config set:" key "=" coerced "(coerced from" value ")")
+      (result/ok {:key key
+                  :value coerced
+                  :raw-input value
+                  :coerced? (not= coerced value)
+                  :status "updated"}))))
 
 (defn- list-config*
   [_params]

@@ -123,15 +123,20 @@
 (def param-aliases
   "Maps single-char (or short) parameter aliases to full keywords.
    Applied during sentence parsing to expand compressed params."
-  {"c"  :content
-   "t"  :type
-   "#"  :tags
-   "d"  :directory
-   "q"  :query
-   "n"  :name
-   "id" :id
-   "p"  :prompt
-   "f"  :files})
+  {"c"   :content
+   "t"   :type
+   "#"   :tags
+   "d"   :directory
+   "q"   :query
+   "n"   :name
+   "id"  :id
+   "p"   :prompt
+   "f"   :files
+   ;; b+ idempotency-key: short alias so the verb stays terse.
+   ;; Underscored long form is the canonical handler param shape;
+   ;; both the alias and the snake-case name reach the same handler
+   ;; param via memory-kanban/normalize-idempotency-key.
+   "idk" :idempotency_key})
 
 ;; =============================================================================
 ;; Parameter Expansion
