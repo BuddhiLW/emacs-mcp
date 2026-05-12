@@ -365,6 +365,15 @@
   ;; Per-memory-type route flip: :type/plan → venice qwen3-8b when
   ;; VENICE_API_KEY is present AND the user hasn't pinned a different
   ;; route via `hive config set embedder.routes.type/plan ...`.
+  ;;
+  ;; Only :type/plan auto-flips. The other 4096-dim heavy types
+  ;; (decision / convention / conversation-turn / turn-summary /
+  ;; session-summary) stay on :openrouter-qwen3 by default — users
+  ;; who want them on Venice pin explicitly. Pre-2026-05-07 those types
+  ;; were hard-coded to :venice-qwen3 in merge.clj defaults; when Venice
+  ;; was slow/unreachable, every memory write for those types stalled
+  ;; the 30s memory-write budget. Defaults now point at OpenRouter
+  ;; (always-available 4096-d), and Venice is opt-in.
   (routing/apply-route-flip!
    {:route   :type/plan
     :default :openrouter-qwen3
