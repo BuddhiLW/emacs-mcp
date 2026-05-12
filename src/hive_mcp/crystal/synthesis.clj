@@ -326,14 +326,11 @@
     (when (result/ok? store-r)
       ;; Re-anchor any placeholder claim-sets persisted by the wrap-time
       ;; claim-extract pipeline (which only knew the session-id) to this
-      ;; canonical wrap memory id. Fire-and-forget — claim-set lookup is
-      ;; rescued in hive-knowledge; misses are surfaced at catchup-time
-      ;; via find-placeholder-claim-sets.
+      ;; canonical wrap memory id. Fire-and-forget — addons attach a
+      ;; rewrite hook under :crystal/claim-rewrite via the extension
+      ;; registry; misses are surfaced at catchup-time.
       (try
-        (when-let [rewrite-fn
-                   (try (requiring-resolve
-                          'hive-knowledge.crystal.claims/rewrite-placeholder-claim-sets-for-session!)
-                        (catch Throwable _ nil))]
+        (when-let [rewrite-fn (ext/get-extension :crystal/claim-rewrite)]
           (future
             (try (rewrite-fn (crystal/session-id) (:ok store-r) project-id)
                  (catch Throwable t
