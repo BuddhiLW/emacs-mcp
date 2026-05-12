@@ -60,6 +60,59 @@
       (log/debug "track-movement! failed (non-fatal):" (.getMessage e)))))
 
 ;; ============================================================
+;; Idempotency-key (b+ retry safety)
+;;
+;; Without this, re-running a wrap-ceremony DSL batch after a transient
+;; failure mints fresh kanban ids for every `b+` and pollutes the board
+;; with duplicates. Memory `m+` is dedup'd by content-hash; this gives
+;; `b+` the same retry-safe property.
+;;
+;; The key is carried as a tag (`idempotency:<key>`) on the entry. A
+;; create call with an idempotency-key first looks up an existing entry
+;; carrying that tag in the same project scope; if found, returns its
+;; id verbatim (no second write). If not found, the new entry is
+;; tagged so the next retry within TTL hits.
+;; ============================================================
+
+(defn- idempotency-tag
+  "Build the canonical tag string for an idempotency key. Returns nil
+   when the key is blank — keeps the no-key path zero-overhead."
+  [k]
+  (when (and k (string? k) (not (str/blank? k)))
+    (str "idempotency:" k)))
+
+(defn- normalize-idempotency-key
+  "Pull the idempotency key from any of the accepted param shapes
+   (`:idempotency_key`, `:idempotency-key`, `:idk`). Returns the
+   string or nil. Centralised so the DSL surface and direct callers
+   stay symmetric."
+  [params]
+  (or (:idempotency_key params)
+      (:idempotency-key params)
+      (:idk params)))
+
+(defn- find-by-idempotency-key
+  "Return the id of an existing kanban entry tagged with
+   `idempotency:<key>` in `project-id`'s scope, or nil. Wraps the
+   facade in `safe-call`-style rescue so a transient backend failure
+   never breaks the create path — a missed lookup degrades to
+   'create as if no key', which is the same behaviour the caller
+   would have got pre-feature."
+  [idem-key project-id]
+  (when-let [tag (idempotency-tag idem-key)]
+    (try
+      (let [results (kanban-facade/query-entries
+                     :type             "note"
+                     :tags             ["kanban" tag]
+                     :project-id       project-id
+                     :limit            1
+                     :include-expired? false)]
+        (some-> (first results) :id))
+      (catch Throwable t
+        (log/debug "idempotency lookup failed (non-fatal):" (ex-message t))
+        nil))))
+
+;; ============================================================
 ;; Descendant aggregation (HCR Wave 5)
 ;; ============================================================
 
@@ -68,42 +121,58 @@
 ;; ============================================================
 
 (defn- create* [{:keys [title description priority context directory agent_id tags]
-                 :as _params}]
+                 :as params}]
   (when (or (nil? title) (and (string? title) (str/blank? title)))
     (throw (ex-info "Kanban task requires a non-empty title" {:type :validation-error})))
   (let [eff-dir   (effective-dir directory)
         eff-agent (or agent_id (ctx/current-agent-id) (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
         priority  (or priority "medium")
         project-id (scope/get-current-project-id eff-dir)
-        content (cond-> {:task-type "kanban" :title title :status "todo"
-                         :priority priority :created (kt/kanban-timestamp)
-                         :started nil :context context}
-                  description (assoc :description description))
-        ;; Merge caller-supplied tags (e.g. wave:N from plan-to-kanban,
-        ;; epic:foo from grouping) with the standard kanban tag set.
-        ;; Audit kanban 20260429203429: previously :tags was silently dropped.
-        extra-tags (when (sequential? tags)
-                     (filterv string? tags))
-        tags (vec (distinct (concat (kt/build-kanban-tags "todo" priority project-id)
-                                    (or extra-tags []))))
-        ;; Thread the kanban-store toggle's active key into the generic
-        ;; memory-add pipeline. Embedding + duplicate detection + KG
-        ;; edges all stay on `mem-crud/handle-add`; only the IMemoryStore
-        ;; slot routing changes. :default in legacy mode, :kanban after
-        ;; the cutover flag flips.
-        crud-result (mem-crud/handle-add {:type "note"
-                                          :content (json/write-str content)
-                                          :tags tags :directory eff-dir
-                                          :agent_id eff-agent :duration "short"
-                                          :store-key (kanban-facade/active-key)})]
-    (log/info "kanban-create result:" crud-result)
-    (when-not (:isError crud-result)
-      (track-movement! {:task-id (or (:text crud-result) "unknown")
-                        :title title :from nil :to "todo"
-                        :project-id project-id}))
-    (if (:isError crud-result)
-      crud-result
-      {:type "text" :text (:text crud-result)})))
+        idem-key   (normalize-idempotency-key params)
+        ;; Idempotency check: if an entry tagged `idempotency:<key>`
+        ;; already exists in this project scope, return its id without
+        ;; writing again. Makes `b+` safe to re-run as part of a
+        ;; partially-failed wrap-ceremony batch.
+        existing-id (find-by-idempotency-key idem-key project-id)]
+    (if existing-id
+      (do
+        (log/info "kanban-create idempotency hit — returning existing id"
+                  {:idempotency-key idem-key :id existing-id})
+        {:type "text" :text existing-id})
+      (let [content (cond-> {:task-type "kanban" :title title :status "todo"
+                             :priority priority :created (kt/kanban-timestamp)
+                             :started nil :context context}
+                      description (assoc :description description))
+            ;; Merge caller-supplied tags (e.g. wave:N from plan-to-kanban,
+            ;; epic:foo from grouping) with the standard kanban tag set.
+            ;; Audit kanban 20260429203429: previously :tags was silently dropped.
+            extra-tags (when (sequential? tags)
+                         (filterv string? tags))
+            ;; Thread the idempotency tag through if a key was supplied
+            ;; — future creates with the same key will hit
+            ;; `find-by-idempotency-key` above and short-circuit.
+            idem-tag (idempotency-tag idem-key)
+            tags (vec (distinct (concat (kt/build-kanban-tags "todo" priority project-id)
+                                        (or extra-tags [])
+                                        (when idem-tag [idem-tag]))))
+            ;; Thread the kanban-store toggle's active key into the generic
+            ;; memory-add pipeline. Embedding + duplicate detection + KG
+            ;; edges all stay on `mem-crud/handle-add`; only the IMemoryStore
+            ;; slot routing changes. :default in legacy mode, :kanban after
+            ;; the cutover flag flips.
+            crud-result (mem-crud/handle-add {:type "note"
+                                              :content (json/write-str content)
+                                              :tags tags :directory eff-dir
+                                              :agent_id eff-agent :duration "short"
+                                              :store-key (kanban-facade/active-key)})]
+        (log/info "kanban-create result:" crud-result)
+        (when-not (:isError crud-result)
+          (track-movement! {:task-id (or (:text crud-result) "unknown")
+                            :title title :from nil :to "todo"
+                            :project-id project-id}))
+        (if (:isError crud-result)
+          crud-result
+          {:type "text" :text (:text crud-result)})))))
 
 (defn- move*
   "Soft-transition a kanban task to a new status via the event bus.
