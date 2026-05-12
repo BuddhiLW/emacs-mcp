@@ -73,11 +73,25 @@
     (pkg/kg-store? store) (pkg/close! store)))
 
 (defn- ensure-conn-result
-  "Run the appropriate lifecycle open under rescue. Returns SlotInit ADT."
+  "Run the appropriate lifecycle open. Returns SlotInit ADT.
+
+   Logs the swallowed throwable body before returning
+   `:slot/factory-failed`. Without this log, lifecycle errors (LMDB WAL
+   corruption, datahike store-id mismatch, classpath issues) surface
+   only as `slot-store` returning nil — which can take many indirection
+   layers to root-cause. See decision 20260508-storage-1 hardening."
   [slot backend store]
-  (r/rescue (failed slot backend :ensure-conn-threw)
-            (do (open-store! store)
-                (ok slot backend store))))
+  (try
+    (open-store! store)
+    (ok slot backend store)
+    (catch Throwable t
+      (log/error t "kg-slot ensure-conn! threw"
+                 {:slot     slot
+                  :backend  backend
+                  :store    (some-> store class .getName)
+                  :ex-data  (ex-data t)
+                  :cause    (some-> t .getCause .getMessage)})
+      (failed slot backend :ensure-conn-threw))))
 
 (defn- build-slot
   "Pure(ish): resolver + factory → SlotInit. Side effect = ensure-conn!."
