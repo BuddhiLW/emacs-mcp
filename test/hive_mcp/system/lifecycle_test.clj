@@ -182,7 +182,7 @@
 
 (def ^:private base-keys
   "All keys present in base system.edn."
-  #{:hive/guards :hive/hooks :hive/events :hive/coordinator
+  #{:hive/guards :hive/hooks :hive/events :hive/delivery-channels :hive/coordinator
     :hive/nrepl :hive/websocket-mcp :hive/nats
     :hive/embedding :hive/memory-store :hive/tool-delegation
     :hive/forge-belt :hive/config :hive/extensions

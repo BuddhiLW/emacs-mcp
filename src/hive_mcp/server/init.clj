@@ -533,19 +533,27 @@
 ;; NATS Initialization
 ;; =============================================================================
 
-(defn init-nats!
-  "Initialize NATS client + bridge + backbone + delivery channels for universal event backbone.
-   Startup sequence: NATS connect -> set IEventBackbone -> register delivery channels -> bridge subscribe -> callback listener.
-   Opt-in via config: services.nats.enabled = true.
-   Non-fatal: system degrades to NoopBackbone + polling if NATS unavailable."
+(defn init-delivery-channels!
+  "Register every IDeliveryChannel impl chosen by `register-default-channels!`.
+   Run UNCONDITIONALLY at startup — independent of NATS, Emacs, or any
+   editor frontend. Without this, headless hosts with NATS disabled would
+   silently lose all delivery (the historical E2E-2 symptom). Non-fatal:
+   factory errors are logged but don't abort init."
   []
-  ;; M1: Register delivery channels unconditionally — needed for both NATS and direct fallback
   (try
     (when-let [reg-channels! (requiring-resolve 'hive-mcp.delivery.channels/register-default-channels!)]
       (reg-channels!))
     (catch Exception e
-      (log/warn "[init] Failed to register delivery channels (non-fatal):" (ex-message e))))
-  ;; NATS backbone — opt-in via config
+      (log/warn "[init] Failed to register delivery channels (non-fatal):" (ex-message e)))))
+
+(defn init-nats!
+  "Initialize NATS client + bridge + backbone. Opt-in via config: services.nats.enabled = true.
+   Non-fatal: system degrades to NoopBackbone + polling if NATS unavailable.
+
+   Delivery channels are registered separately via init-delivery-channels!
+   so headless hosts still get a working delivery surface even when NATS
+   is disabled."
+  []
   (result/rescue nil
                  (let [nats-config (global-config/get-service-config :nats)]
                    (when (:enabled nats-config)
@@ -554,7 +562,6 @@
                            create-bb (requiring-resolve 'hive-mcp.nats.backbone/create-backbone)
                            set-bb! (requiring-resolve 'hive-mcp.protocols.event-backbone/set-backbone!)]
                        (start! nats-config)
-                       ;; M1: Wire NatsBackbone as active IEventBackbone
                        (let [bb (create-bb)]
                          (set-bb! bb)
                          (log/info "[init] NatsBackbone set as active IEventBackbone"))

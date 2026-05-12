@@ -104,6 +104,31 @@
   (log/info ":hive/events halt — noop (process-global event system)"))
 
 ;; =============================================================================
+;; :hive/delivery-channels — frontend-agnostic IDeliveryChannel registry
+;; =============================================================================
+;; Registers every chosen IDeliveryChannel impl UNCONDITIONALLY at startup so
+;; headless hosts (NATS off, Emacs off) still get a working delivery surface.
+;; Selection: explicit ids set > HIVE_DELIVERY_CHANNELS env > every factory.
+
+(defmethod ig/init-key :hive/delivery-channels
+  [_ config]
+  (log/info ":hive/delivery-channels init — registering IDeliveryChannel fanout endpoints" config)
+  (let [registered (result/rescue nil
+                     (init/init-delivery-channels!)
+                     (require 'hive-mcp.protocols.delivery-channel)
+                     (let [get-fn (resolve 'hive-mcp.protocols.delivery-channel/get-channels)
+                           ch-id  (resolve 'hive-mcp.protocols.delivery-channel/channel-id)]
+                       (mapv ch-id (get-fn))))]
+    {:registered registered
+     :status     (if (seq registered) :running :degraded)}))
+
+(defmethod ig/halt-key! :hive/delivery-channels
+  [_ _state]
+  ;; Channel registry is process-global; clearing it on halt would orphan
+  ;; in-flight fanouts. Leave channels registered across reset.
+  (log/info ":hive/delivery-channels halt — noop (registry survives reset)"))
+
+;; =============================================================================
 ;; :hive/coordinator — DataScript registration + hivemind coordinator entry
 ;; =============================================================================
 

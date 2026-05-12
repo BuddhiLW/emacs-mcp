@@ -11,6 +11,8 @@
 
  :hive/events          {}
 
+ :hive/delivery-channels {}
+
  :hive/coordinator     {}
 
  ;; ── Layer 2: Transport ───────────────────────────────────────────────

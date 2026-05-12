@@ -13,6 +13,7 @@
  :hive/hooks           {:guards (ig/ref :hive/guards)
                         :coordinator-id (ig/ref :hive/coordinator)}
  :hive/events          {}
+ :hive/delivery-channels {}
  :hive/coordinator     {}
 
  ;; ── Layer 2: Transport (network servers) ─────────────────────────────
