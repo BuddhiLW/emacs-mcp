@@ -23,6 +23,10 @@ target/
 # Logs
 *.log
 
+# JVM heap dumps
+*.hprof
+java_pid*.hprof
+
 # Compiled Elisp
 *.elc
 
