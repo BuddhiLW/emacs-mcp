@@ -20,6 +20,27 @@
 ;; Interceptor Predicate
 ;; =============================================================================
 
+(def ^:const unhandled-effect-warn-threshold
+  "After this many silent misses for the same effect-id, do-fx escalates from
+   WARN to ERROR-level log so unregistered effects can't blackhole the system
+   (ENGINE-L0.4, incident 2026-05-11 — missing :resilience/dim-mismatch handler
+   went unnoticed under WARN-default log routing)."
+  10)
+
+(defonce ^:private *unhandled-effect-counts
+  ^{:doc "Per-effect-id miss counter for L0.4 loud-fail escalation."}
+  (atom {}))
+
+(defn unhandled-effect-counts
+  "Read snapshot of per-effect-id miss counts. Diagnostic only."
+  []
+  @*unhandled-effect-counts)
+
+(defn reset-unhandled-effect-counts!
+  "Clear the unhandled-effect counter — call from test fixtures."
+  []
+  (reset! *unhandled-effect-counts {}))
+
 (defn interceptor?
   "Returns true if m is a valid interceptor map."
   [m]
@@ -56,12 +77,30 @@
 ;; Effect Execution (with metrics tracking)
 ;; =============================================================================
 
+(defn- record-unhandled-effect!
+  "Increment the miss counter for effect-id and log at WARN until the
+   threshold is crossed, then escalate to ERROR for every subsequent miss.
+   Returns the new count."
+  [effect-id]
+  (let [n (-> *unhandled-effect-counts
+              (swap! update effect-id (fnil inc 0))
+              (get effect-id))]
+    (if (< n unhandled-effect-warn-threshold)
+      (log/warn "No effect handler for" effect-id
+                (str "(miss " n "/" unhandled-effect-warn-threshold ")"))
+      (log/error "BLACKHOLE: no effect handler for" effect-id
+                 "after" n "misses — register a handler via reg-fx or"
+                 "remove the emitter (ENGINE-L0.4)"))
+    n))
+
 (defn do-fx
   "Execute all effects in the context's :effects map.
 
    Uses hive.events.fx/get-fx for handler lookup (unified registry).
    Tracks effect execution via metrics/record-effect-executed! and
-   metrics/record-effect-error!.
+   metrics/record-effect-error!. Missing handlers are counted per
+   effect-id; the WARN escalates to ERROR after
+   `unhandled-effect-warn-threshold` misses (ENGINE-L0.4).
 
    Arities:
    - [context]              - Uses hive.events global fx registry
@@ -75,10 +114,9 @@
          (catch Throwable e
            (metrics/record-effect-error!)
            (log/error "Effect" effect-id "failed:" (.getMessage e))))
-       (log/warn "No effect handler for" effect-id)))
+       (record-unhandled-effect! effect-id)))
    context)
   ([context _fx-handlers]
-   ;; Legacy 2-arity preserved for backwards compatibility.
    (do-fx context)))
 
 ;; =============================================================================
