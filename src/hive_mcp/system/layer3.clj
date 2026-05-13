@@ -32,11 +32,16 @@
 (defmethod ig/init-key :hive/embedding
   [_ _config]
   (log/info ":hive/embedding init — initializing embedding providers")
-  (let [result (init/init-embedding-provider!)]
-    ;; Fire background warmup (non-blocking future)
-    (init/warmup-embedding!)
-    {:status (if result :running :degraded)
-     :warmup :started}))
+  (let [result (try (init/init-embedding-provider!)
+                    (catch Throwable t
+                      (log/warn t ":hive/embedding init-embedding-provider! threw (non-fatal)")
+                      nil))
+        warmup-ok? (try (init/warmup-embedding!) true
+                        (catch Throwable t
+                          (log/warn t ":hive/embedding warmup threw (non-fatal)")
+                          false))]
+    {:status (if result :running :failed)
+     :warmup (if warmup-ok? :started :failed)}))
 
 (defmethod ig/halt-key! :hive/embedding
   [_ _state]
@@ -57,8 +62,11 @@
 (defmethod ig/init-key :hive/memory-store
   [_ _config]
   (log/info ":hive/memory-store init — wiring IMemoryStore backend")
-  (init/wire-memory-store!)
-  {:status :running})
+  (let [ok? (try (init/wire-memory-store!) true
+                 (catch Throwable t
+                   (log/warn t ":hive/memory-store wire-memory-store! threw (non-fatal)")
+                   false))]
+    {:status (if ok? :running :failed)}))
 
 (defmethod ig/halt-key! :hive/memory-store
   [_ _state]
@@ -96,8 +104,11 @@
 (defmethod ig/init-key :hive/forge-belt
   [_ _config]
   (log/info ":hive/forge-belt init — registering forge belt defaults")
-  (init/register-forge-belt-defaults!)
-  {:status :running})
+  (let [ok? (try (init/register-forge-belt-defaults!) true
+                 (catch Throwable t
+                   (log/warn t ":hive/forge-belt register-defaults! threw (non-fatal)")
+                   false))]
+    {:status (if ok? :running :failed)}))
 
 (defmethod ig/halt-key! :hive/forge-belt
   [_ _state]
@@ -137,8 +148,12 @@
 (defmethod ig/init-key :hive/extensions
   [_ _config]
   (log/info ":hive/extensions init — loading classpath extensions + addon discovery")
-  (let [result (init/load-extensions!)]
-    {:status     :running
+  (let [{:keys [ok? result]}
+        (try {:ok? true :result (init/load-extensions!)}
+             (catch Throwable t
+               (log/warn t ":hive/extensions load-extensions! threw (non-fatal) — some addons may be missing")
+               {:ok? false :result nil}))]
+    {:status     (if ok? :running :failed)
      :registered (:registered result)
      :total      (:total result)
      :sources    (:sources result)}))
