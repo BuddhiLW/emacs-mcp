@@ -5,6 +5,7 @@
             [hive-mcp.knowledge-graph.schema :as schema]
             [hive-mcp.knowledge-graph.store.datalevin-config :as dlc]
             [hive-mcp.knowledge-graph.conn-init :as ci]
+            [hive-mcp.storage.recovery :as rec]
             [hive-mcp.dns.result :as r :refer [rescue]]
             [clojure.java.io :as io]
             [taoensso.timbre :as log]))
@@ -74,7 +75,7 @@
       (.mkdirs (.getParentFile dir))))
   db-path)
 
-(defrecord DatalevinStore [conn-init db-path extra-schema]
+(defrecord DatalevinStore [conn-init db-path extra-schema recovery-policy]
   kg/IKGStore
 
   (ensure-conn! [_this]
@@ -85,7 +86,9 @@
     (ci/open-once!
      conn-init
      (fn []
-       (log/info "Initializing Datalevin KG store" {:path db-path})
+       (log/info "Initializing Datalevin KG store"
+                 {:path db-path
+                  :recovery-strategy (:strategy recovery-policy)})
        (validate-db-path! db-path)
        (let [base-schema (datalevin-schema)
              merged-schema (if extra-schema
@@ -94,7 +97,12 @@
          (log/debug "Datalevin schema translated"
                     {:attributes (count merged-schema)
                      :extra-attributes (when extra-schema (count extra-schema))})
-         (dtlv/get-conn db-path merged-schema)))))
+         ;; ENGINE-L1.2 — wrap the open in heal-and-open!. Policy default
+         ;; is `:throw` (preserves pre-L1.2 semantics); operators opt
+         ;; into `:quarantine` for boot-time WAL self-heal.
+         (rec/heal-and-open!
+          {:policy recovery-policy :db-path db-path}
+          #(dtlv/get-conn db-path merged-schema))))))
 
   (transact! [this tx-data]
     (dtlv/transact! (kg/ensure-conn! this) tx-data))
@@ -188,10 +196,17 @@
   "Create a new Datalevin-backed graph store.
    Resolution order for :db-path:
      1. Explicit caller arg
-     2. DatalevinKGConfig (env > config.edn > XDG default)"
-  [& [{:keys [db-path extra-schema]}]]
+     2. DatalevinKGConfig (env > config.edn > XDG default)
+
+   `recovery-policy` (ENGINE-L1.2) is forwarded to `heal-and-open!`:
+     :strategy     :throw (default) | :audit | :quarantine
+     :max-attempts pos-int (default 2)"
+  [& [{:keys [db-path extra-schema recovery-policy]}]]
   (rescue nil
           (let [resolved-path (or db-path (:db-path (resolve-typed-config)))]
-            (log/info "Creating Datalevin graph store" {:path resolved-path
-                                                        :extra-schema? (some? extra-schema)})
-            (->DatalevinStore (ci/atom-conn-init) resolved-path extra-schema))))
+            (log/info "Creating Datalevin graph store"
+                      {:path resolved-path
+                       :extra-schema? (some? extra-schema)
+                       :recovery-strategy (:strategy recovery-policy)})
+            (->DatalevinStore (ci/atom-conn-init) resolved-path extra-schema
+                              recovery-policy))))
