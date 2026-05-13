@@ -4,6 +4,7 @@
             [hive-mcp.protocols.kg :as kg]
             [hive-mcp.knowledge-graph.schema :as schema]
             [hive-mcp.knowledge-graph.store.datalevin-config :as dlc]
+            [hive-mcp.knowledge-graph.conn-init :as ci]
             [hive-mcp.dns.result :as r :refer [rescue]]
             [clojure.java.io :as io]
             [taoensso.timbre :as log]))
@@ -73,22 +74,27 @@
       (.mkdirs (.getParentFile dir))))
   db-path)
 
-(defrecord DatalevinStore [conn-atom db-path extra-schema]
+(defrecord DatalevinStore [conn-init db-path extra-schema]
   kg/IKGStore
 
   (ensure-conn! [_this]
-    (when (nil? @conn-atom)
-      (log/info "Initializing Datalevin KG store" {:path db-path})
-      (validate-db-path! db-path)
-      (let [base-schema (datalevin-schema)
-            merged-schema (if extra-schema
-                            (merge base-schema (translate-schema extra-schema))
-                            base-schema)]
-        (log/debug "Datalevin schema translated"
-                   {:attributes (count merged-schema)
-                    :extra-attributes (when extra-schema (count extra-schema))})
-        (reset! conn-atom (dtlv/get-conn db-path merged-schema))))
-    @conn-atom)
+    ;; Single-init via IConnInit (ENGINE-L1.2a). Concurrent callers
+    ;; block on the first open and observe the cached conn after,
+    ;; eliminating the LMDB file-lock race that produced
+    ;; `Resource temporarily unavailable`.
+    (ci/open-once!
+     conn-init
+     (fn []
+       (log/info "Initializing Datalevin KG store" {:path db-path})
+       (validate-db-path! db-path)
+       (let [base-schema (datalevin-schema)
+             merged-schema (if extra-schema
+                             (merge base-schema (translate-schema extra-schema))
+                             base-schema)]
+         (log/debug "Datalevin schema translated"
+                    {:attributes (count merged-schema)
+                     :extra-attributes (when extra-schema (count extra-schema))})
+         (dtlv/get-conn db-path merged-schema)))))
 
   (transact! [this tx-data]
     (dtlv/transact! (kg/ensure-conn! this) tx-data))
@@ -125,16 +131,16 @@
     ;; See AXIOM "Never NUKE Data". Destructive wipe lives on
     ;; IPersistentKGStore/delete-database!.
     (log/info "Reopening Datalevin KG store (non-destructive)" {:path db-path})
-    (when-let [c @conn-atom]
+    (when-let [c (ci/snapshot conn-init)]
       (rescue nil (dtlv/close c)))
-    (reset! conn-atom nil)
+    (ci/clear! conn-init)
     (kg/ensure-conn! this))
 
   (close! [_this]
-    (when-let [c @conn-atom]
+    (when-let [c (ci/snapshot conn-init)]
       (log/info "Closing Datalevin KG store" {:path db-path})
       (rescue nil (dtlv/close c))
-      (reset! conn-atom nil)))
+      (ci/clear! conn-init)))
 
   kg/IPersistentKGStore
 
@@ -150,13 +156,13 @@
                {:backend :datalevin
                 :db-path db-path
                 :stacktrace (mapv str (.getStackTrace (Throwable.)))})
-    (when-let [c @conn-atom]
+    (when-let [c (ci/snapshot conn-init)]
       (rescue nil (dtlv/close c)))
     (let [dir (io/file db-path)]
       (when (.exists dir)
         (doseq [f (reverse (file-seq dir))]
           (.delete f))))
-    (reset! conn-atom nil)
+    (ci/clear! conn-init)
     (log/error "[storage/destruction-completed] Datalevin directory deleted"
                {:backend :datalevin :db-path db-path})
     nil))
@@ -188,4 +194,4 @@
           (let [resolved-path (or db-path (:db-path (resolve-typed-config)))]
             (log/info "Creating Datalevin graph store" {:path resolved-path
                                                         :extra-schema? (some? extra-schema)})
-            (->DatalevinStore (atom nil) resolved-path extra-schema))))
+            (->DatalevinStore (ci/atom-conn-init) resolved-path extra-schema))))
