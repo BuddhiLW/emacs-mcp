@@ -79,12 +79,20 @@
   (reset! channel-registry {}))
 
 (defn fanout!
-  "Deliver event to all registered channels. Each delivery is independent
-   and non-fatal — one channel failure does not block others."
+  "Deliver event to all registered channels.
+
+   Delegates to `hive-mcp.delivery.fanout/fanout!` for per-channel
+   timeout + circuit-breaker isolation (ENGINE-L2.3). Late-resolve so
+   protocols stays free of impl-side compile-time dependencies."
   [event]
-  (doseq [ch (get-channels)]
-    (rescue nil (when (available? ch)
-        (deliver! ch event)))))
+  (if-let [f (requiring-resolve 'hive-mcp.delivery.fanout/fanout!)]
+    (f event)
+    ;; Fallback when delivery.fanout isn't on the classpath (e.g. early
+    ;; bootstrap or carved-down test runs). Preserves the pre-L2.3
+    ;; serial-doseq semantics without isolation guarantees.
+    (doseq [ch (get-channels)]
+      (rescue nil (when (available? ch)
+                    (deliver! ch event))))))
 
 ;;; ============================================================================
 ;;; NoopChannel (Fallback)
