@@ -22,7 +22,9 @@
             [hive-mcp.system.layer3]
             [hive-mcp.system.layer4]
             [hive-mcp.system.layer5]
-            [hive-mcp.system.keepalive :as keepalive])
+            [hive-mcp.system.keepalive :as keepalive]
+            ;; Engine resilience — defense-in-depth L0.3 boot-time hprof control
+            [hive-mcp.engine.hprof.boot :as hprof])
   (:gen-class))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -124,6 +126,9 @@
     (log/info "Starting hive-mcp server with Integrant, profile:" profile)
     (when-let [sock (System/getenv "EMACS_SOCKET_NAME")]
       (log/info "Targeting Emacs daemon:" sock))
+    ;; ENGINE-L0.3 — rotate stale hprofs and abort early on disk pressure
+    ;; before allocating any heap-heavy subsystems.
+    (hprof/boot!)
     (let [config (load-system-config profile)
           sys    (ig/init config)]
       (clojure.core/reset! system sys)

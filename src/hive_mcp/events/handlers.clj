@@ -89,7 +89,8 @@
             [hive-mcp.events.handlers.lifecycle :as lifecycle]
             [hive-mcp.events.registry :as registry]
             [hive-mcp.server.guards :as guards]
-            [clojure.set :as set]))
+            [clojure.set :as set]
+            [hive-mcp.events.handlers.resilience :as resilience]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -121,7 +122,8 @@
     :agora/stage-transition :agora/consensus
     :saa/started :saa/phase-complete :saa/completed :saa/failed
     :memory/query :memory/search :memory/get
-    :lifecycle/sweep})
+    :lifecycle/sweep
+    :resilience/dim-mismatch})
 
 (defn verify-handlers!
   "Compare the live event-handler registry against `expected-events` and
@@ -183,6 +185,7 @@
     (saa/register-handlers!)
     (memory-read/register-handlers!)
     (lifecycle/register-handlers!)
+    (resilience/register-handlers!)
 
     (verify-handlers!)
     (reset! *registered true)
