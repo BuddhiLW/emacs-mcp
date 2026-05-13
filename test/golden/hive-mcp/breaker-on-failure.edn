@@ -1,0 +1,8 @@
+{:closed-below-threshold
+ {:state :closed, :failures 1, :opened-at nil, :cooldown-ms 0},
+ :closed-hits-threshold
+ {:state :open, :failures 3, :opened-at 2000, :cooldown-ms 30000},
+ :half-open-reverts-to-open
+ {:state :open, :failures 4, :opened-at 5000, :cooldown-ms 60000},
+ :open-stays-open-with-cooldown-bump
+ {:state :open, :failures 4, :opened-at 9000, :cooldown-ms 60000}}
