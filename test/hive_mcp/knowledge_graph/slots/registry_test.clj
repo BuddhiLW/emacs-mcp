@@ -98,3 +98,29 @@
         _ (p/slot-store r :memory)]
     (p/close-all! r)
     (is (empty? (p/registered r)))))
+
+;; -----------------------------------------------------------------------------
+;; ENGINE-L1.1 — per-slot circuit breaker
+;; -----------------------------------------------------------------------------
+
+(deftest breaker-blocks-after-consecutive-factory-failures
+  (testing "registry stops calling build-slot once the breaker trips"
+    (let [calls   (atom 0)
+          factory (fact/->factory
+                    (fn [_]
+                      (swap! calls inc)
+                      nil))                          ; always fail to build
+          r       (reg/->registry
+                    (cfg/->resolver (constantly nil) {:carto :datalevin})
+                    factory
+                    {:max-failures 2 :initial-cooldown-ms 10000})]
+      ;; First two attempts fall through to the factory.
+      (is (= :slot/factory-failed (adt/adt-variant (p/describe-slot r :carto))))
+      (is (= :slot/factory-failed (adt/adt-variant (p/describe-slot r :carto))))
+      (is (= 2 @calls) "two factory invocations recorded")
+      ;; Third attempt is short-circuited by the open breaker.
+      (let [init (p/describe-slot r :carto)]
+        (is (= :slot/factory-failed (adt/adt-variant init)))
+        (is (= :breaker-open (:reason init))))
+      (is (= 2 @calls)
+          "factory NOT invoked while breaker is :open — retry storm prevented"))))

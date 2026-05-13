@@ -18,6 +18,7 @@
             [hive-dsl.result :as r]
             [hive-mcp.protocols.kg :as pkg]
             [hive-mcp.knowledge-graph.slots.protocol :as p]
+            [hive-mcp.knowledge-graph.slots.breaker :as cb]
             [taoensso.timbre :as log]))
 
 ;; -----------------------------------------------------------------------------
@@ -121,7 +122,15 @@
 ;; AtomBackedRegistry
 ;; -----------------------------------------------------------------------------
 
-(defrecord AtomBackedRegistry [slot-stores resolver factory]
+(defn- breaker-blocked
+  "SlotInit returned when the L1.1 circuit breaker is :open. Mirrors
+   `failed` but tags `:reason` so operators see the cause without
+   trawling the log timeline."
+  [slot]
+  (p/slot-init :slot/factory-failed
+               {:slot slot :backend nil :reason :breaker-open}))
+
+(defrecord AtomBackedRegistry [slot-stores resolver factory breakers breaker-policy]
   p/ISlotRegistry
 
   (slot-store [this slot]
@@ -133,11 +142,23 @@
   (describe-slot [_ slot]
     (or (when-let [s (get @slot-stores slot)]
           (ok slot ::cached s))
-        (let [init (build-slot resolver factory slot)]
-          (when (= (adt/adt-variant init) :slot/ok)
-            (swap! slot-stores assoc slot (:store init)))
-          (log-init init)
-          init)))
+        ;; ENGINE-L1.1 — gate slot construction by the per-slot breaker.
+        ;; When :open, refuse to retry the (expensive, possibly lock-held)
+        ;; ensure-conn! and surface a typed factory-failed init instead.
+        (let [b (cb/attempt breakers slot breaker-policy)]
+          (if (= :block (cb/decision b))
+            (do (log-init (breaker-blocked slot))
+                (breaker-blocked slot))
+            (let [init (build-slot resolver factory slot)
+                  variant (adt/adt-variant init)]
+              (case variant
+                :slot/ok (do (swap! slot-stores assoc slot (:store init))
+                             (cb/record-success! breakers slot))
+                (:slot/missing-backend :slot/factory-failed)
+                (cb/record-failure! breakers slot breaker-policy)
+                nil)
+              (log-init init)
+              init)))))
 
   (registered [_] (vec (keys @slot-stores)))
 
@@ -157,6 +178,14 @@
     nil))
 
 (defn ->registry
-  "Build a registry from a resolver + factory (DIP)."
-  [resolver factory]
-  (->AtomBackedRegistry (atom {}) resolver factory))
+  "Build a registry from a resolver + factory (DIP).
+
+   Optional `breaker-policy` overrides
+   `hive-mcp.knowledge-graph.slots.breaker/default-policy` — caller
+   supplies a map merged into the defaults at construction time."
+  ([resolver factory]
+   (->registry resolver factory {}))
+  ([resolver factory breaker-overrides]
+   (->AtomBackedRegistry (atom {}) resolver factory
+                         (atom {})
+                         (merge cb/default-policy (or breaker-overrides {})))))
