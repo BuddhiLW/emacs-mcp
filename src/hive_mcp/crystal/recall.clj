@@ -3,6 +3,8 @@
    Extension points resolved via extensions registry."
   (:require [hive-mcp.crystal.core :as crystal]
             [hive-mcp.extensions.registry :as ext]
+            [hive-mcp.engine.bounded.protocol :as bp]
+            [hive-mcp.engine.bounded.lru :as lru]
             [hive-dsl.adt :refer [defadt adt-case]]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
@@ -97,27 +99,43 @@
 ;; =============================================================================
 
 (defonce ^{:private true
-           :doc "Buffer for batching recall events before persistence."}
+           :doc "Bounded per-entry-id buffer for recall events.
+
+   ENGINE-L1.3 — implemented via IBoundedQueue/LruByKey so an unflushed
+   buffer cannot grow without bound. Cap defaults:
+     :capacity     1000 distinct entry-ids (LRU eviction)
+     :per-key-cap    20 events per entry-id (drop-oldest within key)
+   Override via system properties (hive.recall-buffer.capacity,
+   hive.recall-buffer.per-key-cap) for ops tuning."}
   recall-buffer
-  (atom {}))
+  (lru/make-by-key
+   {:capacity    (Long/parseLong
+                  (or (System/getProperty "hive.recall-buffer.capacity") "1000"))
+    :per-key-cap (Long/parseLong
+                  (or (System/getProperty "hive.recall-buffer.per-key-cap") "20"))}))
 
 (defn buffer-recall!
-  "Buffer a recall event for later persistence."
+  "Buffer a recall event for later persistence. Bounded — both the
+   number of entry-ids and the number of events per entry-id are
+   capped (see `recall-buffer`)."
   [entry-id event]
-  (swap! recall-buffer update entry-id (fnil conj []) event))
+  (bp/q-offer-key! recall-buffer entry-id event))
 
 (defn flush-recall-buffer!
-  "Get and clear buffered recalls.
+  "Get and clear buffered recalls. Atomic.
    Returns: map of {entry-id [events]}"
   []
-  (let [buffered @recall-buffer]
-    (reset! recall-buffer {})
-    buffered))
+  (bp/q-drain! recall-buffer))
 
 (defn get-buffered-recalls
-  "Get buffered recalls without clearing."
+  "Get buffered recalls without clearing. Returns map of {entry-id [events]}."
   []
-  @recall-buffer)
+  (bp/q-snapshot recall-buffer))
+
+(defn recall-buffer-stats
+  "Diagnostic snapshot of buffer cap usage. Useful for /health endpoints."
+  []
+  (bp/q-stats recall-buffer))
 
 ;; =============================================================================
 ;; CreatedEntry ADT — Sum type for session-tracked memory entries
