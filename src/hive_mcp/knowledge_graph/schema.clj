@@ -239,6 +239,60 @@
    :disc/certainty-beta   2.0
    :disc/volatility-class :moderate})
 
+;; =============================================================================
+;; Synth Schema — derived KG metrics produced by graph-algos synth loops
+;; =============================================================================
+;; Written by hive-knowledge.graph-algos via IKgWriter (DatahikeKgWriter).
+;; Read by ranking/fuse, catchup filter, mcp/* surfaces, carto detectors.
+;; All values are derived (recomputable) — losing them is recoverable.
+
+(def synth-schema
+  "DataScript schema for synth-loop-derived metrics on KG nodes.
+
+   Identity:
+   - :synth/node-id  unique identity anchor. Value = KG node id (same string
+     as :kg-edge/from / :kg-edge/to). Datahike upserts by identity, so writers
+     transact `[{:synth/node-id id, :synth/<attr> value}]` idempotently.
+
+   Population:
+   - :synth/community-id  ← Louvain/Leiden (graph_algos.synth.loop_communities)
+   - :synth/betweenness   ← Brandes (loop_betweenness, GAV2-1.2)
+   - :synth/k-core        ← KCoreDecomposition (loop_kcore, GAV2-1.4)
+   - :synth/hits-hub      ← HITS hub score (loop_hits, GAV2-1.5)
+   - :synth/hits-auth     ← HITS authority score (loop_hits)
+   - :synth/conductance   ← per-cluster (GAV2-2.4)
+   - :synth/modularity-q  ← per-community (GAV2-2.4)
+   - :synth/katz          ← IKatzCentralityBackend (GAV2-2.1)
+   - :synth/eigenvector   ← IEigenvectorCentralityBackend (GAV2-2.2)
+   - :synth/triangle-count    ← jgrapht triangle counting (GAV2-1.7)
+   - :synth/clustering-coef   ← local clustering coefficient (GAV2-1.7)
+
+   Cardinality :db.cardinality/one for scalar metrics. :synth/community-id is
+   one (each node belongs to a single community per detection run); switch to
+   :db.cardinality/many later if multi-cluster membership is wanted."
+  {:synth/node-id         {:db/unique :db.unique/identity
+                           :db/doc "Identity anchor for synth-derived attrs (KG node id)"}
+   :synth/community-id    {:db/index true
+                           :db/doc "Community label assigned by latest ICommunities run"}
+   :synth/betweenness     {:db/doc "Brandes betweenness centrality score (double)"}
+   :synth/k-core          {:db/doc "k-core decomposition coreness (long)"}
+   :synth/hits-hub        {:db/doc "HITS hub score (double)"}
+   :synth/hits-auth       {:db/doc "HITS authority score (double)"}
+   :synth/conductance     {:db/doc "Per-cluster conductance edges-out/(in+out) (double)"}
+   :synth/modularity-q    {:db/doc "Per-community modularity Q contribution (double)"}
+   :synth/katz            {:db/doc "Katz centrality (double)"}
+   :synth/eigenvector     {:db/doc "Eigenvector centrality (double)"}
+   :synth/triangle-count  {:db/doc "Triangles incident at node (long)"}
+   :synth/clustering-coef {:db/doc "Local clustering coefficient (double)"}})
+
+(defn synth-attr?
+  "True iff attr is in the :synth/* namespace (excludes :synth/node-id).
+   Used by DatahikeKgWriter destructive-guard."
+  [attr]
+  (and (keyword? attr)
+       (= "synth" (namespace attr))
+       (not= :synth/node-id attr)))
+
 (defn disc-certainty-defaults-with-timestamp
   "Returns disc certainty defaults with current timestamp for last-observation."
   []
@@ -293,6 +347,6 @@
   (type-registry/abstraction-level entry-type))
 
 (defn full-schema
-  "Returns the combined KG schema (edges + knowledge abstraction + disc + addon extensions)."
+  "Returns the combined KG schema (edges + knowledge abstraction + disc + synth + addon extensions)."
   []
-  (merge kg-schema knowledge-schema disc-schema @kg-schema-extensions))
+  (merge kg-schema knowledge-schema disc-schema synth-schema @kg-schema-extensions))
