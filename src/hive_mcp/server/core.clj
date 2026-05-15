@@ -24,7 +24,9 @@
             [hive-mcp.system.layer5]
             [hive-mcp.system.keepalive :as keepalive]
             ;; Engine resilience — defense-in-depth L0.3 boot-time hprof control
-            [hive-mcp.engine.hprof.boot :as hprof])
+            [hive-mcp.engine.hprof.boot :as hprof]
+            ;; Engine resilience — defense-in-depth L0.5 bounded manifold pool
+            [hive-mcp.engine.manifold-pool :as manifold-pool])
   (:gen-class))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -129,6 +131,9 @@
     ;; ENGINE-L0.3 — rotate stale hprofs and abort early on disk pressure
     ;; before allocating any heap-heavy subsystems.
     (hprof/boot!)
+    ;; ENGINE-L0.5 — cap manifold's wait-pool BEFORE any deferred runs
+    ;; (the wait-pool fn is delay-cached, so this must precede ig/init).
+    (manifold-pool/boot!)
     (let [config (load-system-config profile)
           sys    (ig/init config)]
       (clojure.core/reset! system sys)

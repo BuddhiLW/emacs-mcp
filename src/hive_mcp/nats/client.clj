@@ -87,16 +87,66 @@
     (log/info "[NATS] Disconnected")))
 
 ;; =============================================================================
+;; Payload Sanitization
+;; =============================================================================
+
+(def ^:const max-payload-depth
+  "Maximum nesting depth allowed in a published payload before clamping.
+   clojure.data.json walks payloads recursively; an unbounded deep nest
+   (e.g. a shout whose :data carries a quoted ratom graph or a cyclic
+   structure) exhausts the JVM stack as a StackOverflowError that takes
+   down the publisher thread. 32 is well below the safe Clojure recursion
+   ceiling and deeper than any legitimate shout payload."
+  32)
+
+(defn clamp-depth
+  "Walk DATA replacing collections nested deeper than `max-payload-depth`
+   with a marker string. Cycle-safe insofar as a depth bound guarantees
+   termination regardless of input shape (self-referential maps will
+   bottom out at the cap rather than recurse forever)."
+  ([data] (clamp-depth data max-payload-depth))
+  ([data depth]
+   (cond
+     (or (nil? data) (not (coll? data))) data
+     (zero? depth)
+     (cond
+       (map? data)    "<truncated:map>"
+       (vector? data) "<truncated:vec>"
+       (set? data)    "<truncated:set>"
+       :else          "<truncated:seq>")
+     (map? data)
+     (persistent!
+      (reduce-kv (fn [m k v] (assoc! m k (clamp-depth v (dec depth))))
+                 (transient {}) data))
+     (vector? data)
+     (mapv #(clamp-depth % (dec depth)) data)
+     (set? data)
+     (into #{} (map #(clamp-depth % (dec depth))) data)
+     :else
+     (doall (map #(clamp-depth % (dec depth)) data)))))
+
+;; =============================================================================
 ;; Publish / Subscribe
 ;; =============================================================================
 
 (defn publish!
-  "Publish JSON message to subject. Serializes data to JSON string using
-   clojure.data.json and UTF-8 encoding. No-op if disconnected."
+  "Publish JSON message to subject. Clamps nesting depth at
+   `max-payload-depth` to prevent StackOverflow from deep/cyclic payloads,
+   then serializes to JSON with UTF-8 encoding. No-op if disconnected.
+   Serialization failures and StackOverflow are logged and swallowed —
+   one bad shout must not crash the publisher."
   [subject data]
   (when-let [conn @connection]
     (when (connected?)
-      (.publish conn subject (.getBytes (json/write-str data) "UTF-8")))))
+      (try
+        (let [safe (clamp-depth data)
+              bytes (.getBytes (json/write-str safe) "UTF-8")]
+          (.publish conn subject bytes))
+        (catch StackOverflowError _e
+          (log/warn "[NATS] StackOverflow serializing payload for" subject
+                    "— dropped (depth cap insufficient or cycle in scalar)"))
+        (catch Exception e
+          (log/warn "[NATS] Publish failed on" subject ":" (.getMessage e)))))))
 
 (defn subscribe!
   "Subscribe to subject with handler fn. Handler receives parsed JSON map.
