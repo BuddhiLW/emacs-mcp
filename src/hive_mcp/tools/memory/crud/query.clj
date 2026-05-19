@@ -122,6 +122,28 @@
     (mcp-json (mapv fmt/entry->metadata results))
     (mcp-json (mapv fmt/entry->json-alist results))))
 
+(defn- tag-encodes-scope?
+  "True when a tag string explicitly anchors a scope (e.g. \"scope:project:topic:X\")."
+  [tag]
+  (and (string? tag)
+       (clojure.string/starts-with? tag "scope:project:")))
+
+(defn- resolve-scope
+  "Honor a caller-supplied :tags scope-predicate by skipping pwd auto-derivation.
+
+   When `:scope` is unspecified AND any tag in `tags` encodes an explicit scope
+   (e.g. `scope:project:topic:data-intensive`), the caller has already pinned
+   the scope structurally — auto-deriving a competing pwd scope would silently
+   AND-filter to zero results. In that case, fall through to `\"all\"` so the
+   tag predicate becomes the sole scope filter.
+
+   Otherwise pass scope through unchanged (nil → auto-derive via parse-scope)."
+  [scope tags]
+  (cond
+    (some? scope)                       scope
+    (some tag-encodes-scope? tags)      "all"
+    :else                                nil))
+
 (defn handle-query
   "Query project memory by type with scope and verbosity filtering."
   [{:keys [type tags exclude_tags limit duration scope directory include_descendants verbosity]}]
@@ -131,7 +153,8 @@
                                true)
         metadata-only? (not= verbosity "full")
         tags         (coerce-vec! tags :tags [])
-        exclude-tags (coerce-vec! exclude_tags :exclude_tags [])]
+        exclude-tags (coerce-vec! exclude_tags :exclude_tags [])
+        scope        (resolve-scope scope tags)]
     (log/info "mcp-memory-query:" type "scope:" scope "directory:" directory
               "include_descendants:" include-descendants? "verbosity:" (or verbosity "metadata"))
     (try
