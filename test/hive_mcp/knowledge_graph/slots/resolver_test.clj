@@ -66,3 +66,48 @@
       (is (= :proximum  (p/resolve-backend r :exotic)))
       (is (= :datahike  (p/resolve-backend r :memory))
           "slot absent from override defaults still falls back"))))
+
+;; -----------------------------------------------------------------------------
+;; Per-slot recovery policy resolver — ENGINE-L1.2b
+;; -----------------------------------------------------------------------------
+
+(deftest recovery-policy-defaults-encode-data-class
+  (testing "default slot→policy mapping reflects each slot's recoverability"
+    (let [lookup (path-lookup-stub {})]
+      (testing ":carto is rebuildable → aggressive chain"
+        (let [p (cfg/resolve-recovery-policy lookup :carto)]
+          (is (= [:truncate :quarantine :throw] (:strategy p)))
+          (is (= 3 (:max-attempts p)))))
+      (testing ":sessions is append-only → truncate then throw"
+        (let [p (cfg/resolve-recovery-policy lookup :sessions)]
+          (is (= [:truncate :throw] (:strategy p)))
+          (is (= 2 (:max-attempts p)))))
+      (testing ":memory is irreplaceable → audit only"
+        (let [p (cfg/resolve-recovery-policy lookup :memory)]
+          (is (= :audit (:strategy p)))
+          (is (= 1 (:max-attempts p)))))
+      (testing "unknown slot has no policy → caller uses heal-and-open! default"
+        (is (nil? (cfg/resolve-recovery-policy lookup :exotic)))))))
+
+(deftest recovery-policy-overridden-by-config
+  (testing "config.edn :recovery-policy overrides the default"
+    (let [m {:services {:kg {:slots {:carto {:recovery-policy
+                                              {:strategy [:audit]
+                                               :max-attempts 1}}}}}}
+          policy (cfg/resolve-recovery-policy (path-lookup-stub m) :carto)]
+      (is (= [:audit] (:strategy policy)))
+      (is (= 1 (:max-attempts policy))))))
+
+(deftest recovery-policy-coerces-string-strategies
+  (testing "config.edn string strategies coerce to keywords"
+    (testing "single-strategy form"
+      (let [m {:services {:kg {:slots {:carto {:recovery-policy
+                                                {:strategy "audit"}}}}}}
+            policy (cfg/resolve-recovery-policy (path-lookup-stub m) :carto)]
+        (is (= :audit (:strategy policy)))))
+    (testing "vector-strategy form"
+      (let [m {:services {:kg {:slots {:carto {:recovery-policy
+                                                {:strategy ["truncate" "throw"]
+                                                 :max-attempts 2}}}}}}
+            policy (cfg/resolve-recovery-policy (path-lookup-stub m) :carto)]
+        (is (= [:truncate :throw] (:strategy policy)))))))

@@ -28,12 +28,15 @@
                      failure, emit telemetry, and rethrow. Useful in
                      CI / staging where you want to know what would
                      have triggered a quarantine without acting on it.
-
-   Future strategies (deferred to follow-ups):
-   - `:truncate`   — rewind WAL to last good LSN via `dl/open-tx-log`
-                     replay. Needs upstream datalevin support to
-                     surface 'good-up-to' watermarks; tracked
-                     separately.
+   - `:truncate`   — rewind WAL to the last good record via
+                     `datalevin.txlog/truncate-partial-tail!`. Only
+                     fires on `:wal-corrupt` with a recoverable
+                     tail-zeroed signature (the post-crash unflushed
+                     page case). Mid-segment corruption falls through
+                     to the next strategy. Forensic copy of each
+                     truncated segment lands at
+                     `<db>.txlog-heal.<ts>/segment-N.wal.before-truncate`
+                     before any mutation, per the No-NUKE axiom.
 
    ## Contract
 
@@ -61,8 +64,14 @@
 
 (def ^:private corrupt-signatures
   "Substring fragments that indicate on-disk corruption. Conservative —
-   we treat ambiguous cases as `:unknown` and let the caller's policy
-   decide whether to escalate."
+   ambiguous cases stay `:unknown` and the caller's policy decides.
+
+   Two families:
+   - LMDB-level page corruption (`MDB_*`).
+   - Datalevin txn-log corruption — upstream uses `txn-log` (hyphenated)
+     in error messages; pre-rename code used `txlog` / `WAL`. Match
+     both so a wording flip upstream does not silently degrade us to
+     `:unknown` (which is what produced the 2026-05-19 :carto incident)."
   ["MDB_CORRUPTED"
    "MDB_PAGE_NOTFOUND"
    "MDB_INVALID"
@@ -71,6 +80,10 @@
    "WAL corrupt"
    "txlog corrupt"
    "Invalid txlog"
+   "Invalid txn-log"
+   "Txn-log segment"
+   "txn-log corrupt"
+   "txn-log"
    "checksum mismatch"])
 
 (def ^:private lock-signatures
@@ -135,6 +148,113 @@
          target-path)))))
 
 ;; -----------------------------------------------------------------------------
+;; Truncate — IO (datalevin txn-log tail-zero recovery)
+;;
+;; Datalevin pre-allocates each WAL segment to 256MB and writes records
+;; into the prefix. A crash mid-write can leave the file with valid
+;; records up to some offset, then a partial/zeroed tail. The strict
+;; scan path treats those zeros as an "Invalid txn-log record magic"
+;; and refuses to open the store. The lenient scan path (with
+;; `:allow-preallocated-tail? true`) reports the same file as
+;; `{:partial-tail? true :valid-end <offset>}`. `truncate-partial-tail!`
+;; then trims the file to `valid-end`, after which a strict reopen
+;; succeeds.
+;;
+;; This recovery preserves data integrity: any record before
+;; `valid-end` is fully present in the on-disk format the strict
+;; scanner already accepts. The only thing lost is the trailing
+;; pre-allocated zeros (which carried no records anyway).
+;; -----------------------------------------------------------------------------
+
+(defn- txlog-segment-dir
+  "Locate the txn-log segment directory under a datalevin db-path.
+   Datalevin lays it out as `<db-path>/txlog/`."
+  [db-path]
+  (io/file db-path "txlog"))
+
+(defn- segment-needs-heal?
+  "Return :tail-zeroed if the segment can be loaded only with
+   `:allow-preallocated-tail? true`; :ok if strict scan succeeds;
+   :unhealable if even lenient scan refuses the file."
+  [^java.io.File seg-file]
+  (let [path        (.getAbsolutePath seg-file)
+        scan        (requiring-resolve 'datalevin.txlog/scan-segment)
+        strict      (try (scan path {:collect-records? false
+                                     :allow-preallocated-tail? false})
+                         :ok
+                         (catch Throwable _ :strict-failed))]
+    (if (= :ok strict)
+      :ok
+      (try
+        (let [lenient (scan path {:collect-records? false
+                                  :allow-preallocated-tail? true})]
+          (if (:partial-tail? lenient)
+            :tail-zeroed
+            :unhealable))
+        (catch Throwable _ :unhealable)))))
+
+(defn- forensic-copy!
+  "Copy a segment file to a heal-backup sibling directory before
+   truncate. Returns the backup path string."
+  [^java.io.File seg-file db-path ts]
+  (let [backup-dir (io/file (str db-path ".txlog-heal." ts))
+        backup-fn  (io/file backup-dir
+                            (str (.getName seg-file) ".before-truncate"))]
+    (.mkdirs backup-dir)
+    (io/copy seg-file backup-fn)
+    (.getAbsolutePath backup-fn)))
+
+(defn truncate-tail!
+  "Walk the txn-log segment directory under `db-path`. For each
+   segment whose strict scan fails but lenient scan reports
+   `:partial-tail? true`, copy it aside and invoke datalevin's
+   `truncate-partial-tail!` with `:allow-preallocated-tail? true`.
+
+   Returns a vec of per-segment heal records. An empty result means
+   no segment needed truncation (in which case the caller should
+   treat as a no-op heal — likely the corruption was elsewhere)."
+  ([db-path] (truncate-tail! db-path (System/currentTimeMillis)))
+  ([db-path ts]
+   (let [seg-dir   (txlog-segment-dir db-path)
+         seg-files (requiring-resolve 'datalevin.txlog/segment-files)
+         truncate  (requiring-resolve 'datalevin.txlog/truncate-partial-tail!)
+         segs      (when (.isDirectory seg-dir)
+                     (seg-files (.getAbsolutePath seg-dir)))]
+     (reduce
+      (fn [acc {:keys [^java.io.File file]}]
+        (try
+          (case (segment-needs-heal? file)
+            :ok          acc
+            :tail-zeroed (let [backup (forensic-copy! file db-path ts)
+                               result (truncate
+                                       (.getAbsolutePath file)
+                                       {:allow-preallocated-tail? true
+                                        :collect-records? false})]
+                           (log/warn "[storage/recovery] Truncated txn-log segment"
+                                     {:path (.getAbsolutePath file)
+                                      :backup backup
+                                      :old-size (:old-size result)
+                                      :new-size (:new-size result)
+                                      :dropped-bytes (:dropped-bytes result)})
+                           (conj acc (-> result
+                                         (assoc :path (.getAbsolutePath file)
+                                                :backup backup
+                                                :sub-classification :tail-zeroed))))
+            :unhealable  (do (log/warn "[storage/recovery] Segment unhealable — mid-segment corruption"
+                                       {:path (.getAbsolutePath file)})
+                             (conj acc {:path (.getAbsolutePath file)
+                                        :truncated? false
+                                        :sub-classification :mid-segment})))
+          (catch Throwable t
+            (log/error t "[storage/recovery] Segment heal failed"
+                       {:path (.getAbsolutePath file)})
+            (conj acc {:path (.getAbsolutePath file)
+                       :truncated? false
+                       :error (.getMessage t)}))))
+      []
+      segs))))
+
+;; -----------------------------------------------------------------------------
 ;; Telemetry
 ;; -----------------------------------------------------------------------------
 
@@ -152,15 +272,20 @@
 ;; -----------------------------------------------------------------------------
 
 (def default-policy
-  "Operator-tunable default. `:throw` preserves pre-L1.2 semantics."
+  "Operator-tunable default. `:throw` preserves pre-L1.2 semantics.
+
+   `:strategy` may be a single keyword or a vector of keywords. When a
+   vector is supplied, strategies are tried left-to-right per failure
+   until one returns `:retry`; only after every entry has returned
+   `:abort` does `heal-and-open!` give up."
   {:strategy :throw
    :max-attempts 2})
 
-(defn- apply-strategy
-  "Run the configured recovery strategy for a classified failure.
-   Returns `:retry` when the caller should attempt `open-fn` again
-   (because the on-disk state was healed), or `:abort` when the
-   classification is non-recoverable or the policy says to escalate."
+(defn- apply-single-strategy
+  "Run one recovery strategy keyword for a classified failure. Returns
+   `:retry` when the caller should attempt `open-fn` again, or
+   `:abort` when this strategy can't make progress (the chained
+   walker in `apply-strategy` then tries the next entry, if any)."
   [strategy classification db-path ex]
   (case strategy
     :throw
@@ -182,6 +307,34 @@
                 :message (.getMessage ex)})
         :abort)
 
+    :truncate
+    (if (= :wal-corrupt classification)
+      (let [report (truncate-tail! db-path)
+            healed (filter :truncated? report)]
+        (if (seq healed)
+          (do (emit! :storage/wal-truncated
+                     {:db-path db-path
+                      :classification classification
+                      :segments report})
+              :retry)
+          (do (emit! :storage/open-failed
+                     {:db-path db-path
+                      :classification classification
+                      :strategy strategy
+                      :note (if (seq report)
+                              "policy=:truncate but no segment had a recoverable tail (mid-segment corruption)"
+                              "policy=:truncate but no segments found under txlog/")
+                      :segments report
+                      :message (.getMessage ex)})
+              :abort)))
+      (do (emit! :storage/open-failed
+                 {:db-path db-path
+                  :classification classification
+                  :strategy strategy
+                  :note "policy=:truncate but classification not :wal-corrupt"
+                  :message (.getMessage ex)})
+          :abort))
+
     :quarantine
     (if (= :wal-corrupt classification)
       (let [target (quarantine! db-path)]
@@ -198,6 +351,23 @@
                   :message (.getMessage ex)})
           :abort))))
 
+(defn- apply-strategy
+  "Dispatch `strategy` (keyword or vec of keywords) to the per-failure
+   handler. Vector form walks entries left-to-right and returns
+   `:retry` on the first one that succeeds; `:abort` if all entries
+   abort. Single keyword form delegates directly."
+  [strategy classification db-path ex]
+  (if (sequential? strategy)
+    (reduce
+     (fn [_ s]
+       (let [outcome (apply-single-strategy s classification db-path ex)]
+         (if (= :retry outcome)
+           (reduced :retry)
+           :abort)))
+     :abort
+     strategy)
+    (apply-single-strategy strategy classification db-path ex)))
+
 ;; -----------------------------------------------------------------------------
 ;; Public composition
 ;; -----------------------------------------------------------------------------
@@ -210,7 +380,14 @@
    `[[20260423164323-7bcfef91]] classify-then-retry`).
 
    `policy` shape — see `default-policy`:
-     :strategy       :throw | :audit | :quarantine
+     :strategy       keyword | [keyword ...]
+                     Keywords: :throw | :audit | :truncate | :quarantine
+                     A vector chains strategies — each entry is tried
+                     left-to-right per failure until one succeeds.
+                     Example: `[:truncate :quarantine :throw]` heals
+                     tail-zeroed corruption in place, falls back to
+                     quarantine on unhealable corruption, finally
+                     throws so the caller can decide.
      :max-attempts   positive int (default 2)
 
    `db-path` is informational — it's the directory the caller asks

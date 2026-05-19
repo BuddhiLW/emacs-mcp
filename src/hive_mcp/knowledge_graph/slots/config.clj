@@ -59,6 +59,62 @@
   (get-in (config/get-global-config) path))
 
 ;; -----------------------------------------------------------------------------
+;; Per-slot recovery policy — ENGINE-L1.2b
+;; -----------------------------------------------------------------------------
+;;
+;; Each slot's heal-and-open! policy reflects the data class it owns:
+;;   - rebuildable (regenerable from another source) → aggressive heal
+;;   - irreplaceable (user-authored, no upstream regen) → audit-only
+;;   - append-only (replayable) → truncate-then-quarantine
+;;
+;; Operators override via config.edn:
+;;   :services :kg :slots <slot> :recovery-policy {:strategy ... :max-attempts ...}
+;; -----------------------------------------------------------------------------
+
+(def ^:const default-slot->recovery-policy
+  "Recovery policy per slot. `nil` means use the global heal-and-open!
+   default (`:throw`, preserves pre-L1.2 semantics).
+
+   :carto    — derived index, fully regenerable via `codebase-map scan`.
+                Aggressive heal: truncate tail-zeroed corruption in place,
+                quarantine on unhealable corruption, finally throw.
+   :sessions — append-only timestamp index; truncate handles crash-tail.
+   :memory   — user-authored knowledge, no upstream regen path. Audit
+                only — alarm but never auto-mutate.
+   :default  — legacy global store backing the hive-mcp datahike conn.
+                Audit only — same reasoning as :memory."
+  {:carto     {:strategy [:truncate :quarantine :throw] :max-attempts 3}
+   :sessions  {:strategy [:truncate :throw]            :max-attempts 2}
+   :memory    {:strategy :audit                         :max-attempts 1}
+   :default   {:strategy :audit                         :max-attempts 1}})
+
+(defn- read-config-recovery-policy
+  "Look up :services :kg :slots <slot> :recovery-policy via the supplied
+   path-lookup. Returns a policy map or nil."
+  [path-lookup slot]
+  (let [raw (path-lookup [:services :kg :slots slot :recovery-policy])]
+    (when (map? raw)
+      (cond-> raw
+        ;; Tolerate string-coerced strategy keywords from config.edn
+        (string? (:strategy raw))     (update :strategy keyword)
+        (and (vector? (:strategy raw))
+             (some string? (:strategy raw)))
+        (update :strategy #(mapv (fn [s] (if (string? s) (keyword s) s)) %))))))
+
+(defn resolve-recovery-policy
+  "Resolve a slot's heal-and-open! policy via:
+     1. config.edn :services :kg :slots <slot> :recovery-policy
+     2. default-slot->recovery-policy
+     3. nil (heal-and-open! applies its own default)
+
+   Pure with respect to the resolver — caller injects path-lookup
+   so tests can drive without disk IO."
+  ([slot] (resolve-recovery-policy production-path-lookup slot))
+  ([path-lookup slot]
+   (or (read-config-recovery-policy path-lookup slot)
+       (get default-slot->recovery-policy slot))))
+
+;; -----------------------------------------------------------------------------
 ;; Resolution helpers (pure)
 ;; -----------------------------------------------------------------------------
 

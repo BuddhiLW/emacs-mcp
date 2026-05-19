@@ -80,3 +80,47 @@
         (is (= :SlotInit (:adt/type init)))
         (is (= :slot/ok  (:adt/variant init)))
         (is (= :datalevin (:backend init)))))))
+
+;; -----------------------------------------------------------------------------
+;; heal-sweep! — boot-time probe + report
+;; -----------------------------------------------------------------------------
+
+(deftest heal-sweep-reports-ok-slots
+  (testing "heal-sweep! returns :ok entries when every slot opens cleanly"
+    (let [reg (stub-registry {:carto :datalevin :memory :datahike})]
+      (slots/with-registry reg
+        (let [report (slots/heal-sweep! [:carto :memory])]
+          (is (= 2 (:ok-count report)))
+          (is (= 0 (:degraded-count report)))
+          (is (= [] (:degraded-slots report)))
+          (is (= [{:slot :carto :status :ok :backend :datalevin}
+                  {:slot :memory :status :ok :backend :datahike}]
+                 (:slots report))))))))
+
+(deftest heal-sweep-reports-degraded-slots
+  (testing "heal-sweep! surfaces factory-failed + missing-backend slots"
+    (let [reg (reg/->registry
+                (cfg/->resolver (constantly nil)
+                                ;; :memory has no mapping → :missing-backend
+                                {:carto :datalevin})
+                (fact/->factory (fn [_] nil)))]   ;; factory always fails
+      (slots/with-registry reg
+        (let [report (slots/heal-sweep! [:carto :memory])
+              by-slot (into {} (map (juxt :slot identity)) (:slots report))]
+          (is (= 0 (:ok-count report)))
+          (is (= 2 (:degraded-count report)))
+          (is (= #{:carto :memory} (set (:degraded-slots report))))
+          (is (= :factory-failed   (get-in by-slot [:carto :status])))
+          ;; :memory is in registry-defaults but the cfg path-lookup
+          ;; returned nil AND our resolver defaults map omits it → fallback :datahike
+          ;; → factory returns nil → :factory-failed
+          (is (contains? #{:factory-failed :missing-backend}
+                         (get-in by-slot [:memory :status]))))))))
+
+(deftest heal-sweep-uses-canonical-slots-by-default
+  (testing "0-arg heal-sweep! sweeps every named default slot"
+    (let [reg (stub-registry cfg/default-slot->backend)]
+      (slots/with-registry reg
+        (let [report (slots/heal-sweep!)]
+          (is (= (set (keys cfg/default-slot->backend))
+                 (set (map :slot (:slots report))))))))))

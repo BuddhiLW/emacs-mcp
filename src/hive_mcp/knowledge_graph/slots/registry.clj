@@ -19,6 +19,7 @@
             [hive-mcp.protocols.kg :as pkg]
             [hive-mcp.knowledge-graph.slots.protocol :as p]
             [hive-mcp.knowledge-graph.slots.breaker :as cb]
+            [hive-mcp.knowledge-graph.slots.config :as slot-cfg]
             [taoensso.timbre :as log]))
 
 ;; -----------------------------------------------------------------------------
@@ -94,8 +95,20 @@
                   :cause    (some-> t .getCause .getMessage)})
       (failed slot backend :ensure-conn-threw))))
 
+(defn- slot-opts
+  "Assemble the per-slot opts map passed to the factory. ENGINE-L1.2b
+   forwards `:recovery-policy` so datalevin slots get a slot-specific
+   heal strategy. Empty map for slots with no overrides — the
+   underlying create-store accepts that as 'use defaults'."
+  [slot]
+  (let [policy (slot-cfg/resolve-recovery-policy slot)]
+    (cond-> {}
+      policy (assoc :recovery-policy policy))))
+
 (defn- build-slot
-  "Pure(ish): resolver + factory → SlotInit. Side effect = ensure-conn!."
+  "Pure(ish): resolver + factory → SlotInit. Side effect = ensure-conn!.
+   Forwards per-slot opts (recovery-policy etc.) via the 2-arg
+   make-store call."
   [resolver factory slot]
   (let [backend (p/resolve-backend resolver slot)]
     (cond
@@ -103,7 +116,7 @@
       (missing slot)
 
       :else
-      (let [store (p/make-store factory backend)]
+      (let [store (p/make-store factory backend (slot-opts slot))]
         (if (nil? store)
           (failed slot backend :factory-returned-nil)
           (ensure-conn-result slot backend store))))))

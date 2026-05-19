@@ -48,9 +48,12 @@
   "Creates a fresh IKGStore for a given backend. Stateless — the same
    factory may be invoked multiple times for the same backend with
    different option maps. Factory Method pattern."
-  (make-store [this backend]
-    "Construct an IKGStore for `backend`. Returns the store on success,
-     nil on failure. Implementations log internal failures.")
+  (make-store [this backend] [this backend opts]
+    "Construct an IKGStore for `backend`. The 2-arg form forwards an
+     `opts` map to the underlying create-store fn — e.g.
+     `{:recovery-policy ...}` for the datalevin slot.
+     The 1-arg form defaults `opts` to `{}` (back-compat).
+     Returns the store on success, nil on failure.")
   (supported-backends [this]
     "Return a set of backend keywords this factory can construct."))
 

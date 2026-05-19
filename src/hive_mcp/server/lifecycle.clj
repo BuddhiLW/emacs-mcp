@@ -132,11 +132,28 @@
 ;; Hooks Initialization
 ;; =============================================================================
 
+(defn- run-storage-heal-sweep!
+  "Fire a one-shot boot-time heal sweep across every named slot. Each
+   slot's configured per-slot recovery-policy fires inside the
+   factory, so a healable txn-log tail gets truncated before any
+   reader sees an opening throw. Best-effort — failures here must
+   never block boot."
+  []
+  (result/rescue nil
+    (when-let [sweep! (requiring-resolve 'hive-mcp.knowledge-graph.slots/heal-sweep!)]
+      (let [report (sweep!)]
+        (when (pos? (:degraded-count report))
+          (log/warn "[storage/heal-sweep] Some slots remain degraded after boot probe"
+                    {:degraded (:degraded-slots report)}))
+        report))))
+
 (defn init-hooks!
   "Initialize the hooks system and register crystal hooks.
 
    Creates global registry, registers crystal hooks (auto-wrap),
-   and sets up JVM shutdown hook.
+   and sets up JVM shutdown hook. Also fires the ENGINE-L1.2b
+   storage heal sweep so any datalevin txn-log tail corruption is
+   auto-truncated before any reader observes the opening throw.
 
    Should be called early in server startup.
 
@@ -149,6 +166,11 @@
     (let [registry (hooks/create-registry)]
       (reset! hooks-registry-atom registry)
       (log/info "Global hooks registry created")
+      ;; ENGINE-L1.2b boot-time heal sweep. Lives here (not in an
+      ;; integrant init-key) so resilience is on-by-default — operators
+      ;; cannot accidentally disable it by omitting a key from the
+      ;; integrant config. Best-effort: failures never block boot.
+      (run-storage-heal-sweep!)
       ;; Inject registry into sync module for Layer 4 hook wiring
       ;; This enables architectural guarantee of synthetic shouts on task completion
       (sync/set-hooks-registry! registry)
