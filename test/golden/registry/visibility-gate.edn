@@ -1,0 +1,6 @@
+{:all-folded [],
+ :dup-names ["memory" "memory"],
+ :empty [],
+ :mixed ["fs" "web"],
+ :pre-deprecated ["code"],
+ :roots-only ["code" "fs" "git"]}

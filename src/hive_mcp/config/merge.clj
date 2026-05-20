@@ -17,6 +17,23 @@
 (def default-config
   "Default configuration. Used as base — user config.edn is deep-merged on top."
   {:project-roots []
+   ;; MCP tool-surface shaping. Two complementary knobs:
+   ;;   :visible  — allowlist of tool-root names that stay in tools/list.
+   ;;               Tools NOT listed here are marked :deprecated (hidden from
+   ;;               discovery, still callable via tools/call → back-compat).
+   ;;               nil/absent ⇒ no gating (legacy behavior).
+   ;;   :absorbed — denylist of addon tool names dropped from standalone
+   ;;               roots in get-base-tools (folded as subcommands instead).
+   ;; The "neat 9": the 8 substrate generators (the classifier-kernel partition
+   ;; f: tool → primary substrate) + `multi`, the universal batch/DSL spine.
+   ;;   substrates: fs code memory project swarm git emacs web
+   ;; auth + events are cross-cutting, NOT substrate generators — folded out of
+   ;; the visible surface (gate-hidden, still callable by name). Likewise the
+   ;; folded roots preset/migrate_kanban/transcript are re-exposed as subdomains
+   ;; of swarm/project and stay gated-hidden here for back-compat.
+   :tool-roots {:visible #{"fs" "code" "memory" "project" "swarm"
+                           "git" "emacs" "web" "multi"}
+                :absorbed []}
    :defaults {:kg-backend default-kg-backend
               :hot-reload false
               :presets-path nil}

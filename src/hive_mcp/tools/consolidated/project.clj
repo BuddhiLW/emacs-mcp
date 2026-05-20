@@ -6,11 +6,13 @@
    Addons can extend via contribute-commands! \"project\"."
   (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
             [hive-mcp.tools.composite :as composite]
+            [hive-mcp.tools.core :as tcore]
             [hive-mcp.tools.result-bridge :as rb]
             [hive-mcp.tools.projectile :as projectile-handlers]
             [hive-mcp.project.tree :as tree]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.dns.result :as result]
+            [clojure.string :as str]
             [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -82,6 +84,21 @@
 ;; Canonical Handlers — project flat + kanban/config/session/workflow nested
 ;; =============================================================================
 
+(defn- lazy-subrouter
+  "Nest a folded tool whose handler is itself a command router (it `case`s on
+   :command) as a `:_handler` leaf. Strips the subdomain prefix from :command
+   before delegating, so `project transcript list` reaches the inner router as
+   command=\"list\". Resolves the target fn lazily (DIP — no compile coupling)."
+  [subdomain sym]
+  {:_handler
+   (fn [params]
+     (let [full (str (:command params))
+           pfx  (str subdomain " ")
+           sub  (if (str/starts-with? full pfx) (subs full (count pfx)) full)]
+       (if-let [h (try (requiring-resolve sym) (catch Throwable _ nil))]
+         (h (assoc params :command sub))
+         (tcore/mcp-error (str subdomain " not available (handler unresolved)")))))})
+
 (def canonical-handlers
   ;; Subdomain handler trees resolved lazily via composite/lazy-resolve-handlers
   ;; — the four `c-kanban`/`c-config`/`c-session`/`c-workflow` static :requires
@@ -91,7 +108,12 @@
          {:kanban   (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.kanban/handlers)
           :config   (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.config/handlers)
           :session  (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.session/handlers)
-          :workflow (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.workflow/handlers)}))
+          :workflow (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.workflow/handlers)
+          ;; Folded standalone roots re-exposed as ergonomic subdomains.
+          ;; migrate-kanban/handlers is a flat leaf map → lazy-resolve directly.
+          ;; transcript routes on :command → wrap with prefix-strip subrouter.
+          :migrate-kanban (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.migrate-kanban/handlers)
+          :transcript     (lazy-subrouter "transcript" 'hive-mcp.tools.consolidated.transcript/handle-transcript)}))
 
 ;; Keep backward compat alias
 (def handlers canonical-handlers)
@@ -109,7 +131,7 @@
    :description "Projectile project operations: info (project details), files (list files), search (content search), find (find by filename), recent (recently visited), list (all projects), scan (discover .hive-project.edn hierarchy), tree (query cached hierarchy), staleness (check if rescan needed). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :description "Project operation. Subdomains: 'kanban list', 'kanban retag', 'config get', 'session wrap', 'workflow forge strike'. Use command='help' to list all."}
+                                         :description "Project operation. Subdomains: 'kanban list', 'kanban retag', 'config get', 'session wrap', 'workflow forge strike', 'migrate-kanban status', 'transcript list'. Use command='help' to list all."}
                               ;; Project params
                               "pattern" {:type "string"
                                          :description "Glob pattern or search pattern"}

@@ -28,7 +28,11 @@
    :wave     (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.wave/handlers)
    :hivemind (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.hivemind/handlers)
    :agora    (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.agora/handlers)
-   :olympus  (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.olympus/handlers)})
+   :olympus  (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.olympus/handlers)
+   ;; Folded standalone root (visibility-gated) re-exposed as an ergonomic
+   ;; subdomain: `swarm preset list`. preset/handlers is a flat leaf map, so
+   ;; lazy-resolve merges it directly — no prefix-strip adapter needed.
+   :preset   (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.preset/handlers)})
 
 (def handlers canonical-handlers)
 
@@ -57,14 +61,15 @@
                    (resolve-first-tool 'hive-mcp.tools.consolidated.wave/tools)
                    (resolve-first-tool 'hive-mcp.tools.consolidated.hivemind/tools)
                    (resolve-first-tool 'hive-mcp.tools.consolidated.agora/tools)
-                   (resolve-first-tool 'hive-mcp.tools.consolidated.olympus/tools))]
+                   (resolve-first-tool 'hive-mcp.tools.consolidated.olympus/tools)
+                   (resolve-first-tool 'hive-mcp.tools.consolidated.preset/tools))]
     {:name "swarm"
      :consolidated true
      :description "Unified agent operations: spawn (create ling/drone), status (query agents), kill (terminate), kill-batch (terminate multiple agents in one call), batch-spawn (spawn multiple agents at once via operations array), dispatch (send task), interrupt (interrupt current query of agent-sdk ling), claims (file ownership), list (deprecated alias for status), collect (get task result), broadcast (prompt all), cleanup (remove orphan agents after Emacs restart). Type: 'ling' (Claude Code instance) or 'drone' (OpenRouter leaf worker). Nested: dag (start/stop/status DAGWave scheduler). Use command='help' to list all."
      :inputSchema {:type "object"
                    :properties (merge
                                 {"command" {:type "string"
-                                            :description "Swarm operation. Prefix with subdomain: 'agent spawn', 'wave dispatch', 'hivemind shout', 'agora dialogue', 'olympus focus'. Use command='help' to list all."}}
+                                            :description "Swarm operation. Prefix with subdomain: 'agent spawn', 'wave dispatch', 'hivemind shout', 'agora dialogue', 'olympus focus', 'preset list'. Use command='help' to list all."}}
                                 ;; Include all params from sub-tools
                                 (dissoc all-props "command"))
                    :required ["command"]}
