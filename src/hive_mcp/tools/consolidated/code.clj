@@ -68,14 +68,14 @@
    to drop the static `c-cider` :require coupling (DIP)."
   {:cider    (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.cider/handlers)
    :clojure  {:_handler (make-delegating-handler "clojure" handle-clojure)}
-   ;; Folded standalone addon tools re-exposed as ergonomic subdomains:
-   ;;   `code analysis <cmd>`      → lsp-mcp analysis tool
-   ;;   `code codebase-map <cmd>`  → hive-knowledge cartography tool
-   ;; Both route on :command, so prefix-strip then delegate to the standalone
+   ;; Folded standalone addon tool re-exposed as an ergonomic subdomain:
+   ;;   `code analysis <cmd>`  → lsp-mcp analysis tool
+   ;; Routes on :command, so prefix-strip then delegate to the standalone
    ;; handler resolved from the ext registry at call time (live-only; clean
-   ;; error in bare test where the addon isn't loaded).
-   :analysis     {:_handler (make-delegating-handler "analysis"     (delegate-to-standalone "analysis"))}
-   :codebase-map {:_handler (make-delegating-handler "codebase-map" (delegate-to-standalone "codebase-map"))}})
+   ;; error in bare test where the addon isn't loaded). Further subdomains are
+   ;; addon-contributed at runtime via contribute-commands! "code" (OCP) — core
+   ;; hive-mcp holds ZERO addon tool names.
+   :analysis     {:_handler (make-delegating-handler "analysis"     (delegate-to-standalone "analysis"))}})
 
 (def handlers canonical-handlers)
 
@@ -86,10 +86,10 @@
 (def tool-def
   {:name "code"
    :consolidated true
-   :description "Code intelligence: cider (REPL eval/doc/info/complete), clojure (check/repair/format/eval/wrap), analysis (lsp-mcp), codebase-map (hive-knowledge cartography). Addons extend dynamically. Use command='help' to list all."
+   :description "Code intelligence: cider (REPL eval/doc/info/complete), clojure (check/repair/format/eval/wrap), analysis (lsp-mcp). Addons extend dynamically. Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command"   {:type "string"
-                                           :description "Code operation. Core: 'cider eval', 'clojure check'. Folded subdomains: 'analysis <cmd>', 'codebase-map <cmd>' (live when the addon is loaded). Use command='help' to list all."}
+                                           :description "Code operation. Core: 'cider eval', 'clojure check'. Folded subdomain: 'analysis <cmd>'. Addon subdomains appear at runtime (live when the addon is loaded). Use command='help' to list all."}
                               ;; Cider params
                               "code"      {:type "string"
                                            :description "Clojure code to evaluate"}
