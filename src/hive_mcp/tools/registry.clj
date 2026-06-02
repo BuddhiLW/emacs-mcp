@@ -175,6 +175,50 @@
     (log/info "Filtered tools for listing:" (count visible-tools))
     visible-tools))
 
+(defn- distinct-by-name
+  "Dedupe a tool seq by :name, keeping the FIRST occurrence and preserving
+   order. Consolidated native roots are listed first, so a native supertool
+   wins over a same-named addon tool (no false-discoverability duplicate)."
+  [tools]
+  (-> (reduce (fn [[seen acc] t]
+                (if (contains? seen (:name t))
+                  [seen acc]
+                  [(conj seen (:name t)) (conj acc t)]))
+              [#{} []]
+              tools)
+      second))
+
+(defn- merge-schema-ext
+  "Fold addon-contributed schema extensions into a tool's :inputSchema, mirroring
+   server.routes/make-tool. External loaders (bb-mcp) read :inputSchema straight
+   from this surface and never run make-tool, so without this they advertise the
+   bare core schema and addon params (e.g. carto's new-body/scope/array params)
+   are invisible to the client. Kanban 588762d0."
+  [{:keys [name inputSchema] :as tool}]
+  (if-let [schema-ext (and name (ext/get-schema-extensions name))]
+    (assoc tool :inputSchema (update inputSchema :properties merge schema-ext))
+    tool))
+
+(defn get-advertised-tools
+  "Canonical MCP surface for external loaders (e.g. the bb-mcp dynamic loader).
+
+   = consolidated native roots ++ addon/extension tools, deduped by name
+   (consolidated wins), with the visibility gate applied and addon schema
+   extensions merged into each :inputSchema. Non-allowlisted tools are KEPT in
+   the list but marked :deprecated, so a consumer can hide them from tools/list
+   while still dispatching them via tools/call (back-compat).
+
+   Single-sources the gate: build-server-spec, refresh-tools! and any external
+   loader all derive their surface from `apply-visibility-gate`, so the
+   advertised set can no longer drift from the gate config. Schema-ext merge
+   keeps this surface in sync with the stdio/server-context path (make-tool)."
+  []
+  (mapv merge-schema-ext
+        (apply-visibility-gate
+         (distinct-by-name
+          (concat (get-consolidated-tools)
+                  (ext/get-registered-tools))))))
+
 (def tools
   "Static aggregation (deprecated — use get-filtered-tools)."
   (get-base-tools))
