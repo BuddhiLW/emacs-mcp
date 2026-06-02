@@ -5,13 +5,19 @@
 ;; Dependency edges use #ig/ref — Integrant topologically sorts init order.
 ;; halt-key! runs in reverse init order automatically.
 ;;
+;; NOTE: refs MUST be the #ig/ref reader tag, NOT a (ig/ref :x) list. ig/read-string
+;; parses (ig/ref ...) as a plain list (ig/ref? => false), so Integrant sees ZERO
+;; dependency edges and init order becomes accidental — a latent boot-order race
+;; (kanban 588762d0: carto schema-ext lost when :hive/mcp-stdio snapshots tools/list
+;; before :hive/extensions runs addon register-schema!).
+;;
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 {;; ── Layer 1: Guards, Hooks, Events, Coordinator ──────────────────────
  :hive/guards          {}
- :hive/hooks           {:guards (ig/ref :hive/guards)
-                        :coordinator-id (ig/ref :hive/coordinator)}
+ :hive/hooks           {:guards #ig/ref :hive/guards
+                        :coordinator-id #ig/ref :hive/coordinator}
  :hive/events          {}
  :hive/delivery-channels {}
  :hive/coordinator     {}
@@ -23,24 +29,31 @@
 
  ;; ── Layer 3: Services (embedding, memory, config, extensions) ────────
  :hive/embedding       {}
- :hive/memory-store    {:embedding (ig/ref :hive/embedding)}
- :hive/tool-delegation {:memory (ig/ref :hive/memory-store)}
+ :hive/memory-store    {:embedding #ig/ref :hive/embedding}
+ ;; :extensions edge is a dependency-ordering barrier only (value unused): the
+ ;; delegation tool snapshot (register-tools-for-delegation!) must run AFTER
+ ;; addon IAddon.init! register-schema! so ling agents see addon-contributed
+ ;; params (e.g. carto's new-body/scope/array params). Without it, Integrant may
+ ;; init delegation before :hive/extensions (both only depend on :hive/embedding)
+ ;; and freeze a params-incomplete tool set. Kanban 588762d0.
+ :hive/tool-delegation {:memory     #ig/ref :hive/memory-store
+                        :extensions #ig/ref :hive/extensions}
  :hive/forge-belt      {}
  :hive/config          {}
- :hive/extensions      {:config    (ig/ref :hive/config)
-                        :embedding (ig/ref :hive/embedding)}
+ :hive/extensions      {:config    #ig/ref :hive/config
+                        :embedding #ig/ref :hive/embedding}
 
  ;; ── Layer 4: Channels + Sync ─────────────────────────────────────────
  :hive/ws-channel      {:port 9999}
  :hive/olympus         {}
  :hive/a2a-gateway     {:enabled false}
  :hive/legacy-channel  {:port 9998}
- :hive/channel-bridge  {:events     (ig/ref :hive/events)
-                        :ws-channel (ig/ref :hive/ws-channel)}
- :hive/swarm-sync      {:channel-bridge (ig/ref :hive/channel-bridge)
+ :hive/channel-bridge  {:events     #ig/ref :hive/events
+                        :ws-channel #ig/ref :hive/ws-channel}
+ :hive/swarm-sync      {:channel-bridge #ig/ref :hive/channel-bridge
                         ;; :nats ref is a dependency edge only — ensures the
                         ;; backbone is up before the event bridge subscribes.
-                        :nats           (ig/ref :hive/nats)
+                        :nats           #ig/ref :hive/nats
                         ;; :source resolves from services.swarm-sync.source
                         ;; in config.edn when omitted. Valid: :emacs (legacy)
                         ;; | :datahike (persistent KV) | :none.
@@ -49,14 +62,21 @@
                         ;; services.swarm-sync.event-backbone in config.edn
                         ;; when nil. Valid: :local (default) | :nats.
                         :event-backbone nil}
- :hive/workflow-engine {:extensions (ig/ref :hive/extensions)
-                        :memory     (ig/ref :hive/memory-store)}
+ :hive/workflow-engine {:extensions #ig/ref :hive/extensions
+                        :memory     #ig/ref :hive/memory-store}
 
  ;; ── Layer 5: Hot-reload, Schedulers, Stdio ───────────────────────────
- :hive/hot-reload      {:extensions (ig/ref :hive/extensions)}
- :hive/registry-sync   {:swarm-sync (ig/ref :hive/swarm-sync)}
- :hive/decay-scheduler {:embedding (ig/ref :hive/embedding)}
+ :hive/hot-reload      {:extensions #ig/ref :hive/extensions}
+ :hive/registry-sync   {:swarm-sync #ig/ref :hive/swarm-sync}
+ :hive/decay-scheduler {:embedding #ig/ref :hive/embedding}
  :hive/housekeeping    {}
- :hive/mcp-stdio       {:tool-delegation (ig/ref :hive/tool-delegation)
-                        :hot-reload      (ig/ref :hive/hot-reload)}
+ ;; :extensions edge: the MCP tools/list snapshot (build-server-spec → make-tool
+ ;; merge of addon schema-extensions) is frozen at :hive/mcp-stdio init. It MUST
+ ;; run AFTER addon register-schema! or the served `code` tool loses all carto
+ ;; params (boot-order race, kanban 588762d0). Also guaranteed transitively via
+ ;; :hive/hot-reload → :hive/extensions; explicit here so the invariant survives
+ ;; any future change to hot-reload's deps.
+ :hive/mcp-stdio       {:tool-delegation #ig/ref :hive/tool-delegation
+                        :hot-reload      #ig/ref :hive/hot-reload
+                        :extensions      #ig/ref :hive/extensions}
  :hive/keepalive       {:mode :stdio}}
