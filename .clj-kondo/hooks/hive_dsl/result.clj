@@ -52,3 +52,25 @@
   (let [args (rest (:children node))]
     {:node (api/list-node
             (list* (api/token-node 'do) args))}))
+
+(defn let-ok
+  "Hook for (let-ok [sym expr ... :let [normal-bindings] ...] & body).
+   Railway-oriented let: each `sym expr` pair binds the unwrapped ok value,
+   and a `:let [..]` entry splices ordinary let bindings. `:lint-as let`
+   can't model the interleaved `:let`, so its bound symbols read as
+   unresolved. Rewrite to a plain `let` with every binding flattened so
+   kondo resolves them and still analyzes the body + binding exprs."
+  [{:keys [node]}]
+  (let [[_ binding-vec & body] (:children node)
+        flat (loop [bs (seq (:children binding-vec)) acc []]
+               (if (empty? bs)
+                 acc
+                 (if (= :let (api/sexpr (first bs)))
+                   ;; :let [a 1 b 2] — splice the inner vector's bindings
+                   (recur (drop 2 bs) (into acc (:children (second bs))))
+                   ;; sym expr pair (sym may be a destructure form)
+                   (recur (drop 2 bs) (conj acc (first bs) (second bs))))))]
+    {:node (api/list-node
+            (list* (api/token-node 'let)
+                   (api/vector-node flat)
+                   body))}))
