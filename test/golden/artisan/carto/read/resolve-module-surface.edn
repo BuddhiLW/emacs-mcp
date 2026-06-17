@@ -1,0 +1,6 @@
+{:mcp-tool-budget-ms-class "java.lang.Long",
+ :qn-query-gate-class "hive_weave.gate.Gate",
+ :bg-pool-class "clojure.lang.Delay",
+ :try-resolve-fn? true,
+ :run-budgeted-fn? true,
+ :budget-positive? true}

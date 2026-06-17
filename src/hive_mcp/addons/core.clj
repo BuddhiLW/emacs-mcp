@@ -143,6 +143,8 @@
                                        (case (namespace k)
                                          "multi" ((requiring-resolve 'hive-mcp.multi.registry/register-by-key!)
                                                   id k v)
+                                         "saa" ((requiring-resolve 'hive-mcp.saa.registry/register-by-key!)
+                                                id k v)
                                          (ext/register! k v)))
                                      (swap! addon-registry assoc-in
                                             [id :hook-keys] (set (keys hooks-map)))
@@ -195,9 +197,12 @@
                                (case (namespace k)
                                  "multi" ((requiring-resolve 'hive-mcp.multi.registry/deregister-by-key!)
                                           id k)
+                                 "saa" ((requiring-resolve 'hive-mcp.saa.registry/deregister-by-key!)
+                                        id k)
                                  (ext/deregister! k)))
-                             ;; Belt-and-suspenders: clear any leftover :multi/* entries by owner
+                             ;; Belt-and-suspenders: clear any leftover :multi/* and :saa/* entries by owner
                              ((requiring-resolve 'hive-mcp.multi.registry/deregister-by-owner!) id)
+                             ((requiring-resolve 'hive-mcp.saa.registry/deregister-by-owner!) id)
                              (log/debug "Addon deregistered hooks" {:addon id :keys hook-keys}))
               ;; Deregister tools
                            (doseq [t (proto/tools addon)]

@@ -1,0 +1,28 @@
+{:alias
+ {:pid "hive-knowledge",
+  :scopes
+  ["/home/leibniz/PP/hive/hive-knowledge"
+   "hive-knowledge"
+   "hk-alias"]},
+ :blank {:pid nil, :scopes nil},
+ :empty {:pid nil, :scopes nil},
+ :nil {:pid nil, :scopes nil},
+ :novel {:pid "brand-new-pid", :scopes ["brand-new-pid"]},
+ :other-pid
+ {:pid "hive-mcp",
+  :scopes ["/home/leibniz/PP/hive/hive-mcp" "hive-mcp"]},
+ :path-global {:pid "/x/unknown/y", :scopes ["/x/unknown/y"]},
+ :path-hk
+ {:pid "hive-knowledge",
+  :scopes
+  ["/home/leibniz/PP/hive/hive-knowledge"
+   "hive-knowledge"
+   "hk-alias"]},
+ :path-mcp
+ {:pid "hive-mcp",
+  :scopes ["/home/leibniz/PP/hive/hive-mcp" "hive-mcp"]},
+ :path-nil {:pid "/x/nomatch/y", :scopes ["/x/nomatch/y"]},
+ :plain-pid
+ {:pid "hive-knowledge",
+  :scopes
+  ["/home/leibniz/PP/hive/hive-knowledge" "hive-knowledge" "hk-alias"]}}

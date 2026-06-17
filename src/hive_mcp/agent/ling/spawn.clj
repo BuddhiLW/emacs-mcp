@@ -439,6 +439,8 @@
                         :model model-val}
                  (:provider opts)           (assoc :provider (:provider opts))
                  (some? (:kg-compress? opts)) (assoc :kg-compress? (:kg-compress? opts))
+                 (some? (:verbose? opts))   (assoc :verbose? (:verbose? opts))
+                 (:llm-retries opts)        (assoc :llm-retries (:llm-retries opts))
                  (:sliding-window-size opts) (assoc :sliding-window-size (:sliding-window-size opts))
                  (:agents opts)             (assoc :agents (:agents opts))
                  (:max-budget-usd opts)     (assoc :max-budget-usd (:max-budget-usd opts))))))

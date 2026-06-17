@@ -1,9 +1,20 @@
 (ns hive-mcp.agent.saa.orchestrator
-  "SAA (Silence-Abstract-Act) orchestrator implementing ISAAOrchestrator protocol."
+  "SAA (Silence-Abstract-Act) orchestrator implementing ISAAOrchestrator protocol.
+
+   Ports are injected at construction from hive-mcp.saa.registry: an IPhaseProvider
+   drives phase-config/build-options/execute-phase!, an IObservationScorer scores
+   Silence observations, and an IPlanSynthesizer proposes plans. Defaults
+   (:saa/default) preserve today's behavior (DefaultPhaseProvider -> bridge query!,
+   Korzybski scoring). The :es/score / :ep/generate / :ec/enrich extension hooks layer
+   OVER the ports and never fall back into any provider SDK."
   (:require [clojure.core.async :as async :refer [go go-loop chan >! <! close!]]
             [clojure.string :as str]
             [hive-mcp.dns.result :refer [rescue]]
             [hive-mcp.protocols.agent-bridge :as bridge]
+            [hive-mcp.protocols.saa :as psaa]
+            [hive-mcp.saa.registry :as registry]
+            [hive-mcp.saa.prompt :as prompt]
+            [hive-mcp.saa.model :as model]
             [hive-mcp.extensions.registry :as ext]
             [taoensso.timbre :as log]))
 
@@ -76,97 +87,81 @@
     (shout-phase! agent-id phase message)))
 
 (defn- score-observations-enhanced
-  "Score observations using extension, falling back to built-in heuristic."
-  [observations]
-  (if-let [score-fn (ext/get-extension :es/score)]
-    (score-fn observations)
-    (if-let [sdk-score-fn (rescue nil (requiring-resolve 'hive-claude.sdk.saa/score-observations))]
-      (sdk-score-fn observations)
-      observations)))
+  "Score via the injected IObservationScorer port, then layer the optional
+   :es/score extension OVER the port output. FIX#5: no SDK fallback — the port
+   default (DefaultObservationScorer) is the Korzybski floor."
+  [scorer observations]
+  (let [scored (psaa/score scorer observations)]
+    (if-let [score-fn (ext/get-extension :es/score)]
+      (score-fn scored)
+      scored)))
 
 (defn- plan-from-observations-enhanced
-  "Generate a plan using extension, falling back to nil."
-  [observations task]
-  (if-let [plan-fn (ext/get-extension :ep/generate)]
-    (plan-fn observations task)
-    nil))
+  "Synthesize via the injected IPlanSynthesizer port, then layer the optional
+   :ep/generate extension OVER the port output. No SDK fallback."
+  [planner scored task]
+  (let [synthesized (psaa/synthesize planner scored task)]
+    (if-let [plan-fn (ext/get-extension :ep/generate)]
+      (plan-fn synthesized task)
+      synthesized)))
 
 (defn- enrich-silence-context
-  "Enrich Silence phase with additional context from extension."
+  "Enrich Silence phase with additional context from extension. No SDK fallback."
   [task]
   (if-let [enrich-fn (ext/get-extension :ec/enrich)]
     (enrich-fn task)
     nil))
 
-(defn- resolve-saa-phases
-  "Resolve SAA phase config from SDK addon (hive-claude).
-   Returns phase map or nil if not available."
-  []
-  (rescue nil
-          (when-let [v (requiring-resolve 'hive-claude.sdk.saa/saa-phases)]
-            @v)))
-
 (defn- build-phase-prompt
-  "Build the full prompt for a given SAA phase."
+  "Build the full prompt for a SAA phase via the provider-neutral prompt builder
+   drawing the goal fragment from saa.model."
   [phase task-or-content extra-context]
-  (let [saa-phases (resolve-saa-phases)
-        phase-config (get saa-phases phase)
-        _suffix (:system-prompt-suffix phase-config)]
-    (case phase
-      :silence
-      (str "TASK: " task-or-content
-           "\n\nExplore the codebase and collect context. "
-           "List all relevant files, patterns, and observations."
-           (when extra-context
-             (str "\n\nPrior knowledge context:\n" (pr-str extra-context))))
-
-      :abstract
-      (str "Based on these observations from the Silence phase:\n"
-           (pr-str task-or-content)
-           "\n\nSynthesize these into a concrete action plan."
-           (when extra-context
-             (str "\n\nOriginal task: " extra-context))
-           "\n\nProduce a structured plan with specific steps. "
-           "Each step should name the file, the change, and the rationale.")
-
-      :act
-      (str "Execute the following plan:\n" (or task-or-content "Use best judgment.")
-           (when extra-context
-             (str "\n\nOriginal task: " extra-context))
-           "\n\nFollow the plan precisely. Make changes file by file. "
-           "Verify each change before moving to the next."))))
+  (prompt/build-phase-prompt phase task-or-content extra-context model/saa-phase-model))
 
 (defn- build-phase-opts
-  "Build query options for a phase."
-  [phase user-opts]
-  (let [saa-phases (resolve-saa-phases)
-        phase-config (get saa-phases phase)]
-    (cond-> {:allowed-tools (:allowed-tools phase-config)
-             :permission-mode (keyword (:permission-mode phase-config))}
-      (:system-prompt user-opts)
-      (assoc :system-prompt (str (:system-prompt user-opts)
-                                 "\n\n" (:system-prompt-suffix phase-config)))
+  "Build provider-options for a phase through the injected IPhaseProvider.
+   The provider's build-options is the sole vendor-token emitter; user-opts pass
+   through as neutral overrides. :phase is stamped so the stream adapter can tag."
+  [provider phase user-opts]
+  (psaa/build-options provider phase (assoc user-opts :phase phase)))
 
-      (nil? (:system-prompt user-opts))
-      (assoc :system-prompt (:system-prompt-suffix phase-config))
+(defn- execute-phase-via-provider!
+  "Execute a SAA phase through the injected IPhaseProvider. The default provider
+   queries the agent session (bridge query!), behavior-identical to the prior
+   inline path."
+  [provider session prompt provider-opts]
+  (psaa/execute-phase! provider session prompt provider-opts))
 
-      (:max-turns user-opts)
-      (assoc :max-turns (:max-turns user-opts)))))
+(defn- pm->raw-envelope
+  "Adapt one injected-provider PhaseMessage back to the legacy raw envelope
+   ({:type _ :content/:data _}) the phase collectors and consumers expect.
+   Keeps the streaming envelope shape behavior-identical to the prior bridge path."
+  [pm]
+  (case (:adt/variant pm)
+    :pm/chunk          {:type :message  :content (:content pm)}
+    :pm/observation    {:type :message  :content (:observation pm)}
+    :pm/phase-complete {:type :complete :content (:payload pm)}
+    :pm/error          {:type :error    :error (:error pm)}
+    :pm/started        {:type :started}
+    :pm/saa-complete   (assoc (:summary pm) :type :saa-complete)
+    pm))
 
-(defn- execute-phase-via-session!
-  "Execute a SAA phase by querying the agent session."
-  [session prompt phase-opts]
-  (bridge/query! session prompt phase-opts))
+(defn- raw-or-pm
+  "Normalize a phase-stream message to the legacy raw envelope. The injected
+   provider streams :pm/* variants; a plain map already carries :type."
+  [msg]
+  (if (:adt/variant msg) (pm->raw-envelope msg) msg))
 
 (defn- collect-phase-messages!
-  "Drain a phase channel, collecting messages and forwarding to output channel."
+  "Drain a phase channel, normalizing each message to the legacy raw envelope,
+   stamping :saa-phase, forwarding to out-ch, and collecting the raw envelopes."
   [phase-ch out-ch saa-phase]
   (go-loop [messages []]
     (if-let [msg (<! phase-ch)]
-      (do
+      (let [raw (raw-or-pm msg)]
         (when out-ch
-          (>! out-ch (assoc msg :saa-phase saa-phase)))
-        (recur (conj messages msg)))
+          (>! out-ch (assoc raw :saa-phase saa-phase)))
+        (recur (conj messages raw)))
       messages)))
 
 (defn- extract-content
@@ -200,6 +195,7 @@
 
   (run-silence! [_ session task opts]
     (let [agent-id (bridge/session-id session)
+          provider (:phase-provider config)
           out-ch (chan 1024)]
       (init-agent-state! agent-id task)
       (transition-phase! agent-id :silence)
@@ -208,8 +204,8 @@
         (try
           (let [enrichment (enrich-silence-context task)
                 prompt (build-phase-prompt :silence task enrichment)
-                phase-opts (build-phase-opts :silence opts)
-                phase-ch (execute-phase-via-session! session prompt phase-opts)
+                phase-opts (build-phase-opts provider :silence opts)
+                phase-ch (execute-phase-via-provider! provider session prompt phase-opts)
                 messages (<! (collect-phase-messages! phase-ch out-ch :silence))
                 observations (extract-content messages)]
             (update-agent-state! agent-id {:observations observations})
@@ -227,18 +223,21 @@
 
   (run-abstract! [_ session observations opts]
     (let [agent-id (bridge/session-id session)
+          provider (:phase-provider config)
+          scorer (:scorer config)
+          planner (:planner config)
           out-ch (chan 1024)]
       (transition-phase! agent-id :abstract)
       (maybe-shout! config agent-id :abstract
                     (str "Starting synthesis with " (count observations) " observations"))
       (go
         (try
-          (let [scored (score-observations-enhanced observations)
+          (let [scored (score-observations-enhanced scorer observations)
                 task (:task (get-agent-state agent-id))
-                ext-plan (plan-from-observations-enhanced scored task)
+                ext-plan (plan-from-observations-enhanced planner scored task)
                 prompt (build-phase-prompt :abstract scored task)
-                phase-opts (build-phase-opts :abstract opts)
-                phase-ch (execute-phase-via-session! session prompt phase-opts)
+                phase-opts (build-phase-opts provider :abstract opts)
+                phase-ch (execute-phase-via-provider! provider session prompt phase-opts)
                 messages (<! (collect-phase-messages! phase-ch out-ch :abstract))
                 plan-content (extract-content messages)
                 final-plan (or ext-plan (str/join "\n" plan-content))]
@@ -255,6 +254,7 @@
 
   (run-act! [_ session plan opts]
     (let [agent-id (bridge/session-id session)
+          provider (:phase-provider config)
           out-ch (chan 1024)]
       (transition-phase! agent-id :act)
       (maybe-shout! config agent-id :act "Starting execution phase")
@@ -262,8 +262,8 @@
         (try
           (let [task (:task (get-agent-state agent-id))
                 prompt (build-phase-prompt :act plan task)
-                phase-opts (build-phase-opts :act opts)
-                phase-ch (execute-phase-via-session! session prompt phase-opts)
+                phase-opts (build-phase-opts provider :act opts)
+                phase-ch (execute-phase-via-provider! provider session prompt phase-opts)
                 messages (<! (collect-phase-messages! phase-ch out-ch :act))
                 result-content (extract-content messages)]
             (update-agent-state! agent-id {:result {:messages result-content
@@ -281,6 +281,10 @@
             (close! out-ch))))
       out-ch))
 
+  ;; W5 retires this inline phase-flow: full-SAA delegation moves to the mesh FSM
+  ;; (saa.mesh ->saa-resources, not yet on classpath). Until then this drives the
+  ;; cycle by chaining the port-routed run-silence!/run-abstract!/run-act! — no
+  ;; vendor SDK reference, behavior-preserving.
   (run-full-saa! [this session task opts]
     (let [agent-id (bridge/session-id session)
           out-ch (chan 4096)
@@ -328,15 +332,27 @@
       out-ch)))
 
 (defn ->saa-orchestrator
-  "Create an SAAOrchestrator instance with optional config."
+  "Create an SAAOrchestrator instance with optional config.
+
+   The three SAA ports are resolved from saa.registry at construction and merged
+   into config (caller overrides win): an IPhaseProvider drives
+   phase-config/build-options/execute-phase!, an IObservationScorer scores
+   observations, an IPlanSynthesizer proposes plans. :provider-id selects the
+   registered provider/scorer/planner triple (defaults to :saa/default — the
+   LSP-clean built-ins). Resolvers always return a satisfying record (never nil)."
   ([] (->saa-orchestrator {}))
   ([config]
-   (->SAAOrchestrator (merge {:shout? true
-                              :score-threshold 0.0
-                              :max-silence-turns 50
-                              :max-abstract-turns 20
-                              :max-act-turns 100}
-                             config))))
+   (let [provider-id (get config :provider-id :saa/default)]
+     (->SAAOrchestrator
+      (merge {:shout? true
+              :score-threshold 0.0
+              :max-silence-turns 50
+              :max-abstract-turns 20
+              :max-act-turns 100
+              :phase-provider (registry/lookup-phase-provider-or-default provider-id)
+              :scorer (registry/lookup-scorer-or-default provider-id)
+              :planner (registry/lookup-planner-or-default provider-id)}
+             config)))))
 
 (defn agent-saa-state
   "Get the current SAA state for an agent (read-only)."

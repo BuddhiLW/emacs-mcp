@@ -1,0 +1,20 @@
+{:all-empty [],
+ :empty-points [],
+ :multi-tag [{:id 3, :payload {:tags []}}],
+ :nil-exclude
+ [{:id 1, :payload {:tags ["a" "b"]}}
+  {:id 2, :payload {:tags ["c"]}}
+  {:id 3, :payload {:tags []}}
+  {:id 4, :payload {:tags ["a" "d"]}}],
+ :no-exclude
+ [{:id 1, :payload {:tags ["a" "b"]}}
+  {:id 2, :payload {:tags ["c"]}}
+  {:id 3, :payload {:tags []}}
+  {:id 4, :payload {:tags ["a" "d"]}}],
+ :no-match
+ [{:id 1, :payload {:tags ["a" "b"]}}
+  {:id 2, :payload {:tags ["c"]}}
+  {:id 3, :payload {:tags []}}
+  {:id 4, :payload {:tags ["a" "d"]}}],
+ :single-tag
+ [{:id 2, :payload {:tags ["c"]}} {:id 3, :payload {:tags []}}]}

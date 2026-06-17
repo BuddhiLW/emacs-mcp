@@ -91,8 +91,9 @@
     :description "Add an entry to project memory (Chroma storage). Types: note, snippet, convention, decision, axiom, plan. Optionally specify duration for TTL: ephemeral (1 day), short (7 days), medium (30 days), long (90 days), permanent (never expires). For ling attribution, pass agent_id to tag entry with agent:<id>. Knowledge Graph: Use kg_* params to create edges linking this entry to existing entries (implements, supersedes, depends-on, refines). Plans (type=plan) are stored in a separate collection with OpenRouter embeddings for large content support."
     :inputSchema {:type "object"
                   :properties {"type" {:type "string"
-                                       :enum (type-registry/mcp-enum)
-                                       :description "Type of memory entry. Use 'principle' for architectural design principles. Use 'plan' for large implementation plans (1000-5000+ chars) - stored in dedicated collection with OpenRouter embeddings."}
+                                       :description (str "Type of memory entry. Use 'principle' for architectural design principles. "
+                                                         "Use 'plan' for large implementation plans (1000-5000+ chars) - stored in dedicated collection with OpenRouter embeddings. "
+                                                         (type-registry/mcp-type-hint))}
                                "content" {:type "string"
                                           :description "Content of the memory entry"}
                                "tags" {:type "array"
@@ -128,8 +129,8 @@
     :description "Query project memory by type with scope filtering (Chroma storage). Returns stored notes, snippets, conventions, decisions, axioms, or plans filtered by scope (auto-filters by current project + global unless specified). HCR Wave 4: include_descendants defaults to true (also surfaces child project memories); pass false to restrict to the current project."
     :inputSchema {:type "object"
                   :properties {"type" {:type "string"
-                                       :enum (type-registry/mcp-enum {:include-conversation? true})
-                                       :description "Type of memory entries to query"}
+                                       :description (str "Type of memory entries to query. "
+                                                         (type-registry/mcp-type-hint))}
                                "tags" {:type "array"
                                        :items {:type "string"}
                                        :description "Optional tags to filter by"}
@@ -151,8 +152,8 @@
     :description "Query project memory by type, returning only metadata (id, type, preview, tags, created). Use this for efficient browsing - returns ~10x fewer tokens than full query. Follow up with mcp_memory_get_full to fetch specific entries."
     :inputSchema {:type "object"
                   :properties {"type" {:type "string"
-                                       :enum (type-registry/mcp-enum {:include-conversation? true})
-                                       :description "Type of memory entries to query"}
+                                       :description (str "Type of memory entries to query. "
+                                                         (type-registry/mcp-type-hint))}
                                "tags" {:type "array"
                                        :items {:type "string"}
                                        :description "Optional tags to filter by"}
@@ -192,8 +193,8 @@
                                "limit" {:type "integer"
                                         :description "Maximum number of results to return (default: 10)"}
                                "type" {:type "string"
-                                       :enum (type-registry/mcp-enum)
-                                       :description "Optional filter by memory type. Use 'plan' to search only plan entries (stored in dedicated collection)."}
+                                       :description (str "Optional filter by memory type. Use 'plan' to search only plan entries (stored in dedicated collection). "
+                                                         (type-registry/mcp-type-hint))}
                                "directory" {:type "string"
                                             :description "Working directory to determine project scope (pass your cwd to ensure correct scoping)"}
                                "scope" {:type "string"

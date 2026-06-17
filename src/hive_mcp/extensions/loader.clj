@@ -29,6 +29,13 @@
   (rescue nil
           (requiring-resolve sym)))
 
+(defn- boot-timing?
+  "Per-addon boot timing is on by default; disable with HIVE_BOOT_TIMING=0.
+   Mirrors hive-mcp.server.core/boot-timing? (kept local to avoid a require
+   cycle through the init path)."
+  []
+  (not= "0" (System/getenv "HIVE_BOOT_TIMING")))
+
 ;; =============================================================================
 ;; Extension Manifests (removed — addons self-register via init!)
 ;; =============================================================================
@@ -70,7 +77,8 @@
 
    Returns init result map on success, nil on failure."
   [ns-sym]
-  (let [addon-sym  (symbol (str ns-sym) "init-as-addon!")
+  (let [t0         (System/nanoTime)
+        addon-sym  (symbol (str ns-sym) "init-as-addon!")
         legacy-sym (symbol (str ns-sym) "init!")
         try-call   (fn [strategy-name init-sym]
                      (try
@@ -86,9 +94,15 @@
                                     "via" strategy-name
                                     "— addon will be SKIPPED. Cause:"
                                     (.getMessage t))
-                         nil)))]
-    (or (try-call "IAddon (multiplexer)" addon-sym)
-        (try-call "init! (legacy)" legacy-sym))))
+                         nil)))
+        result     (or (try-call "IAddon (multiplexer)" addon-sym)
+                       (try-call "init! (legacy)" legacy-sym))]
+    ;; Per-addon boot timing — captures first-time require/compile of the
+    ;; addon's transitive graph (via requiring-resolve) plus its init cost.
+    (when (boot-timing?)
+      (log/info (format "[boot-timing] addon %-48s %9.1f ms"
+                        (str ns-sym) (/ (- (System/nanoTime) t0) 1e6))))
+    result))
 
 ;; =============================================================================
 ;; Public API
@@ -98,7 +112,11 @@
   "Scan classpath for addon manifests, validate, and topo-sort.
    Returns {:ordered [manifest...] :errors [...] :init-ns-set #{sym...}}."
   []
-  (let [{:keys [manifests errors]} (manifest/scan-classpath-manifests)]
+  (let [scan-t0 (System/nanoTime)
+        {:keys [manifests errors]} (manifest/scan-classpath-manifests)
+        _ (when (boot-timing?)
+            (log/info (format "[boot-timing] classpath manifest scan %9.1f ms (%d manifests)"
+                              (/ (- (System/nanoTime) scan-t0) 1e6) (count manifests))))]
     (when (seq errors)
       (log/warn "Addon manifest scan errors" {:count (count errors) :errors errors}))
     (if (seq manifests)
@@ -110,6 +128,49 @@
                   {:ids (mapv :addon/id ordered)})
         {:ordered ordered :errors errors :init-ns-set init-ns-set})
       {:ordered [] :errors errors :init-ns-set #{}})))
+
+(defn- roster-status
+  "Resolve a manifest entry's load status. Precedence:
+     - addon-core registry record present → its :state (:active ✓ / :error ✗)
+       (IAddon-protocol addons: hive.knowledge, hive.milvus, …)
+     - else loaded via self-registration (init returned non-nil) → ✓
+       (libraries/legacy init! that register caps without an addon-core record:
+        hive.agent, hive.ttracking)
+     - else → ✗ (genuinely failed to load).
+   `state-by-id` maps :addon/id → addon-core :state."
+  [m successful-ns state-by-id]
+  (let [rstate (get state-by-id (:addon/id m))
+        ns-sym (symbol (str (:addon/init-ns m)))]
+    (cond
+      (= :active rstate)               "✓"
+      (= :error rstate)                "✗ ERR"
+      (some? rstate)                   (str "? " (name rstate))
+      (contains? successful-ns ns-sym) "✓"
+      :else                            "✗")))
+
+(defn- log-addon-roster!
+  "Log discovered addons with their META-INF/hive-addons/*.edn metadata —
+   kind (addon|lib), id, version, capabilities, description — and accurate load
+   status (see roster-status). :addon/kind is author-declared; '?' when unset.
+   Gated on boot-timing? (HIVE_BOOT_TIMING=0 to mute)."
+  [ordered successful-ns]
+  (when (and (boot-timing?) (seq ordered))
+    (let [state-by-id (into {} (map (juxt :name :state))
+                           (rescue [] (addon-core/list-addons)))]
+      (log/info (format "[addons] roster — %d discovered on classpath:" (count ordered)))
+      (doseq [m ordered]
+        (let [kind (case (:addon/kind m)
+                     :addon   "addon"
+                     :library "lib"
+                     "?")]
+          (log/info (format "[addons]   %-6s [%-5s] %-22s v%-7s caps=%-46s ns=%-26s — %s"
+                            (roster-status m successful-ns state-by-id)
+                            kind
+                            (str (:addon/id m))
+                            (str (:addon/version m "—"))
+                            (pr-str (or (:addon/capabilities m) #{}))
+                            (str (:addon/init-ns m))
+                            (str (:addon/description m "")))))))))
 
 (defn load-extensions!
   "Resolve and register all available extensions.
@@ -142,10 +203,15 @@
                                                    :ns all-init-ns}))
 
         ;; Step 3: Try self-registration for each init-ns
+        step3-t0     (System/nanoTime)
         init-results (into {}
                            (map (fn [ns-sym]
                                   [ns-sym (try-call-initializer ns-sym)]))
                            all-init-ns)
+        _            (when (boot-timing?)
+                       (log/info (format "[boot-timing] addon self-registration total %9.1f ms (%d ns)"
+                                         (/ (- (System/nanoTime) step3-t0) 1e6)
+                                         (count all-init-ns))))
         successful-ns (into #{} (keep (fn [[ns-sym result]]
                                         (when result ns-sym)))
                             init-results)
@@ -166,6 +232,9 @@
                 (swap! manifest-init-count inc))))
 
         total-registered (count (ext/registered-keys))]
+
+    ;; Roster: which addons were discovered, their META-INF metadata + status
+    (log-addon-roster! ordered successful-ns)
 
     (if (pos? total-registered)
       (log/info "Extensions loaded:" total-registered "total capabilities"

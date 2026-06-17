@@ -1,0 +1,208 @@
+{:callees
+ {:datalog
+  [:find
+   (pull
+    ?e
+    [:kg-edge/from
+     :kg-edge/to
+     :kg-edge/relation
+     :kg-edge/confidence
+     :kg-edge/id])
+   :in
+   $
+   [?n ...]
+   ?rel
+   [?scope ...]
+   :where
+   [?e :kg-edge/from ?n]
+   [?e :kg-edge/relation ?rel]
+   [?e :kg-edge/scope ?scope]],
+  :inputs [["n1"] :depends-on ["s1"]],
+  :limit 10},
+ :caller-count
+ {:datalog
+  [:find
+   (pull
+    ?e
+    [:kg-edge/from
+     :kg-edge/to
+     :kg-edge/relation
+     :kg-edge/confidence
+     :kg-edge/id])
+   :in
+   $
+   [?n ...]
+   ?rel
+   [?scope ...]
+   :where
+   [?e :kg-edge/to ?n]
+   [?e :kg-edge/relation ?rel]
+   [?e :kg-edge/scope ?scope]],
+  :inputs [["n1"] :depends-on ["s1"]],
+  :limit 5},
+ :callers
+ {:datalog
+  [:find
+   (pull
+    ?e
+    [:kg-edge/from
+     :kg-edge/to
+     :kg-edge/relation
+     :kg-edge/confidence
+     :kg-edge/id])
+   :in
+   $
+   [?n ...]
+   ?rel
+   [?scope ...]
+   :where
+   [?e :kg-edge/to ?n]
+   [?e :kg-edge/relation ?rel]
+   [?e :kg-edge/scope ?scope]],
+  :inputs [["n1"] :depends-on ["s1" "s2"]],
+  :limit 50},
+ :callers-coll
+ {:datalog
+  [:find
+   (pull
+    ?e
+    [:kg-edge/from
+     :kg-edge/to
+     :kg-edge/relation
+     :kg-edge/confidence
+     :kg-edge/id])
+   :in
+   $
+   [?n ...]
+   ?rel
+   [?scope ...]
+   :where
+   [?e :kg-edge/to ?n]
+   [?e :kg-edge/relation ?rel]
+   [?e :kg-edge/scope ?scope]],
+  :inputs [["a" "b"] :refines ["s"]],
+  :limit 1000},
+ :callers-frontier
+ {:datalog
+  [:find
+   (pull
+    ?e
+    [:kg-edge/from
+     :kg-edge/to
+     :kg-edge/relation
+     :kg-edge/confidence
+     :kg-edge/id])
+   :in
+   $
+   [?n ...]
+   ?rel
+   [?scope ...]
+   :where
+   [?e :kg-edge/to ?n]
+   [?e :kg-edge/relation ?rel]
+   [?e :kg-edge/scope ?scope]],
+  :inputs [["n1" "n2"] :depends-on ["s1"]],
+  :limit 1000},
+ :centrality
+ {:datalog
+  [:find
+   ?v
+   .
+   :in
+   $
+   ?node
+   ?attr
+   :where
+   [?s :synth/node-id ?node]
+   [?s ?attr ?v]],
+  :inputs ["n1" :synth/pagerank],
+  :limit 1},
+ :centrality-deflt
+ {:datalog
+  [:find
+   ?v
+   .
+   :in
+   $
+   ?node
+   ?attr
+   :where
+   [?s :synth/node-id ?node]
+   [?s ?attr ?v]],
+  :inputs ["n1" :synth/betweenness],
+  :limit 1},
+ :community
+ {:datalog
+  [:find
+   ?c
+   .
+   :in
+   $
+   ?node
+   :where
+   [?s :synth/node-id ?node]
+   [?s :synth/community-id ?c]],
+  :inputs ["n1"],
+  :limit 1},
+ :edge-by-relation
+ {:datalog
+  [:find
+   (pull
+    ?e
+    [:kg-edge/from
+     :kg-edge/to
+     :kg-edge/relation
+     :kg-edge/confidence
+     :kg-edge/id])
+   :in
+   $
+   ?rel
+   [?scope ...]
+   :where
+   [?e :kg-edge/relation ?rel]
+   [?e :kg-edge/scope ?scope]],
+  :inputs [:refines ["s1"]],
+  :limit 7},
+ :grounding
+ {:datalog
+  [:find
+   ?vc
+   ?ca
+   ?cb
+   ?rc
+   ?ch
+   ?gc
+   :in
+   $
+   ?path
+   ?scope
+   :where
+   [?d :disc/path ?path]
+   [?d :disc/project-id ?scope]
+   [?d :disc/volatility-class ?vc]
+   [?d :disc/certainty-alpha ?ca]
+   [?d :disc/certainty-beta ?cb]
+   [(get-else $ ?d :disc/read-count 0) ?rc]
+   [(get-else $ ?d :disc/content-hash "") ?ch]
+   [(get-else $ ?d :disc/git-commit "") ?gc]],
+  :inputs ["src/foo.clj" "proj"],
+  :limit 1},
+ :grounding-batch
+ {:datalog
+  [:find
+   ?path
+   ?vc
+   ?ca
+   ?cb
+   :in
+   $
+   [?path ...]
+   ?scope
+   :where
+   [?d :disc/path ?path]
+   [?d :disc/project-id ?scope]
+   [?d :disc/volatility-class ?vc]
+   [?d :disc/certainty-alpha ?ca]
+   [?d :disc/certainty-beta ?cb]],
+  :inputs [["a.clj" "b.clj"] "proj"],
+  :limit 1000}}

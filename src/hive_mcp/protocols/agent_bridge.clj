@@ -1,6 +1,7 @@
 (ns hive-mcp.protocols.agent-bridge
   "Protocols for agent backend abstraction and session lifecycle."
-  (:require [clojure.core.async :as async]))
+  (:require [clojure.core.async :as async]
+            [hive-mcp.protocols.saa :as psaa]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -83,23 +84,14 @@
     "Set a custom permission handler for the agent session."))
 
 ;;; ============================================================================
-;;; ISAAOrchestrator Protocol
+;;; ISAAOrchestrator Protocol (canonical in hive-mcp.protocols.saa; re-exported)
 ;;; ============================================================================
 
-(defprotocol ISAAOrchestrator
-  "Protocol for SAA phase orchestration."
-
-  (run-silence! [this session task opts]
-    "Execute the Silence phase with read-only tools.")
-
-  (run-abstract! [this session observations opts]
-    "Execute the Abstract phase to synthesize a plan.")
-
-  (run-act! [this session plan opts]
-    "Execute the Act phase with full tool access.")
-
-  (run-full-saa! [this session task opts]
-    "Execute the complete SAA cycle."))
+(def ISAAOrchestrator psaa/ISAAOrchestrator)
+(def run-silence! psaa/run-silence!)
+(def run-abstract! psaa/run-abstract!)
+(def run-act! psaa/run-act!)
+(def run-full-saa! psaa/run-full-saa!)
 
 ;;; ============================================================================
 ;;; NoopAgentSession (No-Op Fallback)
@@ -189,7 +181,7 @@
     {:success? false
      :errors [noop-msg]})
 
-  ISAAOrchestrator
+  psaa/ISAAOrchestrator
 
   (run-silence! [_ _session _task _opts]
     (let [ch (async/chan 1)]

@@ -75,6 +75,7 @@
 
 (def ^:private canonical-handlers
   {:list           mem-kanban/handle-mem-kanban-list-slim
+   :get            mem-kanban/handle-mem-kanban-get
    :create         mem-kanban/handle-mem-kanban-create
    :update         mem-kanban/handle-mem-kanban-move
    :delete         mem-kanban/handle-mem-kanban-delete
@@ -118,10 +119,10 @@
 (def tool-def
   {:name "kanban"
    :consolidated true
-   :description "Kanban task management: list (all/filtered tasks), create (new task), update (change status/modify task), delete (hard-remove task by id; no archival, no completion — use for duplicates/cancellations), retag (scope-move via project_id + optional ±tags; preserves entry id + KG edges, no re-embed), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks, supports plan_id or plan_path), batch-update (bulk status changes; per-op :command respected — pass :command \"delete\" inside an op to mix delete in), batch-delete (sweep many task_ids; mirror of batch-update), batch-retag (sweep many scope-moves). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all. HCR: use include_descendants=true to aggregate descendant project tasks. List filters: query (substring), tags (extra required tags), tag_match (any|all), created_after / updated_after (ISO-8601), limit / offset (pagination), fields (projection)."
+   :description "Kanban task management: list (all/filtered tasks), get (single task/entry by id — unified across the kanban store AND the default memory store, since they are separate backends; surfaces full fields + KG edges; on miss returns semantic-search suggestions), create (new task), update (change status/modify task), delete (hard-remove task by id; no archival, no completion — use for duplicates/cancellations), retag (scope-move via project_id + optional ±tags; preserves entry id + KG edges, no re-embed), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks, supports plan_id or plan_path), batch-update (bulk status changes; per-op :command respected — pass :command \"delete\" inside an op to mix delete in), batch-delete (sweep many task_ids; mirror of batch-update), batch-retag (sweep many scope-moves). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all. HCR: a list shows its own scope + ANCESTORS (parent tasks, always — 'child sees parent'); include_descendants=true (default) also aggregates DESCENDANT (child) project tasks; scope=\"all\" lifts the project filter entirely for a cross-workspace whole-board view. List filters: query (substring), tags (extra required tags), tag_match (any|all), created_after / updated_after (ISO-8601), limit / offset (pagination), fields (projection)."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["list" "create" "move" "status" "update" "delete" "retag" "roadmap" "my-tasks" "sync" "plan-to-kanban" "batch-update" "batch-delete" "batch-create" "batch-retag" "help"]
+                                         :enum ["list" "get" "create" "move" "status" "update" "delete" "retag" "roadmap" "my-tasks" "sync" "plan-to-kanban" "batch-update" "batch-delete" "batch-create" "batch-retag" "help"]
                                          :description "Kanban operation to perform"}
                               "status" {:type "string"
                                         :enum ["todo" "inprogress" "inreview" "done"]
@@ -131,7 +132,9 @@
                               "description" {:type "string"
                                              :description "Task description"}
                               "task_id" {:type "string"
-                                         :description "Task ID to move/update/retag/delete"}
+                                         :description "Task ID to get/move/update/retag/delete"}
+                              "id" {:type "string"
+                                    :description "[get] Alias for task_id — entry id to fetch (kanban store or default memory store)"}
                               "new_status" {:type "string"
                                             :enum ["todo" "inprogress" "inreview" "done"]
                                             :description "Target status for move"}
@@ -162,11 +165,14 @@
                               "directory" {:type "string"
                                            :description "Working directory for project scope (auto-detected if not provided)"}
                               "include_descendants" {:type "boolean"
-                                                     :description "Include child project tasks in results (HCR Wave 4). Default true — set false to restrict to current project only."}
+                                                     :description "Include DESCENDANT (child) project tasks in results (HCR Wave 4). Default true — set false to restrict to current scope + ancestors only. Ancestor (parent) tasks are ALWAYS included regardless of this flag ('child sees parent')."}
+                              "scope" {:type "string"
+                                       :enum ["all"]
+                                       :description "[list/status] scope=\"all\" lifts the project filter entirely — returns the whole board across EVERY workspace (opt-in cross-workspace view). Omit for the default scoped view (current project + ancestors [+ descendants])."}
                               "project_id" {:type "string"
                                             :description "[list] Exact-match project filter (overrides directory-derived scope). [retag] Alias for new_project_id."}
                               "query" {:type "string"
-                                       :description "[list] Case-insensitive substring match on title + description"}
+                                       :description "[list] Case-insensitive substring match on title + description. [get] Fallback semantic-search term when the id misses in both stores (defaults to the id itself)"}
                               "tags" {:type "array" :items {:type "string"}
                                       :description "[list] Extra required tags beyond ['kanban' status]"}
                               "tag_match" {:type "string"

@@ -59,7 +59,7 @@
 
    Defense-in-depth: denies spawn when called from a child ling process
    (HIVE_MCP_ROLE=child-ling). This prevents recursive agent spawning."
-  [{:keys [type name cwd presets model provider task files parent project_id kanban_task_id spawn_mode agents max_budget_usd kg_compress sliding_window_size]}]
+  [{:keys [type name cwd presets model provider task files parent project_id kanban_task_id spawn_mode agents max_budget_usd kg_compress sliding_window_size verbose llm_retries]}]
   ;; Layer 3: Defense-in-depth spawn guard
   (if-let [_ (when (guards/child-ling?) :denied)]
     (do
@@ -108,6 +108,12 @@
                                                        normalized-agents (assoc :agents normalized-agents)
                                                        max_budget_usd    (assoc :max-budget-usd max_budget_usd)
                                                        (some? kg_compress) (assoc :kg-compress? kg_compress)
+                                                       (some? verbose)   (assoc :verbose? (if (string? verbose)
+                                                                                            (= "true" verbose)
+                                                                                            (boolean verbose)))
+                                                       llm_retries       (assoc :llm-retries (if (string? llm_retries)
+                                                                                               (parse-long llm_retries)
+                                                                                               llm_retries))
                                                        sliding_window_size (assoc :sliding-window-size sliding_window_size)))
                     slave-id (proto/spawn! ling-agent (cond-> {:task task
                                                                :parent parent

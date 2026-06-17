@@ -81,6 +81,8 @@
            :model (:model ling)}
     (:provider ling) (assoc :provider (:provider ling))
     (some? (:kg-compress? ling)) (assoc :kg-compress? (:kg-compress? ling))
+    (some? (:verbose? ling)) (assoc :verbose? (:verbose? ling))
+    (:llm-retries ling) (assoc :llm-retries (:llm-retries ling))
     (:sliding-window-size ling) (assoc :sliding-window-size (:sliding-window-size ling))
     (:agents ling) (assoc :agents (:agents ling))))
 

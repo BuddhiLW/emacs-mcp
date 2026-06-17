@@ -43,7 +43,11 @@
    :disc/git-commit   :db.type/string
    :disc/project-id   :db.type/string
    :disc/last-read-at :db.type/instant
-   :disc/read-count   :db.type/long})
+   :disc/read-count   :db.type/long
+   :disc/certainty-alpha  :db.type/double
+   :disc/certainty-beta   :db.type/double
+   :disc/volatility-class :db.type/keyword
+   :disc/last-observation :db.type/instant})
 
 (defn translate-schema
   "Translate DataScript schema to Datalevin schema."

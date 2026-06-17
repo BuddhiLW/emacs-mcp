@@ -1,0 +1,11 @@
+{:alias "hive-knowledge",
+ :blank "   ",
+ :empty "",
+ :nil nil,
+ :novel "brand-new-pid",
+ :other-pid "hive-mcp",
+ :path-global "/x/unknown/y",
+ :path-hk "hive-knowledge",
+ :path-mcp "hive-mcp",
+ :path-nil "/x/nomatch/y",
+ :plain-pid "hive-knowledge"}

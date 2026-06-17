@@ -131,7 +131,7 @@
    :description "Projectile project operations: info (project details), files (list files), search (content search), find (find by filename), recent (recently visited), list (all projects), scan (discover .hive-project.edn hierarchy), tree (query cached hierarchy), staleness (check if rescan needed). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :description "Project operation. Subdomains: 'kanban list', 'kanban retag', 'config get', 'session wrap', 'workflow forge strike', 'migrate-kanban status', 'transcript list'. Use command='help' to list all."}
+                                         :description "Project operation. Subdomains: 'kanban list', 'kanban get' (single task by id, unified across kanban + default memory stores), 'kanban retag', 'config get', 'session wrap', 'workflow forge strike', 'migrate-kanban status', 'transcript list'. Use command='help' to list all."}
                               ;; Project params
                               "pattern" {:type "string"
                                          :description "Glob pattern or search pattern"}
@@ -148,7 +148,8 @@
                               ;; Kanban params
                               "title" {:type "string" :description "[kanban create] Task title"}
                               "description" {:type "string" :description "[kanban create] Task description"}
-                              "task_id" {:type "string" :description "[kanban update|delete|retag] Task ID"}
+                              "task_id" {:type "string" :description "[kanban get|update|delete|retag] Task ID"}
+                              "id" {:type "string" :description "[kanban get] Alias for task_id — entry id to fetch from either store"}
                               "new_status" {:type "string"
                                             :enum ["todo" "inprogress" "inreview" "done"]
                                             :description "[kanban update] Target status"}
@@ -162,7 +163,10 @@
                                         :enum ["todo" "inprogress" "inreview" "done"]
                                         :description "[kanban list] Filter by status"}
                               "include_descendants" {:type "boolean"
-                                                     :description "[kanban] Include child project tasks (HCR). Default true."}
+                                                     :description "[kanban] Include DESCENDANT (child) project tasks (HCR). Default true. Ancestor (parent) tasks are ALWAYS included regardless of this flag ('child sees parent')."}
+                              "scope" {:type "string"
+                                       :enum ["all"]
+                                       :description "[kanban list/status] scope=\"all\" lifts the project filter — whole board across EVERY workspace (opt-in cross-workspace view). Omit for the default scoped view (current project + ancestors [+ descendants])."}
                               "plan_id" {:type "string" :description "[kanban plan-to-kanban] Memory plan entry ID"}
                               "plan_path" {:type "string" :description "[kanban plan-to-kanban] File path to plan"}
                               ;; Kanban list filters (token-flood reduction)

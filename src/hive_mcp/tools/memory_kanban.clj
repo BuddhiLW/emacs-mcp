@@ -24,7 +24,11 @@
             [hive-mcp.tools.kanban.transitions :as kt]
             [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.crud :as mem-crud]
+            [hive-mcp.tools.memory.format :as fmt]
             [hive-mcp.tools.memory.scope :as scope]
+            [hive-mcp.tools.memory.search :as mem-search]
+            [hive-mcp.protocols.memory :as proto]
+            [hive-mcp.knowledge-graph.edges :as kg-edges]
             [taoensso.timbre :as log]
             [hive-mcp.tools.kanban.filters :as kf]
             [hive-mcp.vectordb.kanban-facade :as kanban-facade]
@@ -120,11 +124,14 @@
 ;; Pure operations
 ;; ============================================================
 
-(defn- create* [{:keys [title description priority context directory agent_id tags]
+(defn- create* [{:keys [title priority context agent_id tags description]
                  :as params}]
   (when (or (nil? title) (and (string? title) (str/blank? title)))
     (throw (ex-info "Kanban task requires a non-empty title" {:type :validation-error})))
-  (let [eff-dir   (effective-dir directory)
+  ;; HCR: explicit :directory > :_caller_cwd (bb-mcp session pwd) >
+  ;; request-ctx > server user.dir. Keeps default scope on the caller's
+  ;; pwd project instead of the server's own (hive-mcp).
+  (let [eff-dir   (ctx/resolve-caller-directory params)
         eff-agent (or agent_id (ctx/current-agent-id) (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
         priority  (or priority "medium")
         project-id (scope/get-current-project-id eff-dir)
@@ -246,6 +253,95 @@
       (mcp-error (str "Task not found: " task-id)))))
 
 ;; ============================================================
+;; Get — unified by-id retrieval across BOTH backends
+;;
+;; Kanban entries live in the dedicated :kanban slot (qdrant) while
+;; `memory get` only reads the :default slot. That split is why agents
+;; hit dead ends: a task id is unreachable from `memory get` and the
+;; kanban tool previously had no `get` verb at all. This resolves an id
+;; from either store, surfaces the full kanban fields + a compact KG
+;; edge summary, and on a total miss falls back to a semantic memory
+;; search to suggest near-matches.
+;; ============================================================
+
+(defn- try-get
+  "Best-effort store read; nil on any failure (unregistered slot, transport
+   blip, missing entry). Keeps the cross-store probe non-throwing."
+  [thunk]
+  (try (thunk) (catch Throwable _ nil)))
+
+(defn- fetch-entry-any-store
+  "Resolve a single entry by id across the kanban store and the default
+   memory store (separate backends). Returns [entry store-label] or
+   [nil nil]. Probes, in order: kanban-facade (mode-aware), the :default
+   slot, then the :kanban slot explicitly — covering :default mode where a
+   task was written to the dedicated slot, and vice versa."
+  [id]
+  (or (when-let [e (try-get #(kanban-facade/get-entry-by-id id))]
+        [e (if (kp/kanban-entry? e) "kanban" "default")])
+      (when-let [e (try-get #(proto/get-entry (proto/get-store) id))]
+        [e "default"])
+      (when (kanban-facade/registered? :kanban)
+        (when-let [e (try-get #(proto/get-entry (proto/get-store :kanban) id))]
+          [e "kanban"]))
+      [nil nil]))
+
+(defn- kg-summary
+  "Compact KG-edge summary for an id: outgoing/incoming as
+   {:from :to :relation}. Non-fatal — returns {} on any failure."
+  [id]
+  (try
+    (let [edge->m (fn [e] {:from     (:kg-edge/from e)
+                           :to       (:kg-edge/to e)
+                           :relation (some-> (:kg-edge/relation e) name)})
+          out (kg-edges/get-edges-from id)
+          in  (kg-edges/get-edges-to id)]
+      (cond-> {}
+        (seq out) (assoc :kg_outgoing (mapv edge->m out))
+        (seq in)  (assoc :kg_incoming (mapv edge->m in))))
+    (catch Throwable _ {})))
+
+(defn- search-suggestions
+  "Run a semantic memory search to surface near-matches when a direct get
+   misses in both stores. Parses the search tool's JSON envelope back to
+   data. Non-fatal — nil on any failure or blank query."
+  [q directory]
+  (when (and (string? q) (not (str/blank? q)))
+    (try
+      (let [res (mem-search/handle-search-semantic
+                 {:query q :limit 5 :directory directory})
+            txt (:text res)]
+        (when txt (json/read-str txt :key-fn keyword)))
+      (catch Throwable _ nil))))
+
+(defn- get*
+  "Unified get-by-id across the kanban store and the default memory store.
+   Accepts :task_id (or :id). Returns the full entry envelope with kanban
+   fields (title/description/status/priority) surfaced, a `:store` marker
+   (\"kanban\"|\"default\"), `:is_kanban`, and a compact KG-edge summary.
+
+   On a miss in both backends, falls back to a semantic memory search over
+   :query (or the id) and returns the candidates under :suggestions — so a
+   stale or mistyped id still points the caller somewhere useful."
+  [{:keys [task_id id query] :as params}]
+  (let [target  (or task_id id)
+        eff-dir (ctx/resolve-caller-directory params)]
+    (if (or (nil? target) (and (string? target) (str/blank? target)))
+      (mcp-error "kanban get requires :task_id (or :id)")
+      (let [[entry store-label] (fetch-entry-any-store target)]
+        (if entry
+          (mcp-json (-> (fmt/entry->json-alist entry)
+                        (assoc :store store-label
+                               :is_kanban (kp/kanban-entry? entry))
+                        (merge (kg-summary target))))
+          (let [suggestions (search-suggestions (or query target) eff-dir)]
+            (mcp-json (cond-> {:error          "Entry not found by id"
+                               :id             target
+                               :searched_stores ["kanban" "default"]
+                               :hint           "id missed in both the kanban store and the default memory store (separate backends); semantic-search candidates below"}
+                        (seq suggestions) (assoc :suggestions suggestions)))))))))
+
+;; ============================================================
 ;; Public Handlers
 ;; ============================================================
 
@@ -279,6 +375,13 @@
 (defn handle-mem-kanban-stats [params]
   (safe-call :kanban/stats-failed #(with-store (stats* params))))
 
+(defn handle-mem-kanban-get
+  "Get a single task/entry by id, unified across the kanban store and the
+   default memory store (separate backends). Surfaces full kanban fields +
+   KG-edge summary; on miss, returns semantic-search suggestions."
+  [params]
+  (safe-call :kanban/get-failed #(with-store (get* params))))
+
 (defn handle-mem-kanban-quick
   [{:keys [title directory agent_id]}]
   (handle-mem-kanban-create {:title title :directory directory :agent_id agent_id}))
@@ -290,6 +393,8 @@
 (def ^:private query-kanban-entries hive-mcp.tools.memory-kanban.query/query-kanban-entries)
 
 (def ^:private resolve-project-ids-with-descendants hive-mcp.tools.memory-kanban.query/resolve-project-ids-with-descendants)
+
+(def ^:private resolve-visible-project-ids hive-mcp.tools.memory-kanban.query/resolve-visible-project-ids)
 
 (def ^:private effective-dir hive-mcp.tools.memory-kanban.query/effective-dir)
 

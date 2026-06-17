@@ -1,0 +1,7 @@
+{:custom-w 1.0,
+ :empty 0.0,
+ :full 1.0,
+ :mid 0.5,
+ :only-conf 0.3,
+ :only-grd 0.2,
+ :partial 0.5}

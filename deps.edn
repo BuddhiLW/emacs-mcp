@@ -185,6 +185,22 @@
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
               "-Dio.netty.tryReflectionSetAccessible=true"]}
 
+  ;; One-off KG datahike rebuild (drop legacy carto structural edges).
+  ;; Run STANDALONE with hive-mcp STOPPED:
+  ;;   clj -Sdeps "$(cat local.deps.edn)" -X:kg-rebuild              ; export-only
+  ;;   clj -Sdeps "$(cat local.deps.edn)" -X:kg-rebuild :confirm? true
+  :kg-rebuild
+  {:exec-fn hive-mcp.scripts.kg-datahike-rebuild/rebuild!
+   :exec-args {}
+   :jvm-opts ["-Xmx32g"
+              "-Xms8g"
+              "-XX:+UseG1GC"
+              "-XX:MaxGCPauseMillis=500"
+              "-XX:+HeapDumpOnOutOfMemoryError"
+              "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
+              "--add-opens=java.base/java.nio=ALL-UNNAMED"
+              "--add-modules=jdk.incubator.vector"]}
+
   :dev
   {:extra-paths ["dev" "test"]
    :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}

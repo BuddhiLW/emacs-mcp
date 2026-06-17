@@ -170,9 +170,7 @@
                                                  {:has-elisp-data (some? elisp-result)})})))))
 
 (defn- crystallize*
-  "Crystallize session data into long-term memory. Returns Result.
-   Resets per-agent session-start timestamp after successful crystallization
-   so subsequent sessions measure duration correctly."
+  "Crystallize session data into long-term memory. Returns Result."
   [{:keys [directory] :as params}]
   (let [effective-dir (or directory (ctx/current-directory))
         effective-agent (resolve-agent params)
@@ -181,29 +179,35 @@
     (log/info "wrap-crystallize" (str "agent-id:" effective-agent " directory:" effective-dir))
     (result/let-ok [harvested (harvest effective-dir effective-agent)
                     _t1 (do (log/info "wrap-crystallize: harvest" (- (System/currentTimeMillis) t-start) "ms")
-                            (result/ok nil))
-                    cr-result (crystallize-session-result harvested project-id)
-                    _t2 (do (log/info "wrap-crystallize: crystallize" (- (System/currentTimeMillis) t-start) "ms")
                             (result/ok nil))]
-                   (let [safe-stats (or (when (map? (:stats cr-result)) (:stats cr-result)) {})
-                         summary-id (:summary-id cr-result)]
-                     ;; Auto-KG edges — fire-and-forget (takes ~5s for 50 edges).
-                     ;; Previously deref-blocked with 15s timeout. KG edge results
-                     ;; are not needed for the wrap response.
-                     (when summary-id
-                       (future
-                         (try
-                           (let [kg-result (ck-a summary-id harvested project-id effective-agent)]
-                             (log/info "wrap-crystallize: KG edges completed"
-                                       "edges:" (:total-edges kg-result)
-                                       "capped?" (:capped? kg-result)))
-                           (catch Throwable t
-                             (log/warn "wrap-crystallize: KG edges failed" (ex-message t))))))
-                     (emit-wrap-notify! effective-agent cr-result project-id safe-stats)
-                     ;; Reset session-start for this agent so next session measures fresh
-                     (crystal/reset-session-start! effective-agent)
-                     (log/info "wrap-crystallize: total" (- (System/currentTimeMillis) t-start) "ms")
-                     (result/ok (assoc cr-result :project-id project-id))))))
+      (if-not (crystal/meaningful-harvest? harvested)
+        (do
+          (log/info "wrap-crystallize: skipped no-activity"
+                    "agent:" effective-agent "project:" project-id)
+          (crystal/reset-session-start! effective-agent)
+          (result/ok {:skipped true
+                      :reason "no-activity"
+                      :session (:session harvested)
+                      :project-id project-id
+                      :stats (:summary harvested)}))
+        (result/let-ok [cr-result (crystallize-session-result harvested project-id)
+                        _t2 (do (log/info "wrap-crystallize: crystallize" (- (System/currentTimeMillis) t-start) "ms")
+                                (result/ok nil))]
+          (let [safe-stats (or (when (map? (:stats cr-result)) (:stats cr-result)) {})
+                summary-id (:summary-id cr-result)]
+            (when summary-id
+              (future
+                (try
+                  (let [kg-result (ck-a summary-id harvested project-id effective-agent)]
+                    (log/info "wrap-crystallize: KG edges completed"
+                              "edges:" (:total-edges kg-result)
+                              "capped?" (:capped? kg-result)))
+                  (catch Throwable t
+                    (log/warn "wrap-crystallize: KG edges failed" (ex-message t))))))
+            (emit-wrap-notify! effective-agent cr-result project-id safe-stats)
+            (crystal/reset-session-start! effective-agent)
+            (log/info "wrap-crystallize: total" (- (System/currentTimeMillis) t-start) "ms")
+            (result/ok (assoc cr-result :project-id project-id))))))))
 
 (defn- permeate*
   "Process wrap queue entries. Returns Result."

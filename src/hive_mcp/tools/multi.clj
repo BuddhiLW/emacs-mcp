@@ -23,7 +23,8 @@
             [hive-mcp.tools.core :refer [mcp-error]]
             [hive-mcp.dsl.response :as compress]
             [taoensso.timbre :as log]
-            [clojure.data.json :as json]))
+            [clojure.data.json :as json]
+            [hive-mcp.agent.context :as ctx]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -258,6 +259,23 @@
     :else
     (result/ok operations)))
 
+(defn- thread-caller-cwd
+  "Default each op's scope directory to the request's caller cwd (HCR:
+   explicit :directory > :_caller_cwd > request-ctx > server user.dir).
+   Without this, ops executed by the shared-JVM server resolve project
+   scope from the server's own cwd (hive-mcp) instead of the caller's
+   pwd. Ops carrying their own :directory or :_caller_cwd keep theirs.
+   Ops may still have string keys here (normalize-op runs later)."
+  [ops params]
+  (if-let [cwd (ctx/resolve-caller-directory params)]
+    (mapv (fn [op]
+            (if (or (get op :directory) (get op "directory")
+                    (get op :_caller_cwd) (get op "_caller_cwd"))
+              op
+              (assoc op :_caller_cwd cwd)))
+          ops)
+    ops))
+
 (defn handle-batch
   "Handle a batch of cross-tool operations from the MCP multi tool."
   [params]
@@ -265,6 +283,6 @@
         compact (compress/resolve-compress-mode params)]
     (if (result/err? input)
       (mcp-error (:message input))
-      (format-results (run-multi (:ok input)
+      (format-results (run-multi (thread-caller-cwd (:ok input) params)
                                  :dry-run (boolean (:dry_run params)))
                       :compact compact))))

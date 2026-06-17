@@ -20,7 +20,9 @@
    in use. Property test `batchable_lsp_test/lsp-substitutability` enforces.
 
    Decision: 20260429230453-7e7627cc"
-  (:require [hive-mcp.batch.protocol :as bproto]
+  (:require [hive-mcp.batch.cli-adapter :as bca]
+            [hive-mcp.batch.protocol :as bproto]
+            [hive-mcp.tools.kg.batch :as kg-batch]
             [hive-dsl.result :as r :refer [rescue]]
             [clojure.data.json :as json]))
 
@@ -185,11 +187,15 @@
 ;; KgBatchable
 ;; =============================================================================
 
+(def ^:private kg-edge-handler
+  (delay (bca/cli-batch-handler {:run-fn kg-batch/run-batch :cmd-kw :edge})))
+
+(def ^:private kg-traverse-handler
+  (delay (bca/cli-batch-handler {:run-fn kg-batch/run-batch :cmd-kw :traverse})))
+
 (defn- kg-handlers []
-  {:edge     (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.consolidated.kg/handle-batch-edge)
-                                 deref))
-   :traverse (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.consolidated.kg/handle-batch-traverse)
-                                 deref))})
+  {:edge     @kg-edge-handler
+   :traverse @kg-traverse-handler})
 
 (defrecord KgBatchable []
   bproto/Batchable

@@ -42,7 +42,7 @@
 (def tool-def
   {:name "cider"
    :consolidated true
-   :description "CIDER REPL operations: eval (silent|explicit, optional session routing), doc (docstring), info (full metadata), complete (completions), apropos (search symbols), status (connection), spawn/connect/sessions/kill-session/kill-all (multi-REPL). connect joins an existing nREPL (e.g. shadow-cljs, lein). Use command='help' to list all."
+   :description "CIDER REPL operations: eval (silent|explicit; targets the caller's project nREPL by default, override with project_dir or session_name), doc (docstring), info (full metadata), complete (completions), apropos (search symbols), status (connection), spawn/connect/sessions/kill-session/kill-all (multi-REPL). connect joins an existing nREPL (e.g. shadow-cljs, lein). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :enum ["eval" "eval-explicit" "doc" "info" "complete" "apropos" "status" "spawn" "connect" "sessions" "eval-session" "kill-session" "kill-all" "help"]
@@ -69,7 +69,7 @@
                               "session_name" {:type "string"
                                               :description "Session name for eval-session/kill-session. When provided with eval command, routes to session eval."}
                               "project_dir" {:type "string"
-                                             :description "Project directory for spawn"}
+                                             :description "Project directory. For spawn: nREPL root. For eval: routes the call to that project's nREPL session (spawning auto-<hash> if none). Defaults to the caller's cwd."}
                               "agent_id" {:type "string"
                                           :description "Agent ID to link session"}
                               "repl_type" {:type "string"

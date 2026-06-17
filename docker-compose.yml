@@ -46,9 +46,23 @@ services:
     volumes:
       - ${HOME}/.cache/hive-lsp:/cache
       - ${HIVE_LSP_WORKSPACE_ROOT:-${HOME}/PP}:/workspace:rw
+      # SSH auth for private :git/url deps in deps.edn (e.g. baston/domain-spec).
+      # SSH_AUTH_SOCK forwards the host ssh-agent — preferred (key never enters the container).
+      # Read-only ~/.ssh mount is the fallback for `known_hosts` + ed25519 keys when the agent
+      # isn't running. .gitconfig forwards user config (insteadOf rewrites, signing prefs).
+      - ${SSH_AUTH_SOCK:-/dev/null}:/ssh-agent
+      - ${HOME}/.ssh:/root/.ssh:ro
+      - ${HOME}/.gitconfig:/root/.gitconfig:ro
+      # Share host's git/maven caches so the sidecar reuses already-fetched
+      # :git/url deps (gitlibs) and Maven artifacts. Without these, every scan
+      # of a project with many transitive deps re-clones from scratch and
+      # trips the sidecar timeout (hit 2026-05-13 on PP/general/examples).
+      - ${HOME}/.gitlibs:/root/.gitlibs:rw
+      - ${HOME}/.m2:/root/.m2:rw
     environment:
       - ANALYSIS_INTERVAL_SECONDS=300
       - JAVA_OPTS=-Xmx1g -Xms256m
+      - SSH_AUTH_SOCK=/ssh-agent
       # LSP_PROJECTS unset → auto-discovers deps.edn via find (maxdepth 3,
       # so /workspace/<group>/<project>/deps.edn is found).
       # Set to comma-separated RELATIVE paths for explicit projects

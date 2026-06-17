@@ -11,32 +11,33 @@
 ;; =============================================================================
 
 (deftest memory-type-test
-  (testing "valid L2 semantic types"
+  (testing "well-known types validate (advisory registry set)"
     (is (m/validate mem/MemoryType "snippet"))
     (is (m/validate mem/MemoryType "note"))
-    (is (m/validate mem/MemoryType "doc"))
-    (is (m/validate mem/MemoryType "todo"))
-    (is (m/validate mem/MemoryType "question"))
-    (is (m/validate mem/MemoryType "answer"))
-    (is (m/validate mem/MemoryType "warning"))
-    (is (m/validate mem/MemoryType "error")))
-
-  (testing "valid L3 pattern types"
     (is (m/validate mem/MemoryType "convention"))
     (is (m/validate mem/MemoryType "pattern"))
-    (is (m/validate mem/MemoryType "lesson"))
-    (is (m/validate mem/MemoryType "rule"))
-    (is (m/validate mem/MemoryType "guideline"))
-    (is (m/validate mem/MemoryType "workflow"))
-    (is (m/validate mem/MemoryType "recipe")))
-
-  (testing "valid L4 intent types"
     (is (m/validate mem/MemoryType "decision"))
     (is (m/validate mem/MemoryType "axiom"))
-    (is (m/validate mem/MemoryType "principle")))
+    (is (m/validate mem/MemoryType "principle"))
+    (is (m/validate mem/MemoryType "knowledge"))
+    (is (m/validate mem/MemoryType "ingestion")))
 
-  (testing "invalid types rejected"
-    (is (not (m/validate mem/MemoryType "invalid")))
+  (testing "open registry — any safe custom token validates"
+    ;; This is the behavioural change: the type field is OPEN, not a closed
+    ;; enum. Unknown-but-safe tokens (e.g. 'insight') are valid and get
+    ;; auto-registered with sane defaults at the handler boundary.
+    (is (m/validate mem/MemoryType "insight"))
+    (is (m/validate mem/MemoryType "my-custom-type"))
+    (is (m/validate mem/MemoryType "adr_v2"))
+    (is (m/validate mem/MemoryType "x")))
+
+  (testing "unsafe / malformed types rejected (security gate)"
+    (is (not (m/validate mem/MemoryType "bad type")))   ; whitespace
+    (is (not (m/validate mem/MemoryType "type!")))      ; punctuation
+    (is (not (m/validate mem/MemoryType "9lives")))     ; leading digit
+    (is (not (m/validate mem/MemoryType "-foo")))       ; leading dash
+    (is (not (m/validate mem/MemoryType "a;drop")))     ; injection char
+    (is (not (m/validate mem/MemoryType (apply str (repeat 65 "a"))))) ; oversize
     (is (not (m/validate mem/MemoryType "")))
     (is (not (m/validate mem/MemoryType nil)))
     (is (not (m/validate mem/MemoryType 123)))))
@@ -47,7 +48,7 @@
 
 (deftest memory-duration-test
   (testing "valid durations"
-    (is (m/validate mem/MemoryDuration "session"))
+    (is (m/validate mem/MemoryDuration "ephemeral"))
     (is (m/validate mem/MemoryDuration "short"))
     (is (m/validate mem/MemoryDuration "medium"))
     (is (m/validate mem/MemoryDuration "long"))
@@ -111,10 +112,16 @@
                          {:id "20260131"
                           :type "decision"}))))  ; missing content
 
-  (testing "invalid type rejected"
+  (testing "unsafe type rejected (open registry, safe-token gate)"
+    ;; 'invalid' is now a *valid* safe token (open registry); only unsafe
+    ;; tokens are rejected.
+    (is (m/validate mem/MemoryEntry
+                    {:id "20260131"
+                     :type "invalid"
+                     :content "Test"}))
     (is (not (m/validate mem/MemoryEntry
                          {:id "20260131"
-                          :type "invalid"
+                          :type "bad type!"
                           :content "Test"})))))
 
 ;; =============================================================================
@@ -154,9 +161,11 @@
 ;; =============================================================================
 
 (deftest validator-functions-test
-  (testing "valid-type?"
+  (testing "valid-type? (permissive: safe tokens valid, unsafe rejected)"
     (is (mem/valid-type? "decision"))
-    (is (not (mem/valid-type? "invalid"))))
+    (is (mem/valid-type? "insight"))           ; safe custom token -> valid
+    (is (not (mem/valid-type? "bad type!")))   ; unsafe -> rejected
+    (is (not (mem/valid-type? nil))))
 
   (testing "valid-duration?"
     (is (mem/valid-duration? "long"))

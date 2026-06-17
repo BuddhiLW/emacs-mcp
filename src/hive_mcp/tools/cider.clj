@@ -15,6 +15,7 @@
             [hive-mcp.emacs-ext.elisp :as el]
             [hive-mcp.telemetry.core :as telemetry]
             [hive-mcp.dns.validation :as v]
+            [hive-mcp.agent.context :as ctx]
             [hive-mcp.schema.cider :as cider-schema]
             [clojure.data.json :as json]
             [clojure.string :as str]
@@ -197,13 +198,18 @@
    elisp-fn: (fn [code] elisp-expression-string)
    timeout-ms: optional emacsclient timeout override (default 5000)
 
-   When :directory is in params, eval is routed through the project-scoped
-   session (via eval-in-session) so the call lands on the right nREPL —
-   not whatever happens to be CIDER's default connection in the daemon."
+   Target directory precedence: explicit :directory, then :project_dir,
+   then the request-context caller cwd (bound by wrap-handler-context).
+   When resolved, eval routes through the project-scoped session (via
+   eval-in-session) so the call lands on the right nREPL. nil (no request
+   context — tests / non-MCP callers) keeps the legacy default-connection path."
   [params telemetry-key elisp-fn]
   (try
     (v/validate-cider-eval-request params)
-    (let [{:keys [code timeout directory]} params
+    (let [{:keys [code timeout]} params
+          directory (or (:directory params)
+                        (:project_dir params)
+                        (ctx/current-directory))
           ;; Convert CIDER timeout (seconds) to emacsclient timeout (ms).
           ;; Add 2s buffer so emacsclient doesn't race the nREPL timeout.
           ;; Default: 62s (CIDER default nREPL timeout is 60s).

@@ -9,11 +9,18 @@
    - handle-cider-status
    - handle-cider-eval-silent
    - handle-cider-list-sessions"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.string :as str]
             [clojure.data.json :as json]
             [hive-mcp.tools.cider :as tools]
-            [hive-mcp.emacs.client :as ec]))
+            [hive-mcp.emacs-ext.client :as ec]))
+
+;; eval-path tests call eval-elisp-with-timeout; route it through the
+;; per-test eval-elisp mock (var resolved at call time).
+(use-fixtures :each
+  (fn [t]
+    (with-redefs [ec/eval-elisp-with-timeout (fn [elisp & _] (ec/eval-elisp elisp))]
+      (t))))
 
 ;; =============================================================================
 ;; Test Helpers

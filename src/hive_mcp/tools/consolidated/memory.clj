@@ -112,8 +112,8 @@
                  :properties {"command" {:type "string"
                                          :description "Command to execute. Memory commands are flat (add, query, etc.). Subdomains: 'kg edge', 'kg traverse', 'migration backup', 'ingest file', 'enrich enrich'. Use command='help' to list all."}
                               "type" {:type "string"
-                                      :enum (type-registry/mcp-enum)
-                                      :description "[add/query] Type of memory entry"}
+                                      :description (str "[add/query] Type of memory entry. "
+                                                        (type-registry/mcp-type-hint))}
                               "content" {:type "string"
                                          :description "[add] Content of the memory entry"}
                               "tags" {:type "array"

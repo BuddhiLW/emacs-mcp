@@ -13,10 +13,15 @@
 ;; =============================================================================
 
 (def MemoryType
-  "Valid memory entry types. Derived from type-registry (SST).
-   Note: captures core types at load time. Extension types are validated
-   dynamically via type-registry/valid-type? at runtime."
-  (into [:enum] (type-registry/all-type-strings)))
+  "Memory entry type — an OPEN, safe token (the registry is advisory).
+
+   Permissive by design: any sanitized, safe type string validates (see
+   hive-mcp.memory.type-registry/safe-type?), not just pre-registered types.
+   Extended / user-defined types are accepted with sane defaults. Safety
+   (charset + bounded length) is enforced here so an unsafe token never
+   reaches storage, vector-DB filter expressions, or keyword interning."
+  [:fn {:error/message "must be a safe type token: starts with a letter, then [a-z0-9_-], max 64 chars"}
+   type-registry/safe-type?])
 
 (def MemoryDuration
   "Valid duration values for memory entries.

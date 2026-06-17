@@ -113,6 +113,10 @@
                                              :description "[spawn] Enable KG-compression between turns (default: true). Rewrites message history into compressed KG-derived context to keep context constant-size for long-running lings. SET TO FALSE for weaker models (qwen/qwen3.6-plus, z-ai/glm-5.1) that plan-paralyze on compressed context — they loop on identical tool calls because they can't infer 'already did X' from KG summaries. Strong models (claude, deepseek, kimi, gpt-5) handle kg_compress=true fine."}
                               "sliding_window_size" {:type "integer"
                                                      :description "[spawn] Number of recent raw conversation turns to keep in context alongside KG-compressed summaries. Default 5. Only effective when kg_compress=true. Larger = more coherent short-term recall, lower compression ratio. Planned: not yet implemented — reconstructor extension pending (kanban 20260415160150-4fd21a2a)."}
+                              "verbose" {:type "boolean"
+                                         :description "[spawn] When true, bb-ling lings shout the full per-turn LLM exchange (last request message + response, truncated) to hivemind piggyback. Default false — exchange is always persisted to the agent's transcript store (Datalevin) and queryable post-hoc via the `transcript` MCP tool (list/search)."}
+                              "llm_retries" {:type "integer"
+                                             :description "[spawn] Max bb-ling loop-level retries on transient LLM failures (rate-limit/overload/timeout). Default 3, exponential backoff."}
                               ;; common params
                               "agent_id" {:type "string"
                                           :description "Agent ID for status/kill/dispatch/claims"}

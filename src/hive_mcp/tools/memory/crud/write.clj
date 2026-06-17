@@ -20,6 +20,7 @@
             [clojure.string :as str]
             [taoensso.timbre :as log]
             [hive-mcp.vectordb.resilience :refer [with-resilience]]
+            [hive-mcp.memory.type-registry :as type-registry]
             [hive-weave.core :as weave]))
 
 (def ^:const ^:private memory-write-timeout-ms
@@ -344,11 +345,23 @@
   "Add an entry to project memory with optional KG edge creation.
    Runs the IO-heavy core on the dedicated memory-pool so slow Chroma
    or KG calls cannot saturate the shared io-pool."
-  [{:keys [abstraction_level] :as args}]
+  [{:keys [type abstraction_level] :as args}]
   (try
-    (if (and abstraction_level (not (kg-schema/valid-abstraction-level? abstraction_level)))
+    (cond
+      (not (type-registry/valid-type? type))
+      (mcp-error (str "Invalid memory type: " (pr-str type)
+                      ". Type must be a safe token — letters, digits, '_' or '-', "
+                      "starting with a letter, max " type-registry/max-type-length
+                      " chars (e.g. axiom, decision, pattern, my-custom-type)."))
+
+      (and abstraction_level (not (kg-schema/valid-abstraction-level? abstraction_level)))
       (mcp-error (str "Invalid abstraction_level: " abstraction_level))
-      (let [timeout-sentinel ::timeout
+
+      :else
+      (let [;; Canonicalize + auto-register the (possibly novel) type with sane
+            ;; defaults, so unknown-but-safe types persist and stay consistent.
+            args (assoc args :type (type-registry/ensure-type! type))
+            timeout-sentinel ::timeout
             result (wpool/await!
                     (pool/memory-pool)
                     #(try (do-add! args)

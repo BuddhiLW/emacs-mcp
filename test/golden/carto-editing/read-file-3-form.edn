@@ -1,0 +1,60 @@
+{:command "read-file",
+ :ns "demo.core",
+ :form-count 3,
+ :forms
+ [{:callers
+   [{:id "c1", :qn "external.caller/foo", :rel-scope :external}],
+   :caller-count 1,
+   :callees [{:id "f2", :qn "demo.core/beta", :rel-scope :in-file}],
+   :staleness 0.5,
+   :line 10,
+   :implements [],
+   :form-type "defn",
+   :docstring "Alpha docs.",
+   :visibility "public",
+   :qn "demo.core/alpha",
+   :callee-count 1}
+  {:callers [{:id "f1", :qn "demo.core/alpha", :rel-scope :in-file}],
+   :caller-count 1,
+   :callees [{:id "e1", :qn "demo.util/ext", :rel-scope :in-project}],
+   :staleness 0.5,
+   :line 20,
+   :implements [],
+   :form-type "defn-",
+   :docstring nil,
+   :visibility "private",
+   :qn "demo.core/beta",
+   :callee-count 1}
+  {:callers [],
+   :caller-count 0,
+   :callees [],
+   :staleness 0.5,
+   :line 30,
+   :implements
+   [{:id "p1", :qn "demo.proto/IProto", :rel-scope :in-project}],
+   :form-type "defn",
+   :docstring "Gamma docs.",
+   :visibility "public",
+   :qn "demo.core/gamma",
+   :callee-count 0}],
+ :relations
+ {:inbound-callers
+  [{:ns "external.caller", :count 1, :qns ["external.caller/foo"]}],
+  :outbound-callees
+  [{:ns "demo.util", :count 1, :qns ["demo.util/ext"]}],
+  :implements ["demo.proto/IProto"],
+  :fan-in 1,
+  :fan-out 1,
+  :impacted-callers ["external.caller/foo"],
+  :impact-radius 1},
+ :synthesis
+ {:summary
+  "demo.core: 3 form(s) (2 public, 1 private). Depended on by 1 external form(s) across 1 namespace(s); depends on 1 external form(s) across 1 namespace(s). Balanced fan-in/out — a mid-pipeline module. Hub form(s): demo.core/alpha, demo.core/beta.",
+  :coupling :balanced,
+  :type-histogram {"defn" 2, "defn-" 1},
+  :public 2,
+  :private 1,
+  :hub-forms
+  [{:qn "demo.core/alpha", :caller-count 1}
+   {:qn "demo.core/beta", :caller-count 1}],
+  :stale? false}}

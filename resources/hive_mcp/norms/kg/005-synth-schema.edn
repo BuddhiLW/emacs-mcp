@@ -1,0 +1,62 @@
+{:tx-data
+ [{:db/ident       :synth/node-id
+   :db/valueType   :db.type/string
+   :db/cardinality :db.cardinality/one
+   :db/unique      :db.unique/identity
+   :db/doc         "Identity anchor for synth-derived attrs. Value = KG node id (same string as :kg-edge/from / :kg-edge/to). Upserts by identity make synth writers idempotent."}
+
+  {:db/ident       :synth/community-id
+   :db/valueType   :db.type/string
+   :db/cardinality :db.cardinality/one
+   :db/index       true
+   :db/doc         "Community label assigned by latest ICommunities run. Louvain labels are representative node-id strings; non-string labels (e.g. Leiden outer|inner) must be stringified at the writer boundary."}
+
+  {:db/ident       :synth/betweenness
+   :db/valueType   :db.type/double
+   :db/cardinality :db.cardinality/one
+   :db/doc         "Brandes betweenness centrality score (double)"}
+
+  {:db/ident       :synth/k-core
+   :db/valueType   :db.type/long
+   :db/cardinality :db.cardinality/one
+   :db/doc         "k-core decomposition coreness (long)"}
+
+  {:db/ident       :synth/hits-hub
+   :db/valueType   :db.type/double
+   :db/cardinality :db.cardinality/one
+   :db/doc         "HITS hub score (double)"}
+
+  {:db/ident       :synth/hits-auth
+   :db/valueType   :db.type/double
+   :db/cardinality :db.cardinality/one
+   :db/doc         "HITS authority score (double)"}
+
+  {:db/ident       :synth/conductance
+   :db/valueType   :db.type/double
+   :db/cardinality :db.cardinality/one
+   :db/doc         "Per-cluster conductance edges-out/(in+out) (double)"}
+
+  {:db/ident       :synth/modularity-q
+   :db/valueType   :db.type/double
+   :db/cardinality :db.cardinality/one
+   :db/doc         "Per-community modularity Q contribution (double)"}
+
+  {:db/ident       :synth/katz
+   :db/valueType   :db.type/double
+   :db/cardinality :db.cardinality/one
+   :db/doc         "Katz centrality (double)"}
+
+  {:db/ident       :synth/eigenvector
+   :db/valueType   :db.type/double
+   :db/cardinality :db.cardinality/one
+   :db/doc         "Eigenvector centrality (double)"}
+
+  {:db/ident       :synth/triangle-count
+   :db/valueType   :db.type/long
+   :db/cardinality :db.cardinality/one
+   :db/doc         "Triangles incident at node (long)"}
+
+  {:db/ident       :synth/clustering-coef
+   :db/valueType   :db.type/double
+   :db/cardinality :db.cardinality/one
+   :db/doc         "Local clustering coefficient (double)"}]}

@@ -54,7 +54,11 @@
    content, KG edges. Returns nil for missing/non-kanban entries.
 
    Effect map invariants:
-     * `:kanban/facade-update` carries ONLY {:tags new-tags} — no content edit
+     * `:kanban/facade-update` carries {:tags new-tags :project-id new-pid}
+       — no content edit. The :project-id field MUST move with the scope
+       tag: stores (qdrant/milvus) filter project queries on the payload
+       field, not on tags, so a tags-only retag leaves the entry invisible
+       on its new board (lived 2026-06-10, funeraria-db EPIC).
      * `:kanban/temporal-record` op = `:kanban-retag` for audit
      * `:kanban/track-movement` records old→new scope as a movement
      * No completion hooks, no delete effect"
@@ -76,7 +80,8 @@
                                              :new-tags       new-tags}
                                 :project-id new-project-id}
        :kanban/facade-update   {:task-id task-id
-                                :payload {:tags new-tags}}})))
+                                :payload {:tags       new-tags
+                                          :project-id new-project-id}}})))
 
 (defn- result-from-fx
   "Lift a possibly-nil effect map into a Result."

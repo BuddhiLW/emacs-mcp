@@ -20,16 +20,25 @@
      (->memory-type :axiom)     => {:adt/type :MemoryType :adt/variant :axiom}
      (variant->string mt)       => \"axiom\"
      (variant->keyword mt)      => :axiom"
-  (:require [hive-dsl.adt :refer [defadt]]))
+  (:require [hive-dsl.adt :refer [defadt]]
+            [hive-mcp.memory.type-registry :as type-registry]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defadt MemoryType
-  "Memory entry type — closed sum type for classification.
-   Core types (7): visible in MCP tool enums.
-   Extended types (12): Malli-valid, stored in Chroma, not first-class in MCP."
+  "Memory entry type — the ADVISORY set of well-known classifications.
+
+   No longer a *closed* validation authority: unknown-but-safe type tokens are
+   accepted at the boundary (see hive-mcp.memory.type-registry/valid-type? +
+   ensure-type!) and auto-registered with sane defaults. This variant set
+   documents the curated/known types and powers typed dispatch + the subset
+   sets below; it does NOT gate which types may be stored.
+
+   Core types: visible in MCP tool enums. Extended/ingestion types: stored,
+   not first-class in MCP. Synced with the type-registry SST."
   :axiom :principle :decision :convention :snippet :note :plan
+  :knowledge :ingestion
   :doc :todo :question :answer :warning :error
   :pattern :lesson :rule :guideline :workflow :recipe)
 
@@ -44,13 +53,12 @@
     (->memory-type (keyword s))))
 
 (defn valid?
-  "Check if a keyword or string represents a valid MemoryType."
+  "Permissive: true when `x` is a SAFE memory type token (any sanitized token
+   matching the safe charset/length), delegating to the registry SST gate. The
+   defadt variant set below is advisory documentation, not the validation
+   authority — unknown-but-safe types are valid and auto-registered on use."
   [x]
-  (boolean
-   (cond
-     (keyword? x) (->memory-type x)
-     (string? x)  (from-string x)
-     :else        nil)))
+  (type-registry/valid-type? x))
 
 (defn variant->keyword
   "Extract the variant keyword from a MemoryType ADT value."

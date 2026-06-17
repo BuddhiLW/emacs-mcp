@@ -25,17 +25,23 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defn- normalize-type
-  "Coerce a type parameter (keyword or string) into the canonical string form."
+  "Canonicalize a type parameter into its safe token form, auto-registering
+   unknown-but-safe types with sane defaults (symmetric with the add path).
+   Nil (no type change) passes through as nil."
   [t]
-  (when t (if (keyword? t) (name t) t)))
+  (when t (type-registry/ensure-type! t)))
 
 (defn- validate-type!
-  "Throw ex-info with :invalid-type marker when the incoming type is not in
-   the registry. Nil is allowed (means 'no type change')."
+  "Throw ex-info with :invalid-type marker when the incoming type is unsafe
+   (bad charset / oversized — see type-registry/safe-type?). Unknown-but-safe
+   types are accepted (and auto-registered by normalize-type). Nil is allowed
+   (means 'no type change')."
   [t]
   (when (and t (not (type-registry/valid-type? t)))
     (throw (ex-info (str "Invalid memory type: " (pr-str t)
-                         ". Valid: " (vec (sort (type-registry/all-type-strings))))
+                         ". Type must be a safe token — letters, digits, '_' or '-', "
+                         "starting with a letter, max " type-registry/max-type-length
+                         " chars.")
                     {:type :invalid-type :value t}))))
 
 (defn- build-updates

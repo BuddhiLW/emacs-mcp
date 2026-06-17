@@ -9,10 +9,17 @@
    4. Retry the eval
 
    This prevents agents from getting stuck on 'not connected' errors."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.string :as str]
             [hive-mcp.tools.cider :as cider]
-            [hive-mcp.emacs.client :as ec]))
+            [hive-mcp.emacs-ext.client :as ec]))
+
+;; The eval path calls eval-elisp-with-timeout; route it through whatever
+;; eval-elisp each test mocks (var resolved at call time).
+(use-fixtures :each
+  (fn [t]
+    (with-redefs [ec/eval-elisp-with-timeout (fn [elisp & _] (ec/eval-elisp elisp))]
+      (t))))
 
 ;; =============================================================================
 ;; Test Helpers

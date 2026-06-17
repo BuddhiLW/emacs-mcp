@@ -1,0 +1,36 @@
+{:depth-0
+ {:status :ok,
+  :reached [],
+  :reached-count 0,
+  :depth 0,
+  :truncated? false},
+ :depth-1
+ {:status :ok,
+  :reached ["a"],
+  :reached-count 1,
+  :depth 1,
+  :truncated? false},
+ :depth-2
+ {:status :ok,
+  :reached ["a" "b"],
+  :reached-count 2,
+  :depth 2,
+  :truncated? false},
+ :depth-3
+ {:status :ok,
+  :reached ["a" "b" "c"],
+  :reached-count 3,
+  :depth 3,
+  :truncated? false},
+ :exhausted
+ {:status :ok,
+  :reached ["a" "b" "c"],
+  :reached-count 3,
+  :depth 4,
+  :truncated? false},
+ :fanout
+ {:status :ok,
+  :reached :clipped-nondeterministic,
+  :reached-count 256,
+  :depth 1,
+  :truncated? true}}
