@@ -78,6 +78,11 @@
                          :model "nomic-embed-text"}
                 :openrouter {:model "qwen/qwen3-embedding-8b"}}
    :embedder {:default :ollama-nomic
+              ;; Memory types that are structurally addressed (fetched by
+              ;; tag/id/project-id, never semantic search) — the write path
+              ;; skips embedding them. hive-di-configurable per profile; addons
+              ;; may also self-register via embeddings.service/register-no-embed-type!
+              :no-embed-types #{}
               ;; Defaults route the heavy 4096-dim types to OpenRouter (the
               ;; "always available" 4096-d provider). `service/configure-defaults!`
               ;; flips each of these to :venice-qwen3 at boot when VENICE_API_KEY

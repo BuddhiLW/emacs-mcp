@@ -86,6 +86,14 @@
                      (some-> (ex-data ex) :body))]
     (boolean (re-find #"(?i)context.*(length|limit|size|exceed)|too (long|large|many)|token.*(limit|exceed)|input.*(too|exceed)" msg))))
 
+(defn- num-ctx-for
+  "Context window (num_ctx) to request per model. qwen3-embedding ships a 32k
+   context; nomic/minilm cap lower. Requesting the larger window only costs
+   VRAM when big content is actually embedded, and lets size-aware escalation
+   to the local qwen3 provider honor its declared 32768 max-tokens."
+  [model]
+  (if (and model (re-find #"(?i)qwen3" (str model))) 32768 8192))
+
 (defn- get-embedding
   "Get embedding for a single text from Ollama.
    Throws helpful error when content exceeds embedding token limit."
@@ -95,7 +103,7 @@
                                  {:model model
                                   :input text
                                   :keep_alive "24h"
-                                  :options {:num_ctx 8192}})]
+                                  :options {:num_ctx (num-ctx-for model)}})]
       (first (:embeddings response)))
     (catch Exception e
       (if (context-length-error? e)

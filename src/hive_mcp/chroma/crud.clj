@@ -36,15 +36,24 @@
   (let [entry-id (or id (h/generate-id))
         now (h/iso-timestamp)
         doc-text (h/memory-to-document entry)
-        resolved (rescue nil (embedding-service/resolve-provider-for-type type))
-        _ (when resolved (embedding-service/validate-content-size! doc-text resolved))
+        ;; Size-aware resolution: oversized content auto-escalates to a
+        ;; bigger-context provider (and its collection) — same resolution
+        ;; drives collection + provider + embedding, so dimension stays
+        ;; coherent. No-embed types (structurally-addressed blobs) skip the
+        ;; provider call and store a zero placeholder vector.
+        no-embed? (embedding-service/no-embed-type? type)
+        resolved (rescue nil (embedding-service/resolve-provider-for-type+size type doc-text))
+        _ (when (and resolved (not no-embed?))
+            (embedding-service/validate-content-size! doc-text resolved))
         coll (if resolved
                (conn/get-or-create-named-collection
                  (:collection-name resolved) (:dimension resolved))
                (conn/get-or-create-collection))
         provider (if resolved (:provider resolved) (emb/get-embedding-provider))
-        embedding (gate/with-embedding-gate
-                    (emb/embed-text provider doc-text))
+        embedding (if no-embed?
+                    (vec (repeat (or (:dimension resolved) 768) 0.0))
+                    (gate/with-embedding-gate
+                      (emb/embed-text provider doc-text)))
         provided {:type type :tags (h/join-tags tags) :content (h/serialize-content content)
                   :content-hash content-hash :created (or created now) :updated (or updated now)
                   :duration duration :expires expires :access-count access-count

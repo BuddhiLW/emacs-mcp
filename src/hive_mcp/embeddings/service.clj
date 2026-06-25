@@ -234,14 +234,40 @@
         (:default cfg)
         :ollama-nomic)))
 
-(defn resolve-provider-for-type
-  "Resolve embedding provider + metadata for a memory type.
-   Returns {:provider EmbeddingProvider, :dimension int, :max-tokens int,
-            :collection-name str, :provider-key keyword}."
-  [memory-type]
-  (let [cfg          (embedder-config)
-        provider-key (resolve-provider-key memory-type)
-        provider-spec (get-in cfg [:providers provider-key])]
+;; --- No-embed types (structurally-addressed data blobs) -------------------
+;; Some memory types are fetched ONLY by tag/id/project-id, never by semantic
+;; search (e.g. serialized C4 snapshots). Embedding their (often oversized)
+;; content is pure waste and a failure point. The effective set is the union
+;; of a hive-di-configurable profile set ([:embedder :no-embed-types], merged
+;; via global config) and any addon-registered types — so embeddings core
+;; stays ignorant of any specific addon's domain types (SOLID/OCP).
+(defonce ^:private registered-no-embed-types (atom #{}))
+
+(defn register-no-embed-type!
+  "Addon-facing: declare a memory :type as structurally-addressed so the
+   write path SKIPS embedding it (stores a zero placeholder vector instead).
+   Idempotent. Returns the (string) type."
+  [type-str]
+  (when type-str (swap! registered-no-embed-types conj (name type-str)))
+  (some-> type-str name))
+
+(defn no-embed-type?
+  "True when entries of `type-str` must not be embedded. Union of the
+   hive-di-configurable [:embedder :no-embed-types] profile set and any
+   addon-registered types."
+  [type-str]
+  (boolean
+   (when type-str
+     (let [t (name type-str)]
+       (or (contains? @registered-no-embed-types t)
+           (contains? (into #{} (map name) (:no-embed-types (embedder-config))) t))))))
+
+(defn- build-resolved
+  "Resolved-provider map for an explicit provider-key (or the global provider
+   fallback when the key has no configured spec). Shared by the type resolver
+   and the size-aware escalation resolver so both produce identical shapes."
+  [cfg provider-key]
+  (let [provider-spec (get-in cfg [:providers provider-key])]
     (if provider-spec
       (let [impl      (:impl provider-spec)
             model     (:model provider-spec)
@@ -265,12 +291,64 @@
       ;; No embedder config → fall back to global provider
       (let [global (chroma/get-embedding-provider)]
         (when-not global
-          (throw (ex-info "No embedding provider available" {:type memory-type})))
+          (throw (ex-info "No embedding provider available" {:provider-key provider-key})))
         {:provider        global
          :dimension       (chroma/embedding-dimension global)
          :max-tokens      2048
          :collection-name base-collection-name
          :provider-key    :fallback}))))
+
+(defn resolve-provider-for-type
+  "Resolve embedding provider + metadata for a memory type.
+   Returns {:provider EmbeddingProvider, :dimension int, :max-tokens int,
+            :collection-name str, :provider-key keyword}."
+  [memory-type]
+  (build-resolved (embedder-config) (resolve-provider-key memory-type)))
+
+(defn estimate-tokens
+  "Cheap token estimate (chars/4 heuristic) — same basis as the size guard."
+  [content]
+  (quot (count (or content "")) 4))
+
+(defn resolve-provider-for-type+size
+  "Type-routed provider resolution WITH size-aware auto-escalation. When the
+   type's routed provider cannot fit `content` (est. tokens > its :max-tokens),
+   walk the configured :providers ladder (by :max-tokens ascending) and pick
+   the SMALLEST provider that fits; if none fit, the LARGEST available. Logs
+   the escalation. Same return shape as `resolve-provider-for-type`.
+
+   Coherence: callers MUST use this same resolution for BOTH the embedding
+   vector and the target collection (escalation changes dimension). See
+   hive-milvus.store.routing/coll-for-entry."
+  [memory-type content]
+  (let [cfg  (embedder-config)
+        base (build-resolved cfg (resolve-provider-key memory-type))
+        est  (estimate-tokens content)
+        ;; A provider is usable only if its required secret is present; local
+        ;; ollama needs none. Prefer usable providers, smallest that fits,
+        ;; then smallest dimension (favors the key-free local 32k embedder
+        ;; over remote ones, and avoids wasting a 4096-d vector).
+        available? (fn [spec]
+                     (case (:impl spec)
+                       :openrouter (some? (global-config/get-secret :openrouter-api-key))
+                       :openai     (some? (global-config/get-secret :openai-api-key))
+                       :venice     (some? (global-config/get-secret :venice-api-key))
+                       true))]
+    (if (<= est (:max-tokens base))
+      base
+      (let [ladder (->> (:providers cfg)
+                        (map (fn [[k spec]] (assoc spec :provider-key k)))
+                        (filter available?)
+                        (sort-by (juxt :max-tokens :dimension)))
+            pick   (or (first (filter #(<= est (:max-tokens %)) ladder))
+                       (last ladder))]
+        (if (and pick (not= (:provider-key pick) (:provider-key base)))
+          (let [esc (build-resolved cfg (:provider-key pick))]
+            (log/info "Embedder auto-escalated for oversized content:"
+                      (:provider-key base) "→" (:provider-key esc)
+                      (str "(" est " est-tokens > " (:max-tokens base) " max-tokens)"))
+            esc)
+          base)))))
 
 (defn validate-content-size!
   "Reject content exceeding the resolved provider's max-tokens.
