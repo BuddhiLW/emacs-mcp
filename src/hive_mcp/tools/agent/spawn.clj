@@ -101,10 +101,8 @@
    Defense-in-depth: denies spawn when called from a child ling process
    (HIVE_MCP_ROLE=child-ling). This prevents recursive agent spawning.
 
-   The full request map is forwarded to the ling under :spawn/request so the
-   generic :spawn/opts-overlay seam (consumed in ling spawn!) can let addons
-   enrich opts without core knowing any addon-specific param. Core strips the
-   carrier before planning."
+   The full request map rides on opts under :spawn/request for the
+   :spawn/opts-overlay extension seam, and is stripped before planning."
   [{:keys [type name cwd presets model provider task files parent project_id kanban_task_id spawn_mode agents max_budget_usd kg_compress sliding_window_size verbose llm_retries] :as params}]
   ;; Layer 3: Defense-in-depth spawn guard
   (if-let [_ (when (guards/child-ling?) :denied)]

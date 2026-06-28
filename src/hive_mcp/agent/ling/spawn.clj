@@ -1,14 +1,11 @@
 (ns hive-mcp.agent.ling.spawn
   "Spawn pipeline for Ling agents: plan computation, preset loading, readiness
-   dispatch, and the `Ling` defrecord itself. Split from `hive-mcp.agent.ling`
-   (hotspot #20) — the `execute-spawn-plan!` god function lived here."
+   dispatch, and the `Ling` defrecord itself."
   (:require [hive-mcp.agent.protocol :refer [IAgent]]
             [hive-mcp.agent.ling.strategy :as strategy]
             [hive-mcp.agent.ling.headless-registry :as headless-reg]
             [hive-mcp.agent.ling.lifecycle :as lifecycle]
             [hive-mcp.agent.ling.spawn-store :as spawn-store]
-            ;; LingResources concretion lives in hive-agent (task c1):
-            ;; resolved lazily below to keep hive-mcp → hive-agent dep inverted.
             [hive-mcp.workflows.catchup-ling :as catchup-ling]
             [hive-mcp.swarm.datascript.lings :as ds-lings]
             [hive-mcp.swarm.datascript.queries :as ds-queries]
@@ -60,7 +57,7 @@
 (defn- load-presets-content
   "Load preset content from preset .md files for headless backends.
    Claude CLI lings load presets from .claude/agents/ automatically;
-   headless backends (OpenRouter, hive-agent) need explicit injection.
+   headless backends need explicit injection.
    Returns concatenated preset markdown string, or nil."
   [preset-names]
   (r/rescue nil
@@ -155,23 +152,17 @@
                  (or (:provider ctx) :openrouter)))}))
 
 (defn- spawn-opts
-  "Build the spawn-opts passed to strategy-spawn!. A :system-prompt on opts is
-   folded into :preset-content (agentic backends derive their system message from
-   preset-content) while the raw :system-prompt stays on opts for the process
-   backend (--append-system-prompt). No :system-prompt => preset-content unchanged."
+  "Build the spawn-opts passed to strategy-spawn!. Backend-agnostic: opts pass
+   through (incl. any :system-prompt), with resolved preset-content and api-key
+   added. Each backend maps these to its own config."
   [opts enriched-task {:keys [preset-content api-key]}]
-  (let [sys-prompt (:system-prompt opts)
-        eff-preset (cond
-                     (and sys-prompt (seq preset-content)) (str sys-prompt "\n\n---\n\n" preset-content)
-                     sys-prompt sys-prompt
-                     :else preset-content)]
-    (cond-> (if enriched-task
-              (assoc opts :task enriched-task)
-              opts)
-      (seq eff-preset)
-      (assoc :preset-content eff-preset)
-      api-key
-      (assoc :api-key api-key))))
+  (cond-> (if enriched-task
+            (assoc opts :task enriched-task)
+            opts)
+    (seq preset-content)
+    (assoc :preset-content preset-content)
+    api-key
+    (assoc :api-key api-key)))
 
 (defn- initial-slave-attrs
   [{:keys [depth parent presets cwd project-id kanban-task-id]} enriched-task]
@@ -264,14 +255,10 @@
                             :enriched-task enriched-task})))
 
 (defn- apply-spawn-overlay
-  "Generic, addon-agnostic spawn-opts extension seam. Strips the internal
-   :spawn/request carrier from opts (so it never reaches planning) and, when an
-   extension is registered under :spawn/opts-overlay (e.g. by an addon via
-   IAddon/hooks), applies it: (f opts ctx) -> opts'. The extension may enrich
-   opts from the request/spawn-context (model/provider/system-prompt/task/...),
-   owning its own semantics + fail-soft; core falls back to the carrier-stripped
-   opts on nil/throw and knows nothing about what the overlay does. Applied ONCE
-   in spawn! so compute-spawn-plan and execute-spawn-plan! both see merged opts."
+  "Generic spawn-opts extension seam. Strips the internal :spawn/request key
+   from opts, then applies any extension registered under :spawn/opts-overlay
+   as (f opts ctx) -> opts'. Fail-soft: nil or a throw falls back to the
+   stripped opts. Applied once in spawn! so plan + executor both see merged opts."
   [opts ling]
   (let [req  (:spawn/request opts)
         opts (dissoc opts :spawn/request)]
@@ -392,8 +379,7 @@
       (if can-kill?
         (do
           ;; Release per-ling owned resources (channels, caches) + unregister.
-          ;; Additive: existing .release-claims! path retained until c6 migrates.
-          ;; Task c1: release fn lives in hive-agent — lazy resolve (no-op if addon absent).
+          ;; Lazy-resolve the release fn so this is a no-op when the addon is absent.
           (r/rescue nil
             (when-let [release (requiring-resolve 'hive-agent.lifecycle.resources/release-ling-resources!)]
               (release id)))
