@@ -208,7 +208,10 @@
                 refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
    ;; Netty access, Proximum HNSW SIMD, aggressive GC return-to-OS
-   :jvm-opts ["-Xmx8g"
+   ;; -Xmx16g: the live KG set reached ~8.2G and maxed the old 8g cap on
+   ;; boot (95% post-GC). Box has headroom; MaxHeapFreeRatio=40 returns
+   ;; unused heap to the OS so this is a ceiling, not a reservation.
+   :jvm-opts ["-Xmx16g"
               "-Xms4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
@@ -233,7 +236,10 @@
                 refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
    ;; Netty access, Proximum HNSW SIMD, aggressive GC return-to-OS
-   :jvm-opts ["-Xmx8g"
+   ;; -Xmx16g: the live KG set reached ~8.2G and maxed the old 8g cap on
+   ;; boot (95% post-GC). Box has headroom; MaxHeapFreeRatio=40 returns
+   ;; unused heap to the OS so this is a ceiling, not a reservation.
+   :jvm-opts ["-Xmx16g"
               "-Xms4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
