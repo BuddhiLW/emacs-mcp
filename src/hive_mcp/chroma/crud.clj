@@ -50,10 +50,30 @@
                  (:collection-name resolved) (:dimension resolved))
                (conn/get-or-create-collection))
         provider (if resolved (:provider resolved) (emb/get-embedding-provider))
+        embed-1 (fn [p] (gate/with-embedding-gate (emb/embed-text p doc-text)))
         embedding (if no-embed?
                     (vec (repeat (or (:dimension resolved) 768) 0.0))
-                    (gate/with-embedding-gate
-                      (emb/embed-text provider doc-text)))
+                    ;; Embed via the resolved provider; on failure (e.g. Venice
+                    ;; slow/unreachable) fail over once to a same-dimension
+                    ;; sibling (venice<->openrouter qwen3, both 4096-d) so the
+                    ;; write is never silently stored unvectorized.
+                    (try
+                      (embed-1 provider)
+                      (catch Throwable e1
+                        (if-let [alt (and resolved (embedding-service/sibling-failover resolved))]
+                          (do (log/warn "Embed via" (:provider-key resolved)
+                                        "failed for entry" entry-id "— failing over to"
+                                        (:provider-key alt) "(" (.getMessage e1) ")")
+                              (try (embed-1 (:provider alt))
+                                   (catch Throwable e2
+                                     (log/error "Embed failover also failed for entry"
+                                                entry-id "providers" (:provider-key resolved)
+                                                "/" (:provider-key alt) "—" (.getMessage e2))
+                                     (throw e2))))
+                          (do (log/error "Embed FAILED (no failover sibling) for entry"
+                                         entry-id "via" (and resolved (:provider-key resolved))
+                                         "—" (.getMessage e1))
+                              (throw e1))))))
         provided {:type type :tags (h/join-tags tags) :content (h/serialize-content content)
                   :content-hash content-hash :created (or created now) :updated (or updated now)
                   :duration duration :expires expires :access-count access-count

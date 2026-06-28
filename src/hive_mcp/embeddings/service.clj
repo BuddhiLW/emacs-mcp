@@ -350,6 +350,27 @@
             esc)
           base)))))
 
+(defn sibling-failover
+  "Given a `resolved` provider that just failed to embed, return an alternative
+   resolved provider of the SAME :dimension (so the vector and its target
+   collection stay coherent) backed by a DIFFERENT, available impl — or nil if
+   none exists. Lets the venice-qwen3 <-> openrouter-qwen3 pair (both
+   Qwen3-Embedding-8B @ 4096-d) cover for each other when one is slow/down."
+  [{:keys [dimension provider-key] :as _resolved}]
+  (let [cfg        (embedder-config)
+        available? (fn [spec]
+                     (case (:impl spec)
+                       :openrouter (some? (global-config/get-secret :openrouter-api-key))
+                       :openai     (some? (global-config/get-secret :openai-api-key))
+                       :venice     (some? (global-config/get-secret :venice-api-key))
+                       true))]
+    (some (fn [[k spec]]
+            (when (and (= (:dimension spec) dimension)
+                       (not= k provider-key)
+                       (available? spec))
+              (build-resolved cfg k)))
+          (:providers cfg))))
+
 (defn validate-content-size!
   "Reject content exceeding the resolved provider's max-tokens.
    Uses chars/4 heuristic for token estimation."
