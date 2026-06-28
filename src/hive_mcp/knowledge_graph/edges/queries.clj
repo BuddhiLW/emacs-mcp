@@ -93,7 +93,6 @@
   (let [query '[:find [(pull ?e [*]) ...]
                 :in $ ?scope
                 :where
-                [?e :kg-edge/id]
                 [?e :kg-edge/scope ?scope]]]
     (conn/query query scope)))
 
