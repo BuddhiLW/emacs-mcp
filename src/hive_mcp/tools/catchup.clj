@@ -289,14 +289,33 @@
               ;; — `catchup-priority` and `scope:project:<current>` still
               ;; pierce. See `hive-mcp.tools.catchup.relevance`.
               ;; Entries without scope tags pass through (global by convention).
+              ;; Optional persona lens (e.g. hive-agent addon, via
+              ;; :catchup/persona-lens) — mirror of :catchup/status-providers.
+              ;; Resolves an OPAQUE per-caller lens (plain EDN) for the current
+              ;; agent, keyed by (caller-id, project-id). rescue-wrapped: a
+              ;; throwing or absent provider yields nil => identity compose
+              ;; downstream (no persona boost). DIP: core never names the
+              ;; persona NOR the lens shape — hive-knowledge.catchup.lens
+              ;; coerces the EDN at the :catchup/lens seam below.
+              persona-lens-fn (ext/get-extension :catchup/persona-lens)
+              persona-lens    (when persona-lens-fn
+                                (rescue nil (persona-lens-fn raw-caller-id project-id)))
               relevance-ctx
-              (relevance/build-context
-               {:project-id project-id
-                :co-loaded-entries (concat priority-conventions
-                                           decisions
-                                           sessions)})
+              (cond-> (relevance/build-context
+                       {:project-id project-id
+                        :co-loaded-entries (concat priority-conventions
+                                                   decisions
+                                                   sessions)})
+                persona-lens (assoc :persona-lens persona-lens))
+              ;; Optional lens provider (hive-knowledge addon, via :catchup/lens).
+              ;; Re-ranks/refines the relevance-filtered axioms against active
+              ;; work. Absent addon => nil => relevant-axioms is byte-for-byte
+              ;; today's filter output (cond-> guard false). DIP: core never
+              ;; names the provider — see hive-knowledge.catchup.lens-addon.
+              lens-fn (ext/get-extension :catchup/lens)
               relevant-axioms
-              (relevance/filter-by-relevance (vec axioms) relevance-ctx)
+              (cond-> (relevance/filter-by-relevance (vec axioms) relevance-ctx)
+                lens-fn (lens-fn relevance-ctx))
               piggyback-raw (into (into (vec relevant-axioms) principles) priority-conventions)
               piggyback-entries
               (let [in-project? (and project-id (not= project-id "global"))]
