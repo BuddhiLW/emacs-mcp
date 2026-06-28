@@ -16,10 +16,17 @@
    resolver from a stub map without touching disk.
 
    Default mapping encodes decision 20260507133442-017631c2:
-     :carto    → Datalevin (LMDB scalar EAV, no rename race, regenerable)
-     :memory   → Datahike  (bitemporal — as-of/since/history)
-     :sessions → Datalevin (append-only timestamp idx)
-     :default  → Datahike  (legacy global-store callers)"
+     :carto      → Datalevin (LMDB scalar EAV, no rename race, regenerable)
+     :memory     → Datahike  (bitemporal — as-of/since/history)
+     :sessions   → Datalevin (append-only timestamp idx)
+     :default    → Datahike  (legacy global-store callers)
+
+   STORAGE-2 phase 2 (2026-05-07): per-slot vector routing. The two
+   new slots host the carto / memory IVecStore handles via the
+   Proximum HNSW backend (replaces the qdrant/milvus addons for
+   in-process vector search):
+     :carto-vec  → Proximum (HNSW, branchable, time-travel)
+     :memory-vec → Proximum (HNSW, branchable, time-travel)"
   (:require [hive-mcp.config.core :as config]
             [hive-mcp.knowledge-graph.slots.protocol :as p]))
 
@@ -29,11 +36,14 @@
 
 (def ^:const default-slot->backend
   "Canonical mapping per the storage migration plan
-   (decision 20260507133442-017631c2)."
-  {:carto    :datalevin
-   :memory   :datahike
-   :sessions :datalevin
-   :default  :datahike})
+   (decision 20260507133442-017631c2). Vector slots added in
+   STORAGE-2 phase 2 — `:proximum` is the IVecStore backend keyword."
+  {:carto      :datalevin
+   :memory     :datahike
+   :sessions   :datalevin
+   :default    :datahike
+   :carto-vec  :proximum
+   :memory-vec :proximum})
 
 (def ^:const fallback-backend
   "Final safety net when slot is unknown to both config + defaults."

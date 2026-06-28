@@ -59,12 +59,20 @@
 (defmethod backend->store :datascript [_]
   (invoke-create-fn 'hive-mcp.knowledge-graph.store.datascript/create-store))
 
+(defmethod backend->store :proximum [_]
+  ;; STORAGE-2 phase 2: Proximum HNSW vector store. The returned record
+  ;; satisfies BOTH IVecStore (vector verbs) and IKGStore (lifecycle
+  ;; only — data methods noop) so the SlotRegistry's ensure-conn! path
+  ;; works unchanged. Vec callers gate on `(satisfies? vec/IVecStore
+  ;; store)` before invoking vector methods.
+  (invoke-create-fn 'hive-mcp.knowledge-graph.store.proximum/create-store))
+
 (defmethod backend->store :default [_] nil)
 
 (def ^:const supported-backends-set
   "Backends this factory can construct. Keep in lockstep with the
    `defmethod backend->store` declarations above."
-  #{:datalevin :datahike :datascript})
+  #{:datalevin :datahike :datascript :proximum})
 
 ;; -----------------------------------------------------------------------------
 ;; LateBoundFactory — Factory Method implementation
