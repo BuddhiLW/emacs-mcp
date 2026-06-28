@@ -15,6 +15,7 @@
             [hive-mcp.swarm.datascript.queries :as queries]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.server.guards :as guards]
+            [hive-mcp.config.core :as config]
             [taoensso.timbre :as log]
             [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -50,6 +51,46 @@
        "If you need parallel work, use hivemind_shout to request the coordinator\n"
        "to spawn agents on your behalf."))
 
+
+(defn- heap-pressure-defer
+  "Layer 4 OOM backpressure: best-effort heap-headroom admission check.
+   Returns a {:level :heap-pct} map when a new spawn should be DEFERRED
+   (JVM heap fraction >= the soft watermark), or nil to ADMIT.
+
+   Lings/drones launch inside (or alongside) this nREPL JVM; N concurrent
+   heavy spawns atop the multi-GB KG floor have driven kernel OOMs. We shed
+   *new* spawns under pressure rather than hard-kill live agents.
+
+   Reuses the self-contained hive-knowledge.cartography.mem-guard governor,
+   lazily resolved — hive-mcp does NOT statically depend on hive-knowledge
+   (the dep is inverted). FAIL-OPEN: a missing governor, any sampling error,
+   or config opt-out all ADMIT (return nil), so the guard can never wedge the
+   spawn path.
+
+   Config — note hive-mcp.config.resolve/get-service-value uses (or val default)
+   which swallows boolean false, so the kill switch is a default-FALSE *disable*
+   flag, not a default-true enable flag:
+     [:swarm :heap-admission-disabled] default false; set true (or env
+       HIVE_MCP_SWARM_HEAP_ADMISSION_DISABLED=true) to force the gate off.
+     [:swarm :heap-admission-soft]      0.0-1.0 heap fraction; nil = mem-guard
+       default 0.80 (env HIVE_MCP_SWARM_HEAP_ADMISSION_SOFT)."
+  []
+  (try
+    (when-not (config/get-service-value :swarm :heap-admission-disabled
+                                        :env "HIVE_MCP_SWARM_HEAP_ADMISSION_DISABLED"
+                                        :parse #(Boolean/parseBoolean %)
+                                        :default false)
+      (when-let [check (requiring-resolve 'hive-knowledge.cartography.mem-guard/check)]
+        (let [soft (config/get-service-value :swarm :heap-admission-soft
+                                             :env "HIVE_MCP_SWARM_HEAP_ADMISSION_SOFT"
+                                             :parse parse-double
+                                             :default nil)
+              wm   (when (number? soft) {:soft soft})
+              {:keys [level heap-pct]} (check nil wm)]
+          (when (contains? #{:soft :hard} level)
+            {:level level :heap-pct heap-pct}))))
+    (catch Throwable _ nil)))
+
 ;;; =============================================================================
 ;;; Spawn Handler
 ;;; =============================================================================
@@ -66,7 +107,20 @@
       (log/warn "Spawn denied: child ling attempted agent spawn"
                 {:role (guards/get-role) :depth (guards/ling-depth)})
       (mcp-error (build-spawn-denied-message)))
-    (let [agent-type (keyword type)]
+    (if-let [defer (heap-pressure-defer)]
+      ;; Layer 4: heap-headroom backpressure — defer rather than launch.
+      (do
+        (log/warn "Spawn deferred: heap pressure backpressure" defer)
+        (mcp-json {:success  false
+                   :deferred true
+                   :reason   "heap-pressure"
+                   :level    (clojure.core/name (:level defer))
+                   :heap-pct (:heap-pct defer)
+                   :message  (str "Spawn deferred: JVM heap at " (:heap-pct defer)
+                                  "% (>= soft watermark). Best-effort OOM "
+                                  "backpressure — existing agents keep running; "
+                                  "retry once active lings drain.")}))
+      (let [agent-type (keyword type)]
       (if-not (and (agent-type-registry/valid-type? agent-type)
                    (agent-type-registry/spawnable? agent-type))
         (mcp-error (str "type must be one of: " (pr-str (agent-type-registry/mcp-enum))))
@@ -167,4 +221,4 @@
                     :always mcp-json)))))
           (catch Exception e
             (log/error "Failed to spawn agent" {:type agent-type :error (ex-message e)})
-            (mcp-error (str "Failed to spawn " (clojure.core/name agent-type) ": " (ex-message e)))))))))
+            (mcp-error (str "Failed to spawn " (clojure.core/name agent-type) ": " (ex-message e))))))))))
