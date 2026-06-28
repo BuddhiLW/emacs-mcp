@@ -55,6 +55,16 @@
   #{:feedback :kanban-done :kanban-move :kanban-delete :expire :decay
     :promote :reground :migrate :log-access :cleanup})
 
+(def ^:private ephemeral-ops
+  "Mutation ops NOT written to the durable trail (access telemetry; the signal
+   already lives in the entry's :access-count counter)."
+  #{:log-access})
+
+(defn- persist-mutation?
+  "True when `op` should be written to the durable audit trail."
+  [op]
+  (not (contains? ephemeral-ops op)))
+
 (defn record-mutation!
   "Record a memory mutation event to Datahike for temporal tracking.
 
@@ -76,7 +86,7 @@
   [{:keys [entry-id op data previous-value agent-id project-id]}]
   {:pre [(string? entry-id) (contains? valid-ops op)]}
   (try
-    (when (kg-conn/temporal-store?)
+    (when (and (persist-mutation? op) (kg-conn/temporal-store?))
       (let [mutation-id (gen-mutation-id)
             agent-id (or agent-id
                          (ctx/current-agent-id)
@@ -140,7 +150,7 @@
                               (assoc :mem-mutation/data (pr-str data))
                               previous-value
                               (assoc :mem-mutation/previous-value (pr-str previous-value))))
-                          mutations)]
+                          (filter (comp persist-mutation? :op) mutations))]
         (kg-conn/transact! tx-data)
         (log/debug "Temporal batch recorded" {:count (count tx-data)})
         {:ok true :count (count tx-data)}))
