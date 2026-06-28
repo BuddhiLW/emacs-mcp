@@ -15,7 +15,8 @@
             [hive-mcp.protocols.dispatch :as dispatch-ctx]
             [clojure.string :as str]
             [hive-dsl.result :as r]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.extensions.registry :as ext]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -44,7 +45,8 @@
     {:effective-model effective-model
      :mode mode
      :strat (lifecycle/resolve-strategy mode)
-     :ctx (assoc (lifecycle/ling-ctx ling) :model effective-model)
+     :ctx (cond-> (assoc (lifecycle/ling-ctx ling) :model effective-model)
+            (:provider opts) (assoc :provider (:provider opts)))
      :depth depth
      :parent parent
      :kanban-task-id kanban-task-id
@@ -153,14 +155,23 @@
                  (or (:provider ctx) :openrouter)))}))
 
 (defn- spawn-opts
+  "Build the spawn-opts passed to strategy-spawn!. A :system-prompt on opts is
+   folded into :preset-content (agentic backends derive their system message from
+   preset-content) while the raw :system-prompt stays on opts for the process
+   backend (--append-system-prompt). No :system-prompt => preset-content unchanged."
   [opts enriched-task {:keys [preset-content api-key]}]
-  (cond-> (if enriched-task
-            (assoc opts :task enriched-task)
-            opts)
-    (seq preset-content)
-    (assoc :preset-content preset-content)
-    api-key
-    (assoc :api-key api-key)))
+  (let [sys-prompt (:system-prompt opts)
+        eff-preset (cond
+                     (and sys-prompt (seq preset-content)) (str sys-prompt "\n\n---\n\n" preset-content)
+                     sys-prompt sys-prompt
+                     :else preset-content)]
+    (cond-> (if enriched-task
+              (assoc opts :task enriched-task)
+              opts)
+      (seq eff-preset)
+      (assoc :preset-content eff-preset)
+      api-key
+      (assoc :api-key api-key))))
 
 (defn- initial-slave-attrs
   [{:keys [depth parent presets cwd project-id kanban-task-id]} enriched-task]
@@ -252,6 +263,28 @@
                             :effective-model effective-model
                             :enriched-task enriched-task})))
 
+(defn- apply-spawn-overlay
+  "Generic, addon-agnostic spawn-opts extension seam. Strips the internal
+   :spawn/request carrier from opts (so it never reaches planning) and, when an
+   extension is registered under :spawn/opts-overlay (e.g. by an addon via
+   IAddon/hooks), applies it: (f opts ctx) -> opts'. The extension may enrich
+   opts from the request/spawn-context (model/provider/system-prompt/task/...),
+   owning its own semantics + fail-soft; core falls back to the carrier-stripped
+   opts on nil/throw and knows nothing about what the overlay does. Applied ONCE
+   in spawn! so compute-spawn-plan and execute-spawn-plan! both see merged opts."
+  [opts ling]
+  (let [req  (:spawn/request opts)
+        opts (dissoc opts :spawn/request)]
+    (if-let [f (ext/get-extension :spawn/opts-overlay)]
+      (or (r/rescue nil
+            (f opts {:request req
+                     :cwd (:cwd ling)
+                     :project-id (:project-id ling)
+                     :task (:task opts)
+                     :kanban-task-id (:kanban-task-id opts)}))
+          opts)
+      opts)))
+
 (defn- execute-spawn-plan!
   "Execute spawn effects: catchup enrichment, store pre-registration, strategy
    spawn, store reconciliation, budget registration, and readiness-based dispatch.
@@ -281,7 +314,8 @@
   IAgent
 
   (spawn! [this opts]
-    (let [plan (compute-spawn-plan this opts)]
+    (let [opts (apply-spawn-overlay opts this)
+          plan (compute-spawn-plan this opts)]
       (execute-spawn-plan! plan opts)))
 
   (dispatch! [this task-opts]
