@@ -1,0 +1,28 @@
+{:tx-data
+ ;; HEAP-7-FOLLOWUP: add :db/noHistory to the already-installed :mem-mutation/*
+ ;; attrs so the append-only audit trail (pr-str EDN :data/:previous-value)
+ ;; stops pinning historical datoms on the in-heap datahike index.
+ ;;
+ ;; This is a NEW norm file, NOT an edit of 003, because datahike norms are
+ ;; keyed by FILENAME (datahike.norm/transact-norms runs a norm's tx-data only
+ ;; once per filename, ever) — 003 is already installed on live DBs, so editing
+ ;; it is a no-op there. Sorts after 005 so the attrs already exist.
+ ;;
+ ;; datahike lists :db/noHistory in the always-allow branch of
+ ;; schema/find-invalid-schema-updates, so altering it on an existing attr is
+ ;; accepted; the minimal {:db/ident X :db/noHistory true} form merges into each
+ ;; attr's existing valueType/cardinality. Verified at runtime: alter accepted +
+ ;; honored under :schema-flexibility :read.
+ ;;
+ ;; FORWARD-ONLY: does not reclaim history accumulated before this norm. For
+ ;; :mem-mutation that backlog is append-only (entities never previously
+ ;; updated/retracted), so reclamation is handled by prune-mutations!
+ ;; (memory.temporal) retracting old events once noHistory is in place.
+ [{:db/ident :mem-mutation/id             :db/noHistory true}
+  {:db/ident :mem-mutation/entry-id       :db/noHistory true}
+  {:db/ident :mem-mutation/op             :db/noHistory true}
+  {:db/ident :mem-mutation/timestamp      :db/noHistory true}
+  {:db/ident :mem-mutation/agent-id       :db/noHistory true}
+  {:db/ident :mem-mutation/project-id     :db/noHistory true}
+  {:db/ident :mem-mutation/data           :db/noHistory true}
+  {:db/ident :mem-mutation/previous-value :db/noHistory true}]}
