@@ -57,20 +57,24 @@
   "Detect the desired KG backend from configuration sources.
 
    Priority (highest → lowest):
+   0. `hive.kg.backend` system property — explicit JVM override. The :test
+      aliases set -Dhive.kg.backend=datascript so cold test JVMs use an
+      ephemeral in-memory store and never open (and lock-contend) a prod
+      file backend. See axiom 20260122235103-7151cc29.
    1. .hive-project.edn hierarchy (parent > child > grandchild)
    2. HIVE_KG_BACKEND env var (explicit override)
    3. config.edn :services.kg.backend (global default)
-   4. Fallback: config/default-kg-backend
-
-   Rationale: project hierarchy is ground truth (lives with code),
-   config.edn is user-global preference, env var is session override."
+   4. Fallback: config/default-kg-backend"
   []
-  (let [hierarchy-backend (walk-hierarchy-for-kg-backend)
+  (let [prop-backend (some-> (System/getProperty "hive.kg.backend") keyword)
+        hierarchy-backend (walk-hierarchy-for-kg-backend)
         env-backend (some-> (System/getenv "HIVE_KG_BACKEND") keyword)
         config-backend (config/get-service-value :kg :backend :parse keyword)
-        backend (or hierarchy-backend env-backend config-backend config/default-kg-backend)]
+        backend (or prop-backend hierarchy-backend env-backend config-backend
+                    config/default-kg-backend)]
     (log/info "KG backend detection"
-              {:hierarchy hierarchy-backend
+              {:property prop-backend
+               :hierarchy hierarchy-backend
                :env env-backend
                :config config-backend
                :selected backend})
