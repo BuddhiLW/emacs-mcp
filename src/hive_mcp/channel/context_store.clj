@@ -18,6 +18,15 @@
   "Reaper runs every 60 seconds."
   60)
 
+(def ^:const max-entries
+  "Maximum number of live entries the store will hold. Enforced at
+   `context-put!` time (TTL + reaper still apply independently). Generous on
+   purpose: pass-by-reference callers fetch their ctx-id shortly after putting,
+   so the cap must never be tight enough to drop a just-put, still-pending
+   entry. When at/over cap we reap expired entries first, then evict
+   oldest-by-:created-at — newest (just-put) entries are evicted last."
+  2000)
+
 ;; Store (ConcurrentHashMap)
 
 (defonce ^{:doc "ConcurrentHashMap<String, Map> — the context store."}
@@ -49,6 +58,38 @@
   [entry]
   (> (now-ms) (:expires-at entry)))
 
+(declare reap-expired!)
+
+(defn- evict-oldest!
+  "Evict oldest-by-:created-at entries until the store is below `max-entries`.
+   Assumes expired entries were already reaped by the caller. Entries are pure
+   data, so .remove makes them GC-eligible. Returns count evicted."
+  []
+  (let [evicted (atom 0)
+        ;; Snapshot, sorted oldest-first; newest (just-put) entries sort last.
+        by-age (sort-by (comp :created-at val) (into {} store))]
+    (loop [pairs by-age]
+      (when (and (seq pairs) (>= (.size store) max-entries))
+        (let [[id _] (first pairs)]
+          (when (.remove store id)
+            (swap! evicted inc)))
+        (recur (rest pairs))))
+    (let [n @evicted]
+      (when (pos? n)
+        (log/info "[context-store] evicted" n "oldest entries (capacity cap" max-entries ")"))
+      n)))
+
+(defn- enforce-capacity!
+  "Ensure room for one more entry before a put. When the store is at/over
+   `max-entries`, reap expired entries first, then — if still at/over cap —
+   evict oldest-by-:created-at until under cap. Expired-first + oldest-first
+   eviction keeps just-put, still-pending entries safe."
+  []
+  (when (>= (.size store) max-entries)
+    (reap-expired!)
+    (when (>= (.size store) max-entries)
+      (evict-oldest!))))
+
 ;; Public API
 
 (defn context-put!
@@ -64,6 +105,7 @@
                :expires-at (+ now ttl-ms)
                :access-count 0
                :last-accessed nil}]
+    (enforce-capacity!)
     (.put store id entry)
     (log/debug "[context-store] put" id "tags:" tags "ttl:" ttl-ms)
     id))

@@ -150,20 +150,48 @@
 ;; Created IDs Tracking (Session-scoped)
 ;; =============================================================================
 
+(def ^{:private true
+       :doc "Hard cap on retained created-id entries (ENGINE-L1.3).
+   Beyond this `register-created-id!` drops the oldest entries so a buffer
+   that is never drained by a crystal harvest cannot grow without bound.
+   Override via system property hive.created-ids-buffer.capacity for ops tuning."}
+  created-ids-cap
+  (Long/parseLong
+   (or (System/getProperty "hive.created-ids-buffer.capacity") "10000")))
+
 (defonce ^{:private true
-           :doc "Buffer for tracking memory IDs created during this session."}
+           :doc "Buffer for tracking memory IDs created during this session.
+
+   Bounded at `created-ids-cap` entries (drop-oldest): `register-created-id!`
+   trims the oldest entries past the cap so a buffer that is never drained by
+   a crystal harvest cannot grow without bound. A flat cap (vs the per-key
+   lru/make-by-key used by `recall-buffer`) is used here because the
+   flush-by-project contract retains cross-project scoped entries and folds
+   unscoped (`:entry/unscoped`, project-agnostic) entries into every project
+   flush — semantics that a per-key drain cannot express without a new
+   per-key drain op on `IBoundedQueue`."}
   created-ids-buffer
   (atom []))
 
 (defn register-created-id!
-  "Register a created memory entry ID. Constructs CreatedEntry ADT."
+  "Register a created memory entry ID. Constructs CreatedEntry ADT.
+   Bounded: retains at most `created-ids-cap` entries, dropping the oldest."
   [entry-id project-id]
   (when entry-id
     (let [ts (.toString (java.time.Instant/now))
           entry (if project-id
                   (created-entry :entry/scoped {:id entry-id :timestamp ts :project-id project-id})
                   (created-entry :entry/unscoped {:id entry-id :timestamp ts}))]
-      (swap! created-ids-buffer conj entry))))
+      (swap! created-ids-buffer
+             (fn [buf]
+               (let [buf' (conj buf entry)
+                     n    (count buf')]
+                 (if (> n created-ids-cap)
+                   ;; into [] copies into a fresh vector so the trimmed-off
+                   ;; head array is released (a raw/`vec`-wrapped subvec would
+                   ;; retain the parent array).
+                   (into [] (subvec buf' (- n created-ids-cap)))
+                   buf')))))))
 
 (defn get-created-ids
   "Get all created IDs without clearing."
