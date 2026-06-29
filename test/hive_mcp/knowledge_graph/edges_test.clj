@@ -74,6 +74,17 @@
       (is (= "agent:test-123" (:kg-edge/created-by edge)))
       (is (inst? (:kg-edge/created-at edge))))))
 
+(deftest add-edge-rejects-non-string-node-id-test
+  (testing "add-edge! throws when :from/:to is not a non-blank string (poison-datom guard)"
+    (let [to (gen-node-id)]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"non-blank string"
+                            (edges/add-edge! {:from {:success? false :reconnecting? true}
+                                              :to to :relation :derived-from})))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"non-blank string"
+                            (edges/add-edge! {:from (gen-node-id) :to nil :relation :derived-from})))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"non-blank string"
+                            (edges/add-edge! {:from "" :to to :relation :derived-from}))))))
+
 (deftest add-edge-default-confidence-test
   (testing "add-edge! defaults confidence to 1.0"
     (let [from (gen-node-id)

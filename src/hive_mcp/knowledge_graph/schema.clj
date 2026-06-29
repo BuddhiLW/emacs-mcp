@@ -117,6 +117,12 @@
   [source-type]
   (contains? source-types source-type))
 
+(defn valid-node-id?
+  "Check if a value is usable as a KG node id: a non-blank string."
+  [node-id]
+  (and (string? node-id)
+       (boolean (re-find #"\S" node-id))))
+
 (defn valid-abstraction-level?
   "Check if abstraction level is valid (1-4).
    L0 (runtime) is not stored, so 0 is not valid for persistence."

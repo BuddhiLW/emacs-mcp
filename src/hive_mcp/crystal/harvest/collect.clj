@@ -385,7 +385,11 @@
              :kg-edge-count        (:count kg-edges)
              :kanban-movement-count (:count kanban-mvs)
              :created-count        (count memory-ids-created)
-             :accessed-count       (count memory-ids-accessed)}
+             :accessed-count       (count memory-ids-accessed)
+             ;; Per-type breakdown of memories created this session (decision,
+             ;; convention, …). Feeds the wrap-notify projection so the hivemind
+             ;; piggyback reports real counts instead of 0 decisions/0 conventions.
+             :created-by-type      (frequencies (keep :type memory-ids-created))}
    :errors (when (seq errors) errors)})
 
 ;; =============================================================================
@@ -427,7 +431,8 @@
                              :kg-edge-count 0
                              :kanban-movement-count 0
                              :created-count 0
-                             :accessed-count 0}
+                             :accessed-count 0
+                             :created-by-type {}}
                    :errors [{:type :harvest-failed :fn "harvest-all"}]}
                   (let [dir (or directory (ctx/current-directory))
                         effective-agent (or agent-id (ctx/current-agent-id))

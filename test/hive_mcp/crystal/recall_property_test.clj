@@ -62,14 +62,17 @@
                   (= (count entries) (+ (count matched) (count retained))))))
 
 ;; =============================================================================
-;; P3 — Correctness: all matched entries have the target project-id
+;; P3 — Correctness: every matched entry is either the target-scoped or unscoped
+;;      (unscoped entries belong to any project — see partition-by-project docstring)
 ;; =============================================================================
 
 (defspec p3-partition-correctness 200
   (prop/for-all [entries gen-entries
                  pid gen-project-id]
                 (let [[matched _] (partition-by-project entries pid)]
-                  (every? #(= pid (:project-id %)) matched))))
+                  (every? #(or (= :entry/unscoped (:adt/variant %))
+                               (= pid (:project-id %)))
+                          matched))))
 
 ;; =============================================================================
 ;; P4 — Complement: no retained scoped entries have the target project-id
@@ -114,15 +117,16 @@
                        (= [] re-retained)))))
 
 ;; =============================================================================
-;; P8 — Unscoped invariant: unscoped entries always go to retained
+;; P8 — Unscoped invariant: unscoped entries always go to matched
+;;       (an unscoped memory belongs to every project — see impl docstring)
 ;; =============================================================================
 
-(defspec p8-unscoped-always-retained 200
+(defspec p8-unscoped-always-matched 200
   (prop/for-all [unscoped-entries (gen/vector gen-unscoped-entry 0 20)
                  pid gen-project-id]
                 (let [[matched retained] (partition-by-project unscoped-entries pid)]
-                  (and (empty? matched)
-                       (= unscoped-entries retained)))))
+                  (and (= unscoped-entries matched)
+                       (empty? retained)))))
 
 ;; =============================================================================
 ;; P9 — ADT completeness: result is always a 2-element vector
@@ -165,7 +169,7 @@
     (reset! @#'recall/created-ids-buffer [])))
 
 (deftest flush-scoped-filters-by-project
-  (testing "flush-created-ids! with project-id returns only matching, retains rest"
+  (testing "flush-created-ids! with project-id returns matching + unscoped, retains the rest"
     (reset! @#'recall/created-ids-buffer [])
     (recall/register-created-id! "a" "project-alpha")
     (recall/register-created-id! "b" "project-beta")
@@ -173,10 +177,12 @@
     (recall/register-created-id! "d" nil)
     (let [matched (recall/flush-created-ids! "project-alpha")
           remaining (recall/get-created-ids)]
-      (is (= 2 (count matched)) "Should match 2 hive-mcp entries")
-      (is (every? #(= "project-alpha" (:project-id %)) matched))
-      (is (= 2 (count remaining)) "Should retain project-beta + unscoped")
-      (is (= #{"b" "d"} (set (map :id remaining)))))
+      (is (= 3 (count matched)) "Should match project-alpha scoped + unscoped")
+      (is (every? #(or (= :entry/unscoped (:adt/variant %))
+                       (= "project-alpha" (:project-id %)))
+                  matched))
+      (is (= 1 (count remaining)) "Should retain only project-beta")
+      (is (= #{"b"} (set (map :id remaining)))))
     (reset! @#'recall/created-ids-buffer [])))
 
 (deftest flush-all-clears-buffer

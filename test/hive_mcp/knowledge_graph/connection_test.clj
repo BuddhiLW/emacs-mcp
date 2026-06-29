@@ -12,7 +12,7 @@
             [clojure.string :as string]
             [hive-mcp.knowledge-graph.connection :as conn]
             [hive-mcp.knowledge-graph.protocol :as proto]
-            [hive-mcp.knowledge-graph.store.fixtures :as fixtures]))
+            [hive-mcp.knowledge-graph.store.datascript :as ds-store]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -21,7 +21,29 @@
 ;; Test Fixtures
 ;; =============================================================================
 
-(use-fixtures :each fixtures/datascript-fixture)
+(defn isolated-store-fixture
+  "Per-test isolated KG store with auto setup + teardown.
+
+   Installs a fresh in-memory DataScript store as the GLOBAL store
+   (proto/set-store!) — not a thread-local *test-store* — so every thread
+   resolves the same ephemeral instance and can never fall through to a
+   real/live backend. Binds *sync-writes* so writes complete on the calling
+   thread (these tests read immediately after transact!, with no async
+   go-loop store-resolution divergence). Restores the prior store (or clears)
+   on teardown. See convention 20260629150125-3a07e787."
+  [f]
+  (let [prior (when (proto/store-set?) (proto/get-store))
+        store (ds-store/create-store)]
+    (proto/ensure-conn! store)
+    (proto/set-store! store)
+    (binding [conn/*sync-writes* true]
+      (try
+        (f)
+        (finally
+          (conn/stop-writer!)
+          (if prior (proto/set-store! prior) (proto/clear-store!)))))))
+
+(use-fixtures :each isolated-store-fixture)
 
 ;; =============================================================================
 ;; get-conn / ensure-conn Tests

@@ -20,7 +20,8 @@
             [hive-mcp.dns.result :as result]
             [hive-mcp.plan.schema :as schema]
             [clojure.tools.logging :as log]
-            [clojure.set :as set]))
+            [clojure.set :as set]
+            [hive-mcp.plan.field-registry :as field-registry]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -322,9 +323,11 @@
     :files-read :files-write})
 
 (defn- warn-unknown-keys
-  "Log warn for step keys not in `known-step-keys`. Pure pass-through."
+  "Log warn for step keys not in known-step-keys nor registered by an addon
+   (plan.field-registry). Pure pass-through."
   [step]
-  (let [unknown (remove known-step-keys (keys step))]
+  (let [known   (into known-step-keys (field-registry/step-field-keys))
+        unknown (remove known (keys step))]
     (when (seq unknown)
       (clojure.tools.logging/warn
        "[plan-parser] step has unknown keys (silently dropped):"
@@ -368,19 +371,17 @@
   #{:objective :non-goals :validation-strategy})
 
 (defn- warn-unknown-plan-keys
-  "Log warn for plan-level keys not in `known-plan-keys`. Pure pass-through.
-
-   Two warning classes:
-     - :recognized-but-unused — listed in recognized-but-unused-plan-keys;
-       parser sees them but downstream (plan-to-kanban, KG) ignores them.
-     - :unknown — outside both sets; almost certainly a typo or stale field."
+  "Log warn for plan-level keys outside known-plan-keys, addon-registered plan
+   fields (plan.field-registry), and recognized-but-unused-plan-keys. Pure
+   pass-through; recognized-but-unused warned distinctly from unknown."
   [plan]
   (let [present-keys (set (keys plan))
+        known        (into known-plan-keys (field-registry/plan-field-keys))
         recognized   (set/intersection
-                       present-keys recognized-but-unused-plan-keys)
+                      present-keys recognized-but-unused-plan-keys)
         unknown      (set/difference
-                       present-keys known-plan-keys
-                       recognized-but-unused-plan-keys)]
+                      present-keys known
+                      recognized-but-unused-plan-keys)]
     (when (seq recognized)
       (log/warn
        "[plan-parser] plan has recognized-but-unused keys (parser saw, kanban ignored):"

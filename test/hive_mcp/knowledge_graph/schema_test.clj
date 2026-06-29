@@ -32,6 +32,17 @@
     (is (false? (schema/valid-abstraction-level? nil)))
     (is (false? (schema/valid-abstraction-level? "2")))))
 
+(deftest valid-node-id-test
+  (testing "valid-node-id? accepts non-blank strings"
+    (is (true? (schema/valid-node-id? "20260629-abc")))
+    (is (true? (schema/valid-node-id? "x"))))
+  (testing "valid-node-id? rejects non-strings and blanks (poison-datom guard)"
+    (is (false? (schema/valid-node-id? nil)))
+    (is (false? (schema/valid-node-id? "")))
+    (is (false? (schema/valid-node-id? "   ")))
+    (is (false? (schema/valid-node-id? 42)))
+    (is (false? (schema/valid-node-id? {:success? false :reconnecting? true})))))
+
 (deftest abstraction-level-keyword-test
   (testing "abstraction-level-keyword converts integer to keyword"
     (is (= :L1 (schema/abstraction-level-keyword 1)))

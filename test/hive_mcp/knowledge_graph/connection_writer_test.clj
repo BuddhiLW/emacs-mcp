@@ -15,7 +15,7 @@
             [clojure.core.async :as async]
             [hive-mcp.knowledge-graph.connection :as conn]
             [hive-mcp.knowledge-graph.protocol :as proto]
-            [hive-mcp.knowledge-graph.store.fixtures :as fixtures])
+            [hive-mcp.knowledge-graph.store.datascript :as ds-store])
   (:import [java.util.concurrent CountDownLatch TimeUnit]))
 
 ;; =============================================================================
@@ -23,16 +23,42 @@
 ;; =============================================================================
 
 (defn writer-fixture
-  "Fixture that ensures writer is stopped before and after each test.
-   Combined with datascript-fixture for a fresh store."
+  "Per-test isolated KG store with auto setup + teardown.
+
+   Installs a fresh in-memory DataScript store as the GLOBAL store
+   (proto/set-store!) — not a thread-local *test-store* — so the writer
+   go-loop and any spawned threads resolve the SAME ephemeral store and can
+   never fall through to a real/live backend. Stops the writer before and
+   after, and restores the prior store (or clears) on teardown."
   [f]
-  (fixtures/datascript-fixture
-   (fn []
-     (conn/stop-writer!)
-     (try
-       (f)
-       (finally
-         (conn/stop-writer!))))))
+  (let [prior (when (proto/store-set?) (proto/get-store))
+        store (ds-store/create-store)]
+    (proto/ensure-conn! store)
+    (proto/set-store! store)
+    (conn/stop-writer!)
+    (try
+      (f)
+      (finally
+        (conn/stop-writer!)
+        (if prior (proto/set-store! prior) (proto/clear-store!))))))
+
+(deftest transact-rejects-poison-edge-datom-test
+  (testing "transact! rejects a KG edge datom with a non-string node id (writer-survival guard)"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Poison KG edge datom"
+                          (conn/transact! [{:kg-edge/id "e1"
+                                            :kg-edge/from {:success? false :reconnecting? true}
+                                            :kg-edge/to "2026-06-29"
+                                            :kg-edge/relation :derived-from}])))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Poison KG edge datom"
+                          (conn/transact! [{:kg-edge/from "ok" :kg-edge/to 42}])))))
+
+(deftest assert-edge-node-ids-allows-clean-tx-test
+  (testing "guard is a no-op for string-id edges, non-edge datoms, and vector ops"
+    (is (nil? (#'conn/assert-edge-node-ids!
+               [{:kg-edge/from "a" :kg-edge/to "b" :kg-edge/relation :implements}])))
+    (is (nil? (#'conn/assert-edge-node-ids! [{:memory/id "m1" :memory/content "x"}])))
+    (is (nil? (#'conn/assert-edge-node-ids! [[:db/add 1 :kg-edge/confidence 0.5]])))
+    (is (nil? (#'conn/assert-edge-node-ids! nil)))))
 
 (use-fixtures :each writer-fixture)
 
@@ -240,3 +266,26 @@
         (is (= (* n-threads writes-per-thread) (count concurrent-ids))
             (str "Expected " (* n-threads writes-per-thread)
                  " writes, got " (count concurrent-ids)))))))
+
+;; =============================================================================
+;; Fail-Fast on Unavailable Backend (no silent drop / false success)
+;; =============================================================================
+
+(deftest transact-fails-fast-when-store-unavailable-test
+  (testing "transact! surfaces an unavailable backend instead of reporting success then dropping"
+    (with-redefs [conn/ensure-store!
+                  (fn [] (throw (ex-info "Datahike KG backend unavailable"
+                                         {:backend :datahike})))]
+      (testing "async (default) path throws rather than enqueueing a doomed write"
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (conn/transact! [{:kg-edge/id "degraded-async"
+                                       :kg-edge/from "a" :kg-edge/to "b"
+                                       :kg-edge/relation :implements
+                                       :kg-edge/confidence 1.0}]))))
+      (testing "sync path throws rather than swallowing to nil"
+        (binding [conn/*sync-writes* true]
+          (is (thrown? clojure.lang.ExceptionInfo
+                       (conn/transact! [{:kg-edge/id "degraded-sync"
+                                         :kg-edge/from "a" :kg-edge/to "b"
+                                         :kg-edge/relation :implements
+                                         :kg-edge/confidence 1.0}]))))))))

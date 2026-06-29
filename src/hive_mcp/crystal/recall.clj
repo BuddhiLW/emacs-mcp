@@ -3,6 +3,7 @@
    Extension points resolved via extensions registry."
   (:require [hive-mcp.crystal.core :as crystal]
             [hive-mcp.extensions.registry :as ext]
+            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
             [hive-mcp.engine.bounded.protocol :as bp]
             [hive-mcp.engine.bounded.lru :as lru]
             [hive-dsl.adt :refer [defadt adt-case]]
@@ -15,15 +16,6 @@
 ;; =============================================================================
 ;; Extension Delegation Helpers
 ;; =============================================================================
-
-(defn- delegate-or-noop
-  "Try to delegate to extension fn, fall back to default value."
-  [ext-key default-val args]
-  (if-let [f (ext/get-extension ext-key)]
-    (apply f args)
-    (do
-      (log/debug "Extension not available, returning default for" ext-key)
-      default-val)))
 
 ;; =============================================================================
 ;; Recall Context Detection — delegates to extension
@@ -142,9 +134,11 @@
 ;; =============================================================================
 
 (defadt CreatedEntry
-  "Session-tracked memory entry. Scoped or unscoped."
-  [:entry/scoped   {:id string? :timestamp string? :project-id string?}]
-  [:entry/unscoped {:id string? :timestamp string?}])
+  "Session-tracked memory entry. Scoped or unscoped. `:type` is the memory
+   type (\"decision\", \"convention\", …) when known — wrap synthesis breaks the
+   session delta down by type so the hivemind piggyback reports real counts."
+  [:entry/scoped   {:id string? :timestamp string? :project-id string? :type string?}]
+  [:entry/unscoped {:id string? :timestamp string? :type string?}])
 
 ;; =============================================================================
 ;; Created IDs Tracking (Session-scoped)
@@ -175,13 +169,20 @@
 
 (defn register-created-id!
   "Register a created memory entry ID. Constructs CreatedEntry ADT.
+   Optional `type` (the memory type string) is threaded onto the entry so
+   wrap synthesis can break the session delta down by type.
    Bounded: retains at most `created-ids-cap` entries, dropping the oldest."
-  [entry-id project-id]
-  (when entry-id
+  ([entry-id project-id] (register-created-id! entry-id project-id nil))
+  ([entry-id project-id type]
+   (when entry-id
     (let [ts (.toString (java.time.Instant/now))
           entry (if project-id
-                  (created-entry :entry/scoped {:id entry-id :timestamp ts :project-id project-id})
-                  (created-entry :entry/unscoped {:id entry-id :timestamp ts}))]
+                  (created-entry :entry/scoped
+                                 (cond-> {:id entry-id :timestamp ts :project-id project-id}
+                                   type (assoc :type type)))
+                  (created-entry :entry/unscoped
+                                 (cond-> {:id entry-id :timestamp ts}
+                                   type (assoc :type type))))]
       (swap! created-ids-buffer
              (fn [buf]
                (let [buf' (conj buf entry)
@@ -191,7 +192,7 @@
                    ;; head array is released (a raw/`vec`-wrapped subvec would
                    ;; retain the parent array).
                    (into [] (subvec buf' (- n created-ids-cap)))
-                   buf')))))))
+                   buf'))))))))
 
 (defn get-created-ids
   "Get all created IDs without clearing."

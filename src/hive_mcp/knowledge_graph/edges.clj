@@ -79,12 +79,14 @@
    - :source-type   - How edge was established (:manual, :automated, :inferred, :co-access)
    - :last-verified - Timestamp of last verification (defaults to creation time)
 
+   :from and :to must be non-blank strings (schema/valid-node-id?).
+
    Returns the edge ID on success, throws on validation failure."
   [{:keys [from to relation scope confidence created-by source-type last-verified]
     :or {confidence 1.0}}]
   ;; Validate required fields
-  (when (or (nil? from) (nil? to))
-    (throw (ex-info "Edge requires :from and :to node IDs"
+  (when-not (and (schema/valid-node-id? from) (schema/valid-node-id? to))
+    (throw (ex-info "Edge requires non-blank string :from and :to node IDs"
                     {:from from :to to})))
   (when-not (schema/valid-relation? relation)
     (throw (ex-info "Invalid relation type"

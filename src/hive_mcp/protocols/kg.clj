@@ -1,5 +1,6 @@
 (ns hive-mcp.protocols.kg
-  "Protocol definitions for Knowledge Graph storage backends.")
+  "Protocol definitions for Knowledge Graph storage backends."
+  (:require [hive-mcp.protocols.registry :as reg]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -86,35 +87,31 @@
 ;;; Active Store Management
 ;;; ============================================================================
 
-(defonce ^:private active-store (atom nil))
+(defonce ^:private slot
+  (reg/single-slot {:validate #(satisfies? IKGStore %)
+                    :on-empty #(throw (ex-info "No graph store configured. Call set-store! first."
+                                               {:hint "Initialize with datascript-store, datalevin-store, or datahike-store"}))
+                    :teardown close!}))
 
 (defn set-store!
   "Set the active graph store implementation."
   [store]
-  {:pre [(satisfies? IKGStore store)]}
-  (reset! active-store store)
-  store)
+  (reg/install! slot store))
 
 (defn get-store
   "Get the active graph store, or throw if none set."
   []
-  (or @active-store
-      (throw (ex-info "No graph store configured. Call set-store! first."
-                      {:hint "Initialize with datascript-store, datalevin-store, or datahike-store"}))))
+  (reg/current slot))
 
 (defn store-set?
   "Check if a store has been configured."
   []
-  (some? @active-store))
+  (reg/present? slot))
 
 (defn clear-store!
   "Clear the active store."
   []
-  (when-let [store @active-store]
-    (try
-      (close! store)
-      (catch Exception _)))
-  (reset! active-store nil))
+  (reg/clear! slot))
 
 ;;; ============================================================================
 ;;; ITemporalKGStore Protocol (Optional Extension)
@@ -153,7 +150,7 @@
   "Check if the active store supports temporal queries."
   []
   (and (store-set?)
-       (temporal-store? @active-store)))
+       (temporal-store? (get-store))))
 
 (defn kg-store?
   "Check if the given object implements IKGStore."

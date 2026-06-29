@@ -29,6 +29,7 @@
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.duration :as dur]
             [hive-mcp.extensions.registry :as ext]
+            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
             [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.dns.result :as result]
             [hive-mcp.concurrency.pool :as pool]
@@ -95,15 +96,6 @@
 ;; =============================================================================
 ;; Extension Delegation Helpers
 ;; =============================================================================
-
-(defn- delegate-or-noop
-  "Try to delegate to extension fn, fall back to default value."
-  [ext-key default-val args]
-  (if-let [f (ext/get-extension ext-key)]
-    (apply f args)
-    (do
-      (log/debug "Extension not available, returning default for" ext-key)
-      default-val)))
 
 (defn- surface-rescue-error
   "If rescue/guard attached error metadata, surface :error into map for backward compat.

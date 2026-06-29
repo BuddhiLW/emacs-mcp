@@ -259,7 +259,8 @@
 
     ;; Build composite tools from addon command contributions
     (let [composite-tools (composite/build-all-composite-tools
-                           {"analysis" "Code analysis"})]
+                           {"analysis" "Code analysis"
+                            "overarch" "Architecture model"})]
       (doseq [t composite-tools]
         (ext/register-tool! t)
         ;; Also register in agent registry for drone agentic loop

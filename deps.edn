@@ -150,7 +150,7 @@
         ;; process liveness, secrets, shell, redaction). Single source of
         ;; truth for "is this pid alive?", `kill -0` semantics, etc.
         ;; NOTE: process.liveness ns is post-v0.2.1 — when the next tag is
-        ;; cut, bump :git/sha here and drop the deps.local.edn override.
+        ;; cut, bump :git/sha here and drop the local.deps.edn override.
         io.github.hive-agi/hive-system {:git/tag "v0.2.4" :git/sha "0706c57"}
 
         ;; Integrant — lifecycle framework for component-based systems
@@ -300,8 +300,8 @@
    :ns-default build}
 
 ;; Local dev overrides for sibling :local/root projects.
-  ;; start-mcp.sh auto-merges deps.local.edn via -Sdeps when present.
-  ;; Create deps.local.edn (gitignored) with :deps key, e.g.:
+  ;; The hive-mcp launcher merges local.deps.edn via `clj -Sdeps` at startup.
+  ;; Create local.deps.edn (gitignored) with :deps key, e.g.:
   ;;   {:deps {io.github.hive-agi/hive-events {:git/tag "v0.5.2" :git/sha "24a58a1"}}}
   ;; NOTE: Use :deps (top-level key), NOT :override-deps (alias-level only).
   }}

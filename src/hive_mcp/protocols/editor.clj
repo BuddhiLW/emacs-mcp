@@ -6,7 +6,8 @@
 
    Pattern: follows protocols/kg.clj (active atom + NoopEditor fallback).
    Unlike kg.clj which throws when no store is set, get-editor returns
-   NoopEditor — headless mode is a first-class citizen.")
+   NoopEditor — headless mode is a first-class citizen."
+  (:require [hive-mcp.protocols.registry :as reg]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -48,32 +49,32 @@
 ;;; Active Editor Management
 ;;; ============================================================================
 
-(defonce ^:private active-editor (atom nil))
+(declare ->NoopEditor)
+
+(defonce ^:private slot
+  (reg/single-slot {:validate #(satisfies? IEditor %)
+                    :on-empty #(->NoopEditor)}))
 
 (defn set-editor!
   "Set the active editor implementation."
   [editor]
-  {:pre [(satisfies? IEditor editor)]}
-  (reset! active-editor editor)
-  editor)
+  (reg/install! slot editor))
 
 (defn editor-set?
   "Check if an editor has been explicitly configured."
   []
-  (some? @active-editor))
-
-(declare ->NoopEditor)
+  (reg/present? slot))
 
 (defn get-editor
   "Get the active editor. Returns NoopEditor when none is configured
    (headless mode is a first-class citizen, unlike kg.clj which throws)."
   []
-  (or @active-editor (->NoopEditor)))
+  (reg/current slot))
 
 (defn clear-editor!
   "Clear the active editor."
   []
-  (reset! active-editor nil))
+  (reg/clear! slot))
 
 ;;; ============================================================================
 ;;; NoopEditor (Headless Fallback)

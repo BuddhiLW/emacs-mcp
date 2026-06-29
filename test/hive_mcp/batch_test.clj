@@ -2,7 +2,8 @@
   "Smoke test proving hive-mcp.batch is independently callable without
    any hive-mcp tool routing. Deeper coverage remains in
    hive-mcp.tools.multi-test which exercises the wrapper."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.data.json :as json]
             [hive-mcp.batch :as batch]
             [hive-mcp.batch.protocol :as bp]
             [hive-mcp.extensions.registry :as ext]))
@@ -11,6 +12,28 @@
   "Simple in-process handler registry keyed by :tool keyword."
   [handlers tool-name]
   (get handlers tool-name))
+
+(defn- with-text-envelope-parser
+  "Supply a faithful :bx/b that parses the standard {:type \"text\" :text json}
+   tool envelope into a keywordized map. The prod batch addon registers this at
+   server boot; clojure -M:test never loads addons, so enrich-op-result's
+   text-envelope downgrade path has no parser cold and silently can't see inner
+   failures. Bare-map results pass through unchanged. Restores any prior :bx/b."
+  [f]
+  (let [prior (ext/get-extension :bx/b)]
+    (ext/register! :bx/b
+                   (fn [result]
+                     (if (and (map? result)
+                              (= "text" (:type result))
+                              (string? (:text result)))
+                       (try (json/read-str (:text result) :key-fn keyword)
+                            (catch Exception _ result))
+                       result)))
+    (try (f)
+         (finally
+           (if prior (ext/register! :bx/b prior) (ext/deregister! :bx/b))))))
+
+(use-fixtures :once with-text-envelope-parser)
 
 (deftest run-operations-happy-path
   (testing "single op with an injected handler executes and returns success"
@@ -203,3 +226,48 @@
             "every op-id must appear in the results vector exactly once"))
       (is (= 2 (get-in result [:summary :failed]))
           "nil-from-executor is a failure signal, not a phantom success"))))
+
+;; =============================================================================
+;; In-band tool error → summary.failed (kanban 20260629161156-76f4e486)
+;; =============================================================================
+;;
+;; The earlier enrich-op-result tests exercise the JSON-text envelope
+;; ({:text "{...}"}) form. KG handlers also fail *in band* without that
+;; envelope: handle-kg-add-edge's validation returns a bare {:error "..."}
+;; map directly, and mcp-error returns an {:isError true} envelope. Both
+;; must surface as summary.failed>0 through the full run-operations flow —
+;; otherwise a k> op whose edge was rejected reads back as success and any
+;; dependent $ref dispatches against a phantom endpoint.
+
+(deftest in-band-bare-error-counts-as-failed
+  (testing "a handler returning a bare {:error ...} (no throw, no :success key) —
+            exactly handle-kg-add-edge's validation-failure shape — is counted failed"
+    (let [handlers {"kg" (fn [_args] {:error "relation is required"})}
+          result (batch/run-operations
+                  [{:id "k1" :tool "kg" :command "edge" :from "a" :to "b"}]
+                  {:resolve-handler (partial stub-handler handlers)})
+          k1 (->> (vals (:waves result)) (mapcat :results)
+                  (filter #(= "k1" (:id %))) first)]
+      (is (false? (:success result)))
+      (is (= 1 (get-in result [:summary :total])))
+      (is (= 0 (get-in result [:summary :success])))
+      (is (= 1 (get-in result [:summary :failed]))
+          "bare in-band :error must surface as failed, not masked as success")
+      (is (false? (:success k1)))
+      (is (re-find #"relation is required" (or (:error k1) ""))
+          "the op error must carry the in-band message"))))
+
+(deftest in-band-mcp-error-envelope-counts-as-failed
+  (testing "a handler returning an mcp-error {:isError true} envelope is counted failed"
+    (let [handlers {"kg" (fn [_args] {:isError true
+                                      :error "Edge not found: x"
+                                      :content [{:type "text" :text "Edge not found: x"}]})}
+          result (batch/run-operations
+                  [{:id "p1" :tool "kg" :command "promote" :edge_id "x" :to_scope "s"}]
+                  {:resolve-handler (partial stub-handler handlers)})
+          p1 (->> (vals (:waves result)) (mapcat :results)
+                  (filter #(= "p1" (:id %))) first)]
+      (is (false? (:success result)))
+      (is (= 1 (get-in result [:summary :failed]))
+          "mcp-error :isError envelope must surface as failed")
+      (is (false? (:success p1))))))

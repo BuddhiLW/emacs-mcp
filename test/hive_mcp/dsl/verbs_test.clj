@@ -17,8 +17,8 @@
 ;; =============================================================================
 
 (deftest verb-table-structure-test
-  (testing "verb-table has 36 verbs"
-    (is (= 36 (count verbs/verb-table))))
+  (testing "verb-table has 41 verbs"
+    (is (= 41 (count verbs/verb-table))))
   (testing "all keys are strings"
     (is (every? string? (keys verbs/verb-table))))
   (testing "all values have :tool and :command"
@@ -116,19 +116,21 @@
 ;; =============================================================================
 
 (deftest param-aliases-completeness-test
-  (testing "all 9 aliases present"
-    (is (= 9 (count verbs/param-aliases))))
+  (testing "all 11 aliases present"
+    (is (= 11 (count verbs/param-aliases))))
   (testing "each alias maps correctly"
     (are [alias kw] (= kw (get verbs/param-aliases alias))
-      "c"  :content
-      "t"  :type
-      "#"  :tags
-      "d"  :directory
-      "q"  :query
-      "n"  :name
-      "id" :id
-      "p"  :prompt
-      "f"  :files)))
+      "c"   :content
+      "t"   :type
+      "#"   :tags
+      "d"   :directory
+      "q"   :query
+      "n"   :name
+      "id"  :id
+      "p"   :prompt
+      "f"   :files
+      "rel" :relation
+      "idk" :idempotency_key)))
 
 ;; =============================================================================
 ;; Part 4: expand-param-key

@@ -334,7 +334,7 @@
                               "Backend is likely degraded or offline — "
                               "check store health and retry."))
               (let [entry-id raw-id
-                    _ (recall/register-created-id! entry-id project-id)
+                    _ (recall/register-created-id! entry-id project-id type)
                     kg-params {:kg_implements (:kg-implements-vec kg-vecs)
                                :kg_supersedes (:kg-supersedes-vec kg-vecs)
                                :kg_depends_on (:kg-depends-on-vec kg-vecs)

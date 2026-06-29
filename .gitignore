@@ -35,7 +35,6 @@ test-output/
 
 # Local config
 .clojure-mcp/
-deps.local.edn
 .dir-locals.el
 
 # Generated diagrams

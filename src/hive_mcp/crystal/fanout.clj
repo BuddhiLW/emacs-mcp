@@ -114,7 +114,8 @@
                          :kg-edge-count        (count (:kg-edges-created slice))
                          :kanban-movement-count (count (:kanban-movements slice))
                          :created-count        (count (:memory-ids-created slice))
-                         :accessed-count       (count (:memory-ids-accessed slice))}})
+                         :accessed-count       (count (:memory-ids-accessed slice))
+                         :created-by-type      (frequencies (keep :type (:memory-ids-created slice)))}})
 
 ;; =============================================================================
 ;; Umbrella → legacy-harvested adapter
@@ -155,7 +156,8 @@
                            :kg-edge-count        (count cross-pid-edges)
                            :kanban-movement-count 0
                            :created-count        0
-                           :accessed-count       0}}))
+                           :accessed-count       0
+                           :created-by-type      {}}}))
 
 ;; =============================================================================
 ;; Per-scope synthesis call

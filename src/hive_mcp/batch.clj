@@ -23,6 +23,7 @@
             [hive-mcp.batch.protocol :as proto]
             [hive-mcp.dns.result :as result]
             [hive-mcp.extensions.registry :as ext]
+            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
             [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -32,15 +33,6 @@
 ;; =============================================================================
 ;; Extension delegation
 ;; =============================================================================
-
-(defn- delegate-or-noop
-  "Delegate to extension if available, fall back to default value."
-  [ext-key default-val args]
-  (if-let [f (ext/get-extension ext-key)]
-    (apply f args)
-    (do
-      (log/debug "Extension not available, returning default for" ext-key)
-      default-val)))
 
 ;; =============================================================================
 ;; Operation normalization
@@ -119,17 +111,38 @@
         inner-success-false?  (and (map? data)
                                    (contains? data :success)
                                    (false? (:success data)))
+        ;; Explicit error flags: mcp-error envelopes carry {:isError true};
+        ;; hive-dsl Result failures carry {:ok false}. Neither was inspected
+        ;; before, so in-band tool errors surfaced in summaries as failed:0.
+        explicit-error-flag?  (and (map? data)
+                                   (or (true? (:isError data))
+                                       (false? (:ok data))))
+        ;; Bare error map with no :success key — e.g. handle-kg-add-edge's
+        ;; validation failures return {:error "relation is required"} directly.
+        bare-error?           (and (map? data)
+                                   (some? (:error data))
+                                   (not (contains? data :success)))
         null-id-on-create?    (and (creation-tool? tool)
                                    (map? data)
-                                   (contains? data :id)
-                                   (nil? (:id data)))
+                                   (or (and (contains? data :id) (nil? (:id data)))
+                                       ;; kg edge handler returns :edge-id, not :id
+                                       (and (contains? data :edge-id) (nil? (:edge-id data)))))
         downgrade?            (and success
-                                   (or inner-success-false? null-id-on-create?))
+                                   (or inner-success-false?
+                                       explicit-error-flag?
+                                       bare-error?
+                                       null-id-on-create?))
         downgrade-msg         (cond
                                 inner-success-false?
                                 (or (some-> data :errors first)
                                     (some-> data :error str)
                                     "tool reported failure (inner :success false)")
+                                bare-error?
+                                (some-> data :error str)
+                                explicit-error-flag?
+                                (or (some-> data :error str)
+                                    (some-> data :text str)
+                                    "tool reported failure (:isError/:ok false)")
                                 null-id-on-create?
                                 (str "creation tool returned nil id — degraded backend?")
                                 :else nil)]

@@ -1,5 +1,6 @@
 (ns hive-mcp.protocols.workflow
-  "Protocol definitions for workflow execution engines.")
+  "Protocol definitions for workflow execution engines."
+  (:require [hive-mcp.protocols.registry :as reg]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -108,31 +109,29 @@
 ;;; Active Engine Management
 ;;; =============================================================================
 
-(defonce ^:private active-engine (atom nil))
+(defonce ^:private slot
+  (reg/single-slot {:validate #(satisfies? IWorkflowEngine %)
+                    :on-empty ->NoopWorkflowEngine}))
 
 (defn set-workflow-engine!
   "Set the active workflow engine implementation."
   [engine]
-  {:pre [(satisfies? IWorkflowEngine engine)]}
-  (reset! active-engine engine)
-  engine)
+  (reg/install! slot engine))
 
 (defn get-workflow-engine
   "Get the active workflow engine, or NoopWorkflowEngine if none set."
   []
-  (or @active-engine
-      (->NoopWorkflowEngine)))
+  (reg/current slot))
 
 (defn workflow-engine-set?
   "Check if an active workflow engine is configured."
   []
-  (some? @active-engine))
+  (reg/present? slot))
 
 (defn clear-workflow-engine!
   "Clear the active workflow engine."
   []
-  (reset! active-engine nil)
-  nil)
+  (reg/clear! slot))
 
 ;;; =============================================================================
 ;;; Utility Functions
@@ -152,7 +151,7 @@
   "Check if a non-noop workflow engine is active."
   []
   (and (workflow-engine-set?)
-       (not (instance? NoopWorkflowEngine @active-engine))))
+       (not (instance? NoopWorkflowEngine (get-workflow-engine)))))
 
 (defn capabilities
   "Get a summary of available workflow capabilities."

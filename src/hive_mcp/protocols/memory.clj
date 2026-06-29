@@ -1,6 +1,7 @@
 (ns hive-mcp.protocols.memory
   "Protocol definitions for memory storage backends."
-  (:require [clojure.string]))
+  (:require [clojure.string]
+            [hive-mcp.protocols.registry :as reg]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -127,34 +128,31 @@
 ;;; independent stores (e.g. cartography-scoped backends) without disturbing
 ;;; existing code.
 
-(defonce ^:private store-registry (atom {}))
+(defonce ^:private slot
+  (reg/multi-slot {:validate #(satisfies? IMemoryStore %)}))
 
 (defn register-store!
   "Register `store` under `key` in the multi-store registry.
    Returns the registered store."
   [key store]
-  {:pre [(satisfies? IMemoryStore store)]}
-  (swap! store-registry assoc key store)
-  store)
+  (reg/reg-put! slot key store))
 
 (defn unregister-store!
   "Remove the store at `key`. No-op if absent. Does NOT disconnect
    the underlying store; callers are responsible for lifecycle."
   [key]
-  (swap! store-registry dissoc key)
-  nil)
+  (reg/reg-remove! slot key))
 
 (defn registered-stores
   "Return the current registry map {key -> store}. Read-only snapshot."
   []
-  @store-registry)
+  (reg/reg-snapshot slot))
 
 (defn reset-registry!
   "Clear all entries from the registry. Intended for tests.
    Does NOT disconnect underlying stores."
   []
-  (reset! store-registry {})
-  nil)
+  (reg/reg-clear! slot))
 
 (defn get-store
   "Get a memory store from the registry.
@@ -162,15 +160,15 @@
             (backward-compatible with legacy callers).
    1-arity: return the store registered under `key`, throw if absent."
   ([]
-   (or (:default @store-registry)
+   (or (:default (reg/reg-snapshot slot))
        (throw (ex-info "No default memory store registered. Call set-store! or register-store! :default first."
-                       {:registry-keys (vec (keys @store-registry))
+                       {:registry-keys (vec (keys (reg/reg-snapshot slot)))
                         :hint "Initialize with chroma-store, milvus addon, or datascript-store"}))))
   ([key]
-   (or (get @store-registry key)
+   (or (get (reg/reg-snapshot slot) key)
        (throw (ex-info (str "Unknown memory store key: " key)
                        {:store-key key
-                        :available (vec (keys @store-registry))})))))
+                        :available (vec (keys (reg/reg-snapshot slot)))})))))
 
 (defn set-store!
   "Legacy single-store setter. Routes to the :default slot of the
@@ -183,17 +181,17 @@
 (defn store-set?
   "Check if a default memory store has been configured."
   []
-  (some? (:default @store-registry)))
+  (some? (:default (reg/reg-snapshot slot))))
 
 (defn reset-active-store!
   "Disconnect and clear the :default store. Leaves other registry
    entries untouched."
   []
-  (when-let [store (:default @store-registry)]
+  (when-let [store (:default (reg/reg-snapshot slot))]
     (try
       (disconnect! store)
       (catch Exception _)))
-  (swap! store-registry dissoc :default)
+  (reg/reg-remove! slot :default)
   nil)
 
 ;;; ============================================================================

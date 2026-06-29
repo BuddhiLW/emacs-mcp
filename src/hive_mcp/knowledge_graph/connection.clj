@@ -422,45 +422,93 @@
                        :hint "Ephemeral backends (DataScript) have no persistent state. Use reset-conn! for a fresh in-memory conn."})))
     (proto/delete-database! store confirm)))
 
-(defn transact!
-  "Transact data to the KG database.
-   Priority:
-     1. *tx-batch* bound (via with-tx-batch) → accumulate for explicit batch flush
-     2. Otherwise → route through write-coalescing queue for automatic batching
-
-   The coalescing queue drains items within a 25ms window and flushes
-   as a single transaction. Combined with d/transact! (async) at the
-   store level, this eliminates the 'Transacting 1 objects' pattern."
+(defn- offer-coalesced!
+  "Enqueue tx-data on the write-coalescing channel. Pre-increments in-flight
+   before put! so flush-pending! never observes a transient zero while an item
+   is mid-enqueue. Returns true when accepted, false when the channel is
+   full/closed (compensating the in-flight bump)."
   [tx-data]
-  (cond
-    *tx-batch*
-    (swap! *tx-batch* into (dsl-batch/normalize-tx-datum tx-data))
+  (let [tx-chan (:tx-chan @writer-state)]
+    (swap! in-flight inc)
+    (if (and tx-chan (async/put! tx-chan tx-data))
+      true
+      (do (swap! in-flight dec) false))))
 
-    *sync-writes*
+(defn- write-sync-fallback!
+  "Direct synchronous write used when the coalescing queue cannot accept an
+   item, so data is never lost. Records the queue-miss in writer-metrics."
+  [store tx-data]
+  (log/warn "Write-coalescing queue put! failed, falling back to sync transact"
+            {:tx-data-count (if (sequential? tx-data) (count tx-data) 1)})
+  (swap! writer-metrics update :items-dropped
+         + (if (sequential? tx-data) (count tx-data) 1))
+  (r/rescue nil
+            (proto/transact! store (dsl-batch/normalize-tx-datum tx-data))))
+
+(defprotocol IWriteStrategy
+  "One discipline for applying tx-data to the KG store. SRP: each record owns a
+   single write mode; OCP: add a mode by adding a record, not by editing
+   `transact!`."
+  (apply-tx! [strategy tx-data]
+    "Apply tx-data under this strategy. Returns nil. Throws when a required
+     backend is unavailable so callers never receive a false success."))
+
+(defrecord BatchAccumulator [batch-atom]
+  IWriteStrategy
+  (apply-tx! [_ tx-data]
+    (swap! batch-atom into (dsl-batch/normalize-tx-datum tx-data))))
+
+(defrecord SyncWriter [store]
+  IWriteStrategy
+  (apply-tx! [_ tx-data]
     (r/rescue nil
-              (proto/transact! (ensure-store!)
-                               (dsl-batch/normalize-tx-datum tx-data)))
+              (proto/transact! store (dsl-batch/normalize-tx-datum tx-data)))))
 
-    :else
-    (do
-      (ensure-writer!)
-      (let [tx-chan (:tx-chan @writer-state)]
-        ;; Pre-increment BEFORE put! so flush-pending! never observes a
-        ;; transient zero while an item is mid-enqueue. If put! fails we
-        ;; compensate with a decrement on the fallback path.
-        (swap! in-flight inc)
-        (if (and tx-chan (async/put! tx-chan tx-data))
-          nil
-          ;; Channel full or closed — fallback to sync write
-          (do
-            (swap! in-flight dec)
-            (log/warn "Write-coalescing queue put! failed, falling back to sync transact"
-                      {:tx-data-count (if (sequential? tx-data) (count tx-data) 1)})
-            (swap! writer-metrics update :items-dropped
-                   + (if (sequential? tx-data) (count tx-data) 1))
-            (r/rescue nil
-                      (proto/transact! (ensure-store!)
-                                       (dsl-batch/normalize-tx-datum tx-data)))))))))
+(defrecord CoalescingWriter [store]
+  IWriteStrategy
+  (apply-tx! [_ tx-data]
+    (ensure-writer!)
+    (when-not (offer-coalesced! tx-data)
+      (write-sync-fallback! store tx-data))))
+
+(defn- write-strategy
+  "Select the active write strategy from dynamic context (Collect + Promote).
+   The store is resolved eagerly for store-backed strategies so an unavailable
+   backend surfaces to the caller here, not silently in the async flush."
+  []
+  (cond
+    *tx-batch*    (->BatchAccumulator *tx-batch*)
+    *sync-writes* (->SyncWriter (ensure-store!))
+    :else         (->CoalescingWriter (ensure-store!))))
+
+(defn- assert-edge-node-ids!
+  "Reject tx-data containing a KG edge datom whose :kg-edge/from or
+   :kg-edge/to is not a string. A non-string edge node id crashes the
+   datahike AVET writer thread; rejecting it synchronously keeps the
+   writer alive and surfaces a catchable error to the caller."
+  [tx-data]
+  (when (sequential? tx-data)
+    (doseq [d tx-data
+            :when (map? d)]
+      (when (or (contains? d :kg-edge/from)
+                (contains? d :kg-edge/to))
+        (let [from (:kg-edge/from d)
+              to   (:kg-edge/to d)]
+          (when-not (and (string? from) (string? to))
+            (throw (ex-info "Poison KG edge datom rejected: :kg-edge/from and :kg-edge/to must be strings"
+                            {:kg-edge/from from :kg-edge/to to}))))))))
+
+(defn transact!
+  "Transact data to the KG database via the active write strategy:
+     - *tx-batch* bound   → accumulate for an explicit batch flush
+     - *sync-writes* true → immediate synchronous write
+     - otherwise          → route through the write-coalescing queue
+
+   The coalescing queue drains items within a 25ms window and flushes as a
+   single transaction, eliminating the 'Transacting 1 objects' pattern."
+  [tx-data]
+  (assert-edge-node-ids! tx-data)
+  (apply-tx! (write-strategy) tx-data))
 
 (defn transact-sync!
   "Synchronous transact — bypasses the coalescing queue.
@@ -468,6 +516,7 @@
    (e.g., extracting entity IDs from :tx-data).
    Most callers should use transact! (async coalesced) instead."
   [tx-data]
+  (assert-edge-node-ids! tx-data)
   (proto/transact! (ensure-store!) tx-data))
 
 (defmacro with-tx-batch

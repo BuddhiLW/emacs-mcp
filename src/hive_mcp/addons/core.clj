@@ -145,6 +145,10 @@
                                                   id k v)
                                          "saa" ((requiring-resolve 'hive-mcp.saa.registry/register-by-key!)
                                                 id k v)
+                                         "plan" ((requiring-resolve 'hive-mcp.plan.field-registry/register-by-key!)
+                                                 id k v)
+                                         "wf" ((requiring-resolve 'hive-mcp.workflows.strategy-registry/register-by-key!)
+                                               id k v)
                                          (ext/register! k v)))
                                      (swap! addon-registry assoc-in
                                             [id :hook-keys] (set (keys hooks-map)))
@@ -199,10 +203,16 @@
                                           id k)
                                  "saa" ((requiring-resolve 'hive-mcp.saa.registry/deregister-by-key!)
                                         id k)
+                                 "plan" ((requiring-resolve 'hive-mcp.plan.field-registry/deregister-by-owner!)
+                                         id)
+                                 "wf" ((requiring-resolve 'hive-mcp.workflows.strategy-registry/deregister-by-owner!)
+                                       id)
                                  (ext/deregister! k)))
-                             ;; Belt-and-suspenders: clear any leftover :multi/* and :saa/* entries by owner
+                             ;; Belt-and-suspenders: clear any leftover :multi/*, :saa/*, :plan/*, :wf/* entries by owner
                              ((requiring-resolve 'hive-mcp.multi.registry/deregister-by-owner!) id)
                              ((requiring-resolve 'hive-mcp.saa.registry/deregister-by-owner!) id)
+                             ((requiring-resolve 'hive-mcp.plan.field-registry/deregister-by-owner!) id)
+                             ((requiring-resolve 'hive-mcp.workflows.strategy-registry/deregister-by-owner!) id)
                              (log/debug "Addon deregistered hooks" {:addon id :keys hook-keys}))
               ;; Deregister tools
                            (doseq [t (proto/tools addon)]

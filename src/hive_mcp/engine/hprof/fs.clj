@@ -61,20 +61,41 @@
 
 (defn gzip!
   "Gzip a hprof in place — produces `<path>.gz`, deletes the original
-   on success. Returns the path to the `.gz` file or nil on failure."
+   on success. Returns the path to the `.gz` file or nil on failure.
+
+   Atomic + idempotent so an interrupted boot never causes a costly
+   re-gzip of a multi-GB dump:
+   - If a non-empty `<path>.gz` already exists, treat it as a completed
+     prior compression: drop the raw and skip re-deflating.
+   - Otherwise deflate to a `.gz.tmp` and atomically rename on success.
+     A killed run leaves only an orphan tmp (cleaned on retry), never a
+     partial `.gz` alongside a surviving raw — the state that made boot
+     re-compress the same 13GB dump on every restart."
   [{:keys [path]}]
   (let [src (io/file path)
-        dst (io/file (str path ".gz"))]
-    (try
-      (with-open [in  (FileInputStream. src)
-                  out (GZIPOutputStream. (FileOutputStream. dst))]
-        (io/copy in out))
-      (.delete src)
-      (.getCanonicalPath dst)
-      (catch Throwable t
-        (log/warn t "[hprof] gzip failed:" path)
-        (try (.delete dst) (catch Throwable _ nil))
-        nil))))
+        dst (io/file (str path ".gz"))
+        tmp (io/file (str path ".gz.tmp"))]
+    (cond
+      (and (.isFile dst) (pos? (.length dst)))
+      (do (log/info "[hprof] gzip skipped — .gz already present, dropping raw:" path)
+          (.delete src)
+          (.getCanonicalPath dst))
+
+      :else
+      (try
+        (with-open [in  (FileInputStream. src)
+                    out (GZIPOutputStream. (FileOutputStream. tmp))]
+          (io/copy in out))
+        (if (.renameTo tmp dst)
+          (do (.delete src)
+              (.getCanonicalPath dst))
+          (do (log/warn "[hprof] gzip rename failed:" (.getCanonicalPath tmp))
+              (try (.delete tmp) (catch Throwable _ nil))
+              nil))
+        (catch Throwable t
+          (log/warn t "[hprof] gzip failed:" path)
+          (try (.delete tmp) (catch Throwable _ nil))
+          nil)))))
 
 (defn delete!
   "Best-effort delete. Returns true on success, false otherwise."

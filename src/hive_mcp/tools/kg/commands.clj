@@ -3,6 +3,7 @@
   (:require [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.tools.kg.queries :as q]
             [hive-mcp.tools.kg.synthetics :as synthetics]
+            [hive-mcp.knowledge-graph.connection :as conn]
             [hive-mcp.knowledge-graph.edges :as edges]
             [hive-mcp.knowledge-graph.grounding :as grounding]
             [hive-mcp.knowledge-graph.schema :as schema]
@@ -32,8 +33,31 @@
     :else
     {:error "relation must be a string or keyword"}))
 
-(defn handle-kg-add-edge
-  "Create a relationship between two knowledge nodes."
+(defn with-kg-flush
+  "Boundary decorator for KG mutation handlers that write through the async
+   write-coalescing queue (edges/add-edge! -> conn/transact!). After the wrapped
+   handler returns, drain the queue with conn/flush-pending! so the datom is
+   durable BEFORE the tool call returns — read-your-writes at the tool boundary.
+   The immediate beneficiary is the multi/k> DSL: a later op that traverses or
+   reads the just-created edge must not race the ~25ms coalescing window.
+
+   conn/flush-pending! is a cheap no-op when the queue is empty (returns :ok
+   without blocking), so wrapping the validation/error paths costs nothing.
+
+   Centralizes a policy that was previously inlined in handle-kg-add-edge alone
+   — the gap that let kg_promote return before its edge was durable. NOT applied
+   to handlers that write the *memory* store (kg_reground, kg_backfill_grounding
+   via mem-proto): flush-pending! drains only the KG writer. kg_cleanup_synthetics
+   drains internally. Kanban 20260629161156-76f4e486."
+  [handler]
+  (fn [params]
+    (let [result (handler params)]
+      (conn/flush-pending!)
+      result)))
+
+(defn- add-edge*
+  "Create a relationship between two knowledge nodes. Raw impl — the public
+   handle-kg-add-edge wraps this with with-kg-flush for durable-on-return."
   [{:keys [from to relation scope confidence created_by]}]
   (log/info "kg_add_edge" {:from from :to to :relation relation})
   (try
@@ -60,8 +84,15 @@
       (log/error e "kg_add_edge failed")
       (mcp-error (str "Failed to add edge: " (.getMessage e))))))
 
-(defn handle-kg-promote
-  "Promote knowledge edge to a broader scope, preserving the original."
+(def handle-kg-add-edge
+  "Create a relationship between two knowledge nodes. Durable-on-return via
+   with-kg-flush (read-your-writes at the tool boundary)."
+  (with-kg-flush add-edge*))
+
+(defn- promote*
+  "Promote knowledge edge to a broader scope, preserving the original. Raw impl
+   — the public handle-kg-promote wraps this with with-kg-flush so the newly
+   created edge is durable before the tool returns."
   [{:keys [edge_id to_scope]}]
   (log/info "kg_promote" {:edge edge_id :to-scope to_scope})
   (try
@@ -91,6 +122,11 @@
     (catch Exception e
       (log/error e "kg_promote failed")
       (mcp-error (str "Promotion failed: " (.getMessage e))))))
+
+(def handle-kg-promote
+  "Promote knowledge edge to a broader scope, preserving the original.
+   Durable-on-return via with-kg-flush."
+  (with-kg-flush promote*))
 
 (defn handle-kg-reground
   "Re-ground a knowledge entry by verifying against its source file."
