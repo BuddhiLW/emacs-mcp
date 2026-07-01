@@ -51,16 +51,26 @@
    Bounded context pattern: separate from Chroma memory storage.
    Edges connect memory entry IDs without duplicating content."
   {:kg-edge/id            {:db/unique :db.unique/identity
+                           :db/noHistory true
                            :db/doc "Unique edge identifier (UUID string)"}
-   :kg-edge/from          {:db/doc "Source node ID (memory entry ID)"}
-   :kg-edge/to            {:db/doc "Target node ID (memory entry ID)"}
-   :kg-edge/relation      {:db/doc "Relation type keyword from relation-types"}
-   :kg-edge/scope         {:db/doc "Scope where edge was discovered (e.g., project-id)"}
-   :kg-edge/confidence    {:db/doc "Confidence score 0.0-1.0"}
-   :kg-edge/created-by    {:db/doc "Agent ID that created this edge"}
-   :kg-edge/created-at    {:db/doc "Creation timestamp (inst)"}
-   :kg-edge/last-verified {:db/doc "Timestamp of last verification that this edge is still valid (inst)"}
-   :kg-edge/source-type   {:db/doc "How this edge was established: :manual, :automated, :inferred, :co-access"}})
+   :kg-edge/from          {:db/noHistory true
+                           :db/doc "Source node ID (memory entry ID)"}
+   :kg-edge/to            {:db/noHistory true
+                           :db/doc "Target node ID (memory entry ID)"}
+   :kg-edge/relation      {:db/noHistory true
+                           :db/doc "Relation type keyword from relation-types"}
+   :kg-edge/scope         {:db/noHistory true
+                           :db/doc "Scope where edge was discovered (e.g., project-id)"}
+   :kg-edge/confidence    {:db/noHistory true
+                           :db/doc "Confidence score 0.0-1.0"}
+   :kg-edge/created-by    {:db/noHistory true
+                           :db/doc "Agent ID that created this edge"}
+   :kg-edge/created-at    {:db/noHistory true
+                           :db/doc "Creation timestamp (inst)"}
+   :kg-edge/last-verified {:db/noHistory true
+                           :db/doc "Timestamp of last verification that this edge is still valid (inst)"}
+   :kg-edge/source-type   {:db/noHistory true
+                           :db/doc "How this edge was established: :manual, :automated, :inferred, :co-access"}})
 
 ;; =============================================================================
 ;; =============================================================================
@@ -277,19 +287,31 @@
    one (each node belongs to a single community per detection run); switch to
    :db.cardinality/many later if multi-cluster membership is wanted."
   {:synth/node-id         {:db/unique :db.unique/identity
+                           :db/noHistory true
                            :db/doc "Identity anchor for synth-derived attrs (KG node id)"}
    :synth/community-id    {:db/index true
+                           :db/noHistory true
                            :db/doc "Community label assigned by latest ICommunities run"}
-   :synth/betweenness     {:db/doc "Brandes betweenness centrality score (double)"}
-   :synth/k-core          {:db/doc "k-core decomposition coreness (long)"}
-   :synth/hits-hub        {:db/doc "HITS hub score (double)"}
-   :synth/hits-auth       {:db/doc "HITS authority score (double)"}
-   :synth/conductance     {:db/doc "Per-cluster conductance edges-out/(in+out) (double)"}
-   :synth/modularity-q    {:db/doc "Per-community modularity Q contribution (double)"}
-   :synth/katz            {:db/doc "Katz centrality (double)"}
-   :synth/eigenvector     {:db/doc "Eigenvector centrality (double)"}
-   :synth/triangle-count  {:db/doc "Triangles incident at node (long)"}
-   :synth/clustering-coef {:db/doc "Local clustering coefficient (double)"}})
+   :synth/betweenness     {:db/noHistory true
+                           :db/doc "Brandes betweenness centrality score (double)"}
+   :synth/k-core          {:db/noHistory true
+                           :db/doc "k-core decomposition coreness (long)"}
+   :synth/hits-hub        {:db/noHistory true
+                           :db/doc "HITS hub score (double)"}
+   :synth/hits-auth       {:db/noHistory true
+                           :db/doc "HITS authority score (double)"}
+   :synth/conductance     {:db/noHistory true
+                           :db/doc "Per-cluster conductance edges-out/(in+out) (double)"}
+   :synth/modularity-q    {:db/noHistory true
+                           :db/doc "Per-community modularity Q contribution (double)"}
+   :synth/katz            {:db/noHistory true
+                           :db/doc "Katz centrality (double)"}
+   :synth/eigenvector     {:db/noHistory true
+                           :db/doc "Eigenvector centrality (double)"}
+   :synth/triangle-count  {:db/noHistory true
+                           :db/doc "Triangles incident at node (long)"}
+   :synth/clustering-coef {:db/noHistory true
+                           :db/doc "Local clustering coefficient (double)"}})
 
 (defn synth-attr?
   "True iff attr is in the :synth/* namespace (excludes :synth/node-id).
