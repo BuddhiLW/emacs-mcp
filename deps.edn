@@ -267,7 +267,11 @@
                 ;; Generative testing for spec validation
                 org.clojure/test.check {:mvn/version "1.1.1"}
                 ;; Trifecta macro: golden + property + mutation facets
-                io.github.hive-agi/hive-test {:git/tag "v0.2.1" :git/sha "48b480f"}}
+                io.github.hive-agi/hive-test {:git/tag "v0.2.1" :git/sha "48b480f"}
+                ;; hive-spi: pure SPI leaf (role.card schema). Not in :deps
+                ;; (no git remote yet — see local.deps.edn); wired here so the
+                ;; :role write-gate test can validate against the real schema.
+                io.github.hive-agi/hive-spi {:local/root "../hive-spi"}}
    ;; KG test isolation: force ephemeral in-memory DataScript so a cold test
    ;; JVM never opens (and konserve-lock-contends) the prod datahike store.
    :jvm-opts ["-Dhive.kg.backend=datascript"]

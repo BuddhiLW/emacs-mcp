@@ -10,6 +10,7 @@
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.plan.plans :as plans]
             [hive-mcp.plan.gate :as plan-gate]
+            [clojure.edn :as edn]
             [hive-mcp.knowledge-graph.connection :as kg-conn]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.schema :as kg-schema]
@@ -168,6 +169,36 @@
                        :phase (:phase gate-result)
                        :errors (:errors gate-result)})))))
 
+(defn- resolve-role-card-sym
+  "Resolve a `hive-spi.role.card` var, or nil when the role SPI leaf is not
+   on the classpath. Keeps this ns loadable without a hard compile-time dep."
+  [sym]
+  (try (requiring-resolve sym) (catch Throwable _ nil)))
+
+(defn- validate-role-gate!
+  "Validate :role content against the RoleCard malli schema before storage.
+
+   Parses `content` as EDN and delegates to `hive-spi.role.card/valid?`
+   (reached via requiring-resolve — fail-soft skip when the role SPI leaf is
+   absent). FAIL-LOUD otherwise: throws `:role-gate-rejected` when the content
+   is unreadable EDN, not a map, or a non-conformant RoleCard (missing
+   :role/id keyword or :role/name string)."
+  [content]
+  (when-let [valid? (resolve-role-card-sym 'hive-spi.role.card/valid?)]
+    (let [explain (resolve-role-card-sym 'hive-spi.role.card/explain)
+          card (try
+                 (edn/read-string content)
+                 (catch Exception e
+                   (throw (ex-info (str "RoleCard content is not readable EDN: "
+                                        (.getMessage e))
+                                   {:type :role-gate-rejected}))))]
+      (when-not (and (map? card) (valid? card))
+        (throw (ex-info (str "RoleCard validation failed. Required: :role/id "
+                             "(keyword) and :role/name (string). Explanation: "
+                             (pr-str (explain card)))
+                        {:type :role-gate-rejected
+                         :explanation (explain card)}))))))
+
 (defn- index-entry!
   "Index entry through IMemoryStore. Plan-type entries get enriched with
    plan-specific metadata (`:plan-status`, `:steps-count`) but are
@@ -314,6 +345,7 @@
             (log/info "Duplicate found, merged tags:" (:id existing))
             (mcp-json (fmt/entry->json-alist updated)))
           (let [_ (when (= type "plan") (validate-plan-gate! content))
+                _ (when (= type "role") (validate-role-gate! content))
                 entry-ctx {:type type :content content :tags-with-scope tags-with-scope
                            :content-hash content-hash :duration-str duration-str
                            :expires expires :project-id project-id
@@ -378,6 +410,6 @@
 
           :else result)))
     (catch clojure.lang.ExceptionInfo e
-      (if (#{:coercion-error :embedding-too-long :plan-gate-rejected} (:type (ex-data e)))
+      (if (#{:coercion-error :embedding-too-long :plan-gate-rejected :role-gate-rejected} (:type (ex-data e)))
         (mcp-error (.getMessage e))
         (throw e)))))
