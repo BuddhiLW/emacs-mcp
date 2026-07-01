@@ -140,8 +140,8 @@
   "Get full info for an abstraction level.
    Returns {:level n :name \"Name\" :description \"...\"} or nil."
   [level]
-  (when-let [kw (abstraction-level-keyword level)]
-    (get abstraction-levels kw)))
+  (when (valid-abstraction-level? level)
+    (get abstraction-levels (keyword (str "level-" level)))))
 
 ;; =============================================================================
 ;; Disc Entity Schema (File State Tracking)

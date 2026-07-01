@@ -148,44 +148,13 @@
       (is (contains? full :disc/content-hash)))))
 
 ;; =============================================================================
-;; Synthetic Schema Tests (W1 - Datahike KG Backend)
+;; Relation Type Registry Tests
 ;; =============================================================================
-
-(deftest valid-synthetic-type-test
-  (testing "valid-synthetic-type? accepts valid types"
-    (is (true? (schema/valid-synthetic-type? :co-access)))
-    (is (true? (schema/valid-synthetic-type? :temporal-proximity)))
-    (is (true? (schema/valid-synthetic-type? :semantic-cluster)))
-    (is (true? (schema/valid-synthetic-type? :workflow-step)))
-    (is (true? (schema/valid-synthetic-type? :decision-cluster)))))
-
-(deftest valid-synthetic-type-rejects-invalid-test
-  (testing "valid-synthetic-type? rejects invalid values"
-    (is (false? (schema/valid-synthetic-type? :invalid)))
-    (is (false? (schema/valid-synthetic-type? nil)))
-    (is (false? (schema/valid-synthetic-type? "co-access")))))
-
-(deftest synthetic-schema-has-required-fields-test
-  (testing "synthetic-schema contains all required fields"
-    (is (contains? schema/synthetic-schema :kg-synthetic/id))
-    (is (contains? schema/synthetic-schema :kg-synthetic/type))
-    (is (contains? schema/synthetic-schema :kg-synthetic/members))
-    (is (contains? schema/synthetic-schema :kg-synthetic/confidence))
-    (is (contains? schema/synthetic-schema :kg-synthetic/created-at))
-    (is (contains? schema/synthetic-schema :kg-synthetic/last-reinforced))
-    (is (contains? schema/synthetic-schema :kg-synthetic/centroid))
-    (is (contains? schema/synthetic-schema :kg-synthetic/label))
-    (is (contains? schema/synthetic-schema :kg-synthetic/scope))))
-
-(deftest synthetic-id-is-unique-identity-test
-  (testing "kg-synthetic/id has unique identity constraint"
-    (is (= :db.unique/identity
-           (get-in schema/synthetic-schema [:kg-synthetic/id :db/unique])))))
-
-(deftest synthetic-members-has-many-cardinality-test
-  (testing "kg-synthetic/members has cardinality many"
-    (is (= :db.cardinality/many
-           (get-in schema/synthetic-schema [:kg-synthetic/members :db/cardinality])))))
+;;
+;; NOTE: The synthetic KG schema (valid-synthetic-type?, synthetic-schema,
+;; :kg-synthetic/*) moved out of hive-mcp into the hive-knowledge addon
+;; (hive-knowledge.graph.synthetic), which registers it via
+;; schema/register-kg-schema!. Those tests now live in hive-knowledge.
 
 (deftest relation-types-registry-test
   (testing "relation-types returns core types"
@@ -194,11 +163,3 @@
   (testing "register-relation-type! adds to relation-types"
     (schema/register-relation-type! :test-relation)
     (is (contains? (schema/relation-types) :test-relation))))
-
-(deftest full-schema-includes-synthetic-test
-  (testing "full-schema includes synthetic-schema fields"
-    (let [full (schema/full-schema)]
-      (is (contains? full :kg-synthetic/id))
-      (is (contains? full :kg-synthetic/type))
-      (is (contains? full :kg-synthetic/members))
-      (is (contains? full :kg-synthetic/confidence)))))

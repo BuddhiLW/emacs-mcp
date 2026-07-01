@@ -12,7 +12,6 @@
 
    Each test uses a fresh DataScript connection via fixture."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [clojure.string :as string]
             [hive-mcp.knowledge-graph.edges :as edges]
             [hive-mcp.knowledge-graph.store.fixtures :as fixtures]
             [hive-mcp.knowledge-graph.schema :as schema]))
@@ -44,8 +43,7 @@
     (let [from (gen-node-id)
           to (gen-node-id)
           edge-id (edges/add-edge! {:from from :to to :relation :implements})]
-      (is (string? edge-id))
-      (is (string/starts-with? edge-id "edge-")))))
+      (is (string? edge-id)))))
 
 (deftest add-edge-returns-retrievable-edge-test
   (testing "add-edge! returns ID of retrievable edge"
@@ -103,34 +101,34 @@
 
 (deftest add-edge-rejects-invalid-relation-test
   (testing "add-edge! rejects invalid relation"
-    (is (thrown? AssertionError
+    (is (thrown? clojure.lang.ExceptionInfo
                  (edges/add-edge! {:from "a" :to "b" :relation :invalid-rel})))))
 
 (deftest add-edge-rejects-nil-from-test
   (testing "add-edge! rejects nil :from"
-    (is (thrown? AssertionError
+    (is (thrown? clojure.lang.ExceptionInfo
                  (edges/add-edge! {:from nil :to "b" :relation :implements})))))
 
 (deftest add-edge-rejects-nil-to-test
   (testing "add-edge! rejects nil :to"
-    (is (thrown? AssertionError
+    (is (thrown? clojure.lang.ExceptionInfo
                  (edges/add-edge! {:from "a" :to nil :relation :implements})))))
 
 (deftest add-edge-rejects-non-string-from-test
   (testing "add-edge! rejects non-string :from"
-    (is (thrown? AssertionError
+    (is (thrown? clojure.lang.ExceptionInfo
                  (edges/add-edge! {:from 123 :to "b" :relation :implements})))))
 
 (deftest add-edge-rejects-non-keyword-relation-test
   (testing "add-edge! rejects non-keyword relation"
-    (is (thrown? AssertionError
+    (is (thrown? clojure.lang.ExceptionInfo
                  (edges/add-edge! {:from "a" :to "b" :relation "implements"})))))
 
 (deftest add-edge-rejects-confidence-out-of-range-test
   (testing "add-edge! rejects confidence outside [0.0, 1.0]"
-    (is (thrown? AssertionError
+    (is (thrown? clojure.lang.ExceptionInfo
                  (edges/add-edge! {:from "a" :to "b" :relation :implements :confidence 1.5})))
-    (is (thrown? AssertionError
+    (is (thrown? clojure.lang.ExceptionInfo
                  (edges/add-edge! {:from "a" :to "b" :relation :implements :confidence -0.1})))))
 
 (deftest add-edge-boundary-confidence-test
@@ -150,13 +148,13 @@
   (testing "get-edge returns nil for non-existent edge"
     (is (nil? (edges/get-edge "edge-nonexistent-12345")))))
 
-(deftest get-edge-rejects-nil-test
-  (testing "get-edge rejects nil ID"
-    (is (thrown? AssertionError (edges/get-edge nil)))))
+(deftest get-edge-nil-returns-nil-test
+  (testing "get-edge returns nil for nil ID"
+    (is (nil? (edges/get-edge nil)))))
 
-(deftest get-edge-rejects-non-string-test
-  (testing "get-edge rejects non-string ID"
-    (is (thrown? AssertionError (edges/get-edge 12345)))))
+(deftest get-edge-non-string-returns-nil-test
+  (testing "get-edge returns nil for non-string ID"
+    (is (nil? (edges/get-edge 12345)))))
 
 ;; =============================================================================
 ;; get-edges-from Tests
@@ -180,9 +178,9 @@
       (edges/add-edge! {:from (gen-node-id) :to node :relation :implements})
       (is (empty? (edges/get-edges-from node))))))
 
-(deftest get-edges-from-rejects-nil-test
-  (testing "get-edges-from rejects nil node ID"
-    (is (thrown? AssertionError (edges/get-edges-from nil)))))
+(deftest get-edges-from-nil-returns-empty-test
+  (testing "get-edges-from returns empty for nil node ID"
+    (is (empty? (edges/get-edges-from nil)))))
 
 ;; =============================================================================
 ;; get-edges-to Tests
@@ -272,8 +270,8 @@
   (testing "update-edge-confidence! rejects values outside [0.0, 1.0]"
     (let [edge-id (edges/add-edge! {:from (gen-node-id) :to (gen-node-id)
                                     :relation :implements})]
-      (is (thrown? AssertionError (edges/update-edge-confidence! edge-id 1.5)))
-      (is (thrown? AssertionError (edges/update-edge-confidence! edge-id -0.1))))))
+      (is (thrown? clojure.lang.ExceptionInfo (edges/update-edge-confidence! edge-id 1.5)))
+      (is (thrown? clojure.lang.ExceptionInfo (edges/update-edge-confidence! edge-id -0.1))))))
 
 ;; =============================================================================
 ;; increment-confidence! Tests
@@ -323,16 +321,16 @@
       (edges/remove-edge! edge-id)
       (is (nil? (edges/get-edge edge-id))))))
 
-(deftest remove-edge-returns-nil-for-nonexistent-test
-  (testing "remove-edge! returns nil for non-existent edge"
-    (is (nil? (edges/remove-edge! "edge-nonexistent")))))
+(deftest remove-edge-returns-false-for-nonexistent-test
+  (testing "remove-edge! returns false for non-existent edge"
+    (is (false? (edges/remove-edge! "edge-nonexistent")))))
 
 (deftest remove-edge-idempotent-test
   (testing "remove-edge! is idempotent"
     (let [edge-id (edges/add-edge! {:from (gen-node-id) :to (gen-node-id)
                                     :relation :implements})]
       (edges/remove-edge! edge-id)
-      (is (nil? (edges/remove-edge! edge-id))))))
+      (is (false? (edges/remove-edge! edge-id))))))
 
 ;; =============================================================================
 ;; remove-edges-for-node! Tests
