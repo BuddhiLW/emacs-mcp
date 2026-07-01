@@ -12,9 +12,10 @@
                               in :errors, subsequent hooks still run
      E4 empty registry      — returns {:ran 0 :errors []} without throwing
 
-   Isolation: per-test fixture saves/restores @reg/shutdown-registry, and
-   resets it to {} during the test body. The REAL production registry is
-   never mutated across the test boundary (convention 20260122235016-2b1e7be5)."
+   Isolation: per-test fixture captures/restores the registry via
+   reg/capture-all + reg/restore-all!, and reg/reset-all! clears it during the
+   test body. The REAL production registry is never mutated across the test
+   boundary (convention 20260122235016-2b1e7be5)."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
@@ -47,12 +48,12 @@
 
 (use-fixtures :each
   (fn [f]
-    (let [saved @reg/shutdown-registry]
+    (let [saved (reg/capture-all)]
       (try
-        (reset! reg/shutdown-registry {})
+        (reg/reset-all!)
         (f)
         (finally
-          (reset! reg/shutdown-registry saved))))))
+          (reg/restore-all! saved))))))
 
 ;; =============================================================================
 ;; Generators
@@ -84,7 +85,7 @@
    ;; Fresh isolated registry for each shrink trial. The fixture only runs
    ;; once per deftest, so we reset inside the property too for safety when
    ;; test.check shrinks across many inputs.
-   (reset! reg/shutdown-registry {})
+   (reg/reset-all!)
    (doseq [[n p] entries]
      (reg/register-shutdown! (make-hook n p (fn [] :ok))))
    (let [priorities (map lifecycle/shutdown-priority
@@ -100,7 +101,7 @@
    [n  gen-hook-name
     p1 gen-priority
     p2 gen-priority]
-   (reset! reg/shutdown-registry {})
+   (reg/reset-all!)
    (reg/register-shutdown! (make-hook n p1 (fn [] :first)))
    (reg/register-shutdown! (make-hook n p2 (fn [] :second)))
    (let [hooks (reg/registered-shutdown-hooks)]

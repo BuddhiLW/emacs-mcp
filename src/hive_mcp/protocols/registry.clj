@@ -74,6 +74,10 @@
   (reg-put! [this k impl]
     "Validate `impl`, store it under key `k`, return `impl`.")
 
+  (reg-merge! [this kvs]
+    "Validate every val and merge the whole {k -> impl} map atomically (one
+     swap!). Returns the merged keys.")
+
   (reg-get [this k]
     "Return the impl under `k`; when absent apply the missing-policy
      (the on-missing fn, called with [k snapshot], or nil).")
@@ -93,6 +97,10 @@
     (when validate (assert (validate impl)))
     (swap! state assoc k impl)
     impl)
+  (reg-merge! [_ kvs]
+    (when validate (run! #(assert (validate %)) (vals kvs)))
+    (swap! state merge kvs)
+    (keys kvs))
   (reg-get [_ k]
     (if-let [v (get @state k)]
       v

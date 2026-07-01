@@ -40,13 +40,13 @@
 
 (use-fixtures :each
   (fn [f]
-    (let [saved @reg/shutdown-registry]
+    (let [saved (reg/capture-all)]
       (binding [*saved-registry* saved]
         (try
-          (reset! reg/shutdown-registry {})
+          (reg/reset-all!)
           (f)
           (finally
-            (reset! reg/shutdown-registry saved)))))))
+            (reg/restore-all! saved)))))))
 
 ;; =============================================================================
 ;; Test helpers
@@ -197,9 +197,9 @@
     ;; will restore it after f returns.
     (reg/register-shutdown!
      (fake-hook "transient-test-hook" 10 (constantly :ok)))
-    (is (= 1 (count @reg/shutdown-registry))
+    (is (= 1 (count (reg/registered-shutdown-hooks)))
         "Inside the test body we see our own fake")
     (is (map? *saved-registry*)
         "Fixture must expose the pre-test snapshot via *saved-registry*")
-    (is (not (contains? *saved-registry* "transient-test-hook"))
+    (is (not (contains? (:shutdown *saved-registry*) "transient-test-hook"))
         "Saved snapshot must be from BEFORE this test's registration")))
