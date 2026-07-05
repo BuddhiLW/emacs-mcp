@@ -90,6 +90,11 @@
          "Fix: break the cycle by removing one dependency direction.\n"
          "Details: " (str/join "; " errors))
 
+    :fields
+    (str "Plan has an addon-registered field with an invalid value.\n"
+         "Fix: use a value accepted by the contributing addon (e.g. a registered\n"
+         "workflow :method). Details: " (str/join "; " errors))
+
     ;; default
     (str "Plan validation failed. Check the content format.\n"
          "Details: " (str/join "; " errors))))
@@ -185,6 +190,8 @@
                            (get-in validation [:dependencies :invalid-refs]))
               cycle-errors (when-not (get-in validation [:cycles :valid])
                              [(get-in validation [:cycles :cycle])])
+              field-errors (when-not (get-in validation [:fields :valid])
+                             (get-in validation [:fields :errors]))
               all-errors (cond-> []
                            schema-errors
                            (conj (str "Schema: " (pr-str schema-errors)))
@@ -193,11 +200,16 @@
                                       (str/join ", " (map #(str (:step-id %) " -> " (:missing-dep %))
                                                           dep-errors))))
                            cycle-errors
-                           (conj (str "Cycles: " (str/join ", " (remove nil? cycle-errors)))))
+                           (conj (str "Cycles: " (str/join ", " (remove nil? cycle-errors))))
+                           (seq field-errors)
+                           (into (map #(str "Field " (:key %) "=" (pr-str (:value %))
+                                            ": " (pr-str (:error %)))
+                                      field-errors)))
               phase (cond
                       schema-errors :schema
                       dep-errors :dependencies
                       cycle-errors :cycles
+                      (seq field-errors) :fields
                       :else :unknown)]
           (log/warn "[plan-gate] Plan validation failed"
                     {:phase phase :errors all-errors})

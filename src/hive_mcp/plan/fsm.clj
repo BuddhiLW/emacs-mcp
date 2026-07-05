@@ -29,6 +29,7 @@
   (:require [hive.events.fsm :as fsm]
             [hive-mcp.plan.schema :as schema]
             [hive-mcp.plan.parser :as parser]
+            [hive-mcp.plan.field-registry :as field-registry]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -94,19 +95,26 @@
       (assoc data :status :draft :error "No content or plan provided"))))
 
 (defn handle-validate
-  "Validate state: run schema validation + dependency checks."
+  "Validate state: schema + dependency + cycle checks plus addon-registered
+   field-value checks (plan.field-registry/validate-fields)."
   [_resources {:keys [plan] :as data}]
   (let [schema-result (schema/validate-plan plan)
         dep-result (schema/validate-dependencies plan)
-        cycle-result (schema/detect-cycles plan)]
+        cycle-result (schema/detect-cycles plan)
+        field-errors (into (field-registry/validate-fields plan :plan)
+                           (mapcat #(field-registry/validate-fields % :step)
+                                   (:steps plan)))
+        fields-result {:valid (empty? field-errors) :errors field-errors}]
     (assoc data
            :status :validated
            :validation {:schema schema-result
                         :dependencies dep-result
-                        :cycles cycle-result}
+                        :cycles cycle-result
+                        :fields fields-result}
            :valid? (and (:valid schema-result)
                         (:valid dep-result)
-                        (:valid cycle-result)))))
+                        (:valid cycle-result)
+                        (:valid fields-result)))))
 
 (defn handle-approve
   "Approve state: mark plan as approved (human decision captured)."

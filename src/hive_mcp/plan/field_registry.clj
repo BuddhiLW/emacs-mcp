@@ -20,6 +20,9 @@
      :default-from :plan-key           (optional, :step scope — plan-level key that
                                         supplies a per-step default when absent)
      :project?     boolean             (optional — carry into plan->task-specs)
+     :validate     (fn [v] -> nil|err) (optional — field-value check, run only
+                                        when the key is present; truthy return is
+                                        the error surfaced by the plan gate)
      :owner        keyword             (stamped at registration — addon id)"
   (:require [clojure.tools.logging :as log]))
 
@@ -98,6 +101,22 @@
                  (update acc k normalize)
                  acc))
              m
+             (get @registry scope)))
+
+(defn validate-fields
+  "Apply each registered field's :validate fn (for `scope` :step|:plan) to the
+   keys present in map `m`. Returns a vector of {:scope :key :value :error} for
+   every field whose :validate returned a truthy error. Fields without :validate,
+   and keys absent from `m`, contribute nothing. Field-agnostic — core never
+   names a specific field."
+  [m scope]
+  (reduce-kv (fn [acc k {:keys [validate]}]
+               (if (and validate (contains? m k))
+                 (if-let [err (validate (get m k))]
+                   (conj acc {:scope scope :key k :value (get m k) :error err})
+                   acc)
+                 acc))
+             []
              (get @registry scope)))
 
 (defn resolve-step-defaults
