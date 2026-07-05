@@ -79,7 +79,7 @@
       (.mkdirs (.getParentFile dir))))
   db-path)
 
-(defrecord DatalevinStore [conn-init db-path extra-schema recovery-policy]
+(defrecord DatalevinStore [conn-init db-path extra-schema recovery-policy cache-limit]
   kg/IKGStore
 
   (ensure-conn! [_this]
@@ -97,16 +97,21 @@
        (let [base-schema (datalevin-schema)
              merged-schema (if extra-schema
                              (merge base-schema (translate-schema extra-schema))
-                             base-schema)]
+                             base-schema)
+             ;; HEAP-DL-CACHELIMIT — bound the Datalog index-cache LRU
+             ;; (empty map == pre-fix 2-arity, so nil cache-limit is inert).
+             conn-opts (cond-> {}
+                         (some? cache-limit) (assoc :cache-limit cache-limit))]
          (log/debug "Datalevin schema translated"
                     {:attributes (count merged-schema)
-                     :extra-attributes (when extra-schema (count extra-schema))})
+                     :extra-attributes (when extra-schema (count extra-schema))
+                     :cache-limit cache-limit})
          ;; ENGINE-L1.2 — wrap the open in heal-and-open!. Policy default
          ;; is `:throw` (preserves pre-L1.2 semantics); operators opt
          ;; into `:quarantine` for boot-time WAL self-heal.
          (rec/heal-and-open!
           {:policy recovery-policy :db-path db-path}
-          #(dtlv/get-conn db-path merged-schema))))))
+          #(dtlv/get-conn db-path merged-schema conn-opts))))))
 
   (transact! [this tx-data]
     (dtlv/transact! (kg/ensure-conn! this) tx-data))
@@ -185,32 +190,39 @@
   dlc/default-db-path)
 
 (defn- resolve-typed-config
-  "Resolve DatalevinKGConfig via hive-di. Returns map with :db-path resolved
-   across env > config.edn > XDG default. Falls back to bare default if
-   resolution itself errors (defensive — should not happen)."
+  "Resolve DatalevinKGConfig via hive-di. Returns map with :db-path and
+   :cache-limit resolved across env > config.edn > default. Falls back to
+   bare defaults if resolution itself errors (defensive — should not happen)."
   []
   (let [result (dlc/resolve-DatalevinKGConfig)]
     (if (r/ok? result)
       (:ok result)
-      (do (log/warn "DatalevinKGConfig resolution failed; using bare default"
+      (do (log/warn "DatalevinKGConfig resolution failed; using bare defaults"
                     {:errors (:errors result)})
-          {:db-path fallback-db-path}))))
+          {:db-path fallback-db-path
+           :cache-limit dlc/default-cache-limit}))))
 
 (defn create-store
   "Create a new Datalevin-backed graph store.
-   Resolution order for :db-path:
+   Resolution order for :db-path and :cache-limit (each independently):
      1. Explicit caller arg
-     2. DatalevinKGConfig (env > config.edn > XDG default)
+     2. DatalevinKGConfig (env > config.edn > default)
+
+   `:cache-limit` (HEAP-DL-CACHELIMIT) bounds the Datalog index-cache LRU
+   forwarded to `get-conn`; nil leaves upstream behaviour untouched.
 
    `recovery-policy` (ENGINE-L1.2) is forwarded to `heal-and-open!`:
      :strategy     :throw (default) | :audit | :quarantine
      :max-attempts pos-int (default 2)"
-  [& [{:keys [db-path extra-schema recovery-policy]}]]
+  [& [{:keys [db-path extra-schema recovery-policy cache-limit]}]]
   (rescue nil
-          (let [resolved-path (or db-path (:db-path (resolve-typed-config)))]
+          (let [typed         (resolve-typed-config)
+                resolved-path (or db-path (:db-path typed))
+                resolved-cl   (or cache-limit (:cache-limit typed))]
             (log/info "Creating Datalevin graph store"
                       {:path resolved-path
                        :extra-schema? (some? extra-schema)
+                       :cache-limit resolved-cl
                        :recovery-strategy (:strategy recovery-policy)})
             (->DatalevinStore (ci/atom-conn-init) resolved-path extra-schema
-                              recovery-policy))))
+                              recovery-policy resolved-cl))))
