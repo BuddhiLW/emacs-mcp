@@ -172,8 +172,8 @@
                               "from" {:type "string" :description "[kg edge] Source node ID"}
                               "to" {:type "string" :description "[kg edge] Target node ID"}
                               "relation" {:type "string"
-                                          :enum ["implements" "supersedes" "refines" "contradicts" "depends-on" "derived-from" "applies-to"]
-                                          :description "[kg edge] Relation type"}
+                                          :enum ["implements" "supersedes" "refines" "contradicts" "depends-on" "derived-from" "applies-to" "projects-to" "co-accessed"]
+                                          :description "[kg edge] Relation type (server validates against kg-schema/relation-types; addons may register more)"}
                               "node_id" {:type "string" :description "[kg] Node ID for analysis"}
                               "start_node" {:type "string" :description "[kg traverse] Start node"}
                               "confidence" {:type "number" :description "[kg edge] Confidence 0.0-1.0"}

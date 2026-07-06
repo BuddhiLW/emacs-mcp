@@ -375,11 +375,13 @@
   [op exec-result]
   (cond
     (nil? exec-result)
-    {:id      (:id op)
-     :tool    (:tool op)
-     :command (:command op)
-     :success false
-     :error   "executor returned nil — likely worker timeout"}
+    {:id         (:id op)
+     :tool       (:tool op)
+     :command    (:command op)
+     :success    false
+     :timed-out  true
+     :error-type :timeout
+     :error      "executor returned nil — likely worker timeout (op may still have run server-side; retry only if idempotent)"}
 
     (nil? (:id exec-result))
     (assoc exec-result :id (:id op))
@@ -513,15 +515,20 @@
                     :error    error
                     :wave-num wave-num}))))
 
-    (let [results     (vals @all-results)
-          success-cnt (count (filter :success results))
-          failed-cnt  (count (remove :success results))]
+    (let [results       (vals @all-results)
+          success-cnt   (count (filter :success results))
+          failed-cnt    (count (remove :success results))
+          timed-out-cnt (count (filter :timed-out results))]
       {:success (zero? failed-cnt)
        :waves   @wave-log
-       :summary {:total   total-count
-                 :success success-cnt
-                 :failed  failed-cnt
-                 :waves   wave-count}})))
+       :summary (cond-> {:total   total-count
+                         :success success-cnt
+                         :failed  failed-cnt
+                         :waves   wave-count}
+                  ;; Surface timeouts distinctly: they're the subset of
+                  ;; failures that MAY have succeeded server-side and are
+                  ;; safe to retry only for idempotent ops.
+                  (pos? timed-out-cnt) (assoc :timed-out timed-out-cnt))})))
 
 (defn run-operations
   "Execute a vector of operations with dependency ordering.

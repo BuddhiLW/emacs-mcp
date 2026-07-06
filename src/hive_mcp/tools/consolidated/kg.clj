@@ -71,8 +71,8 @@
                               "to" {:type "string"
                                     :description "Target node ID for edge"}
                               "relation" {:type "string"
-                                          :enum ["implements" "supersedes" "refines" "contradicts" "depends-on" "derived-from" "applies-to"]
-                                          :description "Relation type for edge"}
+                                          :enum ["implements" "supersedes" "refines" "contradicts" "depends-on" "derived-from" "applies-to" "projects-to" "co-accessed"]
+                                          :description "Relation type for edge (server validates against kg-schema/relation-types; addons may register more)"}
                               "confidence" {:type "number"
                                             :description "Confidence score 0.0-1.0"}
                               "node_id" {:type "string"

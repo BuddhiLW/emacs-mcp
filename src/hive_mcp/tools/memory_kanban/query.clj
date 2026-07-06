@@ -208,6 +208,11 @@
                             (filter #(kf/entry-after-ts? % :updated updated_after)))
         slim-entries  (mapv #(kt/task->slim % multi-project?) kanban-entries)
         sorted        (kt/sort-by-priority-then-created slim-entries)
-        paged         (kf/paginate sorted offset limit)
+        ;; A bare, unfiltered list (no status, no post-filter, no explicit
+        ;; limit) defaults to a 100-row cap so a large board can't flood the
+        ;; tool token budget. Any narrowing filter or explicit limit opts out
+        ;; and returns the full matched set (offset/limit still honored).
+        default-limit (when-not (or status (kf/post-filters? params)) 100)
+        paged         (kf/paginate sorted offset (or limit default-limit))
         projected     (mapv #(kf/project-fields % fields) paged)]
     (mcp-json projected)))

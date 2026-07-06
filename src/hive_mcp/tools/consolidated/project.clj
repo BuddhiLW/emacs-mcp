@@ -161,7 +161,7 @@
                                              :description "[kanban retag] Tags to remove"}
                               "status" {:type "string"
                                         :enum ["todo" "inprogress" "inreview" "done"]
-                                        :description "[kanban list] Filter by status"}
+                                        :description "[kanban create] Initial status (default: todo) / [kanban list] Filter by status. Aliases inprogress→doing, inreview→review are normalized."}
                               "include_descendants" {:type "boolean"
                                                      :description "[kanban] Include DESCENDANT (child) project tasks (HCR). Default true. Ancestor (parent) tasks are ALWAYS included regardless of this flag ('child sees parent')."}
                               "scope" {:type "string"

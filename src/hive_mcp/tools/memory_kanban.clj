@@ -124,16 +124,22 @@
 ;; Pure operations
 ;; ============================================================
 
-(defn- create* [{:keys [title priority context agent_id tags description]
+(defn- create* [{:keys [title priority context agent_id tags description status]
                  :as params}]
   (when (or (nil? title) (and (string? title) (str/blank? title)))
     (throw (ex-info "Kanban task requires a non-empty title" {:type :validation-error})))
+  (when (and status (not (kp/valid-status? (kp/normalize-status status))))
+    (throw (ex-info (str "Invalid kanban status: " (pr-str status)
+                         ". Must be one of " kp/valid-statuses
+                         " (aliases: " (keys kp/status-enum->tag) ")")
+                    {:type :validation-error})))
   ;; HCR: explicit :directory > :_caller_cwd (bb-mcp session pwd) >
   ;; request-ctx > server user.dir. Keeps default scope on the caller's
   ;; pwd project instead of the server's own (hive-mcp).
   (let [eff-dir   (ctx/resolve-caller-directory params)
         eff-agent (or agent_id (ctx/current-agent-id) (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
         priority  (or priority "medium")
+        status    (or (kp/normalize-status status) "todo")
         project-id (scope/get-current-project-id eff-dir)
         idem-key   (normalize-idempotency-key params)
         ;; Idempotency check: if an entry tagged `idempotency:<key>`
@@ -146,7 +152,7 @@
         (log/info "kanban-create idempotency hit — returning existing id"
                   {:idempotency-key idem-key :id existing-id})
         {:type "text" :text existing-id})
-      (let [content (cond-> {:task-type "kanban" :title title :status "todo"
+      (let [content (cond-> {:task-type "kanban" :title title :status status
                              :priority priority :created (kt/kanban-timestamp)
                              :started nil :context context}
                       description (assoc :description description))
@@ -159,7 +165,7 @@
             ;; — future creates with the same key will hit
             ;; `find-by-idempotency-key` above and short-circuit.
             idem-tag (idempotency-tag idem-key)
-            tags (vec (distinct (concat (kt/build-kanban-tags "todo" priority project-id)
+            tags (vec (distinct (concat (kt/build-kanban-tags status priority project-id)
                                         (or extra-tags [])
                                         (when idem-tag [idem-tag]))))
             ;; Thread the kanban-store toggle's active key into the generic
@@ -171,11 +177,12 @@
                                               :content (json/write-str content)
                                               :tags tags :directory eff-dir
                                               :agent_id eff-agent :duration "short"
+                                              :knowledge_gaps []
                                               :store-key (kanban-facade/active-key)})]
         (log/info "kanban-create result:" crud-result)
         (when-not (:isError crud-result)
           (track-movement! {:task-id (or (:text crud-result) "unknown")
-                            :title title :from nil :to "todo"
+                            :title title :from nil :to status
                             :project-id project-id}))
         (if (:isError crud-result)
           crud-result

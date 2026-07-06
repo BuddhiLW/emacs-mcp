@@ -314,7 +314,7 @@
    would leak through `with-store`'s generic try/catch as errors."
   [{:keys [type content tags duration directory agent_id
            kg_implements kg_supersedes kg_depends_on kg_refines abstraction_level
-           store-key]
+           knowledge_gaps store-key]
     :or   {store-key :default}}]
   (let [tags-vec (coerce-vec! tags :tags [])
         kg-vecs {:kg-implements-vec (coerce-vec! kg_implements :kg_implements [])
@@ -324,7 +324,11 @@
         directory (or directory (ctx/current-directory))
         abstraction-level (or abstraction_level
                               (classify/classify-abstraction-level type content tags-vec))
-        knowledge-gaps (gaps/extract-knowledge-gaps content)]
+        ;; Callers that write structured/serialized content (e.g. kanban JSON)
+        ;; pass an explicit :knowledge_gaps to bypass regex gap-extraction,
+        ;; which otherwise scrapes literals like "status":"todo" out of the
+        ;; JSON. An explicit vector (incl. empty) wins; absent/nil auto-extracts.
+        knowledge-gaps (or knowledge_gaps (gaps/extract-knowledge-gaps content))]
     (log/info "mcp-memory-add:" type "directory:" directory "agent_id:" agent_id
               "store-key:" store-key)
     (with-store
