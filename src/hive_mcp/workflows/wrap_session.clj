@@ -13,6 +13,9 @@
    - Side effects flow through the resources map (territory)
    - The FSM is the map -- deterministic state transitions
    - Dispatch predicates are pure functions of state data
+   - The degrade-continue envelope + evict + trace-log + always seams live in
+     hive-mcp.workflows.support (boundary-step / continue / handle-evict /
+     trace-log-enter / always / default-handle-error).
 
    Resources map (injected at run time):
      :harvest-fn     -- (fn [directory] -> harvested-data)
@@ -38,7 +41,7 @@
       :error          any}     ;; error info if in error state"
 
   (:require [hive.events.fsm :as fsm]
-            [taoensso.timbre :as log]))
+            [hive-mcp.workflows.support :as support]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -72,7 +75,9 @@
          (not (:degraded cr))
          (not (:skipped cr)))))
 
-(defn always [_data] true)
+(def always
+  "Dispatch predicate — always true. Shared seam (support/always)."
+  support/always)
 
 ;; =============================================================================
 ;; Handlers (pure functions: resources x data -> data')
@@ -86,153 +91,112 @@
    Resolves agent-id and directory, derives project-id.
    EDN handler key: :start"
   [resources data]
-  (let [scope-fn (or (:scope-fn resources) (constantly nil))
-        directory (or (:directory data) (:directory resources))
-        agent-id (or (:agent-id data) (:agent-id resources))]
+  (let [{:keys [agent-id directory project-id]}
+        (support/resolve-session-identity resources data)]
     (assoc data
            :agent-id agent-id
            :directory directory
-           :project-id (when directory (scope-fn directory))
+           :project-id project-id
            :error nil)))
 
 (defn handle-gather
   "Harvest session data for crystallization.
    EDN handler key: :gather
 
-   Uses resources:
-     :harvest-fn (fn [directory] -> harvested-data)
-
    Degraded mode: if harvest-fn throws (e.g. nREPL/HTTP down), logs a
    warning, marks :harvested as {:degraded true}, and attaches an empty
-   placeholder so the FSM can continue. Mirrors the 'Git Commit Optional'
-   decision (20260213005110)."
+   placeholder so the FSM can continue."
   [resources data]
   (let [harvest-fn (:harvest-fn resources)
         directory (:directory data)]
-    (try
-      (let [harvested (harvest-fn directory)]
-        (assoc data :harvested harvested))
-      (catch Throwable t
-        (log/warn "wrap-session: harvest failed — continuing in degraded mode:"
-                  (ex-message t))
-        (assoc data :harvested {:degraded true
-                                :error (ex-message t)
-                                :progress-notes []
-                                :completed-tasks []
-                                :git-commits []
-                                :summary {}})))))
+    (support/boundary-step data
+      {:run   (fn [d] (assoc d :harvested (harvest-fn directory)))
+       :policy support/continue
+       :spec  {:log-msg "wrap-session: harvest failed — continuing in degraded mode:"
+               :delta (fn [t] {:harvested {:degraded true
+                                           :error (ex-message t)
+                                           :progress-notes []
+                                           :completed-tasks []
+                                           :git-commits []
+                                           :summary {}}})}})))
 
 (defn handle-crystallize
   "Crystallize harvested session data into long-term memory.
    EDN handler key: :crystallize
 
-   Uses resources:
-     :crystallize-fn (fn [harvested] -> {:summary-id str, :stats map, ...})
-     :source-ids-fn  (fn [harvested] -> [string])
-
-   Degraded mode: if crystallize-fn throws (e.g. nREPL down, HTTP failure
-   to Chroma/embedding service), logs a warning and produces a
-   :crystal-result marked :skipped/:degraded so the wrap still succeeds.
-   Mirrors the 'Git Commit Optional' decision (20260213005110)."
+   Degraded mode: if crystallize-fn throws, logs a warning and produces a
+   :crystal-result marked :skipped/:degraded so the wrap still succeeds."
   [resources data]
   (let [crystallize-fn (:crystallize-fn resources)
         source-ids-fn (or (:source-ids-fn resources) (constantly []))
         harvested (:harvested data)]
-    (try
-      (let [result (crystallize-fn harvested)
-            source-ids (source-ids-fn harvested)]
-        (assoc data
-               :crystal-result result
-               :source-ids source-ids))
-      (catch Throwable t
-        (log/warn "wrap-session: crystallize failed — continuing in degraded mode:"
-                  (ex-message t))
-        (assoc data
-               :crystal-result {:skipped true
-                                :degraded true
-                                :error (ex-message t)
-                                :stats {}}
-               :source-ids [])))))
+    (support/boundary-step data
+      {:run   (fn [d]
+                (let [result (crystallize-fn harvested)
+                      source-ids (source-ids-fn harvested)]
+                  (assoc d
+                         :crystal-result result
+                         :source-ids source-ids)))
+       :policy support/continue
+       :spec  {:log-msg "wrap-session: crystallize failed — continuing in degraded mode:"
+               :delta (fn [t] {:crystal-result {:skipped true
+                                                :degraded true
+                                                :error (ex-message t)
+                                                :stats {}}
+                               :source-ids []})}})))
 
 (defn handle-kg-edges
   "Create :derived-from KG edges linking summary to source entries.
    EDN handler key: :kg-edges
 
-   Uses resources:
-     :kg-edge-fn (fn [summary-id source-ids project-id agent-id] -> {:created-count N})
-
-   Degraded mode: if kg-edge-fn throws (e.g. nREPL/HTTP down), marks
-   :kg-result as {:skipped true :degraded true} and keeps the flow going."
+   Degraded mode: if kg-edge-fn throws, marks :kg-result as
+   {:skipped true :degraded true} and keeps the flow going."
   [resources data]
   (let [{:keys [project-id agent-id]} data
         summary-id (get-in data [:crystal-result :summary-id])
         source-ids (:source-ids data)
         kg-edge-fn (:kg-edge-fn resources)]
-    (if (and kg-edge-fn summary-id (seq source-ids))
-      (try
-        (let [result (kg-edge-fn summary-id source-ids project-id agent-id)]
-          (assoc data :kg-result result))
-        (catch Throwable t
-          (log/warn "wrap-session: kg-edges failed — continuing in degraded mode:"
-                    (ex-message t))
-          (assoc data :kg-result {:created-count 0
-                                  :skipped true
-                                  :degraded true
-                                  :error (ex-message t)})))
-      (assoc data :kg-result {:created-count 0 :skipped true}))))
+    (support/boundary-step data
+      {:present? (boolean (and kg-edge-fn summary-id (seq source-ids)))
+       :run    (fn [d] (assoc d :kg-result (kg-edge-fn summary-id source-ids project-id agent-id)))
+       :absent (fn [d] (assoc d :kg-result {:created-count 0 :skipped true}))
+       :policy support/continue
+       :spec   {:log-msg "wrap-session: kg-edges failed — continuing in degraded mode:"
+                :delta (fn [t] {:kg-result {:created-count 0
+                                            :skipped true
+                                            :degraded true
+                                            :error (ex-message t)}})}})))
 
 (defn handle-notify
   "Emit wrap_notify event for hivemind permeation.
    EDN handler key: :notify
 
-   Uses resources:
-     :notify-fn (fn [agent-id session-id project-id stats] -> nil)
-
-   Degraded mode: if notify-fn throws (e.g. NATS down, nREPL/HTTP down),
-   :notify-sent? is false and :notify-error captures the reason; wrap
-   still continues."
+   Degraded mode: if notify-fn throws, :notify-sent? is false and
+   :notify-error captures the reason; wrap still continues."
   [resources data]
   (let [notify-fn (:notify-fn resources)
         {:keys [agent-id project-id crystal-result]} data
         session-id (:session crystal-result)
         stats (if (map? (:stats crystal-result)) (:stats crystal-result) {})]
-    (if notify-fn
-      (try
-        (notify-fn agent-id session-id project-id stats)
-        (assoc data :notify-sent? true)
-        (catch Throwable t
-          (log/warn "wrap-session: notify failed — continuing in degraded mode:"
-                    (ex-message t))
-          (assoc data
-                 :notify-sent? false
-                 :notify-degraded true
-                 :notify-error (ex-message t))))
-      (assoc data :notify-sent? true))))
+    (support/boundary-step data
+      {:present? (some? notify-fn)
+       :run    (fn [d] (notify-fn agent-id session-id project-id stats)
+                 (assoc d :notify-sent? true))
+       :absent (fn [d] (assoc d :notify-sent? true))
+       :policy support/continue
+       :spec   {:log-msg "wrap-session: notify failed — continuing in degraded mode:"
+                :delta (fn [t] {:notify-sent? false
+                                :notify-degraded true
+                                :notify-error (ex-message t)})}})))
 
 (defn handle-evict
   "Evict context-store entries for the completing agent.
    EDN handler key: :evict
 
-   Uses resources:
-     :evict-fn (fn [agent-id] -> {:evicted N})
-
-   Degraded mode: if evict-fn throws, marks :eviction as
+   Degraded mode (continue policy): if evict-fn throws, marks :eviction as
    {:skipped true :degraded true}; wrap continues to :end."
   [resources data]
-  (let [evict-fn (:evict-fn resources)
-        agent-id (:agent-id data)]
-    (if evict-fn
-      (try
-        (let [result (evict-fn agent-id)]
-          (assoc data :eviction result))
-        (catch Throwable t
-          (log/warn "wrap-session: evict failed — continuing in degraded mode:"
-                    (ex-message t))
-          (assoc data :eviction {:evicted 0
-                                 :skipped true
-                                 :degraded true
-                                 :error (ex-message t)})))
-      (assoc data :eviction {:evicted 0 :skipped true}))))
+  (support/handle-evict resources data support/continue))
 
 (defn handle-end
   "Terminal state handler. Returns final wrap summary.
@@ -245,14 +209,11 @@
                      :kg-result :notify-sent? :notify-degraded :notify-error
                      :eviction]))
 
-(defn handle-error
-  "Error state handler. Captures error context.
+(def handle-error
+  "Error state handler. Captures error context and throws.
    EDN handler key: :error"
-  [_resources {:keys [error data] :as _fsm}]
-  (throw (ex-info "Wrap session workflow error"
-                  {:agent-id (:agent-id data)
-                   :data (select-keys data [:crystal-result :error])
-                   :error error})))
+  (support/default-handle-error "Wrap session workflow error"
+                                [:crystal-result :error]))
 
 ;; =============================================================================
 ;; Handler Map (for EDN spec registration in workflow registry)
@@ -322,12 +283,7 @@
    :opts
    {:max-trace 50
 
-    :pre
-    (fn [{:keys [current-state-id] :as fsm} _resources]
-      (update-in fsm [:data :trace-log] (fnil conj [])
-                 {:state current-state-id
-                  :at (str (java.time.Instant/now))
-                  :direction :enter}))}})
+    :pre support/trace-log-enter}})
 
 ;; =============================================================================
 ;; Compilation & Execution API

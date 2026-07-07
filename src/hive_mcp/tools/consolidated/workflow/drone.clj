@@ -13,7 +13,8 @@
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.tools.swarm.wave.execution :as wave-execution]
             [hive-mcp.dns.result :as result]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.workflows.support :as support]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -59,14 +60,7 @@
                                                      (seq seeds)       (assoc :seeds (vec seeds))
                                                      (seq ctx_refs)    (assoc :ctx-refs ctx_refs)
                                                      (seq kg_node_ids) (assoc :kg-node-ids (vec kg_node_ids))))]
-                 (doseq [task dispatchable
-                         :let [task-id (:id task)]
-                         :when task-id]
-                   (result/rescue nil
-                                  (c-kanban/handle-kanban {:command    "update"
-                                                           :task_id    task-id
-                                                           :new_status "inprogress"
-                                                           :directory  effective-dir})))
+                 (support/mark-tasks-inprogress! c-kanban/handle-kanban effective-dir dispatchable)
                  (log/info "SPARK[drone]: wave dispatched"
                            {:wave-id wave-id :plan-id plan-id
                             :count   item-count :skipped (count skipped-tasks)
