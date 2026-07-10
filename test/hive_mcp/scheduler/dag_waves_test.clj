@@ -292,6 +292,35 @@
         (is (= 0 (:dispatched-count result)))
         (is (= 0 (count @*spawned-lings)))))))
 
+(deftest dispatch-wave-threads-role
+  (testing "A ready task carrying a :role yields a spawn request with that role"
+    (with-dag-mocks
+      (reset! dag/dag-state (assoc @dag/dag-state :active true))
+
+      (let [ready [{:task-id "task-a" :title "Setup" :role "architect"
+                    :deps #{} :dep-count 0}]
+            _ (dag/dispatch-wave! ready 5
+                                  {:cwd test-directory
+                                   :presets ["ling"]
+                                   :project-id test-project-id})
+            spawn-opts (:opts (first @*spawned-lings))]
+        (is (= {:role "architect"} (:spawn/request spawn-opts))
+            "role threaded into create-ling! via :spawn/request")))))
+
+(deftest dispatch-wave-role-absent-fail-soft
+  (testing "A ready task with no :role produces no :spawn/request (fail-soft)"
+    (with-dag-mocks
+      (reset! dag/dag-state (assoc @dag/dag-state :active true))
+
+      (let [ready [{:task-id "task-a" :title "Setup" :deps #{} :dep-count 0}]
+            _ (dag/dispatch-wave! ready 5
+                                  {:cwd test-directory
+                                   :presets ["ling"]
+                                   :project-id test-project-id})
+            spawn-opts (:opts (first @*spawned-lings))]
+        (is (nil? (:spawn/request spawn-opts))
+            "no role => no spawn request key")))))
+
 ;; =============================================================================
 ;; Tests: on-ling-complete
 ;; =============================================================================
