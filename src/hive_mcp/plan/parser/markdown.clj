@@ -25,7 +25,8 @@
 
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
-            [hive-mcp.plan.schema :as schema]))
+            [hive-mcp.plan.schema :as schema]
+            [hive-mcp.plan.field-registry :as field-registry]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -205,7 +206,9 @@
 
 (defn- section->step
   "Convert a markdown section to a plan step. Precedence for each field:
-     inline EDN overlay > [key: value] annotation > inferred default."
+     inline EDN overlay > [key: value] annotation > inferred default.
+   Addon-registered step fields (plan.field-registry) are carried from the
+   inline EDN overlay."
   [section index]
   (let [title-text  (:header section)
         [overlay description] (extract-edn-overlay (:content-lines section))
@@ -227,7 +230,8 @@
                                (extract-files title-text)
                                [])
               :tags        (or (:tags overlay) [])}]
-    (schema/normalize-step base)))
+    (schema/normalize-step
+     (merge base (select-keys overlay (field-registry/step-field-keys))))))
 
 (defn- extract-plan-title
   "Extract plan title from first # header or return default."

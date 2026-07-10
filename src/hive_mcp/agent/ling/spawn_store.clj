@@ -4,7 +4,8 @@
    The default implementation delegates to the current swarm store, but callers
    depend on this protocol so spawn orchestration is not coupled to a concrete
    DataScript backend."
-  (:require [hive-mcp.swarm.datascript.lings :as ds-lings]
+  (:require [hive-mcp.protocols.registry :as reg]
+            [hive-mcp.swarm.datascript.lings :as ds-lings]
             [hive-mcp.swarm.datascript.queries :as ds-queries]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -34,19 +35,19 @@
          (map :file)
          vec)))
 
-(defonce ^:private active-store (atom (->DataScriptSpawnStore)))
+(defonce ^:private slot
+  (reg/single-slot {:validate #(satisfies? ISpawnStore %)
+                    :initial (->DataScriptSpawnStore)}))
 
 (defn set-store!
   "Install a spawn registration store. Intended for addons/tests that provide a
    non-DataScript implementation."
   [store]
-  {:pre [(satisfies? ISpawnStore store)]}
-  (reset! active-store store)
-  store)
+  (reg/install! slot store))
 
 (defn get-store
   []
-  @active-store)
+  (reg/current slot))
 
 (defn reset-store!
   "Restore the default swarm-backed store. Intended for tests."

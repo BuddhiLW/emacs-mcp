@@ -20,7 +20,9 @@
             [hive-mcp.agent.spawn-mode-registry :as spawn-registry]
             [hive-mcp.dns.result :as result]
             [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [clojure.string :as str]
+            [taoensso.timbre :as log]
+            [hive-mcp.workflows.support :as support]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -104,18 +106,10 @@
                          {:agent-id agent-id :error (:text result2)})
               {:dispatch-error (str "dispatch failed after 2 attempts: " (:text result2))})
             (do
-              (when-let [task-id (:id task)]
-                (result/rescue nil
-                               (c-kanban/handle-kanban {:command "update" :task_id task-id
-                                                        :new_status "inprogress"
-                                                        :directory effective-dir})))
+              (support/mark-task-inprogress! c-kanban/handle-kanban effective-dir (:id task))
               nil))))
       (do
-        (when-let [task-id (:id task)]
-          (result/rescue nil
-                         (c-kanban/handle-kanban {:command "update" :task_id task-id
-                                                  :new_status "inprogress"
-                                                  :directory effective-dir})))
+        (support/mark-task-inprogress! c-kanban/handle-kanban effective-dir (:id task))
         nil))))
 
 (defn- spawn-and-wait!
@@ -377,12 +371,7 @@
             (do
               (log/info "SPARK[orchestrator]: dispatched" (count tasks) "tasks to" agent-id)
               ;; Mark all tasks as inprogress
-              (doseq [task tasks]
-                (result/rescue nil
-                               (c-kanban/handle-kanban {:command    "update"
-                                                        :task_id    (:id task)
-                                                        :new_status "inprogress"
-                                                        :directory  effective-dir})))
+              (support/mark-tasks-inprogress! c-kanban/handle-kanban effective-dir tasks {:skip-nil? false})
               {:spawned [{:agent-id agent-id :task-count (count tasks)
                           :mode :orchestrator :spawned true}]
                :failed  []

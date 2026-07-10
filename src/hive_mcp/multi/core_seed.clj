@@ -15,7 +15,8 @@
   (:require [hive-mcp.multi.registry :as registry]
             [hive-mcp.multi.batchables :as bx]
             [hive-mcp.dsl.verbs :as dsl-verbs]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.tools.consolidated.roster :as roster]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -24,21 +25,47 @@
 (def ^:private core-owner :multi/core)
 
 (defn- seed-tools!
-  "Seed registry.tools from hive-mcp.tools.consolidated.multi/tool-handlers.
+  "Seed registry.tools by enumerating consolidated tool symbols from
+   `tools.consolidated.roster` (single source of truth).
 
-   Lazy-resolved to avoid a hard load-order coupling between multi.registry
-   and consolidated.multi (which itself imports many tool nss)."
+   Each handler symbol is `requiring-resolve`d at boot — the consolidated.X
+   namespace loads on demand. This breaks the static-require chain that
+   previously coupled `consolidated.multi` to every consolidated.X namespace
+   (DIP). Adding a new consolidated tool is a single row added to
+   `hive-mcp.tools.consolidated.roster/consolidated-tools`.
+
+   Composite tools (analysis) have no per-tool ns; their handler is built
+   on demand via `composite/build-composite-handler` keyed on tool-name."
   []
-  (let [handlers-var (try (requiring-resolve 'hive-mcp.tools.consolidated.multi/tool-handlers)
-                          (catch Exception _ nil))]
-    (if-not handlers-var
-      (do (log/warn "[multi.core-seed] consolidated.multi/tool-handlers not resolvable — skipping tool seed")
-          0)
-      (let [handlers @handlers-var]
-        (doseq [[k handler] handlers]
-          (registry/register-by-key! core-owner :multi/tool
-                                     [{:tool-name (name k) :handler handler}]))
-        (count handlers)))))
+  (let [composite-builder (try (requiring-resolve 'hive-mcp.tools.composite/build-composite-handler)
+                               (catch Throwable _ nil))
+        seeded-leaf
+        (reduce
+         (fn [acc [tool-name sym]]
+           (if-let [v (try (requiring-resolve sym) (catch Throwable t
+                                                     (log/warn "[multi.core-seed] requiring-resolve failed"
+                                                               {:tool tool-name :sym sym
+                                                                :err (.getMessage t)})
+                                                     nil))]
+             (do (registry/register-by-key! core-owner :multi/tool
+                                            [{:tool-name tool-name :handler @v}])
+                 (inc acc))
+             acc))
+         0
+         roster/consolidated-tools)
+        seeded-composite
+        (if-not composite-builder
+          (do (log/warn "[multi.core-seed] composite/build-composite-handler not resolvable — skipping composite seed")
+              0)
+          (reduce
+           (fn [acc tool-name]
+             (registry/register-by-key! core-owner :multi/tool
+                                        [{:tool-name tool-name
+                                          :handler (composite-builder tool-name)}])
+             (inc acc))
+           0
+           roster/composite-tools))]
+    (+ seeded-leaf seeded-composite)))
 
 (defn- seed-verbs!
   "Seed registry.verbs from hive-mcp.dsl.verbs/verb-table."

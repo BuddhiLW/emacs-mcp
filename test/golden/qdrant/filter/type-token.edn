@@ -1,0 +1,5 @@
+{:empty [""],
+ :keyword ["note"],
+ :nil nil,
+ :ns-keyword ["bar"],
+ :string ["note"]}

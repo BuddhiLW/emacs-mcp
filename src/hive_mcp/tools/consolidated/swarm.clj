@@ -9,12 +9,7 @@
      swarm olympus focus
 
    Addons can extend via contribute-commands! \"swarm\"."
-  (:require [hive-mcp.tools.composite :as composite]
-            [hive-mcp.tools.consolidated.agent :as c-agent]
-            [hive-mcp.tools.consolidated.wave :as c-wave]
-            [hive-mcp.tools.consolidated.hivemind :as c-hivemind]
-            [hive-mcp.tools.consolidated.agora :as c-agora]
-            [hive-mcp.tools.consolidated.olympus :as c-olympus]))
+  (:require [hive-mcp.tools.composite :as composite]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -25,12 +20,19 @@
 ;; =============================================================================
 
 (def canonical-handlers
-  "Nested handler tree. Dispatch via 'agent spawn', 'wave dispatch', etc."
-  {:agent   c-agent/handlers
-   :wave    c-wave/handlers
-   :hivemind c-hivemind/handlers
-   :agora   c-agora/handlers
-   :olympus c-olympus/handlers})
+  "Nested handler tree. Dispatch via 'agent spawn', 'wave dispatch', etc.
+   Subdomain handler trees resolved lazily via composite/lazy-resolve-handlers —
+   drops the static c-agent/c-wave/c-hivemind/c-agora/c-olympus :require
+   coupling (DIP). Same nested handler-tree shape; same dispatch behaviour."
+  {:agent    (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.agent/handlers)
+   :wave     (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.wave/handlers)
+   :hivemind (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.hivemind/handlers)
+   :agora    (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.agora/handlers)
+   :olympus  (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.olympus/handlers)
+   ;; Folded standalone root (visibility-gated) re-exposed as an ergonomic
+   ;; subdomain: `swarm preset list`. preset/handlers is a flat leaf map, so
+   ;; lazy-resolve merges it directly — no prefix-strip adapter needed.
+   :preset   (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.preset/handlers)})
 
 (def handlers canonical-handlers)
 
@@ -43,19 +45,31 @@
   (apply merge-with merge
          (map #(get-in % [:inputSchema :properties]) tool-defs)))
 
+(defn- resolve-first-tool
+  "Lazy-resolve a sub-tool's `tools` var and return its first entry.
+   Returns nil when the namespace cannot be loaded yet — keeps tool-def
+   compile-time-resolvable without static :require coupling (mirrors the
+   DIP pattern used for canonical-handlers above). Bad subdomain just
+   contributes no schema props rather than failing the whole def."
+  [sym]
+  (when-let [v (try (requiring-resolve sym) (catch Exception _ nil))]
+    (first @v)))
+
 (def tool-def
-  (let [all-props (merge-schemas (first c-agent/tools)
-                                 (first c-wave/tools)
-                                 (first c-hivemind/tools)
-                                 (first c-agora/tools)
-                                 (first c-olympus/tools))]
+  (let [all-props (merge-schemas
+                   (resolve-first-tool 'hive-mcp.tools.consolidated.agent/tools)
+                   (resolve-first-tool 'hive-mcp.tools.consolidated.wave/tools)
+                   (resolve-first-tool 'hive-mcp.tools.consolidated.hivemind/tools)
+                   (resolve-first-tool 'hive-mcp.tools.consolidated.agora/tools)
+                   (resolve-first-tool 'hive-mcp.tools.consolidated.olympus/tools)
+                   (resolve-first-tool 'hive-mcp.tools.consolidated.preset/tools))]
     {:name "swarm"
      :consolidated true
      :description "Unified agent operations: spawn (create ling/drone), status (query agents), kill (terminate), kill-batch (terminate multiple agents in one call), batch-spawn (spawn multiple agents at once via operations array), dispatch (send task), interrupt (interrupt current query of agent-sdk ling), claims (file ownership), list (deprecated alias for status), collect (get task result), broadcast (prompt all), cleanup (remove orphan agents after Emacs restart). Type: 'ling' (Claude Code instance) or 'drone' (OpenRouter leaf worker). Nested: dag (start/stop/status DAGWave scheduler). Use command='help' to list all."
      :inputSchema {:type "object"
                    :properties (merge
                                 {"command" {:type "string"
-                                            :description "Swarm operation. Prefix with subdomain: 'agent spawn', 'wave dispatch', 'hivemind shout', 'agora dialogue', 'olympus focus'. Use command='help' to list all."}}
+                                            :description "Swarm operation. Prefix with subdomain: 'agent spawn', 'wave dispatch', 'hivemind shout', 'agora dialogue', 'olympus focus', 'preset list'. Use command='help' to list all."}}
                                 ;; Include all params from sub-tools
                                 (dissoc all-props "command"))
                    :required ["command"]}

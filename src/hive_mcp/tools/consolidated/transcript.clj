@@ -15,7 +15,8 @@
             [hive-dsl.result :as r]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.tools.core :as tcore]))
 
 ;; =============================================================================
 ;; Store Resolution (SLAP: mechanism layer)
@@ -161,7 +162,7 @@
 ;; =============================================================================
 
 (defn handle-transcript
-  "Route transcript MCP commands. Returns result map.
+  "Route transcript MCP commands. Returns an MCP-envelope result.
 
    Commands:
      list                     — Available transcripts (JSONL + Datalevin)
@@ -170,55 +171,57 @@
      since  {:agent-id :turn} — Entries after turn
      stats  {:agent-id}       — Turn count, cost, role breakdown
      replay {:agent-id}       — Formatted markdown conversation"
-  [{:keys [command agent-id agent_id id n turn] :as params}]
+  [{:keys [command agent-id agent_id id n turn] :as _params}]
   (let [agent-id (or agent-id agent_id id)]
-  (case command
-    "list"
-    (let [jsonl (list-jsonl-transcripts)
-          dl    (list-datalevin-transcripts)
-          all   (->> (concat jsonl dl)
-                     (group-by :agent-id)
-                     (map (fn [[id sources]] (assoc (first sources) :sources (mapv :source sources))))
-                     (sort-by :modified >)
-                     vec)]
-      {:transcripts all :count (count all)})
+    (case command
+      "list"
+      (let [jsonl (list-jsonl-transcripts)
+            dl    (list-datalevin-transcripts)
+            all   (->> (concat jsonl dl)
+                       (group-by :agent-id)
+                       (map (fn [[id sources]] (assoc (first sources) :sources (mapv :source sources))))
+                       (sort-by :modified >)
+                       vec)]
+        (tcore/mcp-json {:transcripts all :count (count all)}))
 
-    "query"
-    (let [result (execute-query (tq/transcript-query :query/by-agent {:agent-id agent-id}))]
-      (if (r/ok? result)
-        {:entries (mapv format-entry-compact (:ok result))
-         :count   (count (:ok result))
-         :agent-id agent-id}
-        {:error true :message (:message result)}))
+      "query"
+      (let [result (execute-query (tq/transcript-query :query/by-agent {:agent-id agent-id}))]
+        (if (r/ok? result)
+          (tcore/mcp-json {:entries (mapv format-entry-compact (:ok result))
+                           :count   (count (:ok result))
+                           :agent-id agent-id})
+          (tcore/mcp-error (:message result))))
 
-    "tail"
-    (let [result (execute-query (tq/transcript-query :query/tail {:agent-id agent-id :n (int (or n 10))}))]
-      (if (r/ok? result)
-        {:entries (mapv format-entry-compact (:ok result))
-         :count   (count (:ok result))
-         :agent-id agent-id}
-        {:error true :message (:message result)}))
+      "tail"
+      (let [result (execute-query (tq/transcript-query :query/tail {:agent-id agent-id :n (int (or n 10))}))]
+        (if (r/ok? result)
+          (tcore/mcp-json {:entries (mapv format-entry-compact (:ok result))
+                           :count   (count (:ok result))
+                           :agent-id agent-id})
+          (tcore/mcp-error (:message result))))
 
-    "since"
-    (let [result (execute-query (tq/transcript-query :query/since {:agent-id agent-id :turn (int (or turn 0))}))]
-      (if (r/ok? result)
-        {:entries (mapv format-entry-compact (:ok result))
-         :count   (count (:ok result))
-         :agent-id agent-id}
-        {:error true :message (:message result)}))
+      "since"
+      (let [result (execute-query (tq/transcript-query :query/since {:agent-id agent-id :turn (int (or turn 0))}))]
+        (if (r/ok? result)
+          (tcore/mcp-json {:entries (mapv format-entry-compact (:ok result))
+                           :count   (count (:ok result))
+                           :agent-id agent-id})
+          (tcore/mcp-error (:message result))))
 
-    "stats"
-    (let [result (execute-query (tq/transcript-query :query/by-agent {:agent-id agent-id}))]
-      (if (r/ok? result)
-        (compute-stats (:ok result) agent-id)
-        {:error true :message (:message result)}))
+      "stats"
+      (let [result (execute-query (tq/transcript-query :query/by-agent {:agent-id agent-id}))]
+        (if (r/ok? result)
+          (tcore/mcp-json (compute-stats (:ok result) agent-id))
+          (tcore/mcp-error (:message result))))
 
-    "replay"
-    (let [result (execute-query (tq/transcript-query :query/by-agent {:agent-id agent-id}))]
-      (if (r/ok? result)
-        {:markdown (format-replay (:ok result) agent-id)
-         :agent-id agent-id}
-        {:error true :message (:message result)}))
+      "replay"
+      (let [result (execute-query (tq/transcript-query :query/by-agent {:agent-id agent-id}))]
+        (if (r/ok? result)
+          (tcore/mcp-json {:markdown (format-replay (:ok result) agent-id)
+                           :agent-id agent-id})
+          (tcore/mcp-error (:message result))))
 
-    ;; Unknown command
-    {:error true :message (str "Unknown transcript command: " command)})))
+      ;; Unknown command — surface as MCP error envelope so cross-impl
+      ;; contract test (registry-contract-test/every-tool-help-shape-compliant)
+      ;; sees uniform shape across every consolidated tool.
+      (tcore/mcp-error (str "Unknown transcript command: " command)))))

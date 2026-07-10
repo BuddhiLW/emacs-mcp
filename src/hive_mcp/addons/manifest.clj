@@ -46,8 +46,17 @@
 ;; =============================================================================
 
 (def AddonType
-  "Valid addon type enum."
+  "Valid addon type enum — the *integration mechanism* (native Clojure addon,
+   MCP bridge, or external process)."
   [:enum :native :mcp-bridge :external])
+
+(def AddonKind
+  "Whether this manifest entry is a true hive IAddon (a hive-native capability
+   that implements the IAddon protocol and lives in the addon-core registry) or
+   a library that merely ships a thin addon wrapper around general-purpose
+   infrastructure (DB clients, terminals, external-tool wrappers, instrumentation).
+   Informational — drives roster classification, NOT loading."
+  [:enum :addon :library])
 
 (def AddonId
   "Non-empty string addon identifier."
@@ -91,6 +100,7 @@
    [:addon/type AddonType]
    [:addon/init-ns NamespaceName]
    [:addon/init-fn FunctionName]
+   [:addon/kind {:optional true} AddonKind]
    [:addon/version {:optional true} SemVer]
    [:addon/config {:optional true :default {}} [:map-of :keyword :any]]
    [:addon/capabilities {:optional true :default #{}} [:set Capability]]

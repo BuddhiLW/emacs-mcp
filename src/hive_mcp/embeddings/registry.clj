@@ -43,13 +43,16 @@
 
 
 (defn- create-ollama-provider
-  "Create Ollama embedding provider from config."
+  "Create Ollama embedding provider from config.
+   When (get-in config [:options :executor-fn]) is set, embed calls route
+   through the GPU executor (admission-controlled) instead of direct HTTP."
   [config]
   ;; Use existing factory from ollama namespace
   (require 'hive-mcp.embeddings.ollama)
   (let [factory (resolve 'hive-mcp.embeddings.ollama/->provider)]
-    (factory {:host (get-in config [:options :host])
-              :model (:model config)})))
+    (factory {:host        (get-in config [:options :host])
+              :model       (:model config)
+              :executor-fn (get-in config [:options :executor-fn])})))
 
 (defn- create-openai-provider
   "Create OpenAI embedding provider from config."

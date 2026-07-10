@@ -46,6 +46,54 @@
 ;; Handler: :crystal/wrap-request (Option A - Unified wrap path)
 ;; =============================================================================
 
+(def ^:private memory-type->bucket
+  "Maps a memory `:type` string to the wrap-notify bucket key the shout
+   formatter reads. Types outside this set fold into :other."
+  {"decision"   :decisions
+   "convention" :conventions
+   "note"       :notes
+   "principle"  :principles
+   "axiom"      :axioms
+   "snippet"    :snippets
+   "plan"       :plans
+   "knowledge"  :knowledge})
+
+(defn project-wrap-stats
+  "Reconcile a harvest `:summary` map (producer) into the wrap-notify consumer
+   vocabulary read by `format-bucket-message`.
+
+   The crystallize/harvest path produces a HarvestSummary whose keys
+   (`:created-count`, `:kanban-completed`, `:kg-edge-count`,
+   `:created-by-type` …) do NOT match the `:decisions`/`:conventions`/…
+   vocabulary the shout formatter reads — which is why the piggyback always
+   read `0 decisions, 0 conventions`. This is the single producer→consumer
+   projection site (see memory 20260418200155-6151635c).
+
+   - Per-type memory-creation counts come from `:created-by-type`; unknown
+     types fold into `:other` so custom types still register.
+   - `:kanban-closures`, `:kg-edges`, `:memories-created` surface kanban +
+     KG + total deltas.
+   - Idempotent on already-consumer-shaped maps (the elisp wrap-request path
+     pre-sets `:decisions`/`:conventions`/…): when `:created-by-type` is
+     absent those pre-set counts pass through unchanged."
+  [summary]
+  (let [m       (or summary {})
+        by-type (:created-by-type m)
+        typed   (when by-type
+                  (reduce-kv (fn [acc t c]
+                               (update acc (get memory-type->bucket t :other)
+                                       (fnil + 0) c))
+                             {} by-type))]
+    (merge
+     {:decisions 0 :conventions 0 :notes 0 :principles 0 :axioms 0
+      :snippets 0 :plans 0 :knowledge 0 :other 0}
+     (select-keys m [:decisions :conventions :notes :principles :axioms
+                     :snippets :plans :knowledge :other :accomplishments])
+     typed
+     {:kanban-closures  (or (:kanban-closures m) (:kanban-completed m) 0)
+      :kg-edges         (or (:kg-edges m) (:kg-edge-count m) 0)
+      :memories-created (or (:memories-created m) (:created-count m) 0)})))
+
 (defn- format-bucket-message
   "Format a session-wrap shout message from a stats-like map.
 
@@ -87,10 +135,13 @@
         bucket-pairs [[:notes "notes"]
                       [:principles "principles"]
                       [:axioms "axioms"]
+                      [:knowledge "knowledge"]
                       [:snippets "snippets"]
                       [:plans "plans"]
+                      [:other "other"]
                       [:accomplishments "accomplishments"]
-                      [:kanban-closures "kanban→done"]]
+                      [:kanban-closures "kanban→done"]
+                      [:kg-edges "kg-edges"]]
         extras       (->> bucket-pairs
                           (keep (fn [[k label]]
                                   (let [n (get-n k)]
@@ -111,7 +162,7 @@
                           (nil? extras)
                           (not disposition?))
         hint         (when all-zero?
-                       " (no items in wrap form — direct memory writes accrue independently; run /permeate for queued crystals)")]
+                       " (no memory writes, KG edges, or kanban closures harvested this session)")]
     (str "Session wrapped: " decisions " decisions, " conventions " conventions"
          (when extras (str ", " (str/join ", " extras)))
          disposition
@@ -212,19 +263,23 @@
         ;; Defensive: ensure stats is a map before accessing keys
         ;; This prevents "Key must be integer" error if stats is a vector/nil
         safe-stats (if (map? stats) stats {})
-        message (format-bucket-message safe-stats)]
+        ;; Reconcile the HarvestSummary producer shape into the consumer
+        ;; vocabulary the formatter reads, so the piggyback reports the real
+        ;; session delta instead of a structural 0 decisions, 0 conventions.
+        projected (project-wrap-stats safe-stats)
+        message (format-bucket-message projected)]
     {:log {:level :info
            :message (str "Wrap notify from " agent-id " (project: " project-id "): " note-count " entries")}
      :wrap-notify {:agent-id agent-id
                    :session-id session-id
                    :project-id project-id
                    :created-ids created-ids
-                   :stats safe-stats}
+                   :stats projected}
      :shout {:agent-id agent-id
              :event-type :wrap_notify
              :data {:session-id session-id
                     :project-id project-id
-                    :stats safe-stats
+                    :stats projected
                     :message message}}}))
 
 ;; =============================================================================

@@ -1,6 +1,8 @@
 (ns hive-mcp.protocols.agent-bridge
   "Protocols for agent backend abstraction and session lifecycle."
-  (:require [clojure.core.async :as async]))
+  (:require [clojure.core.async :as async]
+            [hive-mcp.protocols.registry :as reg]
+            [hive-mcp.protocols.saa :as psaa]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -83,23 +85,14 @@
     "Set a custom permission handler for the agent session."))
 
 ;;; ============================================================================
-;;; ISAAOrchestrator Protocol
+;;; ISAAOrchestrator Protocol (canonical in hive-mcp.protocols.saa; re-exported)
 ;;; ============================================================================
 
-(defprotocol ISAAOrchestrator
-  "Protocol for SAA phase orchestration."
-
-  (run-silence! [this session task opts]
-    "Execute the Silence phase with read-only tools.")
-
-  (run-abstract! [this session observations opts]
-    "Execute the Abstract phase to synthesize a plan.")
-
-  (run-act! [this session plan opts]
-    "Execute the Act phase with full tool access.")
-
-  (run-full-saa! [this session task opts]
-    "Execute the complete SAA cycle."))
+(def ISAAOrchestrator psaa/ISAAOrchestrator)
+(def run-silence! psaa/run-silence!)
+(def run-abstract! psaa/run-abstract!)
+(def run-act! psaa/run-act!)
+(def run-full-saa! psaa/run-full-saa!)
 
 ;;; ============================================================================
 ;;; NoopAgentSession (No-Op Fallback)
@@ -189,7 +182,7 @@
     {:success? false
      :errors [noop-msg]})
 
-  ISAAOrchestrator
+  psaa/ISAAOrchestrator
 
   (run-silence! [_ _session _task _opts]
     (let [ch (async/chan 1)]
@@ -219,31 +212,29 @@
 ;;; Active Implementation Management
 ;;; ============================================================================
 
-(defonce ^:private active-agent-backend (atom nil))
+(defonce ^:private slot
+  (reg/single-slot {:validate #(satisfies? IAgentBackend %)
+                    :on-empty ->NoopAgentBackend}))
 
 (defn set-agent-backend!
   "Set the active agent backend implementation."
   [impl]
-  {:pre [(satisfies? IAgentBackend impl)]}
-  (reset! active-agent-backend impl)
-  impl)
+  (reg/install! slot impl))
 
 (defn get-agent-backend
   "Get the active agent backend, or NoopAgentBackend if none set."
   []
-  (or @active-agent-backend
-      (->NoopAgentBackend)))
+  (reg/current slot))
 
 (defn agent-backend-set?
   "Check if an agent backend is configured."
   []
-  (some? @active-agent-backend))
+  (reg/present? slot))
 
 (defn clear-agent-backend!
   "Clear the active agent backend."
   []
-  (reset! active-agent-backend nil)
-  nil)
+  (reg/clear! slot))
 
 ;;; ============================================================================
 ;;; Utility Functions
@@ -263,7 +254,7 @@
   "Check if a non-noop agent backend is active."
   []
   (and (agent-backend-set?)
-       (not (instance? NoopAgentBackend @active-agent-backend))))
+       (not (instance? NoopAgentBackend (get-agent-backend)))))
 
 (defn backend-capabilities
   "Get a summary of available agent backend capabilities."

@@ -125,31 +125,34 @@
 ;; =============================================================================
 
 (defmethod ig/init-key :hive/mcp-stdio
-  [_ {:keys [hot-reload] :as config}]
+  [_ {:keys [hot-reload] :as _config}]
   (log/info ":hive/mcp-stdio init — building MCP server spec and starting stdio server")
   (let [server-id (random-uuid)
-        ;; Require at init time — these may not be loaded in K8s profiles
-        routes-ns   (requiring-resolve 'hive-mcp.server.routes/build-server-spec)
-        io-server   (requiring-resolve 'io.modelcontext.clojure-sdk.stdio-server/stdio-server)
-        create-ctx! (requiring-resolve 'io.modelcontext.clojure-sdk.server/create-context!)
-        start!      (requiring-resolve 'jsonrpc4clj.server/start)
-        spec        (assoc (routes-ns) :server-id server-id)
-        log-ch      (async/chan (async/sliding-buffer 20))
-        server      (io-server {:log-ch log-ch})
-        context     (assoc (create-ctx! spec) :server server)]
-    ;; Wire server context into hot-reload for MCP auto-heal after reload
-    (when-let [ctx-atom (:server-context-atom hot-reload)]
-      (reset! ctx-atom context)
-      (log/info ":hive/mcp-stdio — server context wired to :hive/hot-reload"))
-    ;; Start JSON-RPC server — returns a join promise (derefable)
-    (let [join (start! server context)]
-      (log/info ":hive/mcp-stdio — stdio server started, server-id:" server-id)
-      {:server-id server-id
-       :server    server
-       :context   context
-       :join      join
-       :log-ch    log-ch
-       :status    :running})))
+        result
+        (try
+          (let [;; Require at init time — these may not be loaded in K8s profiles
+                routes-ns   (requiring-resolve 'hive-mcp.server.routes/build-server-spec)
+                io-server   (requiring-resolve 'io.modelcontext.clojure-sdk.stdio-server/stdio-server)
+                create-ctx! (requiring-resolve 'io.modelcontext.clojure-sdk.server/create-context!)
+                start!      (requiring-resolve 'jsonrpc4clj.server/start)
+                spec        (assoc (routes-ns) :server-id server-id)
+                log-ch      (async/chan (async/sliding-buffer 20))
+                server      (io-server {:log-ch log-ch})
+                context     (assoc (create-ctx! spec) :server server)]
+            ;; Wire server context into hot-reload for MCP auto-heal after reload
+            (when-let [ctx-atom (:server-context-atom hot-reload)]
+              (reset! ctx-atom context)
+              (log/info ":hive/mcp-stdio — server context wired to :hive/hot-reload"))
+            ;; Start JSON-RPC server — returns a join promise (derefable)
+            (let [join (start! server context)]
+              (log/info ":hive/mcp-stdio — stdio server started, server-id:" server-id)
+              {:server server :context context :join join :log-ch log-ch}))
+          (catch Throwable t
+            (log/error t ":hive/mcp-stdio init threw — MCP tools will be unavailable in this session")
+            nil))]
+    (merge {:server-id server-id
+            :status    (if result :running :failed)}
+           result)))
 
 (defmethod ig/halt-key! :hive/mcp-stdio
   [_ state]

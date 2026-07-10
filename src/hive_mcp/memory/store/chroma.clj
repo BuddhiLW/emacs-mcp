@@ -279,6 +279,41 @@
                 0
                 kg-outgoing)))))
 
+;; =========================================================================
+;; IMemoryStoreLiveness — cross-store resilience seam
+;; =========================================================================
+;;
+;; Chroma uses a CPython-driven HTTP API; transient drops are uncommon
+;; outside container restarts. The implementation is a stub that satisfies
+;; the protocol contract:
+;;
+;; -probe!           — round-trips via `chroma/chroma-available?` (cheap
+;;                     HTTP heartbeat); throws on transport-fatal.
+;; -kick-reconnect!  — clears the connection cache so the next call
+;;                     re-resolves the host. No background heal loop —
+;;                     chroma's failure mode is "cache stale" not "socket
+;;                     pool dead", so cache-clear is the recovery primitive.
+;; -await-reconnect! — single probe RPC inside the budget; if it succeeds
+;;                     true, otherwise false. No polling because there's
+;;                     no async heal loop to wait on.
+
+(require '[hive-mcp.protocols.memory-liveness :as liveness])
+
+(extend-protocol liveness/IMemoryStoreLiveness
+  ChromaMemoryStore
+  (-probe! [_this]
+    (boolean (chroma/chroma-available?)))
+  (-kick-reconnect! [_this]
+    (try
+      (chroma/reset-collection-cache!)
+      (catch Throwable t
+        (log/warn "chroma kick-reconnect! cache-clear failed:" (ex-message t))))
+    nil)
+  (-await-reconnect! [_this _budget-ms]
+    (try
+      (boolean (chroma/chroma-available?))
+      (catch Throwable _ false))))
+
 (defn create-store
   "Create a new Chroma-backed memory store.
 

@@ -66,6 +66,19 @@
   [data]
   (not (context-gather-enabled?* data)))
 
+(defn- compute-cycle-outcome
+  "Derive per-cycle outcome from a single spark result.
+   :clean   — no failures
+   :partial — some spawned, some failed (mixed)
+   :failure — zero spawned, failures exist"
+  [spark-result]
+  (let [spawned  (get spark-result :count 0)
+        failed   (seq (get spark-result :failed))]
+    (cond
+      (not failed)                   :clean
+      (and (pos? spawned) failed)    :partial
+      :else                          :failure)))
+
 ;; =============================================================================
 ;; Handlers (h1-h7) — Call resources ops, stay decoupled from workflow.clj
 ;; =============================================================================

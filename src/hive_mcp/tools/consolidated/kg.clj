@@ -1,21 +1,21 @@
 (ns hive-mcp.tools.consolidated.kg
   "Consolidated Knowledge Graph CLI tool."
-  (:require [hive-mcp.tools.cli :refer [make-cli-handler make-batch-handler]]
-            [hive-mcp.tools.kg :as kg-handlers]))
-
-(def ^:private edge-handlers
-  {:edge kg-handlers/handle-kg-add-edge})
-
-(def ^:private traverse-handlers
-  {:traverse kg-handlers/handle-kg-traverse})
+  (:require [hive-mcp.batch.cli-adapter :as bca]
+            [hive-mcp.tools.cli :refer [make-cli-handler]]
+            [hive-mcp.tools.kg :as kg-handlers]
+            [hive-mcp.tools.kg.batch :as kg-batch]))
 
 (def handle-batch-edge
-  "Batch edge creation via make-batch-handler."
-  (make-batch-handler edge-handlers))
+  "Batch edge creation via the `Batchable` protocol (decision
+   20260429230453-7e7627cc). Returns the legacy `{:results :summary}`
+   envelope so existing CLI callers stay compatible."
+  (bca/cli-batch-handler {:run-fn kg-batch/run-batch
+                          :cmd-kw :edge}))
 
 (def handle-batch-traverse
-  "Batch traversal via make-batch-handler."
-  (make-batch-handler traverse-handlers))
+  "Batch traversal via the `Batchable` protocol."
+  (bca/cli-batch-handler {:run-fn kg-batch/run-batch
+                          :cmd-kw :traverse}))
 
 (def handlers
   {:traverse           kg-handlers/handle-kg-traverse
@@ -71,8 +71,8 @@
                               "to" {:type "string"
                                     :description "Target node ID for edge"}
                               "relation" {:type "string"
-                                          :enum ["implements" "supersedes" "refines" "contradicts" "depends-on" "derived-from" "applies-to"]
-                                          :description "Relation type for edge"}
+                                          :enum ["implements" "supersedes" "refines" "contradicts" "depends-on" "derived-from" "applies-to" "projects-to" "co-accessed"]
+                                          :description "Relation type for edge (server validates against kg-schema/relation-types; addons may register more)"}
                               "confidence" {:type "number"
                                             :description "Confidence score 0.0-1.0"}
                               "node_id" {:type "string"

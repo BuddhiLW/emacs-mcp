@@ -7,64 +7,31 @@
    - DSL dispatch: {dsl: [[verb, params], ...]} compiled to batch operations
 
    Plus async execution for long-running batches."
-  (:require [hive-mcp.tools.consolidated.agent :as c-agent]
-            [hive-mcp.tools.consolidated.memory :as c-memory]
-            [hive-mcp.tools.consolidated.kg :as c-kg]
-            [hive-mcp.tools.consolidated.hivemind :as c-hivemind]
-            [hive-mcp.tools.consolidated.magit :as c-magit]
-            [hive-mcp.tools.consolidated.cider :as c-cider]
-            [hive-mcp.tools.consolidated.kanban :as c-kanban]
-            [hive-mcp.tools.consolidated.preset :as c-preset]
-            [hive-mcp.tools.consolidated.olympus :as c-olympus]
-            [hive-mcp.tools.consolidated.agora :as c-agora]
-            [hive-mcp.tools.composite :as composite]
-            [hive-mcp.tools.consolidated.project :as c-project]
-            [hive-mcp.tools.consolidated.session :as c-session]
-            [hive-mcp.tools.consolidated.emacs :as c-emacs]
-            [hive-mcp.tools.consolidated.wave :as c-wave]
-            [hive-mcp.tools.consolidated.migration :as c-migration]
-            [hive-mcp.tools.consolidated.config :as c-config]
-            [hive-mcp.tools.consolidated.workflow :as c-workflow]
-            [hive-mcp.tools.consolidated.transcript :as c-transcript]
-            [hive-mcp.tools.events.core :as c-events]
+  (:require [hive-mcp.tools.composite :as composite]
             [hive-mcp.tools.result-bridge :as rb]
             [hive-mcp.tools.core :refer [mcp-error]]
             [hive-mcp.dns.result :refer [rescue]]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.multi.registry :as multi-registry]
+            [hive-mcp.multi.registry.tools :as r-tools]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-(def ^:private tool-handlers
-  {:agent     c-agent/handle-agent
-   :memory    c-memory/handle-memory
-   :kg        c-kg/handle-kg
-   :hivemind  c-hivemind/handle-hivemind
-   :magit     c-magit/handle-magit
-   :cider     c-cider/handle-cider
-   :kanban    c-kanban/handle-kanban
-   :preset    c-preset/handle-preset
-   :olympus   c-olympus/handle-olympus
-   :agora     c-agora/handle-agora
-   :analysis  (composite/build-composite-handler "analysis")
-   :project   c-project/handle-project
-   :session   c-session/handle-session
-   :emacs     c-emacs/handle-emacs
-   :wave      c-wave/handle-wave
-   :migration c-migration/handle-migration
-   :config     c-config/handle-config
-   :workflow   c-workflow/handle-workflow
-   :transcript c-transcript/handle-transcript
-   :events     c-events/handle})
-
-(def ^:private tool-names
-  (sort (map name (keys tool-handlers))))
+(defn tool-names
+  "Sorted vec of all consolidated tool names registered via multi.registry.
+   Read at call time so addons that register tools post-boot are visible."
+  []
+  (r-tools/all-names))
 
 (defn get-tool-handler
-  "Resolve a consolidated tool handler by name."
+  "Resolve a consolidated tool handler by name.
+   Routes through `multi.registry/resolve-tool-handler` (DIP) — covers the
+   :multi/core seed AND any addon-contributed tools, with a legacy
+   flat-tool fallback for non-consolidated tools."
   [tool-name]
-  (get tool-handlers (keyword tool-name)))
+  (multi-registry/resolve-tool-handler (name tool-name)))
 
 ;; ── Lazy Resolution Helpers ───────────────────────────────────────────────────
 
@@ -118,7 +85,7 @@
        "  multi {\"command\": \"list-async\"}                  → list pending async batches\n"
        "  multi {\"command\": \"cancel-async\", \"batch_id\": \"...\"}  → cancel running batch\n\n"
        "Available tools:\n"
-       (str/join "\n" (map #(str "  - " %) tool-names))
+       (str/join "\n" (map #(str "  - " %) (tool-names)))
        "\n\nTo see commands for a specific tool:\n"
        "  multi {\"tool\": \"memory\", \"command\": \"help\"}\n\n"
        "All additional params are forwarded to the target tool handler."))
@@ -236,6 +203,66 @@
                           :hint "hive-mcp.tools.multi-async is not available"})))))
 
 ;; =============================================================================
+;; Plan / Run (PR5 — persistent compile-then-run)
+;; =============================================================================
+
+(defn- resolve-plan-fn [fn-name]
+  (resolve-or-err (symbol "hive-mcp.multi.plan" (name fn-name)) :plan-resolve-error))
+
+(defn- result->mcp
+  "Convert a hive-dsl.result Result map to an MCP envelope.
+
+   Result shape: {:ok value} | {:error category ...extra}"
+  [result]
+  (cond
+    (and (map? result) (contains? result :error))
+    (mcp-error (str (:error result) ": "
+                    (or (:message result) (pr-str (dissoc result :error)))))
+
+    (and (map? result) (contains? result :ok))
+    {:type "text" :text (pr-str (:ok result))}
+
+    :else
+    {:type "text" :text (pr-str result)}))
+
+(defn- handle-plan
+  "Compile ops/dsl into a persisted plan, return plan-id.
+
+   Accepts EITHER `:operations` (raw op vector) OR `:dsl` (verb sentences)."
+  [{:keys [operations dsl reason directory]}]
+  (let [compile-fn (resolve-plan-fn 'compile-and-persist!)
+        compile-paragraph (resolve-compile-paragraph)
+        ops (cond
+              (sequential? operations)
+              (mapv rb/keywordize-map operations)
+
+              (sequential? dsl)
+              (when compile-paragraph (compile-paragraph dsl))
+
+              :else nil)]
+    (cond
+      (or (nil? ops) (empty? ops))
+      (mcp-error "plan requires non-empty 'operations' or 'dsl' input")
+
+      (nil? compile-fn)
+      (mcp-error "multi.plan/compile-and-persist! not resolvable")
+
+      :else
+      (result->mcp (compile-fn ops {:reason reason :directory directory})))))
+
+(defn- handle-run
+  "Execute a previously persisted plan by `plan_id`."
+  [{:keys [plan_id]}]
+  (cond
+    (str/blank? (str plan_id))
+    (mcp-error "run requires 'plan_id' parameter (use command='plan' to obtain one)")
+
+    :else
+    (if-let [run-fn (resolve-plan-fn 'run!)]
+      (result->mcp (run-fn (str plan_id) {}))
+      (mcp-error "multi.plan/run! not resolvable"))))
+
+;; =============================================================================
 ;; Main Router
 ;; =============================================================================
 
@@ -270,6 +297,13 @@
       (= "cancel-async" (str command))
       (handle-async-cancel normalized)
 
+      ;; Plan/Run commands (PR5 — persistent compile-then-run)
+      (= "plan" (str command))
+      (handle-plan normalized)
+
+      (= "run" (str command))
+      (handle-run normalized)
+
       ;; Batch mode: operations present, no tool specified
       (and (some? operations) (or (nil? tool) (str/blank? (str tool))))
       (handle-batch normalized)
@@ -282,21 +316,22 @@
       (and (= "help" (str tool)) (nil? command))
       {:type "text" :text (format-multi-help)}
 
-      ;; Route to consolidated handler (single dispatch)
+      ;; Route to consolidated handler (single dispatch) via the multi.registry —
+      ;; covers :multi/core seed + addon contributions, with legacy fallback.
       :else
-      (let [tool-kw (keyword (str/lower-case (str tool)))
-            handler (get tool-handlers tool-kw)]
+      (let [tool-str (str/lower-case (str tool))
+            handler  (get-tool-handler tool-str)]
         (if handler
           (handler (dissoc normalized :tool))
-          (mcp-error (str "Unknown tool: " (name tool-kw)
-                          ". Available: " (str/join ", " tool-names))))))))
+          (mcp-error (str "Unknown tool: " tool-str
+                          ". Available: " (str/join ", " (tool-names)))))))))
 
 (def tool-def
   {:name "multi"
    :consolidated true
    :description (str "Unified entry point for ALL hive-mcp operations. "
                      "Routes to any consolidated tool via {tool, command, ...params}. "
-                     "Tools: " (str/join ", " tool-names) ". "
+                     "Tools: " (str/join ", " (tool-names)) ". "
                      "Example: {\"tool\": \"memory\", \"command\": \"add\", \"content\": \"...\"}. "
                      "Use {\"tool\": \"<name>\", \"command\": \"help\"} to list commands for a tool. "
                      "All additional params beyond these common ones are forwarded to the target tool. "
@@ -311,7 +346,7 @@
                      "emacs: code, buffer, file, line, text, level, function_name, variable_name, pattern.")
    :inputSchema {:type "object"
                  :properties {"tool"    {:type "string"
-                                         :enum (vec tool-names)
+                                         :enum (vec (tool-names))
                                          :description "Target consolidated tool name"}
                               "command" {:type "string"
                                          :description (str "Subcommand for the target tool (e.g. 'add', 'spawn', 'status'). "

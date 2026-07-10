@@ -1,0 +1,9 @@
+{:empty-after nil,
+ :funeraria "funeraria",
+ :hive "hive",
+ :hive-mcp "hive-mcp",
+ :keyword-input nil,
+ :nil-input nil,
+ :no-prefix nil,
+ :reserved-pid nil,
+ :scope-global nil}

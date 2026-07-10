@@ -20,6 +20,7 @@
             [hive-mcp.tools.memory.duration :as dur]
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.channel.piggyback :as piggyback]
@@ -78,8 +79,8 @@
              :session-end   (.toString fixed-now)
              :duration-minutes 0}))
 
-        ;; Chroma — progress notes query
-        chroma/query-entries
+        ;; Vectordb facade — progress notes / kanban task query
+        facade/query-entries
         (fn [& {:as args#}]
           (cond
             (= "note" (:type args#))
@@ -148,10 +149,10 @@
           ctx/current-directory
           (fn [] "/tmp/golden-test")
 
-          chroma/index-memory-entry!
+          facade/index-memory-entry!
           (fn [_#] (get opts# :entry-id "entry-golden-001"))
 
-          chroma/content-hash
+          facade/content-hash
           (fn [c#] (str (hash c#)))]
 
          (let [result# (do ~@body)]
@@ -203,8 +204,9 @@
         (is (= (set (keys (:summary golden)))
                (set (keys (:summary result))))
             "summary sub-keys must match golden baseline")
-        ;; All counts zero for empty harvest
-        (is (every? zero? (vals (:summary result)))
+        ;; All numeric counts zero for empty harvest (:created-by-type is a
+        ;; map breakdown, not a count — excluded from the zero check)
+        (is (every? zero? (filter number? (vals (:summary result))))
             "all summary counts should be 0 for empty harvest")
         ;; session-temporal should alias session-timing
         (is (= (:session-timing result) (:session-temporal result))
@@ -336,7 +338,7 @@
 (deftest golden-synthesis-shape-contract
   (testing "Both crystallize-session paths return expected key sets from golden file"
     (let [golden (load-golden "golden/crystal/crystal-synthesis-shape.edn")]
-      ;; No-content path
+      ;; No-content path — always-store contract (no :skipped branch)
       (with-synthesis-mocks
         {:summary nil}
         (let [result (hooks/crystallize-session
@@ -355,8 +357,12 @@
           (is (= (:keys (:no-content-path golden))
                  (set (keys result)))
               "No-content path key set must match golden baseline")
-          (is (true? (:skipped result)))
-          (is (= "no-content" (:reason result)))
+          (is (string? (:summary-id result))
+              "No-content path always stores a minimal-wrap breadcrumb")
+          (is (not (contains? result :skipped))
+              "always-store contract: no :skipped key")
+          (is (not (contains? result :reason))
+              "always-store contract: no :reason key")
           ;; Lifecycle stats sub-keys
           (is (= #{:promoted :skipped :below :evaluated}
                  (set (keys (:promotion-stats result))))

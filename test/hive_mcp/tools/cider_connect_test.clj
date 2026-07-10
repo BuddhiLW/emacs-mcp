@@ -9,13 +9,20 @@
    4. No argument type contracts — port could be string, nil, etc.
 
    Kanban: 20260320115940-4489b120"
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.string :as str]
             [malli.core :as m]
             [hive-mcp.schema.cider :as cider-schema]
             [hive-mcp.tools.cider :as tools]
-            [hive-mcp.emacs.client :as ec]
-            [hive-mcp.emacs.elisp :as el]))
+            [hive-mcp.emacs-ext.client :as ec]
+            [hive-mcp.emacs-ext.elisp :as el]))
+
+;; connect uses eval-elisp-with-timeout; route it through the per-test
+;; eval-elisp mock (var resolved at call time).
+(use-fixtures :each
+  (fn [t]
+    (with-redefs [ec/eval-elisp-with-timeout (fn [elisp & _] (ec/eval-elisp elisp))]
+      (t))))
 
 ;; =============================================================================
 ;; Test Helpers

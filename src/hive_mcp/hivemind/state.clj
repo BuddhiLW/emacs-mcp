@@ -53,7 +53,7 @@
   (->> @(:atom ling-results)
        (reduce-kv (fn [acc k entry]
                     (let [data (:data entry)]
-                      (if (not (:reviewed? data))
+                      (if-not (:reviewed? data)
                         (assoc acc k data)
                         acc)))
                   {})))

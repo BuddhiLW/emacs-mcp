@@ -15,7 +15,8 @@
        default-value)
 
    Thread safety: All operations are atomic via atom + swap!.
-   Idempotent: Re-registering the same key replaces silently.")
+   Idempotent: Re-registering the same key replaces silently."
+  (:require [hive-mcp.protocols.registry :as reg]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -25,13 +26,11 @@
 ;; Registry State
 ;; =============================================================================
 
-(defonce ^:private registry
-  (atom {}))
+(defonce ^:private ext-slot (reg/multi-slot {}))
+
+(defonce ^:private tool-slot (reg/multi-slot {}))
 
 (defonce ^:private schema-registry
-  (atom {}))
-
-(defonce ^:private tool-registry
   (atom {}))
 
 ;; Registry for composite tool command contributions.
@@ -47,7 +46,7 @@
    Thread-safe, idempotent. Re-registration replaces the previous value."
   [k f]
   {:pre [(keyword? k) (ifn? f)]}
-  (swap! registry assoc k f)
+  (reg/reg-put! ext-slot k f)
   k)
 
 (defn register-many!
@@ -55,39 +54,38 @@
    Thread-safe, atomic."
   [m]
   {:pre [(map? m)]}
-  (swap! registry merge m)
-  (keys m))
+  (reg/reg-merge! ext-slot m))
 
 (defn get-extension
   "Look up a registered extension by keyword key.
    Returns the function if registered, or default (nil if not provided)."
   ([k]
-   (get @registry k))
+   (get (reg/reg-snapshot ext-slot) k))
   ([k default]
-   (get @registry k default)))
+   (get (reg/reg-snapshot ext-slot) k default)))
 
 (defn extension-available?
   "Check if an extension is registered under the given key."
   [k]
-  (contains? @registry k))
+  (contains? (reg/reg-snapshot ext-slot) k))
 
 (defn registered-keys
   "Return the set of all registered extension keys."
   []
-  (set (keys @registry)))
+  (set (keys (reg/reg-snapshot ext-slot))))
 
 (defn deregister!
   "Remove an extension registration. Returns the key."
   [k]
-  (swap! registry dissoc k)
+  (reg/reg-remove! ext-slot k)
   k)
 
 (defn clear-all!
   "Remove all registrations (fn + schema + tool + contributions). Intended for testing only."
   []
-  (reset! registry {})
+  (reg/reg-clear! ext-slot)
   (reset! schema-registry {})
-  (reset! tool-registry {})
+  (reg/reg-clear! tool-slot)
   (reset! command-contributions {})
   nil)
 
@@ -125,24 +123,24 @@
    Thread-safe, idempotent. Last-write-wins by tool name."
   [tool-def]
   {:pre [(string? (:name tool-def)) (ifn? (:handler tool-def))]}
-  (swap! tool-registry assoc (:name tool-def) tool-def)
+  (reg/reg-put! tool-slot (:name tool-def) tool-def)
   (:name tool-def))
 
 (defn get-registered-tools
   "Return seq of all dynamically registered tool definitions."
   []
-  (vals @tool-registry))
+  (vals (reg/reg-snapshot tool-slot)))
 
 (defn deregister-tool!
   "Remove a dynamically registered tool by name. Returns the name."
   [tool-name]
-  (swap! tool-registry dissoc tool-name)
+  (reg/reg-remove! tool-slot tool-name)
   tool-name)
 
 (defn clear-all-tools!
   "Remove all tool registrations. Intended for testing only."
   []
-  (reset! tool-registry {})
+  (reg/reg-clear! tool-slot)
   nil)
 
 ;; =============================================================================

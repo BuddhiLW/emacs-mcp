@@ -1,7 +1,7 @@
 (ns hive-mcp.tools.swarm.prompt
   "Swarm prompt handlers for human-in-the-loop prompt management and lazy preset headers."
   (:require [hive-mcp.tools.swarm.core :as core]
-            [hive-mcp.emacs.client :as ec]
+            [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.dns.validation :as v]
             [hive-mcp.channel.core :as channel]
             [clojure.data.json :as json]

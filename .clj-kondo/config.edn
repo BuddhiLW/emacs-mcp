@@ -3,7 +3,15 @@
  ;; hive-di defconfig macro hook — expands to <Name>-fields / -schema /
  ;; resolve-<Name> defs so generated symbols resolve.
  :hooks {:analyze-call {hive-dsl.adt/defadt hive-dsl.hooks.defadt/defadt
-                        hive-di.core/defconfig hive-di.hooks.defconfig/defconfig}}
+                        hive-di.core/defconfig hive-di.hooks.defconfig/defconfig
+                        hive-dsl.result/guard            hooks.hive-dsl.result/guard
+                        hive-dsl.result/rescue           hooks.hive-dsl.result/rescue
+                        hive-dsl.result/rescue-log       hooks.hive-dsl.result/rescue-log
+                        hive-dsl.result/rescue-interrupt hooks.hive-dsl.result/rescue-interrupt
+                        hive-dsl.result/try-effect       hooks.hive-dsl.result/try-effect
+                        hive-dsl.result/try-effect*      hooks.hive-dsl.result/try-effect*
+                        hive-dsl.result/let-ok           hooks.hive-dsl.result/let-ok
+                        hive-mcp.dns.result/let-ok       hooks.hive-dsl.result/let-ok}}
 
  :lint-as {;; multi_dsl_e2e_test when-resolved macro binds a single symbol like if-let
            hive-mcp.tools.multi-dsl-e2e-test/when-resolved clojure.core/if-let
@@ -15,13 +23,21 @@
            manifold.deferred/let-flow clojure.core/let
            manifold.deferred/let-flow' clojure.core/let
            manifold.deferred/loop clojure.core/let
-           ;; dns.result / hive-dsl.result let-ok is railway-oriented let
-           hive-mcp.dns.result/let-ok clojure.core/let
-           hive-dsl.result/let-ok clojure.core/let
+           ;; let-ok now uses a hook (see :hooks above) — :lint-as let can't
+           ;; model its interleaved `:let` bindings. ok-> threads the unwrapped
+           ;; ok value as the first arg, exactly like clojure.core/->.
+           hive-mcp.dns.result/ok-> clojure.core/->
+           hive-dsl.result/ok-> clojure.core/->
+           ;; hive-di defmanifest defines a manifest var like def
+           hive-di.addon/defmanifest clojure.core/def
            ;; pool with-connection binds like with-open
            hive-mcp.addons.pool/with-connection clojure.core/with-open
            ;; test.check defspec defines test vars like deftest
            clojure.test.check.clojure-test/defspec clojure.test/deftest
+           ;; hive-di defconfig-tests: first arg is the config type NAME (used
+           ;; for the generated test vars), rest is body — model like deftest so
+           ;; the type name isn't flagged unresolved.
+           hive-di.testing/defconfig-tests clojure.test/deftest
            ;; test.check for-all binds like let
            clojure.test.check.properties/for-all clojure.core/let
            ;; hive-test property macros expand to defspec

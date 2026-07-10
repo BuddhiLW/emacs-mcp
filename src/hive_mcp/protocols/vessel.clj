@@ -10,7 +10,8 @@
 
    Key addition over ad-hoc context resolution: `resolve-context` gives each
    vessel ownership of the agent-to-context mapping, replacing implicit fallbacks
-   in messaging.clj and routes.clj.")
+   in messaging.clj and routes.clj."
+  (:require [hive-mcp.protocols.registry :as reg]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -61,35 +62,34 @@
 ;;; Vessel Registry (Multiple Active Vessels)
 ;;; ============================================================================
 
-(defonce ^:private vessel-registry (atom {})) ;; vessel-id -> IVessel
+(defonce ^:private slot
+  (reg/multi-slot {:validate #(satisfies? IVessel %)}))
 
 (defn register-vessel!
   "Register a vessel. Replaces any existing vessel with same id."
   [vessel]
   {:pre [(satisfies? IVessel vessel)]}
-  (swap! vessel-registry assoc (vessel-id vessel) vessel)
-  vessel)
+  (reg/reg-put! slot (vessel-id vessel) vessel))
 
 (defn unregister-vessel!
   "Unregister a vessel by id."
   [id]
-  (swap! vessel-registry dissoc id)
-  nil)
+  (reg/reg-remove! slot id))
 
 (defn get-vessel
   "Get a specific vessel by id, or nil."
   [id]
-  (get @vessel-registry id))
+  (reg/reg-get slot id))
 
 (defn get-vessels
   "Get all registered vessels as a seq."
   []
-  (vals @vessel-registry))
+  (vals (reg/reg-snapshot slot)))
 
 (defn clear-vessels!
   "Clear all registered vessels."
   []
-  (reset! vessel-registry {}))
+  (reg/reg-clear! slot))
 
 (defn resolve-agent-context
   "Query all registered vessels for agent context.

@@ -34,22 +34,26 @@
 
 (defn resolve-effective-mode
   "Pure function: raw spawn inputs -> effective spawn mode keyword.
-   Handles OpenRouter model detection and headless registry resolution.
 
-   When raw-mode is :headless, the concrete backend keyword is resolved
-   via headless-registry/resolve-default-backend, which honors operator
-   config (HeadlessDefaultsConfig :default-backend in
-   ~/.config/hive-mcp/config.edn) before falling back to provider-based
-   preference. hive-mcp never names a concrete backend — addons
-   contribute keywords via META-INF discovery + register-headless!."
-  [{:keys [model spawn-mode]}]
-  (let [non-claude? (and model (not (schema/claude-model? model)))
-        raw-mode (if non-claude?
-                   :openrouter
-                   (or spawn-mode :claude))]
+   Provider/model are NOT inputs — they're orthogonal infrastructure
+   concerns consumed by the backend's LLM router, not the spawn-mode
+   resolver (DDD: spawn-mode is a domain decision, provider routing is
+   infrastructure).
+
+   When `:spawn-mode` is :headless, the concrete backend keyword is
+   resolved via headless-registry/resolve-default-backend (priority-ranked
+   addon backends, honoring operator override in
+   ~/.config/hive-mcp/config.edn `[:headless :default-backend]`).
+   hive-mcp never names a concrete backend — addons contribute keywords
+   via META-INF discovery + register-headless! / register-mode!.
+
+   When :spawn-mode is any other valid keyword, returned unchanged.
+   When omitted, defaults to :claude (legacy)."
+  [{:keys [spawn-mode]}]
+  (let [raw-mode (or spawn-mode :claude)]
     (if (= raw-mode :headless)
-      (or (headless-reg/resolve-default-backend :claude)
-          (do (log/warn "No headless backend resolvable for :claude, falling back to :headless"
+      (or (headless-reg/resolve-default-backend nil)
+          (do (log/warn "No headless backend resolvable, leaving :headless abstract"
                         {:registered (headless-reg/registered-headless)})
               :headless))
       raw-mode)))
@@ -77,6 +81,8 @@
            :model (:model ling)}
     (:provider ling) (assoc :provider (:provider ling))
     (some? (:kg-compress? ling)) (assoc :kg-compress? (:kg-compress? ling))
+    (some? (:verbose? ling)) (assoc :verbose? (:verbose? ling))
+    (:llm-retries ling) (assoc :llm-retries (:llm-retries ling))
     (:sliding-window-size ling) (assoc :sliding-window-size (:sliding-window-size ling))
     (:agents ling) (assoc :agents (:agents ling))))
 

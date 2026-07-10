@@ -22,7 +22,11 @@
             [hive-mcp.system.layer3]
             [hive-mcp.system.layer4]
             [hive-mcp.system.layer5]
-            [hive-mcp.system.keepalive :as keepalive])
+            [hive-mcp.system.keepalive :as keepalive]
+            ;; Engine resilience — defense-in-depth L0.3 boot-time hprof control
+            [hive-mcp.engine.hprof.boot :as hprof]
+            ;; Engine resilience — defense-in-depth L0.5 bounded manifold pool
+            [hive-mcp.engine.manifold-pool :as manifold-pool])
   (:gen-class))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -103,6 +107,52 @@
      (apply dissoc merged nil-keys))))
 
 ;; =============================================================================
+;; Boot timing — per-init-key duration instrumentation
+;; =============================================================================
+
+(defn- boot-timing?
+  "Per-key boot timing is on by default; disable with HIVE_BOOT_TIMING=0."
+  []
+  (not= "0" (System/getenv "HIVE_BOOT_TIMING")))
+
+(defn- timed-init
+  "Drop-in for `(ig/init config)` that logs per-key init duration plus a sorted
+   summary of the slowest keys. Replicates integrant 1.0.1 `init` internals
+   exactly — `build` with the private `wrapped-assert-key` assertf and the
+   `resolve-key` resolvef — and only wraps `init-key` with a nanoTime probe, so
+   behaviour is identical to `ig/init`. Toggle off with HIVE_BOOT_TIMING=0.
+
+   Greppable: every line is tagged `[boot-timing]`."
+  [config]
+  (if-not (boot-timing?)
+    (ig/init config)
+    (let [timings (atom [])
+          ;; wrapped-assert-key is private — reuse it to keep spec-assertion
+          ;; behaviour identical, falling back to a noop if it ever moves.
+          assertf (or (some-> (resolve 'integrant.core/wrapped-assert-key) deref)
+                      (fn [_ _ _]))
+          t0      (System/nanoTime)
+          sys     (ig/build
+                   config (keys config)
+                   (fn [k v]
+                     (let [s  (System/nanoTime)
+                           r  (ig/init-key k v)
+                           ms (/ (- (System/nanoTime) s) 1e6)]
+                       (swap! timings conj [k ms])
+                       (log/info (format "[boot-timing] init %-30s %9.1f ms" (str k) ms))
+                       r))
+                   assertf
+                   ig/resolve-key)
+          total   (/ (- (System/nanoTime) t0) 1e6)
+          slowest (take 8 (sort-by (comp - second) @timings))]
+      (log/info (format "[boot-timing] ===== ig/init complete: %.1f ms over %d keys ====="
+                        total (count @timings)))
+      (doseq [[k ms] slowest]
+        (log/info (format "[boot-timing]   slowest %-30s %9.1f ms  (%.0f%%)"
+                          (str k) ms (* 100.0 (/ ms (max total 0.001))))))
+      sys)))
+
+;; =============================================================================
 ;; Lifecycle — start! / stop! / reset!
 ;; =============================================================================
 
@@ -124,8 +174,14 @@
     (log/info "Starting hive-mcp server with Integrant, profile:" profile)
     (when-let [sock (System/getenv "EMACS_SOCKET_NAME")]
       (log/info "Targeting Emacs daemon:" sock))
+    ;; ENGINE-L0.3 — rotate stale hprofs and abort early on disk pressure
+    ;; before allocating any heap-heavy subsystems.
+    (hprof/boot!)
+    ;; ENGINE-L0.5 — cap manifold's wait-pool BEFORE any deferred runs
+    ;; (the wait-pool fn is delay-cached, so this must precede ig/init).
+    (manifold-pool/boot!)
     (let [config (load-system-config profile)
-          sys    (ig/init config)]
+          sys    (timed-init config)]
       (clojure.core/reset! system sys)
       ;; Populate server-context-atom for bb-mcp forwarding handlers.
       ;; Must run AFTER extensions are loaded (tools registered).

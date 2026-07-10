@@ -285,7 +285,7 @@
     (ev/configure-metrics! {:max-timings 5 :max-timings-per-type 5})
     (let [;; We need to inject known timing values directly to test FIFO order.
           ;; Use the metrics atom directly via the var for testing.
-          metrics-atom (var-get #'hive-mcp.events.core/*metrics)]
+          metrics-atom (var-get #'hive-mcp.events.metrics/*metrics)]
       ;; Manually set up timings with known values [1.0 2.0 3.0 4.0 5.0]
       (swap! metrics-atom assoc
              :timings [1.0 2.0 3.0 4.0 5.0]
@@ -320,7 +320,7 @@
   (testing "averages are computed correctly on the bounded window"
     (ev/reset-metrics!)
     (ev/configure-metrics! {:max-timings 5 :max-timings-per-type 5})
-    (let [metrics-atom (var-get #'hive-mcp.events.core/*metrics)]
+    (let [metrics-atom (var-get #'hive-mcp.events.metrics/*metrics)]
       ;; Set known timing values
       (swap! metrics-atom assoc
              :timings [10.0 20.0 30.0 40.0 50.0]

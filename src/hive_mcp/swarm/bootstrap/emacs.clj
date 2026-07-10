@@ -9,7 +9,7 @@
    `hive-mcp.swarm.sync/full-sync-from-emacs!` so that sync.clj can depend
    only on ISwarmBootstrap (DIP)."
   (:require [hive-mcp.swarm.bootstrap.protocol :as proto]
-            [hive-mcp.emacs.client :as ec]
+            [hive-mcp.emacs-ext.client :as ec]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>

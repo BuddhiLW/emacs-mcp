@@ -168,6 +168,57 @@
     (is (nil? (ext/get-schema-extensions "tool")))))
 
 ;; =============================================================================
+;; Tool Registry (dynamic MCP tool definitions)
+;; =============================================================================
+
+(defn- tool-def [name] {:name name :handler (fn [_] :ok)})
+
+(deftest register-tool-and-list
+  (testing "register-tool! returns the tool name"
+    (is (= "alpha" (ext/register-tool! (tool-def "alpha")))))
+
+  (testing "get-registered-tools includes the registered def"
+    (let [names (set (map :name (ext/get-registered-tools)))]
+      (is (contains? names "alpha")))))
+
+(deftest register-tool-replaces-by-name
+  (ext/register-tool! (assoc (tool-def "dup") :tag :first))
+  (ext/register-tool! (assoc (tool-def "dup") :tag :second))
+  (testing "last write wins by tool name; single entry"
+    (let [matches (filter #(= "dup" (:name %)) (ext/get-registered-tools))]
+      (is (= 1 (count matches)))
+      (is (= :second (:tag (first matches)))))))
+
+(deftest deregister-tool-removes
+  (ext/register-tool! (tool-def "gone"))
+  (testing "deregister-tool! returns the name and removes it"
+    (is (= "gone" (ext/deregister-tool! "gone")))
+    (is (not (contains? (set (map :name (ext/get-registered-tools))) "gone")))))
+
+(deftest clear-all-tools-resets-only-tools
+  (ext/register! :fn/keep identity)
+  (ext/register-tool! (tool-def "temp"))
+  (ext/clear-all-tools!)
+  (testing "tool registry cleared"
+    (is (empty? (ext/get-registered-tools))))
+  (testing "fn registry untouched"
+    (is (= identity (ext/get-extension :fn/keep)))))
+
+(deftest clear-all-resets-tool-registry
+  (ext/register-tool! (tool-def "wiped"))
+  (ext/clear-all!)
+  (testing "clear-all! also clears the tool registry"
+    (is (empty? (ext/get-registered-tools)))))
+
+(deftest register-tool-rejects-non-string-name
+  (testing "keyword :name throws AssertionError"
+    (is (thrown? AssertionError (ext/register-tool! {:name :bad :handler (fn [_] :ok)})))))
+
+(deftest register-tool-rejects-non-ifn-handler
+  (testing "non-callable :handler throws AssertionError"
+    (is (thrown? AssertionError (ext/register-tool! {:name "x" :handler "not-a-fn"})))))
+
+;; =============================================================================
 ;; Precondition Enforcement
 ;; =============================================================================
 

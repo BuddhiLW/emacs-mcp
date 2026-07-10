@@ -11,7 +11,8 @@
             [hive-mcp.context.reconstruction :as reconstruction]
             [hive-mcp.dns.result :as result]
             [hive-mcp.tools.memory.scope :as scope]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.tools.consolidated.session-config :as session-config]))
 
 (defn- evict-agent-context!
   "Evict context-store entries for a completing agent."
@@ -132,7 +133,7 @@
                           (System/getProperty "user.dir"))
         effective-agent-id (or agent_id
                                (ctx/current-agent-id)
-                               (System/getenv "CLAUDE_SWARM_SLAVE_ID")
+                               (session-config/swarm-slave-id)
                                "unknown")
         project-id (when effective-dir
                      (scope/get-current-project-id effective-dir))]
@@ -148,7 +149,7 @@
   (let [t0 (System/currentTimeMillis)
         effective-agent (or agent_id
                             (ctx/current-agent-id)
-                            (System/getenv "CLAUDE_SWARM_SLAVE_ID"))]
+                            (session-config/swarm-slave-id))]
     (future
       (try
         (trigger-gc-sweep!)
@@ -223,7 +224,7 @@
   (let [result (session-handlers/handle-session-complete params)
         effective-agent (or agent_id
                             (ctx/current-agent-id)
-                            (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
+                            (session-config/swarm-slave-id))
         eviction (evict-agent-context! effective-agent)]
     (when eviction
       (log/info "session-complete: context eviction" eviction))

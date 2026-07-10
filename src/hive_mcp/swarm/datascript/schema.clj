@@ -109,11 +109,13 @@
   "claude")
 
 (defn claude-model?
-  "Check if a model identifier represents a Claude Code CLI ling (default).
+  "Check if a model identifier represents a Claude model name.
    Returns true for nil, 'claude', any 'anthropic/claude-*' model, OR any
-   bare 'claude-*' model (Anthropic's native naming). This determines
-   routing: claude models use Claude Code CLI / Anthropic OAuth, non-claude
-   models route to OpenRouter API."
+   bare 'claude-*' model (Anthropic's native naming).
+
+   Pure infrastructure helper — does NOT influence spawn-mode resolution
+   anymore (that leak was closed in the seam cleanup). Provider routing
+   is handled by the LLM router, not by spawn-mode."
   [model]
   (or (nil? model)
       (= model "claude")
@@ -223,7 +225,7 @@
 
    ;; Headless ling support (process-based spawn without Emacs vterm)
    :ling/spawn-mode
-   {:db/doc "Spawn mode: :vterm, :headless, :openrouter, or :agent-sdk"
+   {:db/doc "Spawn mode: :claude, :vterm, :headless, :agent-sdk, or any addon-contributed mode (e.g. :hive-agent, :tmux). Provider keywords like :openrouter are NOT spawn modes."
     :db/index true}
 
    :ling/process-pid

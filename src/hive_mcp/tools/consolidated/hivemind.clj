@@ -59,6 +59,8 @@
                                       :description "Additional event data"}
                               "directory" {:type "string"
                                            :description "Working directory for project-id derivation"}
+                              "project_id" {:type "string"
+                                            :description "Explicit project-id override. Wins over directory-derivation across shout/ask/status/messages."}
                               "question" {:type "string"
                                           :description "Question for human coordinator"}
                               "options" {:type "array"

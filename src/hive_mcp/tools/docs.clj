@@ -2,7 +2,7 @@
   "MCP tools for Emacs documentation lookup.
    Leverages hive-mcp-docs.el addon for introspection."
   (:require [clojure.string :as str]
-            [hive-mcp.emacs.client :as ec]
+            [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.tools.result-bridge :as rb]
             [hive-mcp.dns.result :as result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>

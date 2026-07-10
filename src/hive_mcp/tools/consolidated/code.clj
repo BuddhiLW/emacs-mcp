@@ -12,7 +12,8 @@
 
    Addon-contributed subdomains appear dynamically at runtime."
   (:require [hive-mcp.tools.composite :as composite]
-            [hive-mcp.tools.consolidated.cider :as c-cider]
+            [hive-mcp.tools.core :refer [mcp-error]]
+            [hive-mcp.extensions.registry :as ext]
             [clojure.string :as str]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -37,6 +38,19 @@
                     full-cmd)]
       (inner-handler-fn (assoc params :command sub-cmd)))))
 
+(defn- delegate-to-standalone
+  "Return a handler that forwards params to a standalone addon tool's handler,
+   resolved by :name from the extension registry on each call (DIP, hot-reload
+   safe). Addons register at server boot, so this is nil in a bare REPL/test —
+   returns a clean mcp-error then, and the live handler once the addon loads.
+   Mirrors hive-mcp.tools.consolidated.web/delegate-to-standalone."
+  [tool-name]
+  (fn [params]
+    (if-let [h (->> (ext/get-registered-tools)
+                    (some (fn [t] (when (= tool-name (:name t)) (:handler t)))))]
+      (h params)
+      (mcp-error (str tool-name " not available (addon not loaded)")))))
+
 ;; Clojure tool handler (basic-tools-mcp — AGPL, hive-mcp dep)
 (defn- handle-clojure [params]
   (if-let [h (resolve-handler 'basic-tools-mcp.tools/handle-clojure)]
@@ -49,9 +63,19 @@
 ;; =============================================================================
 
 (def canonical-handlers
-  "Core handler tree. Addons extend at runtime via contribute-commands! \"code\"."
-  {:cider    c-cider/handlers
-   :clojure  {:_handler (make-delegating-handler "clojure" handle-clojure)}})
+  "Core handler tree. Addons extend at runtime via contribute-commands! \"code\".
+   Subdomain handler trees resolved lazily via composite/lazy-resolve-handlers
+   to drop the static `c-cider` :require coupling (DIP)."
+  {:cider    (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.cider/handlers)
+   :clojure  {:_handler (make-delegating-handler "clojure" handle-clojure)}
+   ;; Folded standalone addon tool re-exposed as an ergonomic subdomain:
+   ;;   `code analysis <cmd>`  → lsp-mcp analysis tool
+   ;; Routes on :command, so prefix-strip then delegate to the standalone
+   ;; handler resolved from the ext registry at call time (live-only; clean
+   ;; error in bare test where the addon isn't loaded). Further subdomains are
+   ;; addon-contributed at runtime via contribute-commands! "code" (OCP) — core
+   ;; hive-mcp holds ZERO addon tool names.
+   :analysis     {:_handler (make-delegating-handler "analysis"     (delegate-to-standalone "analysis"))}})
 
 (def handlers canonical-handlers)
 
@@ -62,10 +86,10 @@
 (def tool-def
   {:name "code"
    :consolidated true
-   :description "Code intelligence: cider (REPL eval/doc/info/complete), clojure (check/repair/format/eval/wrap). Addons extend dynamically. Use command='help' to list all."
+   :description "Code intelligence: cider (REPL eval/doc/info/complete), clojure (check/repair/format/eval/wrap), analysis (lsp-mcp). Addons extend dynamically. Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command"   {:type "string"
-                                           :description "Code operation. Core: 'cider eval', 'clojure check'. Addon subdomains appear dynamically. Use command='help' to list all."}
+                                           :description "Code operation. Core: 'cider eval', 'clojure check'. Folded subdomain: 'analysis <cmd>'. Addon subdomains appear at runtime (live when the addon is loaded). Use command='help' to list all."}
                               ;; Cider params
                               "code"      {:type "string"
                                            :description "Clojure code to evaluate"}

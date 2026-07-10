@@ -24,16 +24,22 @@
 (defn datascript-fixture
   "Fixture that runs test f against a per-thread fresh DataScript store.
 
-   Binds `hive-mcp.knowledge-graph.connection/*test-store*` so the
-   override-aware ensure-store! returns the test store, leaving the
-   global proto store untouched (test isolation)."
+   Binds `connection/*test-store*` so the override-aware ensure-store!
+   returns the test store, leaving the global proto store untouched
+   (test isolation). Also binds `connection/*sync-writes*` true: transact!
+   then writes synchronously on the calling thread instead of routing
+   through the async coalescing writer (a pool thread that does not inherit
+   *test-store*), guaranteeing deterministic read-after-write."
   [f]
-  (let [store          (ds-store/create-store)
-        test-store-var (requiring-resolve
-                         'hive-mcp.knowledge-graph.connection/*test-store*)]
+  (let [store           (ds-store/create-store)
+        test-store-var  (requiring-resolve
+                          'hive-mcp.knowledge-graph.connection/*test-store*)
+        sync-writes-var (requiring-resolve
+                          'hive-mcp.knowledge-graph.connection/*sync-writes*)]
     (proto/ensure-conn! store)
     (edges/reset-stats-cache!)
-    (with-bindings* {test-store-var store}
+    (with-bindings* {test-store-var store
+                     sync-writes-var true}
       (fn []
         (try
           (f)

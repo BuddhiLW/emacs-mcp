@@ -101,29 +101,33 @@
   (let [dynamic-tools (ext/get-registered-tools)
         addon-tools   (addons/active-addon-tools)]
     (if-let [_ (when (guards/child-ling?) true)]
-      ;; Child ling: restricted tool set
+      ;; Child ling: restricted tool set (also visibility-gated for parity)
       (let [child-tools (tools/get-child-ling-tools)
+            gated (tools/apply-visibility-gate
+                   (concat child-tools dynamic-tools addon-tools))
             role (guards/get-role)
             depth (guards/ling-depth)]
-        (log/info "Building CHILD LING server spec with" (count child-tools) "tools"
+        (log/info "Building CHILD LING server spec with" (count gated) "tools"
                   "(role:" role "depth:" depth
                   "excluded:" (count tools/child-excluded-tool-names) "tool categories)"
                   "dynamic:" (count dynamic-tools) "addon:" (count addon-tools))
         {:name "hive-mcp"
          :version "0.1.0"
-         :tools (mapv make-tool (concat child-tools
-                                        dynamic-tools addon-tools))})
-      ;; Coordinator: full tool set including deprecated shims
+         :tools (mapv make-tool gated)})
+      ;; Coordinator: full tool set including deprecated shims.
+      ;; Visibility gate marks non-allowlisted tools :deprecated so tools/list
+      ;; shows <=10 roots while tools/call keeps every old name callable.
       (let [all-tools (tools/get-all-tools :include-deprecated? true)
-            deprecated-count (count (filter :deprecated all-tools))
-            visible-count (- (count all-tools) deprecated-count)]
-        (log/info "Building server spec with" (count all-tools) "tools"
-                  "(" visible-count "visible," deprecated-count "deprecated)"
+            gated (tools/apply-visibility-gate
+                   (concat all-tools dynamic-tools addon-tools))
+            deprecated-count (count (filter :deprecated gated))
+            visible-count (- (count gated) deprecated-count)]
+        (log/info "Building server spec with" (count gated) "tools"
+                  "(" visible-count "visible," deprecated-count "deprecated/gated)"
                   "dynamic:" (count dynamic-tools) "addon:" (count addon-tools))
         {:name "hive-mcp"
          :version "0.1.0"
-         :tools (mapv make-tool (concat all-tools
-                                        dynamic-tools addon-tools))}))))
+         :tools (mapv make-tool gated)}))))
 
 
 ;; =============================================================================
@@ -136,9 +140,16 @@
   (when-let [context @server-context-atom]
     (let [tools-atom (:tools context)
           child? (guards/child-ling?)
-          selected-tools (if child?
-                           (tools/get-child-ling-tools)
-                           (tools/get-all-tools :include-deprecated? true))
+          base-tools (if child?
+                       (tools/get-child-ling-tools)
+                       (tools/get-all-tools :include-deprecated? true))
+          ;; Match build-server-spec: fold dynamic + addon tools and apply the
+          ;; visibility gate so hot-reload reproduces the same <=10-root surface
+          ;; (old names stay callable via tools/call).
+          selected-tools (tools/apply-visibility-gate
+                          (concat base-tools
+                                  (ext/get-registered-tools)
+                                  (addons/active-addon-tools)))
           new-tools (mapv make-tool selected-tools)
           deprecated-count (if child?
                              0

@@ -75,3 +75,35 @@
       (is (= #{"id-1" "id-2" "id-3"} (set (map :id flushed))))
       ;; Buffer should be empty
       (is (= 0 (count (recall/get-created-ids)))))))
+
+;; =============================================================================
+;; register-created-id! type-threading tests (wrap stats by type)
+;; =============================================================================
+
+(deftest register-created-id-threads-type-test
+  (testing "3-arity register threads the memory type onto the entry"
+    (recall/register-created-id! "d1" "alpha" "decision")
+    (recall/register-created-id! "u1" nil "axiom")
+    (let [entries (recall/get-created-ids)
+          by-id   (into {} (map (juxt :id identity)) entries)]
+      (is (= "decision" (:type (get by-id "d1"))) "scoped entry carries type")
+      (is (= :entry/scoped (:adt/variant (get by-id "d1"))))
+      (is (= "axiom" (:type (get by-id "u1"))) "unscoped entry carries type")
+      (is (= :entry/unscoped (:adt/variant (get by-id "u1"))))
+      (is (every? recall/created-entry? entries) "typed entries are valid ADT values")))
+
+  (testing "2-arity register stays backward-compatible (no :type key, still valid)"
+    (recall/flush-created-ids!)
+    (recall/register-created-id! "legacy" "alpha")
+    (let [e (first (recall/get-created-ids))]
+      (is (not (contains? e :type)) "legacy entry has no :type key")
+      (is (recall/created-entry? e) "legacy entry is still a valid CreatedEntry")))
+
+  (testing "type frequencies drive the by-type breakdown wrap synthesis consumes"
+    (recall/flush-created-ids!)
+    (recall/register-created-id! "a" "p" "decision")
+    (recall/register-created-id! "b" "p" "decision")
+    (recall/register-created-id! "c" "p" "convention")
+    (recall/register-created-id! "d" "p")             ;; untyped — excluded
+    (is (= {"decision" 2 "convention" 1}
+           (frequencies (keep :type (recall/get-created-ids)))))))

@@ -12,8 +12,12 @@
    (e.g. :tmux from hive-tmux). Core modes are baked in; addon modes
    are registered during IAddon initialize! lifecycle.
 
-   Sum type: claude | vterm | headless | agent-sdk | openrouter | <addon-contributed>
-   MCP surface: claude | vterm | headless | <addon-contributed with :mcp? true>")
+   Sum type: claude | vterm | headless | agent-sdk | <addon-contributed>
+   MCP surface: claude | vterm | headless | <addon-contributed with :mcp? true>
+
+   NOTE: hive-mcp owns ONLY abstract/generic modes here. Concrete provider-
+   or implementation-specific modes (e.g. :hive-agent, :tmux) are
+   contributed by addons via `register-mode!`.")
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -26,13 +30,22 @@
 (def ^:private core-modes
   "Core spawn modes baked in at compile time. array-map preserves insertion order.
 
+   hive-mcp owns ONLY abstract / generic spawn modes here. Concrete
+   provider-specific or implementation-specific modes (e.g. :hive-agent,
+   :tmux) are contributed by addons via `register-mode!` during their
+   IAddon initialize! lifecycle. Provider keywords (:openrouter, :venice,
+   …) are NEVER spawn modes — they belong to the provider/LLM-router
+   layer behind the backend.
+
    Each mode has:
    - :description     Human-readable description
    - :requires-emacs? Whether this mode needs an Emacs daemon
    - :io-model        How I/O works (:buffer, :stdin-stdout, :api)
    - :slot-limit      Max concurrent instances (nil = unlimited)
    - :mcp?            Visible in MCP tool enums (default true)
-   - :alias-of        If this mode is an alias for another (e.g. :headless -> :agent-sdk)
+   - :alias-of        If this mode is a static alias for another canonical
+                      mode. nil = abstract; resolved dynamically via
+                      headless-registry/resolve-default-backend.
    - :capabilities    Set of capability keywords this mode supports"
   (array-map
    ;; === Emacs-bound modes ===
@@ -52,31 +65,22 @@
                  :alias-of      nil
                  :capabilities  #{:interactive :emacs-visible :dispatch :kill}}
 
-   ;; === Subprocess modes ===
-   :headless    {:description   "Alias for :agent-sdk (legacy name, auto-mapped since 0.12.0)"
+   ;; === Subprocess / API modes ===
+   :headless    {:description   "Abstract headless mode — concrete backend resolved at spawn time via headless-registry (operator config or priority-ranked addon backends)"
                  :requires-emacs? false
                  :io-model      :stdin-stdout
                  :slot-limit    nil
                  :mcp?          true
-                 :alias-of      :agent-sdk
+                 :alias-of      nil
                  :capabilities  #{:dispatch :kill :stdin :stdout-ring}}
 
-   :agent-sdk   {:description   "Claude Agent SDK via subprocess (default for headless)"
+   :agent-sdk   {:description   "Claude Agent SDK via subprocess"
                  :requires-emacs? false
                  :io-model      :stdin-stdout
                  :slot-limit    nil
                  :mcp?          false
                  :alias-of      nil
-                 :capabilities  #{:dispatch :kill :stdin :stdout-ring :subagents}}
-
-   ;; === API modes ===
-   :openrouter  {:description   "Direct OpenRouter API calls (multi-model, no CLI)"
-                 :requires-emacs? false
-                 :io-model      :api
-                 :slot-limit    nil
-                 :mcp?          false
-                 :alias-of      nil
-                 :capabilities  #{:dispatch :kill :multi-model}}))
+                 :capabilities  #{:dispatch :kill :stdin :stdout-ring :subagents}}))
 
 ;; Addon-contributed spawn modes registered at runtime via register-mode!
 (defonce ^:private addon-modes (atom {}))
@@ -148,7 +152,16 @@
         (contains? @addon-modes kw))))
 
 (defn resolve-alias
-  "Resolve a mode to its canonical form. :headless -> :agent-sdk, others unchanged."
+  "Resolve a mode to its canonical form via static :alias-of metadata.
+
+   :headless is ABSTRACT post-cleanup — it has no static :alias-of, so this
+   function returns :headless unchanged. The concrete backend (:agent-sdk,
+   :hive-agent, …) is resolved at spawn time via
+   `hive-mcp.agent.ling.headless-registry/resolve-default-backend` (operator
+   override + priority-ranked addon backends), NOT here.
+
+   Use this only for static alias resolution. For dynamic backend resolution
+   of :headless, call `hive-mcp.agent.ling.lifecycle/resolve-effective-mode`."
   [mode]
   (get alias-map mode mode))
 

@@ -500,6 +500,21 @@
   ([activity harvested]
    (delegate :cc/summarize-memory summarize-memory-activity-fallback [activity harvested])))
 
+(defn meaningful-harvest?
+  "True iff the harvest shows write-shaped work: progress notes, completed
+   tasks, commits, kg-edges, kanban moves, or memories created. Excludes
+   accessed-count (reads)."
+  [harvested]
+  (let [{:keys [progress-count task-count commit-count
+                kg-edge-count kanban-movement-count created-count]}
+        (:summary harvested)]
+    (boolean (some pos? [(or progress-count 0)
+                         (or task-count 0)
+                         (or commit-count 0)
+                         (or kg-edge-count 0)
+                         (or kanban-movement-count 0)
+                         (or created-count 0)]))))
+
 (comment
   (calculate-promotion-score
    [{:context :explicit-reference :count 2}

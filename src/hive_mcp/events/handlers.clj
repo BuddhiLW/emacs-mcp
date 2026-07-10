@@ -87,7 +87,10 @@
             [hive-mcp.events.handlers.saa :as saa]
             [hive-mcp.events.handlers.memory-read :as memory-read]
             [hive-mcp.events.handlers.lifecycle :as lifecycle]
-            [hive-mcp.server.guards :as guards]))
+            [hive-mcp.events.registry :as registry]
+            [hive-mcp.server.guards :as guards]
+            [clojure.set :as set]
+            [hive-mcp.events.handlers.resilience :as resilience]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -97,6 +100,48 @@
 ;; =============================================================================
 
 (defonce ^:private *registered (atom false))
+
+(def expected-events
+  "Canonical advertised event-ids. The set MUST track the namespace docstring;
+   any drift is surfaced by `verify-handlers!` at boot (ENGINE-L0.4)."
+  #{:task/complete :task/shout-complete :git/commit-modified
+    :ling/started :ling/completed :ling/ready-for-wrap
+    :session/end :session/wrap
+    :kanban/done :kanban/sync
+    :crystal/wrap-request :crystal/wrap-notify
+    :wave/start :wave/item-done :wave/complete
+    :validated-wave/start :validated-wave/iteration-start
+    :validated-wave/success :validated-wave/partial :validated-wave/retry
+    :drone/started :drone/completed :drone/failed
+    :claim/file-released :claim/notify-waiting
+    :system/error
+    :hot/reload-start :hot/reload-success :file/changed
+    :kg/edge-created :kg/edge-updated :kg/edge-removed :kg/node-promoted
+    :agora/turn-dispatched :agora/timeout :agora/turn-completed
+    :agora/dispatch-next :agora/execute-drone :agora/debate-started
+    :agora/stage-transition :agora/consensus
+    :saa/started :saa/phase-complete :saa/completed :saa/failed
+    :memory/query :memory/search :memory/get
+    :lifecycle/sweep
+    :resilience/dim-mismatch})
+
+(defn verify-handlers!
+  "Compare the live event-handler registry against `expected-events` and
+   emit a structured WARN for each missing handler. Returns
+   {:registered #{…} :missing #{…} :extra #{…}}.
+
+   Called from `register-handlers!` at boot so unregistered canonical events
+   surface loudly instead of throwing only on first dispatch (ENGINE-L0.4)."
+  []
+  (let [registered (registry/registered-events)
+        missing    (set/difference expected-events registered)
+        extra      (set/difference registered expected-events)]
+    (when (seq missing)
+      (binding [*out* *err*]
+        (println "[hive-events] WARNING: missing canonical handlers:" (sort missing))))
+    (when (seq extra)
+      (println "[hive-events] Extra handlers registered (not in expected-events):" (sort extra)))
+    {:registered registered :missing missing :extra extra}))
 
 (defn register-handlers!
   "Register all event handlers. Call at startup.
@@ -140,7 +185,9 @@
     (saa/register-handlers!)
     (memory-read/register-handlers!)
     (lifecycle/register-handlers!)
+    (resilience/register-handlers!)
 
+    (verify-handlers!)
     (reset! *registered true)
     (println "[hive-events] Handlers registered: :task/complete :task/shout-complete :git/commit-modified :ling/started :ling/completed :ling/ready-for-wrap :session/end :session/wrap :kanban/sync :kanban/done :crystal/wrap-request :crystal/wrap-notify :wave/start :wave/item-done :wave/complete :validated-wave/start :validated-wave/iteration-start :validated-wave/success :validated-wave/partial :validated-wave/retry :drone/started :drone/completed :drone/failed :claim/file-released :claim/notify-waiting :system/error :hot/reload-start :hot/reload-success :file/changed :kg/edge-created :kg/edge-updated :kg/edge-removed :kg/node-promoted :agora/turn-dispatched :agora/timeout :agora/turn-completed :agora/dispatch-next :agora/execute-drone :agora/debate-started :agora/stage-transition :agora/consensus :saa/started :saa/phase-complete :saa/completed :saa/failed :memory/query :memory/search :memory/get :lifecycle/sweep")
     true))

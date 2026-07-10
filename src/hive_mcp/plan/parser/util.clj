@@ -3,7 +3,8 @@
 
    Functions:
    - plan->task-specs:       Convert parsed plan to kanban task specifications
-   - validate-dependencies:  Verify all depends-on references resolve")
+   - validate-dependencies:  Verify all depends-on references resolve"
+  (:require [hive-mcp.plan.field-registry :as field-registry]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -15,18 +16,21 @@
 (defn plan->task-specs
   "Convert a parsed plan to kanban task specifications.
 
-   Useful for feeding into mcp_mem_kanban_create.
+   Useful for feeding into mcp_mem_kanban_create. Carries addon-registered
+   projected step fields (plan.field-registry :project?) alongside core fields.
 
    Returns: vector of task spec maps ready for kanban creation"
   [plan]
-  (mapv (fn [step]
-          {:title (:title step)
-           :description (:description step)
-           :priority (name (:priority step))
-           :tags (:tags step)
-           :depends-on (:depends-on step)
-           :plan-step-id (:id step)})
-        (:steps plan)))
+  (let [proj (field-registry/project-keys)]
+    (mapv (fn [step]
+            (merge {:title (:title step)
+                    :description (:description step)
+                    :priority (name (:priority step))
+                    :tags (:tags step)
+                    :depends-on (:depends-on step)
+                    :plan-step-id (:id step)}
+                   (select-keys step proj)))
+          (:steps plan))))
 
 ;; =============================================================================
 ;; Dependency Validation

@@ -43,10 +43,12 @@ The env var fallback reads from MCP server process, NOT your ling process!"
                                           :description "Status message"}
                                "directory" {:type "string"
                                             :description "Working directory for project-id derivation. Pass your cwd to scope shouts to your project."}
+                               "project_id" {:type "string"
+                                             :description "Explicit project-id override. Wins over directory-derivation; bypass scope/last-path-segment heuristic when caller already knows the project."}
                                "data" {:type "object"
                                        :description "Additional event data"}}
                   :required ["event_type"]}
-    :handler (fn [{:keys [agent_id event_type task message directory data _caller_id] :as _args}]
+    :handler (fn [{:keys [agent_id event_type task message directory project_id data _caller_id] :as _args}]
                (let [ctx-agent (ctx/current-agent-id)
                      env-agent (System/getenv "CLAUDE_SWARM_SLAVE_ID")
                      ;; BUG FIX: _caller_id is injected by bb-mcp from the CHILD
@@ -69,6 +71,7 @@ The env var fallback reads from MCP server process, NOT your ling process!"
                  (messaging/shout! effective-id (keyword event_type)
                                    (merge {:task task :message message}
                                           (when directory {:directory directory})
+                                          (when project_id {:project-id project_id})
                                           data))
                  {:type "text" :text (json/write-str (cond-> {:success true
                                                               :agent_id effective-id}
@@ -101,9 +104,11 @@ The env var fallback reads from MCP server process, NOT your ling process!"
                                "timeout_ms" {:type "integer"
                                              :description "Timeout in ms (default 300000 = 5 min)"}
                                "directory" {:type "string"
-                                            :description "Working directory for project-id derivation. Pass your cwd for proper scoping."}}
+                                            :description "Working directory for project-id derivation. Pass your cwd for proper scoping."}
+                               "project_id" {:type "string"
+                                             :description "Explicit project-id override. Wins over directory-derivation."}}
                   :required ["question"]}
-    :handler (fn [{:keys [agent_id _caller_id question options timeout_ms directory]}]
+    :handler (fn [{:keys [agent_id _caller_id question options timeout_ms directory project_id]}]
                (let [effective-id (or agent_id
                                       _caller_id
                                       (ctx/current-agent-id)
@@ -111,6 +116,8 @@ The env var fallback reads from MCP server process, NOT your ling process!"
                                       "unknown-agent")
                      effective-dir (or directory
                                        (ctx/current-directory))
+                     effective-project-id (or project_id
+                                              (when effective-dir (mem-scope/get-current-project-id effective-dir)))
                      result (messaging/ask! effective-id question options
                                             :timeout-ms (or timeout_ms 300000))]
                  {:type "text"
@@ -119,7 +126,8 @@ The env var fallback reads from MCP server process, NOT your ling process!"
                            {:timeout true :message "No response within timeout"}
                            {:decision (:decision result)
                             :by (:by result)
-                            :directory effective-dir}))}))}
+                            :directory effective-dir
+                            :project-id effective-project-id}))}))}
 
    {:name "hivemind_status"
     :description "Get current hivemind coordinator status.
@@ -133,11 +141,14 @@ When directory is provided, filters to only show agents belonging to that projec
 This prevents cross-project pollution in multi-project hivemind sessions."
     :inputSchema {:type "object"
                   :properties {"directory" {:type "string"
-                                            :description "Working directory to scope results to a specific project. Pass your cwd to see only agents from your project."}}
+                                            :description "Working directory to scope results to a specific project. Pass your cwd to see only agents from your project."}
+                               "project_id" {:type "string"
+                                             :description "Explicit project-id override. Wins over directory-derivation; use when caller already knows the project (e.g. cross-project audits)."}}
                   :required []}
-    :handler (fn [{:keys [directory]}]
+    :handler (fn [{:keys [directory project_id]}]
                (let [effective-dir (or directory (ctx/current-directory))
-                     project-id (when effective-dir (mem-scope/get-current-project-id effective-dir))]
+                     project-id (or project_id
+                                    (when effective-dir (mem-scope/get-current-project-id effective-dir)))]
                  {:type "text"
                   :text (json/write-str (status/get-status project-id))}))}
 
@@ -170,17 +181,24 @@ The specific agent lookup is still allowed even if agent is from another project
                   :properties {"agent_id" {:type "string"
                                            :description "Agent identifier to get messages from"}
                                "directory" {:type "string"
-                                            :description "Working directory to scope available-agents list to a specific project. Pass your cwd to see only agents from your project."}}
+                                            :description "Working directory to scope available-agents list to a specific project. Pass your cwd to see only agents from your project."}
+                               "project_id" {:type "string"
+                                             :description "Explicit project-id override. Wins over directory-derivation."}}
                   :required ["agent_id"]}
     :handler (fn [args]
                (let [agent_id (or (:agent_id args)
                                   (:agent-id args)
                                   (get args "agent_id")
                                   (get args "agent-id"))
+                     explicit-project-id (or (:project_id args)
+                                             (:project-id args)
+                                             (get args "project_id")
+                                             (get args "project-id"))
                      effective-dir (or (:directory args)
                                        (get args "directory")
                                        (ctx/current-directory))
-                     project-id (when effective-dir (mem-scope/get-current-project-id effective-dir))
+                     project-id (or explicit-project-id
+                                    (when effective-dir (mem-scope/get-current-project-id effective-dir)))
                      ds-agents (if project-id
                                  (clojure.core/set (map :slave/id (proto/get-slaves-by-project registry/default-registry project-id)))
                                  (clojure.core/set (map :slave/id (proto/get-all-slaves registry/default-registry))))

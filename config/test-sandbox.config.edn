@@ -1,0 +1,95 @@
+;; ============================================================================
+;; test-sandbox.config.edn  —  SANDBOX config TEMPLATE for bin/test-sandboxed.sh
+;; ----------------------------------------------------------------------------
+;; Purpose: give a cold `clojure -M:test` JVM a config in which EVERY live
+;; service is disabled or redirected, so it can never open (and konserve-lock-
+;; contend) a shared store or connect to real infra and thereby kill the
+;; running production hive-mcp server. See task 20260629190920-06d991d3 and
+;; axiom 20260122235103-7151cc29 (Test Isolation / Silent Server Death).
+;;
+;; This is a TEMPLATE, not a live config. bin/test-sandboxed.sh copies it to
+;;   $SANDBOX/.config/hive-mcp/config.edn
+;; substituting the literal token __SANDBOX__ with the mktemp -d sandbox root.
+;; It is read only because the script sets `-Duser.home=$SANDBOX` (config path
+;; = (System/getProperty "user.home") + "/.config/hive-mcp/config.edn"), so the
+;; real ~/.config/hive-mcp/config.edn is NEVER read or written.
+;;
+;; At load time hive-mcp.config.merge/deep-merge layers THIS map OVER
+;; default-config (user values win). Only the isolation-relevant overrides are
+;; listed; everything else falls through to hardened defaults (which already
+;; ship :nats disabled + :websocket disabled and carry NO :milvus/:swarm-sync
+;; keys, so the live milvus host + live swarm datahike store are never inherited).
+;; Config validation is non-blocking (warn-only), so partial/loose shapes here
+;; do not abort startup.
+;; ============================================================================
+{:project-roots []
+ :parent-rules  []
+
+ ;; KG backend: force ephemeral in-memory DataScript. Redundant with the
+ ;; top-priority JVM prop -Dhive.kg.backend=datascript and HIVE_KG_DH_BACKEND=memory,
+ ;; but keeps config self-consistent so no code path re-derives :datahike.
+ :defaults {:kg-backend :datascript}
+
+ :services
+ {;; ---- Knowledge Graph: never open the file-backed datahike KG store -------
+  :kg       {:mode :local :backend :datascript :writer {:backend :self}}
+  ;; Absolute sandbox path. Dead under :datascript, but if any path force-opens
+  ;; datahike it lands HERE, not on ~/.local/share/hive-mcp/datahike.
+  :datahike {:mode :local :path "__SANDBOX__/state/kg-datahike"}
+
+  ;; ---- Swarm sync: NoopBootstrap — opens NO second konserve/datahike store --
+  ;; The live config uses {:source "datahike" :db-path "data/swarm/datahike"},
+  ;; a CWD-relative path that collides with the live server's lock. :none => noop.
+  :swarm-sync {:source :none
+               :db-path "__SANDBOX__/state/swarm-datahike"
+               :event-backbone :none}
+
+  ;; ---- Event / notification backbones: OFF ---------------------------------
+  :nats      {:mode :local :enabled false :url "nats://127.0.0.1:59595"}
+  :websocket {:mode :local :enabled false :port nil :project-dir nil}
+  :scheduler {:mode :local :enabled false}
+
+  ;; ---- nREPL: never touch the live server's port 7910 ----------------------
+  :nrepl {:mode :disabled :port 0}
+
+  ;; ---- Local socket channels: bind nothing on live ports (9998/9999/7911) --
+  ;; (start! is lazy; port 0 => ephemeral if ever booted, never a live-port clash.)
+  :channel    {:mode :disabled :port 0}
+  :ws-channel {:mode :disabled :port 0}
+  :olympus    {:mode :disabled :ws-port 0}
+
+  ;; ---- Vector / memory infra: point every client at a closed loopback port -
+  ;; Live infra: milvus 10.104.172.142:19530, qdrant 127.0.0.1:6333,
+  ;; chroma :8000, ollama :11434. Redirect so an accidental connect is an
+  ;; instant ECONNREFUSED on 127.0.0.1:59595, never a live-store mutation.
+  :milvus       {:mode :local :enabled false :host "127.0.0.1" :port 59595 :transport :http}
+  :memory-store {:backend :chroma}
+  :chroma       {:mode :local :host "127.0.0.1" :port 59595}
+  :qdrant-carto {:mode :local :host "127.0.0.1" :port 59595
+                 :collection "carto-sandbox"
+                 :embedding {:provider :ollama :model "nomic-embed-code"}}
+  :carto-store  {:backend :qdrant-carto}
+  :ollama       {:mode :local :host "http://127.0.0.1:59595" :model "nomic-embed-text"}
+
+  ;; ---- Telemetry shippers: closed loopback (push, silent on failure) -------
+  :loki       {:mode :local :url "http://127.0.0.1:59595"}
+  :prometheus {:mode :local :url "http://127.0.0.1:59595"}}
+
+ ;; Memory-router chroma store definition (separate from :services.chroma) —
+ ;; redirect to the same closed loopback port so memory writes fail fast.
+ :memory {:default-store :chroma
+          :stores {:chroma {:addon :hive-chroma :host "127.0.0.1" :port 59595}}}
+
+ ;; Cartography sentinel resolves via (System/getProperty "user.home"); with
+ ;; -Duser.home=__SANDBOX__ it already lands in the sandbox. Pinned + strict off.
+ :cartography {:sentinel-path "__SANDBOX__/.config/hive-mcp/data/carto/preferred-backend.edn"
+               :strict-mode? false}
+
+ ;; No real secrets in the sandbox — pass: refs resolve to nil (non-blocking).
+ :secrets {:openrouter-api-key nil
+           :openai-api-key nil
+           :anthropic-api-key nil
+           :venice-api-key nil
+           :groq-api-key nil
+           :together-api-key nil
+           :fireworks-api-key nil}}

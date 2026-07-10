@@ -2,8 +2,48 @@
   "Tests for memory hints: generation, serialization, deserialization, execution."
   (:require [clojure.test :refer [deftest testing is are use-fixtures]]
             [hive-mcp.agent.hints :as hints]
+            [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.tools.catchup :as catchup]
             [clojure.string :as str]))
+
+;; Production code (hints.clj execute-hint-ids/execute-hint-queries/
+;; generate-task-hints) fetches via the IMemoryStore protocol —
+;; mem-proto/get-entry, mem-proto/search-similar, mem-proto/query-entries —
+;; NOT hive-mcp.chroma.core/* directly. So we mock the store layer the way the
+;; rest of the codebase does (catchup query-axioms-regression-test, crystal
+;; persist-test): redef mem-proto/store-set? + mem-proto/get-store to return a
+;; reified store with caller-supplied behavior.
+(defn- stub-store
+  "Reify IMemoryStore. `fns` overrides selected methods, e.g.
+   {:get-entry (fn [id] ...) :search-similar (fn [q opts] ...)
+    :query-entries (fn [opts] ...)}."
+  [{:keys [get-entry search-similar query-entries]
+    :or {get-entry (constantly nil)
+         search-similar (fn [_ _] [])
+         query-entries (fn [_] [])}}]
+  (reify mem-proto/IMemoryStore
+    (connect! [_ _] nil)
+    (disconnect! [_] nil)
+    (connected? [_] true)
+    (health-check [_] {:healthy? true})
+    (add-entry! [_ _] nil)
+    (get-entry [_ id] (get-entry id))
+    (update-entry! [_ _ _] nil)
+    (delete-entry! [_ _] true)
+    (query-entries [_ opts] (query-entries opts))
+    (search-similar [_ query opts] (search-similar query opts))
+    (supports-semantic-search? [_] true)
+    (cleanup-expired! [_] 0)
+    (entries-expiring-soon [_ _ _] [])
+    (find-duplicate [_ _ _ _] nil)
+    (store-status [_] {:backend "stub"})
+    (reset-store! [_] nil)))
+
+;; Production spawn-context gathers git via catchup.git/gather-git-info
+;; (spawn.clj:96,142,152) — not emacs.client/eval-elisp-with-timeout. Mock the
+;; same var the sibling catchup spawn-test does.
+(def ^:private mock-git-info
+  {:branch "main" :uncommitted false :last-commit "abc123"})
 
 ;; =============================================================================
 ;; Hint Generation Tests (Pure — no Chroma dependency)
@@ -204,12 +244,14 @@
 
 (deftest test-execute-hint-ids
   (testing "execute-hint-ids fetches entries by ID"
-    (with-redefs [hive-mcp.chroma.core/get-entry-by-id
-                  (fn [id]
-                    {:id id
-                     :content (str "Content for " id)
-                     :type "convention"
-                     :tags ["test"]})]
+    (with-redefs [mem-proto/store-set? (constantly true)
+                  mem-proto/get-store
+                  (constantly (stub-store {:get-entry
+                                           (fn [id]
+                                             {:id id
+                                              :content (str "Content for " id)
+                                              :type "convention"
+                                              :tags ["test"]})}))]
       (let [results (hints/execute-hint-ids ["id-1" "id-2"])]
         (is (= 2 (count results)))
         (is (= "id-1" (:id (first results))))
@@ -217,10 +259,12 @@
 
 (deftest test-execute-hint-ids-missing
   (testing "execute-hint-ids handles missing entries gracefully"
-    (with-redefs [hive-mcp.chroma.core/get-entry-by-id
-                  (fn [id]
-                    (when (= id "exists")
-                      {:id id :content "found" :type "note" :tags []}))]
+    (with-redefs [mem-proto/store-set? (constantly true)
+                  mem-proto/get-store
+                  (constantly (stub-store {:get-entry
+                                           (fn [id]
+                                             (when (= id "exists")
+                                               {:id id :content "found" :type "note" :tags []}))}))]
       (let [results (hints/execute-hint-ids ["exists" "missing"])]
         (is (= 1 (count results)))
         (is (= "exists" (:id (first results))))))))
@@ -232,9 +276,11 @@
 
 (deftest test-execute-hint-queries
   (testing "execute-hint-queries runs semantic searches"
-    (with-redefs [hive-mcp.chroma.core/search-similar
-                  (fn [query & _]
-                    [{:id "result-1" :content "Result content" :type "convention"}])]
+    (with-redefs [mem-proto/store-set? (constantly true)
+                  mem-proto/get-store
+                  (constantly (stub-store {:search-similar
+                                           (fn [_query _opts]
+                                             [{:id "result-1" :content "Result content" :type "convention"}])}))]
       (let [results (hints/execute-hint-queries ["testing patterns"])]
         (is (= 1 (count results)))
         (is (= "testing patterns" (:query (first results))))
@@ -263,10 +309,12 @@
 
 (deftest test-execute-all-hints
   (testing "execute-all-hints runs all levels and returns stats"
-    (with-redefs [hive-mcp.chroma.core/get-entry-by-id
-                  (fn [id] {:id id :content "content" :type "axiom" :tags []})
-                  hive-mcp.chroma.core/search-similar
-                  (fn [q & _] [{:id "sr-1" :content "result" :type "note"}])
+    (with-redefs [mem-proto/store-set? (constantly true)
+                  mem-proto/get-store
+                  (constantly (stub-store {:get-entry
+                                           (fn [id] {:id id :content "content" :type "axiom" :tags []})
+                                           :search-similar
+                                           (fn [_q _opts] [{:id "sr-1" :content "result" :type "note"}])}))
                   hive-mcp.knowledge-graph.queries/traverse
                   (fn [_ _] [{:node-id "n-1" :relation :implements :confidence 0.9}])]
       (let [hints {:axiom-ids ["ax-1"]
@@ -296,11 +344,13 @@
 
 (deftest test-spawn-context-hints-mode-shape
   (testing "spawn-context with :hints mode returns compact markdown"
-    (with-redefs [hive-mcp.chroma.core/embedding-configured? (fn [] true)
+    (with-redefs [mem-proto/store-set? (fn [] true)
+                  mem-proto/get-store (fn ([] (stub-store {})) ([_] (stub-store {})))
                   hive-mcp.tools.memory.scope/get-current-project-id (fn [_] "test-project")
                   ;; Sprint 2: get-current-project-name moved to catchup.scope
                   hive-mcp.tools.catchup.scope/get-current-project-name (fn [_] "test-project")
-                  ;; Mock hints.clj's private query helpers
+                  ;; :hints mode resolves the PRIVATE hints/query-axioms (hints.clj:39),
+                  ;; not catchup.scope/query-axioms — this redef target is correct.
                   hive-mcp.agent.hints/query-axioms
                   (fn [_] [{:id "ax-1"}])
                   hive-mcp.agent.hints/query-scoped-entries
@@ -311,8 +361,8 @@
                       []))
                   hive-mcp.knowledge-graph.edges/edge-stats
                   (fn [] {:total-edges 0})
-                  hive-mcp.emacs.client/eval-elisp-with-timeout
-                  (fn [_ _] {:success true :result "{\"branch\":\"main\",\"uncommitted\":false,\"last-commit\":\"abc\"}"})]
+                  hive-mcp.tools.catchup.git/gather-git-info
+                  (fn [_] mock-git-info)]
       (let [result (hive-mcp.tools.catchup/spawn-context "/tmp/test" {:mode :hints})]
         (is (string? result))
         (is (str/includes? result "Memory Hints"))
@@ -322,7 +372,8 @@
 
 (deftest test-spawn-context-full-mode-backward-compat
   (testing "spawn-context without opts retains full mode behavior"
-    (with-redefs [hive-mcp.chroma.core/embedding-configured? (fn [] true)
+    (with-redefs [mem-proto/store-set? (fn [] true)
+                  mem-proto/get-store (fn ([] (stub-store {})) ([_] (stub-store {})))
                   hive-mcp.tools.memory.scope/get-current-project-id (fn [_] "test-project")
                   ;; Sprint 2: moved to catchup.scope
                   hive-mcp.tools.catchup.scope/get-current-project-name (fn [_] "test-project")
@@ -333,17 +384,19 @@
                   (fn [_ _ _ _] [])
                   hive-mcp.knowledge-graph.disc/top-stale-files
                   (fn [& _] [])
-                  hive-mcp.emacs.client/eval-elisp-with-timeout
-                  (fn [_ _] {:success true :result "{\"branch\":\"main\",\"uncommitted\":false,\"last-commit\":\"abc\"}"})]
+                  hive-mcp.tools.catchup.git/gather-git-info
+                  (fn [_] mock-git-info)]
       (let [result (hive-mcp.tools.catchup/spawn-context "/tmp/test")]
         (is (string? result))
         ;; Full mode has "Project Context" header, not "Memory Hints"
         (is (str/includes? result "Project Context"))
         (is (not (str/includes? result "Memory Hints")))))))
 
-(deftest test-spawn-context-chroma-not-configured
-  (testing "spawn-context returns nil when Chroma not configured"
-    (with-redefs [hive-mcp.chroma.core/embedding-configured? (fn [] false)]
+(deftest test-spawn-context-no-store
+  (testing "spawn-context returns nil when no memory store is set"
+    ;; spawn-context guards on (mem-proto/store-set?) — spawn.clj:87 — not on
+    ;; chroma embedding config; no store ⇒ nil for every mode.
+    (with-redefs [mem-proto/store-set? (fn [] false)]
       (is (nil? (hive-mcp.tools.catchup/spawn-context "/tmp/test" {:mode :hints})))
       (is (nil? (hive-mcp.tools.catchup/spawn-context "/tmp/test"))))))
 
@@ -353,11 +406,12 @@
 
 (deftest test-generate-task-hints-with-kg-edges
   (testing "generate-task-hints returns structured hints from KG traversal"
-    (with-redefs [hive-mcp.chroma.core/embedding-configured? (fn [] true)
-                  hive-mcp.chroma.core/get-entry-by-id
-                  (fn [id]
-                    {:id id :content "Test task" :type "note"
-                     :tags ["convention" "testing" "scope:project:test"]})
+    (with-redefs [mem-proto/store-set? (constantly true)
+                  mem-proto/get-store
+                  (constantly (stub-store {:get-entry
+                                           (fn [id]
+                                             {:id id :content "Test task" :type "note"
+                                              :tags ["convention" "testing" "scope:project:test"]})}))
                   hive-mcp.knowledge-graph.queries/traverse
                   (fn [node-id opts]
                     [{:node-id "related-1" :depth 1
@@ -384,11 +438,12 @@
 
 (deftest test-generate-task-hints-fallback-no-edges
   (testing "generate-task-hints falls back to tag search when KG has no edges"
-    (with-redefs [hive-mcp.chroma.core/embedding-configured? (fn [] true)
-                  hive-mcp.chroma.core/get-entry-by-id
-                  (fn [id]
-                    {:id id :content "Task with tags" :type "decision"
-                     :tags ["architecture" "refactoring" "scope:project:test" "agent:coordinator"]})
+    (with-redefs [mem-proto/store-set? (constantly true)
+                  mem-proto/get-store
+                  (constantly (stub-store {:get-entry
+                                           (fn [id]
+                                             {:id id :content "Task with tags" :type "decision"
+                                              :tags ["architecture" "refactoring" "scope:project:test" "agent:coordinator"]})}))
                   hive-mcp.knowledge-graph.queries/traverse
                   (fn [_ _] [])]  ;; No KG edges
       (let [result (hints/generate-task-hints {:task-id "task-no-edges"})]
@@ -410,8 +465,9 @@
 
 (deftest test-generate-task-hints-memory-id-alias
   (testing "generate-task-hints accepts :memory-id as alternative to :task-id"
-    (with-redefs [hive-mcp.chroma.core/embedding-configured? (fn [] true)
-                  hive-mcp.chroma.core/get-entry-by-id (fn [_] {:id "mem-1" :tags [] :type "note"})
+    (with-redefs [mem-proto/store-set? (constantly true)
+                  mem-proto/get-store
+                  (constantly (stub-store {:get-entry (fn [_] {:id "mem-1" :tags [] :type "note"})}))
                   hive-mcp.knowledge-graph.queries/traverse (fn [_ _] [])]
       (let [result (hints/generate-task-hints {:memory-id "mem-1"})]
         (is (map? result))
@@ -419,10 +475,11 @@
 
 (deftest test-generate-task-hints-bounded-output
   (testing "generate-task-hints respects max limits"
-    (with-redefs [hive-mcp.chroma.core/embedding-configured? (fn [] true)
-                  hive-mcp.chroma.core/get-entry-by-id
-                  (fn [_] {:id "big-task" :type "note"
-                           :tags (mapv #(str "tag-" %) (range 20))})
+    (with-redefs [mem-proto/store-set? (constantly true)
+                  mem-proto/get-store
+                  (constantly (stub-store {:get-entry
+                                           (fn [_] {:id "big-task" :type "note"
+                                                    :tags (mapv #(str "tag-" %) (range 20))})}))
                   hive-mcp.knowledge-graph.queries/traverse
                   (fn [node-id _]
                     ;; Return 30 nodes (exceeds max-l1-ids of 20)
@@ -441,9 +498,10 @@
 
 (deftest test-generate-task-hints-kg-traverse-error
   (testing "generate-task-hints handles KG traverse errors gracefully"
-    (with-redefs [hive-mcp.chroma.core/embedding-configured? (fn [] true)
-                  hive-mcp.chroma.core/get-entry-by-id
-                  (fn [_] {:id "err-task" :tags ["testing"] :type "note"})
+    (with-redefs [mem-proto/store-set? (constantly true)
+                  mem-proto/get-store
+                  (constantly (stub-store {:get-entry
+                                           (fn [_] {:id "err-task" :tags ["testing"] :type "note"})}))
                   hive-mcp.knowledge-graph.queries/traverse
                   (fn [_ _] (throw (Exception. "KG connection failed")))]
       (let [result (hints/generate-task-hints {:task-id "err-task"})]
@@ -452,12 +510,12 @@
         (is (= [] (:l1-ids result)))
         (is (vector? (:l2-queries result)))))))
 
-(deftest test-generate-task-hints-chroma-not-configured
-  (testing "generate-task-hints works even when Chroma not configured"
-    (with-redefs [hive-mcp.chroma.core/embedding-configured? (fn [] false)
+(deftest test-generate-task-hints-no-store
+  (testing "generate-task-hints works even when no memory store is set"
+    (with-redefs [mem-proto/store-set? (constantly false)
                   hive-mcp.knowledge-graph.queries/traverse (fn [_ _] [])]
-      (let [result (hints/generate-task-hints {:task-id "no-chroma"})]
-        ;; No Chroma = no entry lookup, fallback to empty tags
+      (let [result (hints/generate-task-hints {:task-id "no-store"})]
+        ;; No store = no entry lookup, fallback to empty tags
         (is (map? result))
         (is (= [] (:l1-ids result)))
         (is (= [] (:l3-seeds result)))))))

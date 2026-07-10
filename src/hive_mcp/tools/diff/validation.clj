@@ -1,6 +1,6 @@
 (ns hive-mcp.tools.diff.validation
   "Diff path validation, sandbox path translation, and parameter checking."
-  (:require [hive-mcp.emacs.client :as ec]
+  (:require [hive-mcp.emacs-ext.client :as ec]
             [clojure.string :as str]
             [clojure.java.io :as io]
             [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))

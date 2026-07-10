@@ -51,16 +51,26 @@
    Bounded context pattern: separate from Chroma memory storage.
    Edges connect memory entry IDs without duplicating content."
   {:kg-edge/id            {:db/unique :db.unique/identity
+                           :db/noHistory true
                            :db/doc "Unique edge identifier (UUID string)"}
-   :kg-edge/from          {:db/doc "Source node ID (memory entry ID)"}
-   :kg-edge/to            {:db/doc "Target node ID (memory entry ID)"}
-   :kg-edge/relation      {:db/doc "Relation type keyword from relation-types"}
-   :kg-edge/scope         {:db/doc "Scope where edge was discovered (e.g., project-id)"}
-   :kg-edge/confidence    {:db/doc "Confidence score 0.0-1.0"}
-   :kg-edge/created-by    {:db/doc "Agent ID that created this edge"}
-   :kg-edge/created-at    {:db/doc "Creation timestamp (inst)"}
-   :kg-edge/last-verified {:db/doc "Timestamp of last verification that this edge is still valid (inst)"}
-   :kg-edge/source-type   {:db/doc "How this edge was established: :manual, :automated, :inferred, :co-access"}})
+   :kg-edge/from          {:db/noHistory true
+                           :db/doc "Source node ID (memory entry ID)"}
+   :kg-edge/to            {:db/noHistory true
+                           :db/doc "Target node ID (memory entry ID)"}
+   :kg-edge/relation      {:db/noHistory true
+                           :db/doc "Relation type keyword from relation-types"}
+   :kg-edge/scope         {:db/noHistory true
+                           :db/doc "Scope where edge was discovered (e.g., project-id)"}
+   :kg-edge/confidence    {:db/noHistory true
+                           :db/doc "Confidence score 0.0-1.0"}
+   :kg-edge/created-by    {:db/noHistory true
+                           :db/doc "Agent ID that created this edge"}
+   :kg-edge/created-at    {:db/noHistory true
+                           :db/doc "Creation timestamp (inst)"}
+   :kg-edge/last-verified {:db/noHistory true
+                           :db/doc "Timestamp of last verification that this edge is still valid (inst)"}
+   :kg-edge/source-type   {:db/noHistory true
+                           :db/doc "How this edge was established: :manual, :automated, :inferred, :co-access"}})
 
 ;; =============================================================================
 ;; =============================================================================
@@ -117,6 +127,12 @@
   [source-type]
   (contains? source-types source-type))
 
+(defn valid-node-id?
+  "Check if a value is usable as a KG node id: a non-blank string."
+  [node-id]
+  (and (string? node-id)
+       (boolean (re-find #"\S" node-id))))
+
 (defn valid-abstraction-level?
   "Check if abstraction level is valid (1-4).
    L0 (runtime) is not stored, so 0 is not valid for persistence."
@@ -134,8 +150,8 @@
   "Get full info for an abstraction level.
    Returns {:level n :name \"Name\" :description \"...\"} or nil."
   [level]
-  (when-let [kw (abstraction-level-keyword level)]
-    (get abstraction-levels kw)))
+  (when (valid-abstraction-level? level)
+    (get abstraction-levels (keyword (str "level-" level)))))
 
 ;; =============================================================================
 ;; Disc Entity Schema (File State Tracking)
@@ -239,6 +255,72 @@
    :disc/certainty-beta   2.0
    :disc/volatility-class :moderate})
 
+;; =============================================================================
+;; Synth Schema — derived KG metrics produced by graph-algos synth loops
+;; =============================================================================
+;; Written by hive-knowledge.graph-algos via IKgWriter (DatahikeKgWriter).
+;; Read by ranking/fuse, catchup filter, mcp/* surfaces, carto detectors.
+;; All values are derived (recomputable) — losing them is recoverable.
+
+(def synth-schema
+  "DataScript schema for synth-loop-derived metrics on KG nodes.
+
+   Identity:
+   - :synth/node-id  unique identity anchor. Value = KG node id (same string
+     as :kg-edge/from / :kg-edge/to). Datahike upserts by identity, so writers
+     transact `[{:synth/node-id id, :synth/<attr> value}]` idempotently.
+
+   Population:
+   - :synth/community-id  ← Louvain/Leiden (graph_algos.synth.loop_communities)
+   - :synth/betweenness   ← Brandes (loop_betweenness, GAV2-1.2)
+   - :synth/k-core        ← KCoreDecomposition (loop_kcore, GAV2-1.4)
+   - :synth/hits-hub      ← HITS hub score (loop_hits, GAV2-1.5)
+   - :synth/hits-auth     ← HITS authority score (loop_hits)
+   - :synth/conductance   ← per-cluster (GAV2-2.4)
+   - :synth/modularity-q  ← per-community (GAV2-2.4)
+   - :synth/katz          ← IKatzCentralityBackend (GAV2-2.1)
+   - :synth/eigenvector   ← IEigenvectorCentralityBackend (GAV2-2.2)
+   - :synth/triangle-count    ← jgrapht triangle counting (GAV2-1.7)
+   - :synth/clustering-coef   ← local clustering coefficient (GAV2-1.7)
+
+   Cardinality :db.cardinality/one for scalar metrics. :synth/community-id is
+   one (each node belongs to a single community per detection run); switch to
+   :db.cardinality/many later if multi-cluster membership is wanted."
+  {:synth/node-id         {:db/unique :db.unique/identity
+                           :db/noHistory true
+                           :db/doc "Identity anchor for synth-derived attrs (KG node id)"}
+   :synth/community-id    {:db/index true
+                           :db/noHistory true
+                           :db/doc "Community label assigned by latest ICommunities run"}
+   :synth/betweenness     {:db/noHistory true
+                           :db/doc "Brandes betweenness centrality score (double)"}
+   :synth/k-core          {:db/noHistory true
+                           :db/doc "k-core decomposition coreness (long)"}
+   :synth/hits-hub        {:db/noHistory true
+                           :db/doc "HITS hub score (double)"}
+   :synth/hits-auth       {:db/noHistory true
+                           :db/doc "HITS authority score (double)"}
+   :synth/conductance     {:db/noHistory true
+                           :db/doc "Per-cluster conductance edges-out/(in+out) (double)"}
+   :synth/modularity-q    {:db/noHistory true
+                           :db/doc "Per-community modularity Q contribution (double)"}
+   :synth/katz            {:db/noHistory true
+                           :db/doc "Katz centrality (double)"}
+   :synth/eigenvector     {:db/noHistory true
+                           :db/doc "Eigenvector centrality (double)"}
+   :synth/triangle-count  {:db/noHistory true
+                           :db/doc "Triangles incident at node (long)"}
+   :synth/clustering-coef {:db/noHistory true
+                           :db/doc "Local clustering coefficient (double)"}})
+
+(defn synth-attr?
+  "True iff attr is in the :synth/* namespace (excludes :synth/node-id).
+   Used by DatahikeKgWriter destructive-guard."
+  [attr]
+  (and (keyword? attr)
+       (= "synth" (namespace attr))
+       (not= :synth/node-id attr)))
+
 (defn disc-certainty-defaults-with-timestamp
   "Returns disc certainty defaults with current timestamp for last-observation."
   []
@@ -293,6 +375,6 @@
   (type-registry/abstraction-level entry-type))
 
 (defn full-schema
-  "Returns the combined KG schema (edges + knowledge abstraction + disc + addon extensions)."
+  "Returns the combined KG schema (edges + knowledge abstraction + disc + synth + addon extensions)."
   []
-  (merge kg-schema knowledge-schema disc-schema @kg-schema-extensions))
+  (merge kg-schema knowledge-schema disc-schema synth-schema @kg-schema-extensions))

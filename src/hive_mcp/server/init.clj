@@ -29,8 +29,7 @@
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.swarm.sync :as sync]
             [hive-mcp.swarm.bootstrap.factory :as bootstrap-factory]
-            [hive-mcp.swarm.datalevin.connection :as dl-conn]
-            [hive-mcp.swarm.lifecycle.sweep :as lifecycle-sweep]
+            [hive-mcp.swarm.lifecycle.boot-reconcile :as boot-reconcile]
             [hive-mcp.swarm.event-bridge :as swarm-event-bridge]
             [hive-mcp.channel.piggyback :as piggyback]
             [hive-mcp.channel.instruction-store :as instruction-store]
@@ -392,9 +391,8 @@
                   (let [bs (build-swarm-bootstrap opts)]
                     (sync/set-swarm-bootstrap! bs))
                   (sync/start-sync!)
-                  ;; Liveness sweep: reconcile registry against OS process
-                  ;; state. Marks dead+stale slaves :zombie + :alive? false.
-                  (rescue nil (lifecycle-sweep/sweep-on-boot! (dl-conn/ensure-conn)))
+                  ;; Retires rehydrated slaves (:zombie + :alive? false) — memory 20260423152822-70fe5631.
+                  (rescue nil (boot-reconcile/reconcile-rehydrated-slaves!))
                   (let [eb (resolve-event-backbone opts)]
                     (when (= :nats eb)
                       (let [started? (swarm-event-bridge/start-nats-bridge!)]
@@ -533,19 +531,27 @@
 ;; NATS Initialization
 ;; =============================================================================
 
-(defn init-nats!
-  "Initialize NATS client + bridge + backbone + delivery channels for universal event backbone.
-   Startup sequence: NATS connect -> set IEventBackbone -> register delivery channels -> bridge subscribe -> callback listener.
-   Opt-in via config: services.nats.enabled = true.
-   Non-fatal: system degrades to NoopBackbone + polling if NATS unavailable."
+(defn init-delivery-channels!
+  "Register every IDeliveryChannel impl chosen by `register-default-channels!`.
+   Run UNCONDITIONALLY at startup — independent of NATS, Emacs, or any
+   editor frontend. Without this, headless hosts with NATS disabled would
+   silently lose all delivery (the historical E2E-2 symptom). Non-fatal:
+   factory errors are logged but don't abort init."
   []
-  ;; M1: Register delivery channels unconditionally — needed for both NATS and direct fallback
   (try
     (when-let [reg-channels! (requiring-resolve 'hive-mcp.delivery.channels/register-default-channels!)]
       (reg-channels!))
     (catch Exception e
-      (log/warn "[init] Failed to register delivery channels (non-fatal):" (ex-message e))))
-  ;; NATS backbone — opt-in via config
+      (log/warn "[init] Failed to register delivery channels (non-fatal):" (ex-message e)))))
+
+(defn init-nats!
+  "Initialize NATS client + bridge + backbone. Opt-in via config: services.nats.enabled = true.
+   Non-fatal: system degrades to NoopBackbone + polling if NATS unavailable.
+
+   Delivery channels are registered separately via init-delivery-channels!
+   so headless hosts still get a working delivery surface even when NATS
+   is disabled."
+  []
   (result/rescue nil
                  (let [nats-config (global-config/get-service-config :nats)]
                    (when (:enabled nats-config)
@@ -554,7 +560,6 @@
                            create-bb (requiring-resolve 'hive-mcp.nats.backbone/create-backbone)
                            set-bb! (requiring-resolve 'hive-mcp.protocols.event-backbone/set-backbone!)]
                        (start! nats-config)
-                       ;; M1: Wire NatsBackbone as active IEventBackbone
                        (let [bb (create-bb)]
                          (set-bb! bb)
                          (log/info "[init] NatsBackbone set as active IEventBackbone"))
@@ -594,7 +599,13 @@
                  (let [load-fn (resolve 'hive-mcp.extensions.loader/load-extensions!)]
                    (when load-fn
                      (let [result (load-fn)]
-                       (log/info "Extension loading complete:" result))))))
+                       (log/info "Extension loading complete:" result)))))
+  ;; Post-init multi-dispatch coherence check (WARN-only)
+  (result/rescue nil
+                 (let [get-adv (requiring-resolve 'hive-mcp.tools.registry/get-advertised-tools)
+                       check!  (requiring-resolve 'hive-mcp.multi.registry/check-dispatch-coherence!)]
+                   (when (and get-adv check!)
+                     (check! (filter :consolidated (get-adv)))))))
 
 ;; =============================================================================
 ;; Workflow Engine Initialization

@@ -115,6 +115,24 @@ delegate_drone(
 | `Bash("git commit")` | `mcp__hive__magit_commit` |
 | `Bash("git push")` | `mcp__hive__magit_push` |
 
+### Code Edits — Use `mcp__hive__code` (carto)
+
+For ANY edit to `.clj` / `.cljs` / `.cljc` files, the carto write path is mandatory — raw `Edit`/`Write`/`file_write` skip lint, REPL refresh, and ns-tracking.
+
+**First move on a fresh ling, BEFORE any code edit:**
+```
+ToolSearch(query: "select:mcp__hive__code")
+```
+
+This loads the carto schema. Then use:
+| Operation | Carto tool |
+|-----------|-----------|
+| Replace a top-level form | `mcp__hive__code` `write-form` |
+| Insert before/after a form | `mcp__hive__code` `insert-form` |
+| Whole-file create/rewrite | `mcp__hive__file_write` (only when no existing form to target) |
+
+**Why pre-load the schema?** Without it, the ling defaults to `Read`/`Edit` because those need no setup — and silently bypasses lint + REPL refresh. The single `ToolSearch` call up front kills that friction for the rest of the session.
+
 ### Semantic Search - Use `mcp__claude-context__*`
 ```
 mcp__claude-context__search_code(path: "/project", query: "authentication flow")

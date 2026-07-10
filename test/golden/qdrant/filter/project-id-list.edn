@@ -1,0 +1,8 @@
+{:both-nil nil,
+ :empty-plural-falls ["hive"],
+ :keyword-pid [":hive"],
+ :numeric-pids ["42" "99"],
+ :plural-only ["hive-mcp" "hive-knowledge"],
+ :plural-wins ["hive-mcp" "hive-knowledge"],
+ :single-plural ["solo"],
+ :singular-only ["hive"]}

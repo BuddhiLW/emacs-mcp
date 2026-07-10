@@ -49,7 +49,8 @@
    `rewire!` call (from server/init) rebuilds the subscription."
 
   (:require [hive-mcp.protocols.event-backbone :as eb]
-            [taoensso.timbre :as log])
+            [taoensso.timbre :as log]
+            [hive-mcp.protocols.registry :as reg])
   (:import [java.util UUID]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -326,30 +327,29 @@
 ;; Active store management (defonce — persists across reloads)
 ;; =============================================================================
 
-(defonce ^:private active-store (atom nil))
+(defonce ^:private slot
+  (reg/single-slot {:validate #(satisfies? IInstructionStore %)
+                    :teardown stop!}))
 
 (defn set-store!
   "Install `store` as the active instruction store. Replaces any previous one
    (stopping it first). Returns the installed store."
   [store]
   {:pre [(satisfies? IInstructionStore store)]}
-  (when-let [prev @active-store]
+  (when-let [prev (reg/current slot)]
     (try (stop! prev) (catch Exception _)))
-  (reset! active-store store)
-  store)
+  (reg/install! slot store))
 
 (defn get-store
   "Return the active instruction store, or nil if none has been set.
    The facade uses this with a lazy default."
   []
-  @active-store)
+  (reg/current slot))
 
 (defn clear-store!
   "Remove the active store (stopping it first). Primarily for tests."
   []
-  (when-let [s @active-store]
-    (try (stop! s) (catch Exception _)))
-  (reset! active-store nil))
+  (reg/clear! slot))
 
 ;; =============================================================================
 ;; Bootstrap helper — invoked from server/init once the backbone is ready

@@ -1,0 +1,32 @@
+{:tx-data
+ ;; Alters :kg-edge/* (001/004) + :synth/* (005) to :db/noHistory true so their
+ ;; high-churn datoms stop pinning history on the in-heap datahike index.
+ ;; datahike accepts :db/noHistory alteration on existing attrs (always-allow
+ ;; branch of schema/find-invalid-schema-updates); minimal {:db/ident X
+ ;; :db/noHistory true} merges into each attr's existing valueType/cardinality.
+ ;; Sorts after 005 so every target attr already exists. FORWARD-ONLY: existing
+ ;; history is reclaimed by a separate prune, not this norm.
+ ;; Rationale/evidence: hive memory 20260628142803-4631c68a, 20260628143354-333d0425.
+ [{:db/ident :kg-edge/id            :db/noHistory true}
+  {:db/ident :kg-edge/from          :db/noHistory true}
+  {:db/ident :kg-edge/to            :db/noHistory true}
+  {:db/ident :kg-edge/relation      :db/noHistory true}
+  {:db/ident :kg-edge/scope         :db/noHistory true}
+  {:db/ident :kg-edge/confidence    :db/noHistory true}
+  {:db/ident :kg-edge/created-by    :db/noHistory true}
+  {:db/ident :kg-edge/created-at    :db/noHistory true}
+  {:db/ident :kg-edge/last-verified :db/noHistory true}
+  {:db/ident :kg-edge/source-type   :db/noHistory true}
+
+  {:db/ident :synth/node-id         :db/noHistory true}
+  {:db/ident :synth/community-id    :db/noHistory true}
+  {:db/ident :synth/betweenness     :db/noHistory true}
+  {:db/ident :synth/k-core          :db/noHistory true}
+  {:db/ident :synth/hits-hub        :db/noHistory true}
+  {:db/ident :synth/hits-auth       :db/noHistory true}
+  {:db/ident :synth/conductance     :db/noHistory true}
+  {:db/ident :synth/modularity-q    :db/noHistory true}
+  {:db/ident :synth/katz            :db/noHistory true}
+  {:db/ident :synth/eigenvector     :db/noHistory true}
+  {:db/ident :synth/triangle-count  :db/noHistory true}
+  {:db/ident :synth/clustering-coef :db/noHistory true}]}

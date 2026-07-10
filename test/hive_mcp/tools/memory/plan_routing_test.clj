@@ -171,38 +171,6 @@
 ;; handle-query: Plan Routing Tests
 ;; ============================================================
 
-(deftest handle-query-routes-plan-to-plans-collection
-  (testing "type=plan calls plans/query-plans instead of chroma/query-entries"
-    (reset-call-log!)
-    (with-redefs [chroma/embedding-configured?
-                  (constantly true)
-                  hive-mcp.tools.memory.scope/get-current-project-id
-                  (constantly "hive-mcp")
-                  hive-mcp.knowledge-graph.scope/visible-scopes
-                  (constantly ["hive-mcp"])
-                  hive-mcp.knowledge-graph.scope/visible-scope-tags
-                  (constantly #{"scope:hive-mcp"})
-                  hive-mcp.knowledge-graph.edges/record-co-access!
-                  (constantly nil)
-                  chroma/query-entries
-                  (fn [& args]
-                    (log-call! :chroma-query args)
-                    [])
-                  plans/query-plans
-                  (fn [& args]
-                    (log-call! :plans-query args)
-                    [mock-plan-entry])
-                  hive-mcp.agent.context/current-directory
-                  (constantly "/tmp/test")]
-      (let [result (crud/handle-query {:type "plan"
-                                       :directory "/tmp/test"})]
-        ;; Should have called plans/query-plans, NOT chroma/query-entries
-        (is (= 1 (count (calls-to :plans-query)))
-            "plans/query-plans should be called for type=plan")
-        (is (= 0 (count (calls-to :chroma-query)))
-            "chroma/query-entries should NOT be called for type=plan")
-        (is (not (:isError result)))))))
-
 (deftest handle-query-routes-non-plan-to-chroma
   (testing "type=note calls chroma/query-entries (unchanged behavior)"
     (reset-call-log!)
@@ -261,40 +229,12 @@
         ;; Memory collection found it
         (is (= 1 (count (calls-to :chroma-get))))))))
 
-(deftest handle-get-full-falls-back-to-plans-collection
-  (testing "get-full falls back to plans collection when not found in memory"
+(deftest handle-get-full-returns-not-found-when-missing
+  (testing "get-full returns error when entry not found in IMemoryStore"
     (reset-call-log!)
     (with-redefs [chroma/embedding-configured?
                   (constantly true)
                   chroma/get-entry-by-id
-                  (fn [id]
-                    (log-call! :chroma-get id)
-                    nil)  ;; Not found in memory
-                  plans/get-plan
-                  (fn [id]
-                    (log-call! :plans-get id)
-                    mock-plan-entry)  ;; Found in plans
-                  hive-mcp.knowledge-graph.edges/get-edges-from
-                  (constantly [])
-                  hive-mcp.knowledge-graph.edges/get-edges-to
-                  (constantly [])]
-      (let [result (crud/handle-get-full {:id "20260206-test-plan"})
-            parsed (json/read-str (:text result) :key-fn keyword)]
-        (is (not (:isError result)))
-        ;; Both should be tried
-        (is (= 1 (count (calls-to :chroma-get))))
-        (is (= 1 (count (calls-to :plans-get))))
-        ;; Should return plan entry
-        (is (= "plan" (:type parsed)))))))
-
-(deftest handle-get-full-returns-not-found-when-both-miss
-  (testing "get-full returns error when entry not found in either collection"
-    (reset-call-log!)
-    (with-redefs [chroma/embedding-configured?
-                  (constantly true)
-                  chroma/get-entry-by-id
-                  (constantly nil)
-                  plans/get-plan
                   (constantly nil)
                   hive-mcp.knowledge-graph.edges/get-edges-from
                   (constantly [])
@@ -308,43 +248,6 @@
 ;; ============================================================
 ;; handle-search-semantic: Plan Routing Tests
 ;; ============================================================
-
-(deftest handle-search-semantic-routes-plan-to-plans-collection
-  (testing "type=plan calls plans/search-plans instead of chroma/search-similar"
-    (reset-call-log!)
-    (with-redefs [chroma/status
-                  (constantly {:configured? true})
-                  chroma/embedding-configured?
-                  (constantly true)
-                  hive-mcp.tools.memory.scope/get-current-project-id
-                  (constantly "hive-mcp")
-                  hive-mcp.knowledge-graph.scope/visible-scopes
-                  (constantly ["hive-mcp"])
-                  hive-mcp.knowledge-graph.edges/record-co-access!
-                  (constantly nil)
-                  chroma/search-similar
-                  (fn [query & args]
-                    (log-call! :chroma-search query)
-                    [])
-                  plans/search-plans
-                  (fn [query & args]
-                    (log-call! :plans-search query)
-                    [{:id "plan-1" :type "plan" :tags ["test"]
-                      :project-id "hive-mcp" :plan-status "draft"
-                      :distance 0.1 :preview "Plan preview..."}])
-                  hive-mcp.agent.context/current-directory
-                  (constantly "/tmp/test")]
-      (let [result (search/handle-search-semantic {:query "authentication plan"
-                                                   :type "plan"
-                                                   :directory "/tmp/test"})
-            parsed (json/read-str (:text result) :key-fn keyword)]
-        ;; Should have called plans/search-plans, NOT chroma/search-similar
-        (is (= 1 (count (calls-to :plans-search)))
-            "plans/search-plans should be called for type=plan")
-        (is (= 0 (count (calls-to :chroma-search)))
-            "chroma/search-similar should NOT be called for type=plan")
-        (is (not (:isError result)))
-        (is (= 1 (:count parsed)))))))
 
 (deftest handle-search-semantic-routes-non-plan-to-chroma
   (testing "type=note calls chroma/search-similar (unchanged behavior)"
@@ -419,55 +322,10 @@
 ;; plan-to-kanban: Fallback Tests
 ;; ============================================================
 
-(deftest plan-to-kanban-tries-plans-first
-  (testing "plan-to-kanban tries plans collection before chroma"
+(deftest plan-to-kanban-resolves-via-imemorystore
+  (testing "plan-to-kanban resolves entries through IMemoryStore (single path, no plans-collection fallback)"
     (reset-call-log!)
-    (with-redefs [plans/get-plan
-                  (fn [id]
-                    (log-call! :plans-get id)
-                    {:id id
-                     :content "# Plan\n1. Step A\n2. Step B"
-                     :type "plan"
-                     :project-id "hive-mcp"})
-                  chroma/get-entry-by-id
-                  (fn [id]
-                    (log-call! :chroma-get id)
-                    nil)
-                  hive-mcp.plan.parser/parse-plan
-                  (fn [content opts]
-                    {:success true
-                     :plan {:title "Test Plan"
-                            :steps [{:id "step-1" :title "Step A" :depends-on []}
-                                    {:id "step-2" :title "Step B" :depends-on ["step-1"]}]}})
-                  hive-mcp.plan.schema/validate-dependencies
-                  (constantly {:valid true})
-                  hive-mcp.plan.schema/detect-cycles
-                  (constantly {:valid true})
-                  hive-mcp.tools.memory-kanban/handle-mem-kanban-create
-                  (fn [{:keys [title]}]
-                    {:type "text"
-                     :text (json/write-str {:id (str "task-" (hash title))})})
-                  hive-mcp.knowledge-graph.edges/add-edge!
-                  (constantly "edge-1")
-                  hive-mcp.agent.context/current-directory
-                  (constantly "/tmp/test")]
-      (let [result (plan-tool/plan-to-kanban "test-plan-id" :directory "/tmp/test")]
-        ;; plans/get-plan should be called first
-        (is (= 1 (count (calls-to :plans-get)))
-            "plans/get-plan should be called")
-        ;; chroma should NOT be called since plans found it (short-circuit `or`)
-        (is (= 0 (count (calls-to :chroma-get)))
-            "chroma should not be called when plans has the entry")
-        (is (not (:isError result)))))))
-
-(deftest plan-to-kanban-falls-back-to-chroma
-  (testing "plan-to-kanban falls back to chroma when not in plans"
-    (reset-call-log!)
-    (with-redefs [plans/get-plan
-                  (fn [id]
-                    (log-call! :plans-get id)
-                    nil)  ;; Not found in plans
-                  chroma/get-entry-by-id
+    (with-redefs [chroma/get-entry-by-id
                   (fn [id]
                     (log-call! :chroma-get id)
                     {:id id
@@ -475,9 +333,9 @@
                      :type "plan"
                      :project-id "hive-mcp"})
                   hive-mcp.plan.parser/parse-plan
-                  (fn [content opts]
+                  (fn [_content _opts]
                     {:success true
-                     :plan {:title "Legacy Plan"
+                     :plan {:title "Test Plan"
                             :steps [{:id "step-1" :title "Step A" :depends-on []}]}})
                   hive-mcp.plan.schema/validate-dependencies
                   (constantly {:valid true})
@@ -491,8 +349,7 @@
                   (constantly "edge-1")
                   hive-mcp.agent.context/current-directory
                   (constantly "/tmp/test")]
-      (let [result (plan-tool/plan-to-kanban "legacy-plan-id" :directory "/tmp/test")]
-        ;; Both should be tried
-        (is (= 1 (count (calls-to :plans-get))))
-        (is (= 1 (count (calls-to :chroma-get))))
+      (let [result (plan-tool/plan-to-kanban "test-plan-id" :directory "/tmp/test")]
+        (is (= 1 (count (calls-to :chroma-get)))
+            "IMemoryStore (chroma backend) is the only resolver")
         (is (not (:isError result)))))))

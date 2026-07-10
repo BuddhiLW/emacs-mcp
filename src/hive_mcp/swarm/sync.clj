@@ -37,7 +37,7 @@
             [hive-mcp.swarm.datascript.queries :as queries]
             [hive-mcp.swarm.coordinator :as coord]
             [hive-mcp.channel.core :as channel]
-            [hive-mcp.emacs.daemon-store :as daemon-store]
+            [hive-mcp.emacs-ext.daemon-store :as daemon-store]
             [hive-mcp.hivemind.core :as hivemind]
             [hive-mcp.hooks.core :as hooks]
             [hive-mcp.tools.memory.scope :as scope]
@@ -112,7 +112,11 @@
    transactionally coupled to the in-memory registry."
   [slave-id slave-data]
   (try
-    (bootstrap/snapshot-slave! (get-swarm-bootstrap) slave-id slave-data)
+    (let [reg-slave (some-> (get-swarm-registry) (proto/get-slave slave-id))
+          enriched  (cond-> slave-data
+                      (:ling/spawn-mode reg-slave)   (assoc :spawn-mode (:ling/spawn-mode reg-slave))
+                      (:slave/process-pid reg-slave) (assoc :process-pid (:slave/process-pid reg-slave)))]
+      (bootstrap/snapshot-slave! (get-swarm-bootstrap) slave-id enriched))
     (catch Exception e
       (log/warn "Sync: bootstrap snapshot threw for" slave-id ":" (.getMessage e)))))
 
@@ -487,6 +491,11 @@
         reg (get-swarm-registry)]
     (proto/add-slave! reg slave-id {:status status :name name :depth depth
                                     :cwd cwd :project-id project-id})
+    (let [updates (cond-> {}
+                    (:spawn-mode slave)  (assoc :ling/spawn-mode (:spawn-mode slave))
+                    (:process-pid slave) (assoc :slave/process-pid (:process-pid slave)))]
+      (when (seq updates)
+        (proto/update-slave! reg slave-id updates)))
     (log/debug "Sync: bootstrapped slave" slave-id status "project-id:" project-id)))
 
 (defn full-sync-from-bootstrap!

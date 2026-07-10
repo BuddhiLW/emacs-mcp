@@ -23,6 +23,7 @@
    Design decision: 20260211212019-b8499942 (Multi DSL plan, Phase 2)"
   (:require [clojure.string :as str]
             [hive-mcp.extensions.registry :as ext]
+            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
             [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -32,15 +33,6 @@
 ;; =============================================================================
 ;; Extension Delegation Helper
 ;; =============================================================================
-
-(defn- delegate-or-noop
-  "Try to delegate to extension fn, fall back to default value."
-  [ext-key default-val args]
-  (if-let [f (ext/get-extension ext-key)]
-    (apply f args)
-    (do
-      (log/debug "Extension not available, returning default for" ext-key)
-      default-val)))
 
 ;; =============================================================================
 ;; Verb Table — 36 verbs covering all consolidated tools
@@ -60,6 +52,10 @@
    "m?" {:tool "memory"   :command "query"}
    "m@" {:tool "memory"   :command "get"}
    "m/" {:tool "memory"   :command "search"}
+   "m="  {:tool "memory"  :command "edit"}
+   "m#"  {:tool "memory"  :command "tags"}
+   "m^"  {:tool "memory"  :command "promote"}
+   "m_"  {:tool "memory"  :command "demote"}
 
    ;; Knowledge Graph (k)
    "k>" {:tool "kg"       :command "edge"}
@@ -78,6 +74,7 @@
    "b>" {:tool "kanban"   :command "update"}
    "b?" {:tool "kanban"   :command "list"}
    "b#" {:tool "kanban"   :command "status"}
+   "b-" {:tool "kanban"   :command "delete"}
 
    ;; Session (s)
    "s." {:tool "session"  :command "complete"}
@@ -118,15 +115,22 @@
 (def param-aliases
   "Maps single-char (or short) parameter aliases to full keywords.
    Applied during sentence parsing to expand compressed params."
-  {"c"  :content
-   "t"  :type
-   "#"  :tags
-   "d"  :directory
-   "q"  :query
-   "n"  :name
-   "id" :id
-   "p"  :prompt
-   "f"  :files})
+  {"c"   :content
+   "t"   :type
+   "#"   :tags
+   "d"   :directory
+   "q"   :query
+   "n"   :name
+   "id"  :id
+   "p"   :prompt
+   "f"   :files
+   ;; k> edge: docs/examples use "rel"; map to the handler's :relation key.
+   "rel" :relation
+   ;; b+ idempotency-key: short alias so the verb stays terse.
+   ;; Underscored long form is the canonical handler param shape;
+   ;; both the alias and the snake-case name reach the same handler
+   ;; param via memory-kanban/normalize-idempotency-key.
+   "idk" :idempotency_key})
 
 ;; =============================================================================
 ;; Parameter Expansion

@@ -7,8 +7,6 @@
   (:require [hive-mcp.tools.cli :refer [make-cli-handler make-batch-handler]]
             [hive-mcp.tools.composite :as composite]
             [hive-mcp.tools.memory :as mem]
-            [hive-mcp.tools.consolidated.kg :as c-kg]
-            [hive-mcp.tools.consolidated.migration :as c-mig]
             [hive-mcp.memory.type-registry :as type-registry]
             [hive-mcp.events.core :as ev]))
 
@@ -53,7 +51,9 @@
    :rename            mem/handle-mcp-memory-rename-project
    :batch-get         mem/handle-mcp-memory-batch-get
    :edit              mem/handle-mcp-memory-edit
-   :batch-edit        mem/handle-mcp-memory-batch-edit})
+   :batch-edit        mem/handle-mcp-memory-batch-edit
+   :reembed           mem/handle-mcp-memory-reembed
+   :batch-reembed     mem/handle-mcp-memory-batch-reembed})
 
 (defn- make-single-command-batch
   "Wrap make-batch-handler for batch ops targeting one command."
@@ -72,9 +72,17 @@
   (merge handlers
          {:batch-add      (make-single-command-batch :add (:add handlers))
           :batch-feedback (make-single-command-batch :feedback (:feedback handlers))
-          ;; Nested subdomains (core-owned only — OCP compliant)
-          :kg         c-kg/handlers
-          :migration  c-mig/handlers}))
+          ;; PR4.3 — additional batch siblings via the same iterator pattern.
+          ;; A real single-store-call optimization for these is PR5+ work.
+          :batch-tags     (make-single-command-batch :tags (:tags handlers))
+          :batch-duration (make-single-command-batch :duration (:duration handlers))
+          :batch-promote  (make-single-command-batch :promote (:promote handlers))
+          :batch-demote   (make-single-command-batch :demote (:demote handlers))
+          ;; Nested subdomains resolved lazily via composite/lazy-resolve-handlers
+          ;; — drops the static `c-kg`/`c-mig` :requires that previously
+          ;; coupled this ns to those consolidators (DIP).
+          :kg         (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.kg/handlers)
+          :migration  (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.migration/handlers)}))
 
 (def write-commands
   "Memory commands that default to :async true."
@@ -83,8 +91,10 @@
     :log_access :feedback :helpfulness :tags
     :cleanup :expire :decay :xpoll
     :migrate :migrate-scoped :import :rename
-    :batch-feedback
-    :edit :batch-edit})
+    :batch-feedback :batch-tags :batch-duration
+    :batch-promote :batch-demote
+    :edit :batch-edit
+    :reembed :batch-reembed})
 
 (def handle-memory
   (composite/build-merged-handler "memory" canonical-handlers))
@@ -97,13 +107,13 @@
   {:name "memory"
    :consolidated true
    :default-async-commands write-commands
-   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, migrate-scoped, import, decay, xpoll, rename, edit, batch-add, batch-edit, batch-feedback, batch-get. Use 'help' command to list all.\n\nEdit: 'edit' mutates an entry in place (id preserved → KG edges preserved). Params: id (required), type, content, tags, duration, abstraction_level, reason. Content change triggers re-embed. 'batch-edit' takes operations:[...] and optional dry-run:true for validation preview.\n\nWrites default to async: they return {:queued true :task-id ...} immediately and deliver the real result via ---TOOLRESULT--- on the caller's next tool call. Pass async:false to force sync. Reads (query/metadata/get/search/expiring/batch-get) stay synchronous by default; pass async:true to queue them."
+   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, migrate-scoped, import, decay, xpoll, rename, edit, reembed, batch-add, batch-edit, batch-feedback, batch-get, batch-reembed. Use 'help' command to list all.\n\nEdit: 'edit' mutates an entry in place (id preserved → KG edges preserved). Params: id (required), type, content, tags, duration, abstraction_level, reason. Content change triggers re-embed. 'batch-edit' takes operations:[...] and optional dry-run:true for validation preview.\n\nReembed: 'reembed' re-vectorizes an entry without rewriting content (id required). Use after embedding-model swaps, vector-index rebuilds, or stale-vector recovery. Preserves id, content, tags, edges, duration, abstraction-level, project-id. 'batch-reembed' takes ids:[...] for sequential per-op processing.\n\nWrites default to async: they return {:queued true :task-id ...} immediately and deliver the real result via ---TOOLRESULT--- on the caller's next tool call. Pass async:false to force sync. Reads (query/metadata/get/search/expiring/batch-get) stay synchronous by default; pass async:true to queue them."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :description "Command to execute. Memory commands are flat (add, query, etc.). Subdomains: 'kg edge', 'kg traverse', 'migration backup', 'ingest file', 'enrich enrich'. Use command='help' to list all."}
                               "type" {:type "string"
-                                      :enum (type-registry/mcp-enum)
-                                      :description "[add/query] Type of memory entry"}
+                                      :description (str "[add/query] Type of memory entry. "
+                                                        (type-registry/mcp-type-hint))}
                               "content" {:type "string"
                                          :description "[add] Content of the memory entry"}
                               "tags" {:type "array"
@@ -140,10 +150,10 @@
                                            :enum ["full" "metadata"]
                                            :description "[query] Output detail: 'metadata' (default) or 'full'"}
                               "id" {:type "string"
-                                    :description "[get/promote/demote/feedback/tags] Memory entry ID"}
+                                    :description "[get/promote/demote/feedback/tags/reembed] Memory entry ID"}
                               "ids" {:type "array"
                                      :items {:type "string"}
-                                     :description "[batch-get] Array of memory entry IDs to retrieve"}
+                                     :description "[batch-get/batch-reembed] Array of memory entry IDs"}
                               "query" {:type "string"
                                        :description "[search] Natural language query for semantic search"}
                               "exclude_tags" {:type "array"
@@ -155,13 +165,15 @@
                               "days" {:type "integer"
                                       :description "[expiring] Days to look ahead (default: 7)"}
                               "include_descendants" {:type "boolean"
-                                                     :description "[query/search] Include child project memories (HCR). Default false."}
+                                                     :description "[query/search] Include child project memories (HCR). Default true — pass false to restrict to current project only."}
+                              "force" {:type "boolean"
+                                       :description "[reembed] Force re-embed even if content-hash unchanged (currently no-op; reserved)"}
                               ;; KG params
                               "from" {:type "string" :description "[kg edge] Source node ID"}
                               "to" {:type "string" :description "[kg edge] Target node ID"}
                               "relation" {:type "string"
-                                          :enum ["implements" "supersedes" "refines" "contradicts" "depends-on" "derived-from" "applies-to"]
-                                          :description "[kg edge] Relation type"}
+                                          :enum ["implements" "supersedes" "refines" "contradicts" "depends-on" "derived-from" "applies-to" "projects-to" "co-accessed"]
+                                          :description "[kg edge] Relation type (server validates against kg-schema/relation-types; addons may register more)"}
                               "node_id" {:type "string" :description "[kg] Node ID for analysis"}
                               "start_node" {:type "string" :description "[kg traverse] Start node"}
                               "confidence" {:type "number" :description "[kg edge] Confidence 0.0-1.0"}

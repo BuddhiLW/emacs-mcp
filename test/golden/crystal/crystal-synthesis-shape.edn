@@ -1,10 +1,9 @@
 {:no-content-path
  {:keys
-  #{:skipped :reason :session :project-id :session-timing :stats
+  #{:summary-id :session :project-id :session-timing :stats
     :promotion-stats :decay-stats :xpoll-stats :memory-decay-stats
     :file-provenance-stats},
-  :skipped true,
-  :reason "no-content",
+  :summary-id "entry-golden-001",
   :session "test-session-golden",
   :project-id "golden-project",
   :session-timing

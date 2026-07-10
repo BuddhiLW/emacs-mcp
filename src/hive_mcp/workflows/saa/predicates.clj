@@ -7,7 +7,8 @@
    Also contains FSM pre/post interceptors for trace logging and
    no-op subscription handlers.
 
-   DDD: Value Objects — pure data predicates, no domain logic.")
+   DDD: Value Objects — pure data predicates, no domain logic."
+  (:require [hive-mcp.workflows.support :as support]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -121,7 +122,9 @@
   [data]
   (not (context-loaded? data)))
 
-(defn always [_data] true)
+(def always
+  "Dispatch predicate — always true. Shared seam (hive-mcp.workflows.support/always)."
+  support/always)
 
 
 ;; =============================================================================
@@ -133,18 +136,10 @@
   [_path _old _new]
   nil)
 
-(defn trace-log-enter
-  "Pre-interceptor: append :enter trace entry to data."
-  [{:keys [current-state-id] :as fsm} _resources]
-  (update-in fsm [:data :trace-log] (fnil conj [])
-             {:state current-state-id
-              :at (str (java.time.Instant/now))
-              :direction :enter}))
+(def trace-log-enter
+  "Pre-interceptor: append :enter trace entry (clock-injectable via support/now-str)."
+  support/trace-log-enter)
 
-(defn trace-log-exit
-  "Post-interceptor: append :exit trace entry to data."
-  [{:keys [current-state-id] :as fsm} _resources]
-  (update-in fsm [:data :trace-log] (fnil conj [])
-             {:state current-state-id
-              :at (str (java.time.Instant/now))
-              :direction :exit}))
+(def trace-log-exit
+  "Post-interceptor: append :exit trace entry (clock-injectable via support/now-str)."
+  support/trace-log-exit)

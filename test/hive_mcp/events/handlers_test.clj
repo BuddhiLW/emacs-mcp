@@ -217,9 +217,43 @@
           result ((requiring-resolve 'hive-mcp.events.handlers.crystal/handle-crystal-wrap-notify)
                   {} event)]
       (is (contains? result :wrap-notify) "Should produce :wrap-notify effect")
-      (is (= {} (get-in result [:wrap-notify :stats])) "Should use empty map for nil stats")
+      ;; nil stats project to an all-zero consumer-shape map (not bare {}),
+      ;; so the recorded wrap carries a consistent shape.
+      (is (= 0 (get-in result [:wrap-notify :stats :decisions]))
+          "Projected stats should default decisions to 0 for nil stats")
+      (is (= 0 (get-in result [:wrap-notify :stats :conventions]))
+          "Projected stats should default conventions to 0 for nil stats")
       (is (re-find #"0 decisions" (get-in result [:shout :data :message]))
           "Message should default to 0 decisions"))))
+
+(deftest test-handle-crystal-wrap-notify-projects-harvest-summary
+  (testing ":crystal/wrap-notify projects a HarvestSummary (crystallize path)
+            into real per-type counts instead of 0 decisions, 0 conventions"
+    (let [event [:crystal/wrap-notify
+                 {:agent-id "coordinator"
+                  :session-id "session:2026-06-29:coordinator"
+                  :created-ids ["s-1"]
+                  ;; Producer shape emitted by harvest/synthesize — NOT the
+                  ;; consumer vocabulary the formatter reads.
+                  :stats {:progress-count 1 :created-count 6 :kanban-completed 2
+                          :kg-edge-count 4
+                          :created-by-type {"decision" 2 "convention" 1
+                                            "note" 3 "feedback" 1}}}]
+          result ((requiring-resolve 'hive-mcp.events.handlers.crystal/handle-crystal-wrap-notify)
+                  {} event)
+          stats  (get-in result [:wrap-notify :stats])
+          msg    (get-in result [:shout :data :message])]
+      (is (= 2 (:decisions stats)) "decision count projected from :created-by-type")
+      (is (= 1 (:conventions stats)) "convention count projected from :created-by-type")
+      (is (= 3 (:notes stats)) "note count projected")
+      (is (= 1 (:other stats)) "unknown type folds into :other")
+      (is (= 2 (:kanban-closures stats)) "kanban closures surfaced")
+      (is (= 4 (:kg-edges stats)) "kg edges surfaced")
+      (is (re-find #"2 decisions" msg) "message reports real decision count")
+      (is (re-find #"1 conventions" msg) "message reports real convention count")
+      (is (re-find #"4 kg-edges" msg) "message surfaces kg edges")
+      (is (not (re-find #"no memory writes" msg))
+          "non-empty session must not show the quiet-session hint"))))
 
 (deftest test-handle-crystal-wrap-notify-with-empty-stats
   (testing ":crystal/wrap-notify handles empty stats map"

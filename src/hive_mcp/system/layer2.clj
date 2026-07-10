@@ -31,7 +31,10 @@
   [_ config]
   (log/info ":hive/nrepl init — starting embedded nREPL server")
   (let [nrepl-server-atom (atom nil)
-        server (transport-nrepl/start-embedded-nrepl! nrepl-server-atom)]
+        server (try (transport-nrepl/start-embedded-nrepl! nrepl-server-atom)
+                    (catch Throwable t
+                      (log/warn t ":hive/nrepl start threw (non-fatal) — continuing with :failed status")
+                      nil))]
     {:nrepl-server-atom nrepl-server-atom
      :server            server
      :port              (:port config)
@@ -87,11 +90,18 @@
                            (require 'hive-mcp.config.core)
                            (let [get-svc (resolve 'hive-mcp.config.core/get-service-value)]
                              (get-svc :nats :enabled :default false)))
-        enabled? (or (:enabled config) runtime-enabled?)]
-    (when enabled?
-      (init/init-nats!))
+        enabled? (or (:enabled config) runtime-enabled?)
+        ok? (if enabled?
+              (try (init/init-nats!) true
+                   (catch Throwable t
+                     (log/warn t ":hive/nats init-nats! threw (non-fatal) — continuing with :failed status")
+                     false))
+              true)]
     {:enabled enabled?
-     :status  (if enabled? :running :disabled)}))
+     :status  (cond
+                (not enabled?) :disabled
+                ok?            :running
+                :else          :failed)}))
 
 (defmethod ig/halt-key! :hive/nats
   [_ state]

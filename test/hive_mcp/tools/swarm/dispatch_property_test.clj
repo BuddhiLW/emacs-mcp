@@ -28,8 +28,8 @@
 ;; =============================================================================
 
 (def gen-spawn-mode
-  "Generator for valid spawn mode keywords."
-  (gen/elements [:claude :vterm :headless :agent-sdk :openrouter]))
+  "Generator for valid spawn mode keywords (post-:openrouter cleanup)."
+  (gen/elements [:claude :vterm :headless :agent-sdk]))
 
 (def gen-slave-data
   "Generator for slave data maps (as returned by DataScript query)."

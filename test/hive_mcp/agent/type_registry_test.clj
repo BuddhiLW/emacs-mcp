@@ -115,15 +115,31 @@
     (is (true? (atr/valid-spawn-mode? :ling :vterm)))
     (is (true? (atr/valid-spawn-mode? :ling :headless)))
     (is (true? (atr/valid-spawn-mode? :ling :agent-sdk)))
-    (is (false? (atr/valid-spawn-mode? :ling :openrouter))))
+    (is (false? (atr/valid-spawn-mode? :ling :openrouter))
+        ":openrouter is a provider, not a spawn-mode"))
   (testing "Drone spawn modes"
-    (is (true? (atr/valid-spawn-mode? :drone :openrouter)))
     (is (true? (atr/valid-spawn-mode? :drone :headless)))
+    (is (false? (atr/valid-spawn-mode? :drone :openrouter))
+        ":openrouter is no longer a drone spawn-mode (it's a provider)")
     (is (false? (atr/valid-spawn-mode? :drone :claude)))
     (is (false? (atr/valid-spawn-mode? :drone :vterm)))
     (is (false? (atr/valid-spawn-mode? :drone :agent-sdk))))
   (testing "Coordinator has no spawn modes"
-    (is (false? (atr/valid-spawn-mode? :coordinator :claude)))))
+    (is (false? (atr/valid-spawn-mode? :coordinator :claude))))
+  (testing "Addon-contributed mode is accepted via registry fallback"
+    (let [reg-mode! (requiring-resolve 'hive-mcp.agent.spawn-mode-registry/register-mode!)
+          dereg!    (requiring-resolve 'hive-mcp.agent.spawn-mode-registry/deregister-mode!)]
+      (reg-mode! :test-addon-mode
+                 {:description "test" :requires-emacs? false :io-model :api
+                  :slot-limit nil :mcp? true :alias-of nil
+                  :capabilities #{:dispatch :kill}})
+      (try
+        (is (true? (atr/valid-spawn-mode? :ling :test-addon-mode))
+            "Ling accepts addon-contributed modes")
+        (is (true? (atr/valid-spawn-mode? :drone :test-addon-mode))
+            "Drone accepts addon-contributed modes")
+        (finally
+          (dereg! :test-addon-mode))))))
 
 ;; =============================================================================
 ;; Capabilities and permissions

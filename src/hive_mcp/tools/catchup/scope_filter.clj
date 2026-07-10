@@ -54,6 +54,22 @@
                (contains? visible-ids (:project-id entry)))))
           entries))
 
+(defn scope-filter-entries-strict
+  "Strict variant of `scope-filter-entries` — keeps only entries whose
+   tags explicitly intersect `scope-tags`. Does NOT fall back to
+   `:project-id ∈ visible-ids`.
+
+   Step 10 tripwire (memory `20260504173159-46dc47f1`): apply this to
+   wrap/session entries once step-6 guarantees explicit `scope:project:*`
+   tags at write-time. Any future writer regression that drops the tag
+   will surface as missing-from-catchup rather than as silent bleed via
+   the project-id fallback."
+  [entries scope-tags]
+  (filter (fn [entry]
+            (let [entry-tags (set (or (:tags entry) []))]
+              (boolean (some entry-tags scope-tags))))
+          entries))
+
 (defn scope-pierce-entries
   "Extract axioms, catchup-priority, and session-summary entries that pierce
    scope boundaries. Returns nil when caller is at global scope (no piercing needed)."

@@ -15,6 +15,8 @@
  :kanban-activity
  {:tasks-completed [{:title "Deploy service" :completed-at "2026-01-15T11:20:00Z"}]
   :completed-count 1},
+ :kg-edges-created {:edges [], :count 0, :by-relation {}},
+ :kanban-movements {:movements [], :count 0, :transitions {}},
  :session-timing
  {:session-start "2026-01-15T10:00:00Z",
   :session-end "2026-01-15T12:00:00Z",
@@ -37,6 +39,9 @@
   :recall-count 2,
   :hivemind-shout-count 3,
   :kanban-completed 1,
+  :kg-edge-count 0,
+  :kanban-movement-count 0,
   :created-count 2,
-  :accessed-count 2},
+  :accessed-count 2,
+  :created-by-type {}},
  :errors nil}

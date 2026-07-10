@@ -1,22 +1,18 @@
 (ns hive-mcp.system.sweepers.stale-cache
-  "ISweepable impl that evicts TTL'd entries from known in-process caches.
+  "ISweepable impl that evicts TTL'd entries from registered in-process
+   caches.
 
-   Caches swept (looked up lazily via requiring-resolve — missing ones are
-   silently skipped so this sweeper runs cleanly even when hive-knowledge
-   is OFF the classpath):
+   hive-mcp's own caches are listed by symbol and resolved lazily via
+   `requiring-resolve` at sweep time — missing entries are skipped
+   silently so the sweeper stays loadable even when a cache ns hasn't
+   been required yet.
 
-     - hive-mcp.tools.catchup.axiom-cache/evict-stale!
-         (stale-while-revalidate `type=axiom` cache; owner: catchup scope)
-     - hive-knowledge.carto-editing.snippet-cache/evict-stale!
-         (Milvus tag-filter snippet cache; owner: carto-editing)
-     - hive-knowledge.carto-editing.kondo-cache/evict-stale!
-         (clj-kondo analysis cache; owner: carto-editing)
+   Downstream addons that own additional caches attach their own
+   `evict-stale!` fns through `register-cache-evictor!`, typically from
+   their addon initialization. The sweeper merges the static set with
+   the dynamically registered set on every cycle.
 
-   The `evict-stale!` fns themselves belong to each cache's owner ns and
-   are added in follow-up tasks. Until then, this sweeper is a graceful
-   no-op: requiring-resolve returns nil → we skip that cache.
-
-   Auto-registers with hive-mcp.system.registry on ns load."
+   Auto-registers with `hive-mcp.system.registry` on ns load."
   ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
   ;;
   ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -25,30 +21,49 @@
             [taoensso.timbre :as log]))
 
 ;; =============================================================================
-;; Known cache `evict-stale!` entry points
+;; Cache evictor registry
 ;; =============================================================================
 ;;
-;; Listed as fully-qualified symbols so they resolve lazily at sweep time —
-;; no compile-time dep on any addon ns. Adding a new cache to the sweep set
-;; is a one-liner here plus an `evict-stale!` defn in the cache's own ns.
+;; Static set: fully-qualified symbols for hive-mcp's own caches. Resolved
+;; lazily at sweep time so adding an evict-stale! defn does not require
+;; reloading this ns.
+;;
+;; Dynamic set: 0-arity fns registered at runtime by addons. Lets any
+;; downstream cache opt in without hive-mcp knowing the addon's ns.
 
-(def ^:private cache-evict-syms
-  '[hive-mcp.tools.catchup.axiom-cache/evict-stale!
-    hive-knowledge.carto-editing.snippet-cache/evict-stale!
-    hive-knowledge.carto-editing.kondo-cache/evict-stale!])
+(def ^:private own-cache-evict-syms
+  "hive-mcp-owned evict-stale! entry points. Adding a new cache here is
+   a one-liner plus a defn in the cache's own ns."
+  '[hive-mcp.tools.catchup.axiom-cache/evict-stale!])
+
+(defonce ^:private *cache-evictors
+  ^{:doc "Set of 0-arg evict-stale! fns registered at runtime."}
+  (atom #{}))
+
+(defn register-cache-evictor!
+  "Register a 0-arg evict-stale! fn to be invoked on every sweep.
+   Idempotent — duplicate registrations collapse into one entry.
+   Returns the current registry snapshot."
+  [evict-fn]
+  {:pre [(fn? evict-fn)]}
+  (swap! *cache-evictors conj evict-fn))
+
+(defn registered-evictors
+  "Diagnostic snapshot of the dynamic evictor set."
+  []
+  @*cache-evictors)
 
 (defn- resolve-evict-fns
-  "Return the subset of configured evict-stale! fns that resolve in the
-   current classloader. Missing syms are skipped silently — graceful
-   degradation is the desired behavior (sweep should not fail because a
-   cache owner hasn't implemented evict-stale! yet, or because the addon
-   providing it is off the classpath)."
+  "Merge the statically-listed own caches with the dynamic registry.
+   Static symbols that fail to resolve are dropped silently."
   []
-  (into []
-        (keep (fn [sym]
-                (try (requiring-resolve sym)
-                     (catch Throwable _ nil))))
-        cache-evict-syms))
+  (let [own (into []
+                  (keep (fn [sym]
+                          (try (requiring-resolve sym)
+                               (catch Throwable _ nil))))
+                  own-cache-evict-syms)
+        registered @*cache-evictors]
+    (vec (distinct (concat own registered)))))
 
 ;; =============================================================================
 ;; ISweepable impl

@@ -43,6 +43,14 @@
         ;; Part of replikativ ecosystem (pairs with yggdrasil)
         org.replikativ/datahike {:mvn/version "0.8.1671"}
 
+        ;; Proximum — pure-JVM HNSW vector index with git-like versioning.
+        ;; STORAGE-2 phase 2: backs the :carto-vec / :memory-vec slots
+        ;; via hive-mcp.knowledge-graph.store.proximum/ProximumVecStore.
+        ;; SIMD via Java Vector API (--add-modules jdk.incubator.vector).
+        ;; Late-bound through requiring-resolve so a missing jar surfaces
+        ;; as :slot/factory-failed rather than a JVM crash.
+        org.replikativ/proximum {:mvn/version "0.1.24"}
+
         ;; Logging - SLF4J with Logback backend
         ;; clojure.tools.logging provides the Clojure facade
         ;; logback-classic is the SLF4J implementation
@@ -112,7 +120,7 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL, error taxonomy
         io.github.hive-agi/hive-dsl
-        {:git/tag "v0.4.1" :git/sha "07ab02a"}
+        {:git/tag "v0.5.1" :git/sha "335869e"}
 
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
@@ -121,13 +129,13 @@
         ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
         ;; Overrides default Chroma store when Milvus is reachable.
-        io.github.hive-agi/hive-milvus {:git/tag "v0.2.2" :git/sha "61c3aa8"}
+        io.github.hive-agi/hive-milvus {:git/tag "v0.2.3" :git/sha "aa0ebdf"}
 
         ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj
-        io.github.hive-agi/hive-weave {:git/tag "v0.2.2" :git/sha "7aa6234"}
+        io.github.hive-agi/hive-weave {:git/tag "v0.2.5" :git/sha "5895a2a"}
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
-        io.github.hive-agi/hive-emacs {:git/tag "v0.4.1" :git/sha "47e0f04"}
+        io.github.hive-agi/hive-emacs {:git/tag "v0.4.2" :git/sha "3b3b0f6"}
 
         ;; hive-proximum — temporal/bitemporal memory backend (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/hive-proximum.edn manifest.
@@ -142,8 +150,8 @@
         ;; process liveness, secrets, shell, redaction). Single source of
         ;; truth for "is this pid alive?", `kill -0` semantics, etc.
         ;; NOTE: process.liveness ns is post-v0.2.1 — when the next tag is
-        ;; cut, bump :git/sha here and drop the deps.local.edn override.
-        io.github.hive-agi/hive-system {:git/tag "v0.2.2" :git/sha "53524e3"}
+        ;; cut, bump :git/sha here and drop the local.deps.edn override.
+        io.github.hive-agi/hive-system {:git/tag "v0.2.4" :git/sha "0706c57"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
@@ -160,7 +168,8 @@
                 cider/cider-nrepl {:mvn/version "0.58.0"}}
    ;; Heap cap, G1GC tuning, string dedup for prompt/response data,
    ;; bounded core.async pool, Netty access, aggressive GC return-to-OS
-   :jvm-opts ["-Xmx4g"
+   :jvm-opts ["-Xmx8g"
+              "-Xms4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
@@ -169,10 +178,28 @@
               "-XX:MinHeapFreeRatio=20"
               "-XX:MaxHeapFreeRatio=40"
               "-XX:G1HeapRegionSize=4m"
+              "-XX:+HeapDumpOnOutOfMemoryError"
+              "-XX:+ExitOnOutOfMemoryError"
               "-Dclojure.core.async.pool-size=8"
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
               "-Dio.netty.tryReflectionSetAccessible=true"]}
+
+  ;; One-off KG datahike rebuild (drop legacy carto structural edges).
+  ;; Run STANDALONE with hive-mcp STOPPED:
+  ;;   clj -Sdeps "$(cat local.deps.edn)" -X:kg-rebuild              ; export-only
+  ;;   clj -Sdeps "$(cat local.deps.edn)" -X:kg-rebuild :confirm? true
+  :kg-rebuild
+  {:exec-fn hive-mcp.scripts.kg-datahike-rebuild/rebuild!
+   :exec-args {}
+   :jvm-opts ["-Xmx32g"
+              "-Xms8g"
+              "-XX:+UseG1GC"
+              "-XX:MaxGCPauseMillis=500"
+              "-XX:+HeapDumpOnOutOfMemoryError"
+              "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
+              "--add-opens=java.base/java.nio=ALL-UNNAMED"
+              "--add-modules=jdk.incubator.vector"]}
 
   :dev
   {:extra-paths ["dev" "test"]
@@ -181,7 +208,11 @@
                 refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
    ;; Netty access, Proximum HNSW SIMD, aggressive GC return-to-OS
-   :jvm-opts ["-Xmx4g"
+   ;; -Xmx16g: the live KG set reached ~8.2G and maxed the old 8g cap on
+   ;; boot (95% post-GC). Box has headroom; MaxHeapFreeRatio=40 returns
+   ;; unused heap to the OS so this is a ceiling, not a reservation.
+   :jvm-opts ["-Xmx16g"
+              "-Xms4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
@@ -190,6 +221,8 @@
               "-XX:MinHeapFreeRatio=20"
               "-XX:MaxHeapFreeRatio=40"
               "-XX:G1HeapRegionSize=4m"
+              "-XX:+HeapDumpOnOutOfMemoryError"
+              "-XX:+ExitOnOutOfMemoryError"
               "-Dclojure.core.async.pool-size=8"
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
@@ -203,7 +236,11 @@
                 refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
    ;; Netty access, Proximum HNSW SIMD, aggressive GC return-to-OS
-   :jvm-opts ["-Xmx4g"
+   ;; -Xmx16g: the live KG set reached ~8.2G and maxed the old 8g cap on
+   ;; boot (95% post-GC). Box has headroom; MaxHeapFreeRatio=40 returns
+   ;; unused heap to the OS so this is a ceiling, not a reservation.
+   :jvm-opts ["-Xmx16g"
+              "-Xms4g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
@@ -212,6 +249,8 @@
               "-XX:MinHeapFreeRatio=20"
               "-XX:MaxHeapFreeRatio=40"
               "-XX:G1HeapRegionSize=4m"
+              "-XX:+HeapDumpOnOutOfMemoryError"
+              "-XX:+ExitOnOutOfMemoryError"
               "-Dclojure.core.async.pool-size=8"
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
@@ -228,7 +267,14 @@
                 ;; Generative testing for spec validation
                 org.clojure/test.check {:mvn/version "1.1.1"}
                 ;; Trifecta macro: golden + property + mutation facets
-                io.github.hive-agi/hive-test {:git/tag "v0.2.1" :git/sha "48b480f"}}
+                io.github.hive-agi/hive-test {:git/tag "v0.2.1" :git/sha "48b480f"}
+                ;; hive-spi: pure SPI leaf (role.card schema). Not in :deps
+                ;; (no git remote yet — see local.deps.edn); wired here so the
+                ;; :role write-gate test can validate against the real schema.
+                io.github.hive-agi/hive-spi {:local/root "../hive-spi"}}
+   ;; KG test isolation: force ephemeral in-memory DataScript so a cold test
+   ;; JVM never opens (and konserve-lock-contends) the prod datahike store.
+   :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner"]}
 
   ;; CI-friendly: Run only unit tests (excludes tests requiring Emacs)
@@ -238,6 +284,7 @@
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}
                 io.github.hive-agi/hive-test {:git/tag "v0.2.1" :git/sha "48b480f"}}
+   :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:excludes [:integration]}}
@@ -249,6 +296,7 @@
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 io.github.hive-agi/hive-test
                 {:git/tag "v0.2.1" :git/sha "48b480f"}}
+   :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:includes [:integration]}}
@@ -261,8 +309,8 @@
    :ns-default build}
 
 ;; Local dev overrides for sibling :local/root projects.
-  ;; start-mcp.sh auto-merges deps.local.edn via -Sdeps when present.
-  ;; Create deps.local.edn (gitignored) with :deps key, e.g.:
+  ;; The hive-mcp launcher merges local.deps.edn via `clj -Sdeps` at startup.
+  ;; Create local.deps.edn (gitignored) with :deps key, e.g.:
   ;;   {:deps {io.github.hive-agi/hive-events {:git/tag "v0.5.2" :git/sha "24a58a1"}}}
   ;; NOTE: Use :deps (top-level key), NOT :override-deps (alias-level only).
   }}

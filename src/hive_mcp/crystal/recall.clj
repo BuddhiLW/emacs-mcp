@@ -3,6 +3,9 @@
    Extension points resolved via extensions registry."
   (:require [hive-mcp.crystal.core :as crystal]
             [hive-mcp.extensions.registry :as ext]
+            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
+            [hive-mcp.engine.bounded.protocol :as bp]
+            [hive-mcp.engine.bounded.lru :as lru]
             [hive-dsl.adt :refer [defadt adt-case]]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
@@ -13,15 +16,6 @@
 ;; =============================================================================
 ;; Extension Delegation Helpers
 ;; =============================================================================
-
-(defn- delegate-or-noop
-  "Try to delegate to extension fn, fall back to default value."
-  [ext-key default-val args]
-  (if-let [f (ext/get-extension ext-key)]
-    (apply f args)
-    (do
-      (log/debug "Extension not available, returning default for" ext-key)
-      default-val)))
 
 ;; =============================================================================
 ;; Recall Context Detection — delegates to extension
@@ -97,55 +91,108 @@
 ;; =============================================================================
 
 (defonce ^{:private true
-           :doc "Buffer for batching recall events before persistence."}
+           :doc "Bounded per-entry-id buffer for recall events.
+
+   ENGINE-L1.3 — implemented via IBoundedQueue/LruByKey so an unflushed
+   buffer cannot grow without bound. Cap defaults:
+     :capacity     1000 distinct entry-ids (LRU eviction)
+     :per-key-cap    20 events per entry-id (drop-oldest within key)
+   Override via system properties (hive.recall-buffer.capacity,
+   hive.recall-buffer.per-key-cap) for ops tuning."}
   recall-buffer
-  (atom {}))
+  (lru/make-by-key
+   {:capacity    (Long/parseLong
+                  (or (System/getProperty "hive.recall-buffer.capacity") "1000"))
+    :per-key-cap (Long/parseLong
+                  (or (System/getProperty "hive.recall-buffer.per-key-cap") "20"))}))
 
 (defn buffer-recall!
-  "Buffer a recall event for later persistence."
+  "Buffer a recall event for later persistence. Bounded — both the
+   number of entry-ids and the number of events per entry-id are
+   capped (see `recall-buffer`)."
   [entry-id event]
-  (swap! recall-buffer update entry-id (fnil conj []) event))
+  (bp/q-offer-key! recall-buffer entry-id event))
 
 (defn flush-recall-buffer!
-  "Get and clear buffered recalls.
+  "Get and clear buffered recalls. Atomic.
    Returns: map of {entry-id [events]}"
   []
-  (let [buffered @recall-buffer]
-    (reset! recall-buffer {})
-    buffered))
+  (bp/q-drain! recall-buffer))
 
 (defn get-buffered-recalls
-  "Get buffered recalls without clearing."
+  "Get buffered recalls without clearing. Returns map of {entry-id [events]}."
   []
-  @recall-buffer)
+  (bp/q-snapshot recall-buffer))
+
+(defn recall-buffer-stats
+  "Diagnostic snapshot of buffer cap usage. Useful for /health endpoints."
+  []
+  (bp/q-stats recall-buffer))
 
 ;; =============================================================================
 ;; CreatedEntry ADT — Sum type for session-tracked memory entries
 ;; =============================================================================
 
 (defadt CreatedEntry
-  "Session-tracked memory entry. Scoped or unscoped."
-  [:entry/scoped   {:id string? :timestamp string? :project-id string?}]
-  [:entry/unscoped {:id string? :timestamp string?}])
+  "Session-tracked memory entry. Scoped or unscoped. `:type` is the memory
+   type (\"decision\", \"convention\", …) when known — wrap synthesis breaks the
+   session delta down by type so the hivemind piggyback reports real counts."
+  [:entry/scoped   {:id string? :timestamp string? :project-id string? :type string?}]
+  [:entry/unscoped {:id string? :timestamp string? :type string?}])
 
 ;; =============================================================================
 ;; Created IDs Tracking (Session-scoped)
 ;; =============================================================================
 
+(def ^{:private true
+       :doc "Hard cap on retained created-id entries (ENGINE-L1.3).
+   Beyond this `register-created-id!` drops the oldest entries so a buffer
+   that is never drained by a crystal harvest cannot grow without bound.
+   Override via system property hive.created-ids-buffer.capacity for ops tuning."}
+  created-ids-cap
+  (Long/parseLong
+   (or (System/getProperty "hive.created-ids-buffer.capacity") "10000")))
+
 (defonce ^{:private true
-           :doc "Buffer for tracking memory IDs created during this session."}
+           :doc "Buffer for tracking memory IDs created during this session.
+
+   Bounded at `created-ids-cap` entries (drop-oldest): `register-created-id!`
+   trims the oldest entries past the cap so a buffer that is never drained by
+   a crystal harvest cannot grow without bound. A flat cap (vs the per-key
+   lru/make-by-key used by `recall-buffer`) is used here because the
+   flush-by-project contract retains cross-project scoped entries and folds
+   unscoped (`:entry/unscoped`, project-agnostic) entries into every project
+   flush — semantics that a per-key drain cannot express without a new
+   per-key drain op on `IBoundedQueue`."}
   created-ids-buffer
   (atom []))
 
 (defn register-created-id!
-  "Register a created memory entry ID. Constructs CreatedEntry ADT."
-  [entry-id project-id]
-  (when entry-id
+  "Register a created memory entry ID. Constructs CreatedEntry ADT.
+   Optional `type` (the memory type string) is threaded onto the entry so
+   wrap synthesis can break the session delta down by type.
+   Bounded: retains at most `created-ids-cap` entries, dropping the oldest."
+  ([entry-id project-id] (register-created-id! entry-id project-id nil))
+  ([entry-id project-id type]
+   (when entry-id
     (let [ts (.toString (java.time.Instant/now))
           entry (if project-id
-                  (created-entry :entry/scoped {:id entry-id :timestamp ts :project-id project-id})
-                  (created-entry :entry/unscoped {:id entry-id :timestamp ts}))]
-      (swap! created-ids-buffer conj entry))))
+                  (created-entry :entry/scoped
+                                 (cond-> {:id entry-id :timestamp ts :project-id project-id}
+                                   type (assoc :type type)))
+                  (created-entry :entry/unscoped
+                                 (cond-> {:id entry-id :timestamp ts}
+                                   type (assoc :type type))))]
+      (swap! created-ids-buffer
+             (fn [buf]
+               (let [buf' (conj buf entry)
+                     n    (count buf')]
+                 (if (> n created-ids-cap)
+                   ;; into [] copies into a fresh vector so the trimmed-off
+                   ;; head array is released (a raw/`vec`-wrapped subvec would
+                   ;; retain the parent array).
+                   (into [] (subvec buf' (- n created-ids-cap)))
+                   buf'))))))))
 
 (defn get-created-ids
   "Get all created IDs without clearing."

@@ -4,6 +4,8 @@
  :recalls {},
  :hivemind-messages [],
  :kanban-activity {:tasks-completed [], :completed-count 0},
+ :kg-edges-created {:edges [], :count 0, :by-relation {}},
+ :kanban-movements {:movements [], :count 0, :transitions {}},
  :session-timing
  {:session-start nil, :session-end "2026-01-15T12:00:00Z", :duration-minutes 0},
  :session-temporal
@@ -20,6 +22,9 @@
   :recall-count 0,
   :hivemind-shout-count 0,
   :kanban-completed 0,
+  :kg-edge-count 0,
+  :kanban-movement-count 0,
   :created-count 0,
-  :accessed-count 0},
+  :accessed-count 0,
+  :created-by-type {}},
  :errors nil}

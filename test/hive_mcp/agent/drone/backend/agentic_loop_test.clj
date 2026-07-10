@@ -1,0 +1,230 @@
+(ns hive-mcp.agent.drone.backend.agentic-loop-test
+  "Tests for AgenticLoopBackend — IDroneExecutionBackend wrapping the
+   provider-agnostic drone agentic loop.
+
+   Tests cover:
+   - Protocol satisfaction and contract compliance
+   - resolve-backend multimethod registration
+   - Constructor defaults and model override
+   - execute-drone with mocked LLM backend (no real API calls)
+   - Error handling when backend creation fails"
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.string]
+            [hive-mcp.agent.drone.backend :as backend]
+            [hive-mcp.agent.drone.backend.agentic-loop :as agentic-loop]
+            [hive-mcp.agent.drone.loop]
+            [hive-mcp.agent.registry]))
+
+;; =============================================================================
+;; Fixtures
+;; =============================================================================
+
+(defn ensure-registered-fixture
+  "Re-register :agentic-loop defmethod before each test (require is no-op
+   if ns already loaded, so we must explicitly eval the defmethod)."
+  [f]
+  (defmethod backend/resolve-backend :agentic-loop [context]
+    (agentic-loop/->agentic-loop-backend {:model (:model context)}))
+  (f)
+  (remove-method backend/resolve-backend :agentic-loop))
+
+(use-fixtures :each ensure-registered-fixture)
+
+;; =============================================================================
+;; Section 1: Protocol Satisfaction
+;; =============================================================================
+
+(deftest protocol-satisfaction-test
+  (testing "AgenticLoopBackend satisfies IDroneExecutionBackend"
+    (let [b (agentic-loop/->agentic-loop-backend)]
+      (is (satisfies? backend/IDroneExecutionBackend b)
+          "Should satisfy the protocol"))))
+
+;; =============================================================================
+;; Section 2: backend-type
+;; =============================================================================
+
+(deftest backend-type-test
+  (testing "backend-type returns :agentic-loop"
+    (let [b (agentic-loop/->agentic-loop-backend)]
+      (is (= :agentic-loop (backend/backend-type b))
+          "backend-type should return :agentic-loop"))))
+
+;; =============================================================================
+;; Section 3: supports-validation?
+;; =============================================================================
+
+(deftest supports-validation-test
+  (testing "supports-validation? returns true"
+    (let [b (agentic-loop/->agentic-loop-backend)]
+      (is (true? (backend/supports-validation? b))
+          "Agentic-loop backend should support validation"))))
+
+;; =============================================================================
+;; Section 4: Constructor
+;; =============================================================================
+
+(deftest constructor-defaults-test
+  (testing "Default constructor has nil model-override"
+    (let [b (agentic-loop/->agentic-loop-backend)]
+      (is (nil? (:model-override b))
+          "Default model-override should be nil")))
+
+  (testing "Constructor with model override"
+    (let [b (agentic-loop/->agentic-loop-backend {:model "custom-model"})]
+      (is (= "custom-model" (:model-override b))
+          "model-override should be set"))))
+
+;; =============================================================================
+;; Section 5: resolve-backend Registration
+;; =============================================================================
+
+(deftest resolve-backend-registration-test
+  (testing ":agentic-loop backend is resolved correctly"
+    (let [resolved (backend/resolve-backend {:backend :agentic-loop
+                                             :model "test-model"})]
+      (is (satisfies? backend/IDroneExecutionBackend resolved)
+          "Resolved backend should satisfy protocol")
+      (is (= :agentic-loop (backend/backend-type resolved))
+          "Resolved backend should be :agentic-loop"))))
+
+(deftest resolve-backend-passes-model-test
+  (testing "resolve-backend passes model from context to backend"
+    (let [resolved (backend/resolve-backend {:backend :agentic-loop
+                                             :model "devstral-small:24b"})]
+      (is (= "devstral-small:24b" (:model-override resolved))
+          "Model should be passed through from context"))))
+
+;; =============================================================================
+;; Section 6: execute-drone with Mock
+;; =============================================================================
+
+(deftest execute-drone-with-mock-test
+  (testing "execute-drone returns standardized result with mocked LLM"
+    (let [b (agentic-loop/->agentic-loop-backend {:model "mock-model"})
+          ;; Mock the agentic loop to return a successful result
+          mock-loop-result {:status :completed
+                            :result "Task completed successfully"
+                            :steps [{:type :text :turn 0}]
+                            :tool_calls_made 2
+                            :tokens {:input 150 :output 75 :total 225}
+                            :turns 1
+                            :model "mock-model"
+                            :kg-stats nil}]
+      (with-redefs [hive-mcp.agent.drone.loop/run-agentic-loop
+                    (fn [_task-spec _ctx _opts] mock-loop-result)
+
+                    hive-mcp.agent.registry/ensure-registered!
+                    (fn [] nil)
+
+                    ;; Mock requiring-resolve for auto-backend
+                    requiring-resolve
+                    (let [orig (.getRawRoot #'clojure.core/requiring-resolve)]
+                      (fn [sym]
+                        (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
+                          (fn [_opts] :mock-backend)
+                          (orig sym))))]
+
+        (let [result (backend/execute-drone b {:task "Fix null pointer"
+                                               :model "mock-model"
+                                               :tools ["read_file"]
+                                               :max-steps 5
+                                               :trace true
+                                               :drone-id "test-drone"
+                                               :cwd "/tmp/project"})]
+          (is (map? result) "Result should be a map")
+          (is (= :completed (:status result)) "Status should be :completed")
+          (is (string? (:result result)) "Result should contain result text")
+          (is (= "Task completed successfully" (:result result)))
+          (is (map? (:tokens result)) "Should have tokens map")
+          (is (= 150 (:input-tokens (:tokens result))) "Input tokens")
+          (is (= 75 (:output-tokens (:tokens result))) "Output tokens")
+          (is (= "mock-model" (:model result)) "Model should be present")
+          (is (= 1 (:steps result)) "Steps should be present")
+          (is (= 2 (:tool-calls result)) "Tool calls should be present"))))))
+
+(deftest execute-drone-max-steps-status-test
+  (testing "execute-drone normalizes :max_steps to :completed"
+    (let [b (agentic-loop/->agentic-loop-backend)]
+      (with-redefs [hive-mcp.agent.drone.loop/run-agentic-loop
+                    (fn [_ts _ctx _opts]
+                      {:status :max_steps :result "Ran out of steps"
+                       :tokens {:input 0 :output 0} :turns 10 :tool_calls_made 5})
+
+                    hive-mcp.agent.registry/ensure-registered! (fn [] nil)
+
+                    requiring-resolve
+                    (let [orig (.getRawRoot #'clojure.core/requiring-resolve)]
+                      (fn [sym]
+                        (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
+                          (fn [_] :mock) (orig sym))))]
+
+        (let [result (backend/execute-drone b {:task "test" :model "m"})]
+          (is (= :completed (:status result))
+              ":max_steps should normalize to :completed"))))))
+
+(deftest execute-drone-noop-status-test
+  (testing "execute-drone normalizes :noop to :failed"
+    (let [b (agentic-loop/->agentic-loop-backend)]
+      (with-redefs [hive-mcp.agent.drone.loop/run-agentic-loop
+                    (fn [_ts _ctx _opts]
+                      {:status :noop :result "No backend"
+                       :tokens {:input 0 :output 0} :turns 0 :tool_calls_made 0})
+
+                    hive-mcp.agent.registry/ensure-registered! (fn [] nil)
+
+                    requiring-resolve
+                    (let [orig (.getRawRoot #'clojure.core/requiring-resolve)]
+                      (fn [sym]
+                        (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
+                          (fn [_] :mock) (orig sym))))]
+
+        (let [result (backend/execute-drone b {:task "test" :model "m"})]
+          (is (= :failed (:status result))
+              ":noop should normalize to :failed"))))))
+
+;; =============================================================================
+;; Section 7: Error Handling
+;; =============================================================================
+
+(deftest execute-drone-handles-backend-creation-error-test
+  (testing "execute-drone returns :failed when LLM backend creation throws"
+    (let [b (agentic-loop/->agentic-loop-backend {:model "bad-model"})]
+      (with-redefs [requiring-resolve
+                    (fn [sym]
+                      (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
+                        (fn [_] (throw (ex-info "API key required" {})))
+                        (clojure.core/requiring-resolve sym)))]
+
+        (let [result (backend/execute-drone b {:task "test" :model "bad"})]
+          (is (= :failed (:status result))
+              "Should return :failed on backend creation error")
+          (is (string? (:result result))
+              "Should contain error message")
+          (is (clojure.string/includes? (:result result) "API key")
+              "Error message should mention the cause"))))))
+
+(deftest execute-drone-handles-loop-exception-test
+  (testing "execute-drone returns :failed when agentic loop throws"
+    (let [b (agentic-loop/->agentic-loop-backend)]
+      (with-redefs [hive-mcp.agent.drone.loop/run-agentic-loop
+                    (fn [_ts _ctx _opts]
+                      (throw (ex-info "Connection timeout" {:type :timeout})))
+
+                    hive-mcp.agent.registry/ensure-registered! (fn [] nil)
+
+                    requiring-resolve
+                    (let [orig (.getRawRoot #'clojure.core/requiring-resolve)]
+                      (fn [sym]
+                        (if (= sym 'hive-mcp.agent.openrouter/auto-backend)
+                          (fn [_] :mock) (orig sym))))]
+
+        (let [result (backend/execute-drone b {:task "test" :model "m"})]
+          (is (= :failed (:status result))
+              "Should return :failed on loop exception")
+          (is (clojure.string/includes? (:result result) "Connection timeout")
+              "Should contain exception message"))))))
+
+(comment
+  ;; Run all tests
+  (clojure.test/run-tests 'hive-mcp.agent.drone.backend.agentic-loop-test))

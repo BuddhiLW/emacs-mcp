@@ -18,7 +18,6 @@
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.memory.type-registry :as type-registry]
-            [hive-mcp.plan.plans :as plans]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -26,17 +25,23 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defn- normalize-type
-  "Coerce a type parameter (keyword or string) into the canonical string form."
+  "Canonicalize a type parameter into its safe token form, auto-registering
+   unknown-but-safe types with sane defaults (symmetric with the add path).
+   Nil (no type change) passes through as nil."
   [t]
-  (when t (if (keyword? t) (name t) t)))
+  (when t (type-registry/ensure-type! t)))
 
 (defn- validate-type!
-  "Throw ex-info with :invalid-type marker when the incoming type is not in
-   the registry. Nil is allowed (means 'no type change')."
+  "Throw ex-info with :invalid-type marker when the incoming type is unsafe
+   (bad charset / oversized — see type-registry/safe-type?). Unknown-but-safe
+   types are accepted (and auto-registered by normalize-type). Nil is allowed
+   (means 'no type change')."
   [t]
   (when (and t (not (type-registry/valid-type? t)))
     (throw (ex-info (str "Invalid memory type: " (pr-str t)
-                         ". Valid: " (vec (sort (type-registry/all-type-strings))))
+                         ". Type must be a safe token — letters, digits, '_' or '-', "
+                         "starting with a letter, max " type-registry/max-type-length
+                         " chars.")
                     {:type :invalid-type :value t}))))
 
 (defn- build-updates
@@ -59,8 +64,7 @@
    when the entry is not found. Does not build MCP-shaped responses — leaves
    that to the caller so batch ops can aggregate cleanly."
   [store {:keys [id reason] :as params}]
-  (when-let [existing (or (mem-proto/get-entry store id)
-                          (plans/get-plan id))]
+  (when-let [existing (mem-proto/get-entry store id)]
     (let [[updates content-changed?] (build-updates existing params)]
       (if (empty? updates)
         {:id id :noop true :existing existing}

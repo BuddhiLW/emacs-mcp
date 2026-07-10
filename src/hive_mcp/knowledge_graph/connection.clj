@@ -19,7 +19,8 @@
             [hive-dsl.batch :as dsl-batch]
             [clojure.core.async :as async]
             [clojure.java.io :as io]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.events.core :as events]))
 
 ;; =============================================================================
 ;; Config-based Backend Auto-detection
@@ -56,20 +57,24 @@
   "Detect the desired KG backend from configuration sources.
 
    Priority (highest → lowest):
+   0. `hive.kg.backend` system property — explicit JVM override. The :test
+      aliases set -Dhive.kg.backend=datascript so cold test JVMs use an
+      ephemeral in-memory store and never open (and lock-contend) a prod
+      file backend. See axiom 20260122235103-7151cc29.
    1. .hive-project.edn hierarchy (parent > child > grandchild)
    2. HIVE_KG_BACKEND env var (explicit override)
    3. config.edn :services.kg.backend (global default)
-   4. Fallback: config/default-kg-backend
-
-   Rationale: project hierarchy is ground truth (lives with code),
-   config.edn is user-global preference, env var is session override."
+   4. Fallback: config/default-kg-backend"
   []
-  (let [hierarchy-backend (walk-hierarchy-for-kg-backend)
+  (let [prop-backend (some-> (System/getProperty "hive.kg.backend") keyword)
+        hierarchy-backend (walk-hierarchy-for-kg-backend)
         env-backend (some-> (System/getenv "HIVE_KG_BACKEND") keyword)
         config-backend (config/get-service-value :kg :backend :parse keyword)
-        backend (or hierarchy-backend env-backend config-backend config/default-kg-backend)]
+        backend (or prop-backend hierarchy-backend env-backend config-backend
+                    config/default-kg-backend)]
     (log/info "KG backend detection"
-              {:hierarchy hierarchy-backend
+              {:property prop-backend
+               :hierarchy hierarchy-backend
                :env env-backend
                :config config-backend
                :selected backend})
@@ -122,7 +127,11 @@
 (defn- ensure-store!
   "Ensure a store is configured. Auto-detects backend from config.
    Re-initializes when the current store is stale (see `store-live?`).
-   Returns *test-store* directly when bound (test-isolation override)."
+   Returns *test-store* directly when bound (test-isolation override).
+
+   Fires `:kg.store/ready` on every successful (re)initialization so
+   subscribers (e.g. edge-stats warm-up) can react without coupling
+   to the wiring path."
   []
   (or *test-store*
       (do
@@ -140,10 +149,12 @@
                                    (let [create-fn (resolve 'hive-mcp.knowledge-graph.store.datalevin/create-store)]
                                      (create-fn)))]
                 (if store
-                  (proto/set-store! store)
+                  (do (proto/set-store! store)
+                      (events/dispatch [:kg.store/ready {:backend :datalevin}]))
                   (do
                     (log/error "CRITICAL: Failed to initialize Datalevin, falling back to ephemeral DataScript. KG data on disk will NOT be accessible.")
-                    (proto/set-store! (ds-store/create-store)))))
+                    (proto/set-store! (ds-store/create-store))
+                    (events/dispatch [:kg.store/ready {:backend :datascript :fallback? true}]))))
 
               :datahike
               (let [writer-cfg (detect-writer-config)
@@ -166,7 +177,8 @@
                          (r/ok? (r/try-effect*
                                  :datahike/ensure-conn-failed
                                  (pkg/ensure-conn! store))))
-                  (proto/set-store! store)
+                  (do (proto/set-store! store)
+                      (events/dispatch [:kg.store/ready {:backend :datahike}]))
                   (do
                     (log/error "CRITICAL: Failed to initialize Datahike. Refusing to substitute another KG backend because :kg-backend requested :datahike.")
                     (throw (ex-info "Datahike KG backend unavailable"
@@ -174,7 +186,8 @@
                                      :hint "Check :services.datahike.path / HIVE_KG_DB_PATH. The configured path must be a Datahike database, not a container directory."})))))
 
               ;; Default: DataScript
-              (proto/set-store! (ds-store/create-store)))))
+              (do (proto/set-store! (ds-store/create-store))
+                  (events/dispatch [:kg.store/ready {:backend :datascript}])))))
         (proto/get-store))))
 
 ;; =============================================================================
@@ -413,45 +426,93 @@
                        :hint "Ephemeral backends (DataScript) have no persistent state. Use reset-conn! for a fresh in-memory conn."})))
     (proto/delete-database! store confirm)))
 
-(defn transact!
-  "Transact data to the KG database.
-   Priority:
-     1. *tx-batch* bound (via with-tx-batch) → accumulate for explicit batch flush
-     2. Otherwise → route through write-coalescing queue for automatic batching
-
-   The coalescing queue drains items within a 25ms window and flushes
-   as a single transaction. Combined with d/transact! (async) at the
-   store level, this eliminates the 'Transacting 1 objects' pattern."
+(defn- offer-coalesced!
+  "Enqueue tx-data on the write-coalescing channel. Pre-increments in-flight
+   before put! so flush-pending! never observes a transient zero while an item
+   is mid-enqueue. Returns true when accepted, false when the channel is
+   full/closed (compensating the in-flight bump)."
   [tx-data]
-  (cond
-    *tx-batch*
-    (swap! *tx-batch* into (dsl-batch/normalize-tx-datum tx-data))
+  (let [tx-chan (:tx-chan @writer-state)]
+    (swap! in-flight inc)
+    (if (and tx-chan (async/put! tx-chan tx-data))
+      true
+      (do (swap! in-flight dec) false))))
 
-    *sync-writes*
+(defn- write-sync-fallback!
+  "Direct synchronous write used when the coalescing queue cannot accept an
+   item, so data is never lost. Records the queue-miss in writer-metrics."
+  [store tx-data]
+  (log/warn "Write-coalescing queue put! failed, falling back to sync transact"
+            {:tx-data-count (if (sequential? tx-data) (count tx-data) 1)})
+  (swap! writer-metrics update :items-dropped
+         + (if (sequential? tx-data) (count tx-data) 1))
+  (r/rescue nil
+            (proto/transact! store (dsl-batch/normalize-tx-datum tx-data))))
+
+(defprotocol IWriteStrategy
+  "One discipline for applying tx-data to the KG store. SRP: each record owns a
+   single write mode; OCP: add a mode by adding a record, not by editing
+   `transact!`."
+  (apply-tx! [strategy tx-data]
+    "Apply tx-data under this strategy. Returns nil. Throws when a required
+     backend is unavailable so callers never receive a false success."))
+
+(defrecord BatchAccumulator [batch-atom]
+  IWriteStrategy
+  (apply-tx! [_ tx-data]
+    (swap! batch-atom into (dsl-batch/normalize-tx-datum tx-data))))
+
+(defrecord SyncWriter [store]
+  IWriteStrategy
+  (apply-tx! [_ tx-data]
     (r/rescue nil
-              (proto/transact! (ensure-store!)
-                               (dsl-batch/normalize-tx-datum tx-data)))
+              (proto/transact! store (dsl-batch/normalize-tx-datum tx-data)))))
 
-    :else
-    (do
-      (ensure-writer!)
-      (let [tx-chan (:tx-chan @writer-state)]
-        ;; Pre-increment BEFORE put! so flush-pending! never observes a
-        ;; transient zero while an item is mid-enqueue. If put! fails we
-        ;; compensate with a decrement on the fallback path.
-        (swap! in-flight inc)
-        (if (and tx-chan (async/put! tx-chan tx-data))
-          nil
-          ;; Channel full or closed — fallback to sync write
-          (do
-            (swap! in-flight dec)
-            (log/warn "Write-coalescing queue put! failed, falling back to sync transact"
-                      {:tx-data-count (if (sequential? tx-data) (count tx-data) 1)})
-            (swap! writer-metrics update :items-dropped
-                   + (if (sequential? tx-data) (count tx-data) 1))
-            (r/rescue nil
-                      (proto/transact! (ensure-store!)
-                                       (dsl-batch/normalize-tx-datum tx-data)))))))))
+(defrecord CoalescingWriter [store]
+  IWriteStrategy
+  (apply-tx! [_ tx-data]
+    (ensure-writer!)
+    (when-not (offer-coalesced! tx-data)
+      (write-sync-fallback! store tx-data))))
+
+(defn- write-strategy
+  "Select the active write strategy from dynamic context (Collect + Promote).
+   The store is resolved eagerly for store-backed strategies so an unavailable
+   backend surfaces to the caller here, not silently in the async flush."
+  []
+  (cond
+    *tx-batch*    (->BatchAccumulator *tx-batch*)
+    *sync-writes* (->SyncWriter (ensure-store!))
+    :else         (->CoalescingWriter (ensure-store!))))
+
+(defn- assert-edge-node-ids!
+  "Reject tx-data containing a KG edge datom whose :kg-edge/from or
+   :kg-edge/to is not a string. A non-string edge node id crashes the
+   datahike AVET writer thread; rejecting it synchronously keeps the
+   writer alive and surfaces a catchable error to the caller."
+  [tx-data]
+  (when (sequential? tx-data)
+    (doseq [d tx-data
+            :when (map? d)]
+      (when (or (contains? d :kg-edge/from)
+                (contains? d :kg-edge/to))
+        (let [from (:kg-edge/from d)
+              to   (:kg-edge/to d)]
+          (when-not (and (string? from) (string? to))
+            (throw (ex-info "Poison KG edge datom rejected: :kg-edge/from and :kg-edge/to must be strings"
+                            {:kg-edge/from from :kg-edge/to to}))))))))
+
+(defn transact!
+  "Transact data to the KG database via the active write strategy:
+     - *tx-batch* bound   → accumulate for an explicit batch flush
+     - *sync-writes* true → immediate synchronous write
+     - otherwise          → route through the write-coalescing queue
+
+   The coalescing queue drains items within a 25ms window and flushes as a
+   single transaction, eliminating the 'Transacting 1 objects' pattern."
+  [tx-data]
+  (assert-edge-node-ids! tx-data)
+  (apply-tx! (write-strategy) tx-data))
 
 (defn transact-sync!
   "Synchronous transact — bypasses the coalescing queue.
@@ -459,6 +520,7 @@
    (e.g., extracting entity IDs from :tx-data).
    Most callers should use transact! (async coalesced) instead."
   [tx-data]
+  (assert-edge-node-ids! tx-data)
   (proto/transact! (ensure-store!) tx-data))
 
 (defmacro with-tx-batch
@@ -529,6 +591,29 @@
    Delegates to the active store."
   []
   (proto/db-snapshot (ensure-store!)))
+
+(defn query-with-db
+  "Execute a Datalog query against an EXPLICIT db value (snapshot)
+   instead of the live conn — enables branch-compare verification by
+   running the same query against pre-tx and post-tx db snapshots.
+
+   Backends that share Datalog query shape (Datahike / DataScript /
+   Datalevin) all expose `q` as a static fn that takes a db-value as
+   first arg. We dispatch via requiring-resolve so this ns stays
+   compile-time-decoupled from the chosen backend.
+
+   Returns the query result, or falls back to the live `query` when no
+   backend `q` fn can be resolved (no-op test stores)."
+  [db q & inputs]
+  (let [resolve-q (fn [sym]
+                    (try (requiring-resolve sym) (catch Exception _ nil)))
+        q-fn      (or (resolve-q 'datahike.api/q)
+                      (resolve-q 'datascript.core/q)
+                      (resolve-q 'datalevin.core/q))]
+    (if (and q-fn db)
+      (apply q-fn q db inputs)
+      ;; Fallback: ignore db, query live store.
+      (apply query q inputs))))
 
 (defn close!
   "Close the active store connection.

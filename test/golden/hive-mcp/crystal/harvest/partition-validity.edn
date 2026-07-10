@@ -1,0 +1,4 @@
+{:empty {:valid? true},
+ :mixed {:valid? true},
+ :scoped {:valid? true},
+ :umbrella {:valid? true}}

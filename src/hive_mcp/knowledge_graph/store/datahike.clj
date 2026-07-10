@@ -6,7 +6,7 @@
             [hive-mcp.protocols.kg :as kg]
             [hive-mcp.dns.result :refer [rescue]]
             [hive-dsl.result :as r]
-            [hive-weave.safe :as weave-safe]
+            [hive-weave.retry :as retry]
             [clojure.java.io :as io]
             [taoensso.timbre :as log]))
 
@@ -27,10 +27,28 @@
 (defonce ^:private addon-norms-registry
   (atom []))
 
-(def ^:private read-timeout-ms
+(def ^:dynamic *read-timeout-ms*
   "Upper bound for Datahike read operations. Datahike itself may deref
-   internal futures; keep that async boundary bounded and recoverable."
-  10000)
+   internal futures; keep that async boundary bounded and recoverable.
+
+   60s tolerates cold-cache reads on 28M-datom stores at boot; the prior
+   10s value caused query-with-inputs failures whenever the schema cache
+   was empty (e.g. first query after JVM start).
+
+   Dynamic so callers with known-slow workloads (e.g. cold-start full-table
+   aggregations from edges/stats) can `binding` a longer ceiling at the
+   call site without inflating the global default for every entity lookup."
+  60000)
+
+(def ^:dynamic *write-timeout-ms*
+  "Upper bound for a single Datahike `transact!` deref. Bigger than the
+   read timeout because batch carto KG writes (≤500 edges/chunk per
+   `kg-edge-chunk-size`) can outlive a 60s deref under heap pressure
+   without being stuck — the writer is just slow, not dead.
+
+   Dynamic so callers with known-large transactions can `binding` a
+   longer ceiling without inflating the global default."
+  120000)
 
 (defn register-norms!
   "Register a classpath resource path for addon Datahike norms.
@@ -52,31 +70,49 @@
   (throw (ex-info (str "Datahike KG read failed: " label)
                   (assoc (result-error result) :operation label))))
 
-(defn- read-call
-  "Run Datahike read thunk through hive-weave. Returns Result."
-  [label f]
-  (weave-safe/safe-future-call
-   {:timeout-ms read-timeout-ms
-    :name       label}
-   f))
+(defn- throw-write-failed!
+  [label result]
+  (throw (ex-info (str "Datahike KG write failed: " label)
+                  (assoc (result-error result) :operation label))))
 
 (defn- read-with-retry
-  "Run bounded Datahike read. If the connection is stale/corrupt, reopen
-   once and retry. This specifically guards Datahike's internal Future deref
-   failures such as a nil `fut` inside `datahike.api/db`."
+  "Run bounded Datahike read with auto-heal. Thin adapter over
+   `hive-weave.retry/with-recovery`: per-attempt budget from
+   `*read-timeout-ms*`, recover via `reopen!` on non-timeout failure,
+   throw `Datahike KG read failed` on terminal failure.
+
+   Timeouts surface immediately — retrying a cold-cache scan after
+   reopen drops page-cache work in flight and compounds wall-clock
+   cost without changing the outcome."
   [label reopen! f]
-  (let [first-result (read-call label f)]
-    (if (r/ok? first-result)
-      (:ok first-result)
-      (do
-        (log/warn "Datahike KG read failed; reopening connection and retrying once"
-                  {:operation label
-                   :error     (result-error first-result)})
-        (reopen!)
-        (let [retry-result (read-call (str label "/retry") f)]
-          (if (r/ok? retry-result)
-            (:ok retry-result)
-            (throw-read-failed! label retry-result)))))))
+  (retry/with-recovery
+    {:timeout-ms *read-timeout-ms*
+     :name       label
+     :recover!   reopen!
+     :on-failure (fn [l result] (throw-read-failed! l result))}
+    f))
+
+(defn- write-with-retry
+  "Run bounded Datahike write with auto-heal. Thin adapter over
+   `hive-weave.retry/with-recovery`: per-attempt budget from
+   `*write-timeout-ms*`, recover via `reopen!` on non-timeout failure,
+   throw `Datahike KG write failed` on terminal failure.
+
+   Writer-dead exceptions (SoftReference cast, NoSuchFile during ksv
+   rename — both observed under heap pressure when GC reclaims
+   SoftReferences mid-commit) classify as non-timeout failures, so
+   `reopen!` (drop broken conn, ensure-conn! against same on-disk db)
+   runs and the transact retries once. Timeouts surface immediately:
+   retry buys nothing if the writer is alive but slow, and a re-run
+   can corrupt bookkeeping (e.g. duplicate :db.unique writes on a
+   partial commit)."
+  [label reopen! f]
+  (retry/with-recovery
+    {:timeout-ms *write-timeout-ms*
+     :name       label
+     :recover!   reopen!
+     :on-failure (fn [l result] (throw-write-failed! l result))}
+    f))
 
 (declare validate-config!)
 
@@ -251,7 +287,13 @@
     ;; see a pre-transact db snapshot (root cause of "KG traverse not
     ;; returning results" — edges were enqueued but not yet committed).
     ;; The sync variant in Datahike is the bangless `d/transact`.
-    @(d/transact! (kg/ensure-conn! this) tx-data))
+    ;;
+    ;; Auto-heal: writer-dead exceptions (SoftReference cast under GC
+    ;; pressure, NoSuchFile during ksv rename) reopen the conn and retry
+    ;; once, mirroring read-with-retry semantics.
+    (write-with-retry "transact"
+                      #(kg/reset-conn! this)
+                      #(deref (d/transact! (kg/ensure-conn! this) tx-data))))
 
   (query [this q]
     (read-with-retry "query"

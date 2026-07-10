@@ -29,6 +29,7 @@
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.duration :as dur]
             [hive-mcp.extensions.registry :as ext]
+            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
             [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.dns.result :as result]
             [hive-mcp.concurrency.pool :as pool]
@@ -95,15 +96,6 @@
 ;; =============================================================================
 ;; Extension Delegation Helpers
 ;; =============================================================================
-
-(defn- delegate-or-noop
-  "Try to delegate to extension fn, fall back to default value."
-  [ext-key default-val args]
-  (if-let [f (ext/get-extension ext-key)]
-    (apply f args)
-    (do
-      (log/debug "Extension not available, returning default for" ext-key)
-      default-val)))
 
 (defn- surface-rescue-error
   "If rescue/guard attached error metadata, surface :error into map for backward compat.
@@ -323,6 +315,20 @@
                                       :content-hash (facade/content-hash content)}))
         lifecycle (deref lifecycle-fut op-timeout
                          {:lifecycle-error "timeout"})]
+    (when (result/ok? store-r)
+      ;; Re-anchor any placeholder claim-sets persisted by the wrap-time
+      ;; claim-extract pipeline (which only knew the session-id) to this
+      ;; canonical wrap memory id. Fire-and-forget — addons attach a
+      ;; rewrite hook under :crystal/claim-rewrite via the extension
+      ;; registry; misses are surfaced at catchup-time.
+      (try
+        (when-let [rewrite-fn (ext/get-extension :crystal/claim-rewrite)]
+          (future
+            (try (rewrite-fn (crystal/session-id) (:ok store-r) project-id)
+                 (catch Throwable t
+                   (log/warn "claim-set rewrite hook failed:" (ex-message t))))))
+        (catch Throwable t
+          (log/warn "claim-set rewrite hook launch failed:" (ex-message t)))))
     (if (result/ok? store-r)
       (merge {:summary-id (:ok store-r)
               :session (crystal/session-id)

@@ -67,7 +67,15 @@
    {:db/ident       :slave/snapshot-at
     :db/valueType   :db.type/instant
     :db/cardinality :db.cardinality/one
-    :db/doc         "Last snapshot timestamp"}])
+    :db/doc         "Last snapshot timestamp"}
+   {:db/ident       :ling/spawn-mode
+    :db/valueType   :db.type/keyword
+    :db/cardinality :db.cardinality/one
+    :db/doc         "Spawn mode (:vterm :claude :headless :agent-sdk :tmux ...) — routes JVM-restart reconciliation: terminal-backed vessels are re-probed, not zombified"}
+   {:db/ident       :slave/process-pid
+    :db/valueType   :db.type/long
+    :db/cardinality :db.cardinality/one
+    :db/doc         "OS process pid (nil for in-JVM/vterm lings) — liveness probe input for boot reconciliation"}])
 
 ;; =============================================================================
 ;; Pure helpers (schema-free)
@@ -95,15 +103,17 @@
   "Pure: transform a slave map (from the in-memory registry or from the event
    stream) into a Datahike entity map. Drops nil values — Datahike with
    :write flexibility rejects them."
-  [slave-id {:keys [name status depth cwd project-id parent-id]}]
+  [slave-id {:keys [name status depth cwd project-id parent-id spawn-mode process-pid]}]
   (cond-> {:slave/id slave-id
            :slave/snapshot-at (java.util.Date.)}
-    name       (assoc :slave/name name)
-    status     (assoc :slave/status (keyword status))
-    depth      (assoc :slave/depth (long depth))
-    cwd        (assoc :slave/cwd cwd)
-    project-id (assoc :slave/project-id project-id)
-    parent-id  (assoc :slave/parent-id parent-id)))
+    name        (assoc :slave/name name)
+    status      (assoc :slave/status (keyword status))
+    depth       (assoc :slave/depth (long depth))
+    cwd         (assoc :slave/cwd cwd)
+    project-id  (assoc :slave/project-id project-id)
+    parent-id   (assoc :slave/parent-id parent-id)
+    spawn-mode  (assoc :ling/spawn-mode (keyword spawn-mode))
+    process-pid (assoc :slave/process-pid (long process-pid))))
 
 (defn- entity->slave
   "Pure: transform a Datahike pull result back into the slave map shape
@@ -115,7 +125,9 @@
     (:slave/depth e)      (assoc :depth (:slave/depth e))
     (:slave/cwd e)         (assoc :cwd (:slave/cwd e))
     (:slave/project-id e) (assoc :project-id (:slave/project-id e))
-    (:slave/parent-id e)  (assoc :parent-id (:slave/parent-id e))))
+    (:slave/parent-id e)  (assoc :parent-id (:slave/parent-id e))
+    (:ling/spawn-mode e)  (assoc :spawn-mode (:ling/spawn-mode e))
+    (:slave/process-pid e) (assoc :process-pid (:slave/process-pid e))))
 
 ;; =============================================================================
 ;; Effectful boundary (confined to these two fns + record methods)
@@ -187,7 +199,8 @@
               entities (->> ids
                             (map #(d/pull db '[:slave/id :slave/name :slave/status
                                                :slave/depth :slave/cwd :slave/project-id
-                                               :slave/parent-id]
+                                               :slave/parent-id :ling/spawn-mode
+                                               :slave/process-pid]
                                           [:slave/id %]))
                             (map entity->slave)
                             (vec))]

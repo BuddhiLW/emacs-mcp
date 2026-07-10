@@ -9,7 +9,7 @@
 (def ^:private hardcoded-task-models
   "Fallback task-models when config.edn has no :models.task-models key."
   {:coding     "moonshotai/kimi-k2.5"
-   :coding-alt "minimax/minimax-m2.7"
+   :coding-alt "qwen/qwen3.6-plus"
    :arch       "qwen/qwen3.6-plus"
    :docs       "z-ai/glm-5.1"})
 

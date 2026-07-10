@@ -23,6 +23,10 @@ target/
 # Logs
 *.log
 
+# JVM heap dumps
+*.hprof
+java_pid*.hprof
+
 # Compiled Elisp
 *.elc
 
@@ -31,7 +35,6 @@ test-output/
 
 # Local config
 .clojure-mcp/
-deps.local.edn
 .dir-locals.el
 
 # Generated diagrams
@@ -83,3 +86,4 @@ hive-mcp.wiki/
 hive-hot
 local.deps.edn
 .clj-kondo/
+.worktrees/

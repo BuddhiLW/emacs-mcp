@@ -13,10 +13,15 @@
 ;; =============================================================================
 
 (def MemoryType
-  "Valid memory entry types. Derived from type-registry (SST).
-   Note: captures core types at load time. Extension types are validated
-   dynamically via type-registry/valid-type? at runtime."
-  (into [:enum] (type-registry/all-type-strings)))
+  "Memory entry type — an OPEN, safe token (the registry is advisory).
+
+   Permissive by design: any sanitized, safe type string validates (see
+   hive-mcp.memory.type-registry/safe-type?), not just pre-registered types.
+   Extended / user-defined types are accepted with sane defaults. Safety
+   (charset + bounded length) is enforced here so an unsafe token never
+   reaches storage, vector-DB filter expressions, or keyword interning."
+  [:fn {:error/message "must be a safe type token: starts with a letter, then [a-z0-9_-], max 64 chars"}
+   type-registry/safe-type?])
 
 (def MemoryDuration
   "Valid duration values for memory entries.
@@ -103,6 +108,28 @@
   "Result from metadata query - vector of metadata records."
   [:vector MemoryMetadata])
 
+(def QueryEntriesOpts
+  "Closed Malli schema for IMemoryStore.query-entries opts.
+
+   Closed (`{:closed true}`) — every key the protocol contract honors is
+   listed below; unknown keys fail validation. Backends adding new opts
+   MUST update this schema, otherwise generators will not exercise them
+   and the LSP property test will not pin them to the contract.
+
+   Mirror of the docstring on hive-mcp.protocols.memory/query-entries."
+  [:map {:closed true}
+   [:type             {:optional true} [:maybe :string]]
+   [:project-id       {:optional true} [:maybe :string]]
+   [:project-ids      {:optional true} [:maybe [:vector :string]]]
+   [:tags             {:optional true} [:vector :string]]
+   [:exclude-tags     {:optional true} [:vector :string]]
+   [:limit            {:optional true} [:int {:min 0}]]
+   [:include-expired? {:optional true} :boolean]
+   [:include-content? {:optional true} :boolean]
+   [:output-fields    {:optional true} [:vector :string]]
+   [:order-by         {:optional true}
+    [:tuple :keyword [:enum :asc :desc]]]])
+
 ;; =============================================================================
 ;; Validators
 ;; =============================================================================
@@ -141,7 +168,8 @@
    :memory/entry-minimal MemoryEntryMinimal
    :memory/metadata MemoryMetadata
    :memory/abstraction-level AbstractionLevel
-   :memory/project-scope ProjectScope})
+   :memory/project-scope ProjectScope
+   :memory/query-entries-opts QueryEntriesOpts})
 
 ;; =============================================================================
 ;; Boundary Validation

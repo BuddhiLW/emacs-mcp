@@ -4,7 +4,7 @@
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.core :refer [mcp-json]]
             [hive-mcp.protocols.memory :as mem-proto]
-            [hive-mcp.emacs.client :as ec]
+            [hive-mcp.emacs-ext.client :as ec]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]
             [hive-mcp.vectordb.resilience :refer [with-resilience]]))

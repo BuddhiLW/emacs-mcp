@@ -24,14 +24,18 @@ analyze_project() {
     local kondo_cache="$CACHE_DIR/kondo-cache/$project_id"
     mkdir -p "$kondo_cache"
 
-    # Build --settings: if project has .lsp/config.edn, clojure-lsp reads it.
-    # Otherwise, force plain classpath (no aliases) to avoid transitive dep
-    # failures from :test/:dev aliases. clojure-lsp auto-discovers aliases
-    # from deps.edn and tries -A:test:dev by default — this breaks projects
-    # with unresolvable transitive deps in test/dev profiles.
-    local settings='{}'
-    if [ ! -f "$project_root/.lsp/config.edn" ]; then
-        settings='{:project-specs [{:project-path "deps.edn" :classpath-cmd ["clojure" "-Spath"]}]}'
+    # Force plain classpath (no aliases) via --settings :project-specs.
+    # clojure-lsp deep-merges --settings OVER the project's .lsp/config.edn,
+    # replacing only :project-specs and keeping the rest (:source-paths, etc).
+    # Covers both build tools: deps.edn -> `clojure -Spath`, project.clj ->
+    # `lein classpath`. clojure-lsp runs every spec whose :project-path exists
+    # and unions the results, so a lein-only, a deps-only, or a mixed project
+    # all resolve. Skip the override only when the project already declares its
+    # own :project-specs (EDN reader, not regex, to avoid false positives).
+    local settings='{:project-specs [{:project-path "deps.edn" :classpath-cmd ["clojure" "-Spath"]} {:project-path "project.clj" :classpath-cmd ["lein" "classpath"]}]}'
+    local cfg="$project_root/.lsp/config.edn"
+    if [ -f "$cfg" ] && bb -e '(->> *command-line-args* first slurp clojure.edn/read-string :project-specs some? println)' "$cfg" 2>/dev/null | grep -qx true; then
+        settings='{}'
     fi
 
     if java $JAVA_OPTS -jar "$LSP_JAR" dump --project-root "$project_root" \
@@ -84,10 +88,12 @@ discover_projects() {
             fi
         done
     else
-        # maxdepth 3 so /workspace/<group>/<project>/deps.edn is found.
-        # Project-id is the path relative to /workspace (preserves grouping
-        # so "hive/hive-mcp" and "sec/foo" don't collide on basename).
-        find "$WORKSPACE" -mindepth 1 -maxdepth 3 -name deps.edn -exec dirname {} \; | while read -r dir; do
+        # maxdepth 3 so /workspace/<group>/<project>/{deps.edn,project.clj}
+        # is found. Match both build files (sort -u collapses a project that
+        # ships both into one entry). Project-id is the path relative to
+        # /workspace (preserves grouping so "hive/hive-mcp" and "sec/foo"
+        # don't collide on basename).
+        find "$WORKSPACE" -mindepth 1 -maxdepth 3 \( -name deps.edn -o -name project.clj \) -exec dirname {} \; | sort -u | while read -r dir; do
             local rel="${dir#$WORKSPACE/}"
             echo "$dir:$rel"
         done

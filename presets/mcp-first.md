@@ -43,15 +43,21 @@ mcp__claude-context__index_codebase - Index before searching
 - "Find authentication logic" → `search_code(query: "authentication login flow")`
 - "Where is error handling?" → `search_code(query: "error handling exception catching")`
 
-### 3. Clojure MCP (`mcp__clojure-mcp-emacs__*`) - Clojure Projects
-For Clojure file editing and REPL:
+### 3. Carto (`mcp__hive__code`) - Clojure File Edits
 
-| Task                   | Tool                                    |
+For ANY edit to `.clj` / `.cljs` / `.cljc` files, the carto write path is mandatory — raw `Edit`/`Write`/`file_write` skip lint, REPL refresh, and ns-tracking.
+
+**First move on a fresh ling, BEFORE any code edit:**
+```
+ToolSearch(query: "select:mcp__hive__code")
+```
+
+| Task                   | Carto tool                              |
 |------------------------|-----------------------------------------|
-| Edit defn/def          | `clojure_edit` (structural, safer)      |
-| Replace s-expression   | `clojure_edit_replace_sexp`             |
-| Eval code              | `clojure_eval`                          |
-| Project info           | `clojure_inspect_project`               |
+| Replace top-level form | `mcp__hive__code` `write-form`          |
+| Insert before/after    | `mcp__hive__code` `insert-form`         |
+| Eval code              | `mcp__hive__clojure_eval`               |
+| Whole-file create      | `mcp__hive__file_write` (no existing form) |
 
 ### 4. Memory MCP - Persistent Context
 ```

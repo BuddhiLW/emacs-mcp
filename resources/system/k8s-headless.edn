@@ -12,6 +12,8 @@
 
  :hive/events          {}
 
+ :hive/delivery-channels {}
+
  :hive/coordinator     {}
 
  ;; ── Layer 2: Transport (A2A + WebSocket + NATS, no stdio) ────────────

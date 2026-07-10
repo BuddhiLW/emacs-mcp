@@ -1,0 +1,3 @@
+{:funeraria {:equal? true, :valid? true},
+ :hive {:equal? true, :valid? true},
+ :sisf-crm {:equal? true, :valid? true}}

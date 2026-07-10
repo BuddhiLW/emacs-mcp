@@ -14,7 +14,8 @@
    DDD: Value Objects for enums, schemas as domain contracts."
   (:require [malli.core :as m]
             [malli.error :as me]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [hive-mcp.plan.field-registry :as field-registry]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -264,24 +265,30 @@
 (defn normalize-step
   "Normalize a step map to conform to the Step schema.
 
-   Applies defaults and converts types as needed."
+   Applies defaults, converts types, and applies addon-registered step-field
+   normalizers (plan.field-registry) so core stays field-agnostic."
   [step]
   (-> step
       (update :depends-on #(or % []))
       (update :priority normalize-priority)
       (update :files #(or % []))
       (update :estimate normalize-estimate)
-      (update :tags #(or % []))))
+      (update :tags #(or % []))
+      (field-registry/apply-normalizers :step)))
 
 (defn normalize-plan
   "Normalize a plan map to conform to the Plan schema.
 
-   Applies defaults and normalizes all steps."
+   Applies defaults, normalizes all steps, applies addon-registered plan-field
+   normalizers, and resolves per-step field defaults from plan-level keys
+   (plan.field-registry) — e.g. step :method inheriting plan :default-method."
   [plan]
   (-> plan
+      (field-registry/apply-normalizers :plan)
       (update :steps #(mapv normalize-step %))
       (update :source-format #(or % :edn))
-      (update :tags #(or % []))))
+      (update :tags #(or % []))
+      field-registry/resolve-step-defaults))
 
 ;; =============================================================================
 ;; Example Plans (Documentation)

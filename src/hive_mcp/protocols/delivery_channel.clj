@@ -7,7 +7,9 @@
 
    Pattern: follows protocols/editor.clj pattern.
    Registry pattern: multiple channels can be active simultaneously,
-   unlike IEditor/IEventBackbone which have a single active instance." (:require [hive-dsl.result :refer [rescue]]))
+   unlike IEditor/IEventBackbone which have a single active instance."
+  (:require [hive-dsl.result :refer [rescue]]
+            [hive-mcp.protocols.registry :as reg]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -48,43 +50,50 @@
 ;;; Channel Registry (Multiple Active Channels)
 ;;; ============================================================================
 
-(defonce ^:private channel-registry (atom {}))  ;; channel-id -> IDeliveryChannel
+(defonce ^:private slot
+  (reg/multi-slot {:validate #(satisfies? IDeliveryChannel %)}))
 
 (defn register-channel!
   "Register a delivery channel. Replaces any existing channel with same id."
   [channel]
   {:pre [(satisfies? IDeliveryChannel channel)]}
-  (swap! channel-registry assoc (channel-id channel) channel)
-  channel)
+  (reg/reg-put! slot (channel-id channel) channel))
 
 (defn unregister-channel!
   "Unregister a delivery channel by id."
   [id]
-  (swap! channel-registry dissoc id)
-  nil)
+  (reg/reg-remove! slot id))
 
 (defn get-channel
   "Get a specific delivery channel by id, or nil."
   [id]
-  (get @channel-registry id))
+  (reg/reg-get slot id))
 
 (defn get-channels
   "Get all registered delivery channels as a seq."
   []
-  (vals @channel-registry))
+  (vals (reg/reg-snapshot slot)))
 
 (defn clear-channels!
   "Clear all registered delivery channels."
   []
-  (reset! channel-registry {}))
+  (reg/reg-clear! slot))
 
 (defn fanout!
-  "Deliver event to all registered channels. Each delivery is independent
-   and non-fatal — one channel failure does not block others."
+  "Deliver event to all registered channels.
+
+   Delegates to `hive-mcp.delivery.fanout/fanout!` for per-channel
+   timeout + circuit-breaker isolation (ENGINE-L2.3). Late-resolve so
+   protocols stays free of impl-side compile-time dependencies."
   [event]
-  (doseq [ch (get-channels)]
-    (rescue nil (when (available? ch)
-        (deliver! ch event)))))
+  (if-let [f (requiring-resolve 'hive-mcp.delivery.fanout/fanout!)]
+    (f event)
+    ;; Fallback when delivery.fanout isn't on the classpath (e.g. early
+    ;; bootstrap or carved-down test runs). Preserves the pre-L2.3
+    ;; serial-doseq semantics without isolation guarantees.
+    (doseq [ch (get-channels)]
+      (rescue nil (when (available? ch)
+                    (deliver! ch event))))))
 
 ;;; ============================================================================
 ;;; NoopChannel (Fallback)

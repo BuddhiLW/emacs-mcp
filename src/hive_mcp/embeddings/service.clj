@@ -234,14 +234,40 @@
         (:default cfg)
         :ollama-nomic)))
 
-(defn resolve-provider-for-type
-  "Resolve embedding provider + metadata for a memory type.
-   Returns {:provider EmbeddingProvider, :dimension int, :max-tokens int,
-            :collection-name str, :provider-key keyword}."
-  [memory-type]
-  (let [cfg          (embedder-config)
-        provider-key (resolve-provider-key memory-type)
-        provider-spec (get-in cfg [:providers provider-key])]
+;; --- No-embed types (structurally-addressed data blobs) -------------------
+;; Some memory types are fetched ONLY by tag/id/project-id, never by semantic
+;; search (e.g. serialized C4 snapshots). Embedding their (often oversized)
+;; content is pure waste and a failure point. The effective set is the union
+;; of a hive-di-configurable profile set ([:embedder :no-embed-types], merged
+;; via global config) and any addon-registered types — so embeddings core
+;; stays ignorant of any specific addon's domain types (SOLID/OCP).
+(defonce ^:private registered-no-embed-types (atom #{}))
+
+(defn register-no-embed-type!
+  "Addon-facing: declare a memory :type as structurally-addressed so the
+   write path SKIPS embedding it (stores a zero placeholder vector instead).
+   Idempotent. Returns the (string) type."
+  [type-str]
+  (when type-str (swap! registered-no-embed-types conj (name type-str)))
+  (some-> type-str name))
+
+(defn no-embed-type?
+  "True when entries of `type-str` must not be embedded. Union of the
+   hive-di-configurable [:embedder :no-embed-types] profile set and any
+   addon-registered types."
+  [type-str]
+  (boolean
+   (when type-str
+     (let [t (name type-str)]
+       (or (contains? @registered-no-embed-types t)
+           (contains? (into #{} (map name) (:no-embed-types (embedder-config))) t))))))
+
+(defn- build-resolved
+  "Resolved-provider map for an explicit provider-key (or the global provider
+   fallback when the key has no configured spec). Shared by the type resolver
+   and the size-aware escalation resolver so both produce identical shapes."
+  [cfg provider-key]
+  (let [provider-spec (get-in cfg [:providers provider-key])]
     (if provider-spec
       (let [impl      (:impl provider-spec)
             model     (:model provider-spec)
@@ -265,12 +291,85 @@
       ;; No embedder config → fall back to global provider
       (let [global (chroma/get-embedding-provider)]
         (when-not global
-          (throw (ex-info "No embedding provider available" {:type memory-type})))
+          (throw (ex-info "No embedding provider available" {:provider-key provider-key})))
         {:provider        global
          :dimension       (chroma/embedding-dimension global)
          :max-tokens      2048
          :collection-name base-collection-name
          :provider-key    :fallback}))))
+
+(defn resolve-provider-for-type
+  "Resolve embedding provider + metadata for a memory type.
+   Returns {:provider EmbeddingProvider, :dimension int, :max-tokens int,
+            :collection-name str, :provider-key keyword}."
+  [memory-type]
+  (build-resolved (embedder-config) (resolve-provider-key memory-type)))
+
+(defn estimate-tokens
+  "Cheap token estimate (chars/4 heuristic) — same basis as the size guard."
+  [content]
+  (quot (count (or content "")) 4))
+
+(defn resolve-provider-for-type+size
+  "Type-routed provider resolution WITH size-aware auto-escalation. When the
+   type's routed provider cannot fit `content` (est. tokens > its :max-tokens),
+   walk the configured :providers ladder (by :max-tokens ascending) and pick
+   the SMALLEST provider that fits; if none fit, the LARGEST available. Logs
+   the escalation. Same return shape as `resolve-provider-for-type`.
+
+   Coherence: callers MUST use this same resolution for BOTH the embedding
+   vector and the target collection (escalation changes dimension). See
+   hive-milvus.store.routing/coll-for-entry."
+  [memory-type content]
+  (let [cfg  (embedder-config)
+        base (build-resolved cfg (resolve-provider-key memory-type))
+        est  (estimate-tokens content)
+        ;; A provider is usable only if its required secret is present; local
+        ;; ollama needs none. Prefer usable providers, smallest that fits,
+        ;; then smallest dimension (favors the key-free local 32k embedder
+        ;; over remote ones, and avoids wasting a 4096-d vector).
+        available? (fn [spec]
+                     (case (:impl spec)
+                       :openrouter (some? (global-config/get-secret :openrouter-api-key))
+                       :openai     (some? (global-config/get-secret :openai-api-key))
+                       :venice     (some? (global-config/get-secret :venice-api-key))
+                       true))]
+    (if (<= est (:max-tokens base))
+      base
+      (let [ladder (->> (:providers cfg)
+                        (map (fn [[k spec]] (assoc spec :provider-key k)))
+                        (filter available?)
+                        (sort-by (juxt :max-tokens :dimension)))
+            pick   (or (first (filter #(<= est (:max-tokens %)) ladder))
+                       (last ladder))]
+        (if (and pick (not= (:provider-key pick) (:provider-key base)))
+          (let [esc (build-resolved cfg (:provider-key pick))]
+            (log/info "Embedder auto-escalated for oversized content:"
+                      (:provider-key base) "→" (:provider-key esc)
+                      (str "(" est " est-tokens > " (:max-tokens base) " max-tokens)"))
+            esc)
+          base)))))
+
+(defn sibling-failover
+  "Given a `resolved` provider that just failed to embed, return an alternative
+   resolved provider of the SAME :dimension (so the vector and its target
+   collection stay coherent) backed by a DIFFERENT, available impl — or nil if
+   none exists. Lets the venice-qwen3 <-> openrouter-qwen3 pair (both
+   Qwen3-Embedding-8B @ 4096-d) cover for each other when one is slow/down."
+  [{:keys [dimension provider-key] :as _resolved}]
+  (let [cfg        (embedder-config)
+        available? (fn [spec]
+                     (case (:impl spec)
+                       :openrouter (some? (global-config/get-secret :openrouter-api-key))
+                       :openai     (some? (global-config/get-secret :openai-api-key))
+                       :venice     (some? (global-config/get-secret :venice-api-key))
+                       true))]
+    (some (fn [[k spec]]
+            (when (and (= (:dimension spec) dimension)
+                       (not= k provider-key)
+                       (available? spec))
+              (build-resolved cfg k)))
+          (:providers cfg))))
 
 (defn validate-content-size!
   "Reject content exceeding the resolved provider's max-tokens.
@@ -292,7 +391,9 @@
   [memory-type]
   (if memory-type
     [(-> (resolve-provider-for-type memory-type) :collection-name)]
-    [base-collection-name (str base-collection-name "-4096d")]))
+    [base-collection-name
+     (str base-collection-name "-1024d")
+     (str base-collection-name "-4096d")]))
 
 (defn reset-service!
   "Reset all service state. For testing."
@@ -310,39 +411,68 @@
    - hive-mcp-presets: OpenRouter (accurate, 4096 dims) if API key available
    - hive-mcp-plans: OpenRouter (4096 dims) if API key available, Ollama fallback
 
-   Per-memory-type routing is delegated to `routing/apply-route-flip!` —
-   user `hive config set` pins are honored (idempotent re-runs).
+   All collection routings are guarded by `routing/apply-collection-flip!`
+   so a user pin at `[:embedder :collections <name>]` survives boot
+   (audit kanban 20260429203437). Per-memory-type :type/plan flip is
+   delegated to `routing/apply-route-flip!` (long-standing).
 
    Call after init! for typical hive-mcp setup."
   []
-  ;; Memory always uses Ollama (fast, free, local)
-  (configure-collection! "hive-mcp-memory" (config/ollama-config))
+  ;; Memory always uses Ollama (fast, free, local) — guarded so a user
+  ;; can pin to a different provider for benchmarking without losing it
+  ;; on every boot.
+  (routing/apply-collection-flip!
+   {:collection   "hive-mcp-memory"
+    :default      :ollama
+    :to-id        :ollama
+    :configure-fn #(configure-collection! "hive-mcp-memory" (config/ollama-config))
+    :reason       "fast local 768-dim embeddings for memory"})
 
-  ;; Presets use OpenRouter if available (more accurate semantic search)
-  (when (global-config/get-secret :openrouter-api-key)
-    (try
-      (configure-collection! "hive-mcp-presets" (config/openrouter-config))
-      (catch Exception e
-        (log/warn "Could not configure OpenRouter for presets:" (.getMessage e))
-        ;; Fall back to Ollama for presets too
-        (configure-collection! "hive-mcp-presets" (config/ollama-config)))))
-
-  ;; Plans use OpenRouter if available (plans are 1000-5000+ chars, exceed Ollama limit)
+  ;; Presets: OpenRouter when the key is present; Ollama fallback. Both
+  ;; paths now respect the user pin.
   (if (global-config/get-secret :openrouter-api-key)
-    (try
-      (configure-collection! "hive-mcp-plans" (config/openrouter-config))
-      (catch Exception e
-        (log/warn "Could not configure OpenRouter for plans:" (.getMessage e))
-        (configure-collection! "hive-mcp-plans" (config/ollama-config))))
-    ;; Fallback: Ollama with truncation risk warning
-    (do
-      (configure-collection! "hive-mcp-plans" (config/ollama-config))
-      (log/warn "Plans collection using Ollama (no OPENROUTER_API_KEY) - entries >1500 chars may be truncated")))
+    (routing/apply-collection-flip!
+     {:collection   "hive-mcp-presets"
+      :default      :ollama
+      :to-id        :openrouter
+      :configure-fn #(configure-collection! "hive-mcp-presets" (config/openrouter-config))
+      :reason       "OpenRouter — accurate 4096-dim semantic search for presets"})
+    (routing/apply-collection-flip!
+     {:collection   "hive-mcp-presets"
+      :default      :ollama
+      :to-id        :ollama
+      :configure-fn #(configure-collection! "hive-mcp-presets" (config/ollama-config))
+      :reason       "Ollama fallback (no OPENROUTER_API_KEY)"}))
+
+  ;; Plans: OpenRouter when key present (1000-5000+ char plans exceed
+  ;; Ollama's ceiling). Ollama fallback warns about truncation.
+  (if (global-config/get-secret :openrouter-api-key)
+    (routing/apply-collection-flip!
+     {:collection   "hive-mcp-plans"
+      :default      :ollama
+      :to-id        :openrouter
+      :configure-fn #(configure-collection! "hive-mcp-plans" (config/openrouter-config))
+      :reason       "OpenRouter — long EDN plans exceed Ollama 1500-char ceiling"})
+    (do (routing/apply-collection-flip!
+          {:collection   "hive-mcp-plans"
+           :default      :ollama
+           :to-id        :ollama
+           :configure-fn #(configure-collection! "hive-mcp-plans" (config/ollama-config))
+           :reason       "Ollama fallback (no OPENROUTER_API_KEY)"})
+        (log/warn "Plans collection on Ollama — entries >1500 chars may be truncated")))
 
   ;; Per-memory-type route flip: :type/plan → venice qwen3-8b when
   ;; VENICE_API_KEY is present AND the user hasn't pinned a different
   ;; route via `hive config set embedder.routes.type/plan ...`.
-  ;; See routing/apply-route-flip! for the user-intent guard.
+  ;;
+  ;; Only :type/plan auto-flips. The other 4096-dim heavy types
+  ;; (decision / convention / conversation-turn / turn-summary /
+  ;; session-summary) stay on :openrouter-qwen3 by default — users
+  ;; who want them on Venice pin explicitly. Pre-2026-05-07 those types
+  ;; were hard-coded to :venice-qwen3 in merge.clj defaults; when Venice
+  ;; was slow/unreachable, every memory write for those types stalled
+  ;; the 30s memory-write budget. Defaults now point at OpenRouter
+  ;; (always-available 4096-d), and Venice is opt-in.
   (routing/apply-route-flip!
    {:route   :type/plan
     :default :openrouter-qwen3

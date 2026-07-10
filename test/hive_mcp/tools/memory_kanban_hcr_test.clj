@@ -142,6 +142,64 @@
         "Project not in tree has no descendants")))
 
 ;; =============================================================================
+;; resolve-visible-project-ids Tests — the scope-blindness fix.
+;; Kanban must honour the SAME UP-walk (self + ancestors) memory uses, plus the
+;; optional DOWN-walk (descendants). Ancestors come from the kg-scope registry
+;; (parent chain), descendants from the cached tree fixture.
+;; =============================================================================
+
+(def ^:private resolve-visible
+  @(resolve 'hive-mcp.tools.memory-kanban/resolve-visible-project-ids))
+
+(defmacro ^:private with-registered-chain
+  "Register a hive-mcp → hive parent chain in the kg-scope config registry so
+   visible-scopes walks UP through it. Snapshots any pre-existing configs and
+   restores them after — so this never clobbers a warm REPL / scanned registry."
+  [& body]
+  `(let [get# (requiring-resolve 'hive-mcp.knowledge-graph.scope/get-project-config)
+         reg# (requiring-resolve 'hive-mcp.knowledge-graph.scope/register-project-config!)
+         dreg# (requiring-resolve 'hive-mcp.knowledge-graph.scope/deregister-project-config!)
+         prev-hive#     (get# "hive")
+         prev-hive-mcp# (get# "hive-mcp")]
+     (reg# "hive"     {:project-id "hive"})
+     (reg# "hive-mcp" {:project-id "hive-mcp" :parent-id "hive"})
+     (try ~@body
+          (finally
+            (if prev-hive#     (reg# "hive" prev-hive#)         (dreg# "hive"))
+            (if prev-hive-mcp# (reg# "hive-mcp" prev-hive-mcp#) (dreg# "hive-mcp"))))))
+
+(deftest test-visible-includes-ancestors-without-descendants
+  (testing "include_descendants=false STILL pulls ancestors (child sees parent)"
+    (with-registered-chain
+      (let [ids (set (resolve-visible "hive-mcp" false))]
+        (is (contains? ids "hive-mcp") "self present")
+        (is (contains? ids "hive")     "PARENT present even without descendants")
+        (is (contains? ids "global")   "root ancestor present")
+        (is (not (contains? ids "hive-agent-bridge"))
+            "descendants EXCLUDED when include_descendants=false")))))
+
+(deftest test-visible-includes-ancestors-and-descendants
+  (testing "include_descendants=true unions ancestors (UP) + descendants (DOWN)"
+    (with-registered-chain
+      (let [ids (set (resolve-visible "hive-mcp" true))]
+        (is (contains? ids "hive")              "ancestor present")
+        (is (contains? ids "hive-agent-bridge") "descendant present")
+        (is (contains? ids "hive-mcp")          "self present")))))
+
+(deftest test-visible-global-returns-nil
+  (testing "Global project-id returns nil (caller handles no-filter / single)"
+    (is (nil? (resolve-visible "global" true)))
+    (is (nil? (resolve-visible "global" false)))))
+
+(deftest test-visible-leaf-still-has-ancestors
+  (testing "A leaf project (no descendants) is no longer scoped to ONLY itself —
+            it sees its ancestor chain. This is the regression that hid parent tasks."
+    (with-registered-chain
+      (let [ids (set (resolve-visible "hive-mcp" false))]
+        ;; Pre-fix the leaf path returned a single :project-id (self only).
+        (is (> (count ids) 1) "more than self — ancestors included")))))
+
+;; =============================================================================
 ;; extract-project-id-from-tags Tests
 ;; =============================================================================
 
@@ -617,3 +675,35 @@
         (is (vector? parsed))
         (is (= 3 (count parsed))
             (str "expected 3 hive-mcp tasks; got: " (count parsed)))))))
+
+;; =============================================================================
+;; scope="all" — opt-in cross-workspace whole-board view. Lifts the project
+;; filter entirely so sibling-workspace tasks (invisible by default, since
+;; siblings share only via their common ancestor) surface in one call.
+;; =============================================================================
+
+(deftest ^:regression list-scope-all-lifts-project-filter-test
+  (testing "scope=all returns tasks from a foreign/sibling project the scoped view would drop"
+    ;; From hive-mcp scope, kb-q-4 (hive-agent-bridge) is a DESCENDANT and only
+    ;; appears with include_descendants. Add a true sibling/foreign task that is
+    ;; neither ancestor nor descendant of hive-mcp — it must appear ONLY under
+    ;; scope=all.
+    (let [state (atom (conj @(seed-store)
+                            (kanban-entry {:id "kb-foreign-1" :title "Sibling workspace task"
+                                           :status "todo" :priority "high"
+                                           :project-id "funeraria" :mins-ago 1})))]
+      (with-list-fixtures state "hive-mcp"
+        (let [scoped   (set (map :id (parse-list-result
+                                      (mem-kanban/handle-mem-kanban-list-slim
+                                       {:directory "/fake/hive-mcp"
+                                        :include_descendants true}))))
+              all-view (set (map :id (parse-list-result
+                                      (mem-kanban/handle-mem-kanban-list-slim
+                                       {:directory "/fake/hive-mcp"
+                                        :scope "all"}))))]
+          (is (not (contains? scoped "kb-foreign-1"))
+              "sibling-workspace task must NOT leak into the default scoped view")
+          (is (contains? all-view "kb-foreign-1")
+              "scope=all must surface the sibling-workspace task")
+          (is (contains? all-view "kb-q-1")
+              "scope=all still includes local tasks too"))))))

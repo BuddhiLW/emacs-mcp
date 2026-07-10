@@ -11,7 +11,7 @@
    - Strategy domain  → PollStrategy ADT (closed variant set)"
   (:require [hive-mcp.tools.swarm.core    :as core]
             [hive-mcp.tools.swarm.channel :as channel]
-            [hive-mcp.emacs.client        :as ec]
+            [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.dns.validation      :as v]
             [hive-dsl.adt                 :refer [defadt adt-case]]
             [clojure.data.json            :as json]

@@ -23,6 +23,7 @@
             [hive-mcp.batch.protocol :as proto]
             [hive-mcp.dns.result :as result]
             [hive-mcp.extensions.registry :as ext]
+            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
             [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -32,15 +33,6 @@
 ;; =============================================================================
 ;; Extension delegation
 ;; =============================================================================
-
-(defn- delegate-or-noop
-  "Delegate to extension if available, fall back to default value."
-  [ext-key default-val args]
-  (if-let [f (ext/get-extension ext-key)]
-    (apply f args)
-    (do
-      (log/debug "Extension not available, returning default for" ext-key)
-      default-val)))
 
 ;; =============================================================================
 ;; Operation normalization
@@ -87,10 +79,76 @@
   [handler-result]
   (delegate-or-noop :bx/b handler-result [handler-result]))
 
+(defn- creation-tool?
+  "Tools whose primary effect is producing a new addressable artifact.
+   A creation op that returns `:id nil` has effectively failed even when
+   the call did not throw — downstream $ref to its id resolves to nil
+   and any dependent op runs against a phantom reference."
+  [tool]
+  (contains? #{"memory" "kanban" "kg"} (str tool)))
+
 (defn enrich-op-result
-  "Enrich an execute-op result with :data (parsed handler result)."
-  [{:keys [result] :as op-result}]
-  (assoc op-result :data (extract-result-data result)))
+  "Enrich an execute-op result with `:data` (parsed handler result) and
+   compose a cross-layer `:success` signal.
+
+   Cross-layer composition: a handler may return a structured result
+   whose data carries an explicit failure signal — typical when a tool
+   call did not throw but its underlying side-effect (memory add, kanban
+   create, kg edge) failed. The composed signal honours those:
+
+   - `(:success data)` is `false`              → wrapper :success false
+   - creation-tool with `(:id data)` literally `nil` → wrapper :success false
+
+   Without composition, batch summaries reported `:success true` for ops
+   the user observed as failed (e.g. `{id: null, success: null}` from a
+   degraded memory backend), and dependent `$ref`-using ops dispatched
+   against null endpoints — silent dangling KG edges in wrap ceremonies.
+
+   Never upgrades `:success`; only downgrades. An op that already
+   threw (`:success false`) keeps its original `:error`."
+  [{:keys [tool result success] :as op-result}]
+  (let [data                  (extract-result-data result)
+        inner-success-false?  (and (map? data)
+                                   (contains? data :success)
+                                   (false? (:success data)))
+        ;; Explicit error flags: mcp-error envelopes carry {:isError true};
+        ;; hive-dsl Result failures carry {:ok false}. Neither was inspected
+        ;; before, so in-band tool errors surfaced in summaries as failed:0.
+        explicit-error-flag?  (and (map? data)
+                                   (or (true? (:isError data))
+                                       (false? (:ok data))))
+        ;; Bare error map with no :success key — e.g. handle-kg-add-edge's
+        ;; validation failures return {:error "relation is required"} directly.
+        bare-error?           (and (map? data)
+                                   (some? (:error data))
+                                   (not (contains? data :success)))
+        null-id-on-create?    (and (creation-tool? tool)
+                                   (map? data)
+                                   (or (and (contains? data :id) (nil? (:id data)))
+                                       ;; kg edge handler returns :edge-id, not :id
+                                       (and (contains? data :edge-id) (nil? (:edge-id data)))))
+        downgrade?            (and success
+                                   (or inner-success-false?
+                                       explicit-error-flag?
+                                       bare-error?
+                                       null-id-on-create?))
+        downgrade-msg         (cond
+                                inner-success-false?
+                                (or (some-> data :errors first)
+                                    (some-> data :error str)
+                                    "tool reported failure (inner :success false)")
+                                bare-error?
+                                (some-> data :error str)
+                                explicit-error-flag?
+                                (or (some-> data :error str)
+                                    (some-> data :text str)
+                                    "tool reported failure (:isError/:ok false)")
+                                null-id-on-create?
+                                (str "creation tool returned nil id — degraded backend?")
+                                :else nil)]
+    (cond-> (assoc op-result :data data)
+      downgrade? (-> (assoc :success false)
+                     (assoc :error downgrade-msg)))))
 
 (defn resolve-ref
   "Delegate to extension for reference resolution."
@@ -196,24 +254,32 @@
   "Execute a single operation with error isolation, using an injected
    `resolve-handler` fn (tool-name -> handler-fn-or-nil).
 
-   Returns {:id op-id :success bool :result map}
-        or {:id op-id :success false :error string}."
-  [resolve-handler {:keys [id tool] :as op}]
+   Returns {:id op-id :tool tool-name :command cmd :success bool :result map}
+        or {:id op-id :tool tool-name :command cmd :success false :error string}.
+
+   `:tool` and `:command` are echoed back to the caller so downstream
+   stages (enrich-op-result, FX emitters, format-results) can reason
+   about the op without re-joining against the input. Without this,
+   `enrich-op-result`'s creation-tool classifier sees `nil` for `tool`
+   and fails to downgrade memory/kanban/kg ops that returned `:id nil`."
+  [resolve-handler {:keys [id tool command] :as op}]
   (try
     (let [handler (resolve-handler tool)]
       (if-not handler
-        {:id id :success false :error (str "Tool not found: " tool)}
+        {:id id :tool tool :command command :success false
+         :error (str "Tool not found: " tool)}
         (let [meta-keys #{:id :tool :depends_on :wave}
               handler-args (-> (apply dissoc op meta-keys)
                                (update :command #(if (keyword? %) (name %) %)))
               result (handler handler-args)]
-          {:id id :success true :result result})))
+          {:id id :tool tool :command command :success true :result result})))
     (catch Exception e
       (log/error {:event :op-execution-error
                   :op-id id
                   :tool  tool
                   :error (ex-message e)})
-      {:id id :success false :error (ex-message e)})))
+      {:id id :tool tool :command command :success false
+       :error (ex-message e)})))
 
 ;; =============================================================================
 ;; Wave execution
@@ -242,24 +308,146 @@
         {:ok true}
         {:ok false :failed-deps failed}))))
 
+(defn- classify-op-refs
+  "After `resolve-op-refs` has run, walk the ORIGINAL op's params to
+   spot every `$ref:...` string and look up how it actually resolved
+   against `results-by-id`. A ref is `:broken` when:
+
+     - the source op-id is missing from results (`ref-not-found`), OR
+     - the resolved value is literally `nil`.
+
+   The second case catches the wrap-ceremony footgun where a creation
+   op timed out, was already downgraded to `:success false` by
+   `enrich-op-result`, and its `:data.id` is nil — a dependent k>'s
+   `:from $ref:src.data.id` would otherwise create a phantom edge.
+
+   Returns `nil` when all refs OK (or no refs); otherwise
+   `{:broken-refs [{:ref str :reason kw} ...]}`."
+  [original-op results-by-id]
+  (let [meta-keys #{:id :tool :command :depends_on :wave}
+        refs (atom [])
+        walk! (fn walk! [v]
+                (cond
+                  (ref? v)
+                  (when-let [parsed (parse-ref v)]
+                    (let [resolved (resolve-ref parsed results-by-id)]
+                      (cond
+                        (identical? resolved ref-not-found)
+                        (swap! refs conj {:ref v :reason :unresolved})
+                        (nil? resolved)
+                        (swap! refs conj {:ref v :reason :nil-resolved}))))
+
+                  (map? v)
+                  (run! walk! (vals v))
+
+                  (sequential? v)
+                  (run! walk! v)
+
+                  :else nil))]
+    (doseq [[k v] original-op]
+      (when-not (contains? meta-keys k)
+        (walk! v)))
+    (when (seq @refs)
+      {:broken-refs @refs})))
+
+(defn- broken-ref-skip
+  "Build a skip result for an op whose ref(s) resolved to nil/missing.
+   Mirrors the dependency-skip shape so consumers (format-results,
+   wave summary counters) treat it identically."
+  [op {:keys [broken-refs]}]
+  (enrich-op-result
+    {:id      (:id op)
+     :tool    (:tool op)
+     :command (:command op)
+     :success false
+     :error   (str "Skipped: broken-ref — "
+                   (str/join ", " (mapv (fn [{:keys [ref reason]}]
+                                          (str ref " (" (name reason) ")"))
+                                        broken-refs)))}))
+
+(defn- normalize-exec-result
+  "Defensive: bounded-pmap-style executors can return `nil` on worker
+   timeout; pair each input op with its result by index and synthesise
+   a failed result for any nil position. Without this, the wave-result
+   reduction `(swap! all-results assoc nil {...})` collapses every
+   timed-out op under the nil key, dropping all but one and producing
+   the off-by-one summary count observed during ceremony smoke tests."
+  [op exec-result]
+  (cond
+    (nil? exec-result)
+    {:id         (:id op)
+     :tool       (:tool op)
+     :command    (:command op)
+     :success    false
+     :timed-out  true
+     :error-type :timeout
+     :error      "executor returned nil — likely worker timeout (op may still have run server-side; retry only if idempotent)"}
+
+    (nil? (:id exec-result))
+    (assoc exec-result :id (:id op))
+
+    :else exec-result))
+
 (defn- execute-and-collect-wave
-  "Execute one wave, skipping ops with failed deps. Resolves $ref strings
-   before execution, enriches results with :data for downstream refs."
+  "Execute one wave, skipping ops with failed deps OR broken refs.
+   Resolves $ref strings before execution and enriches results with
+   `:data` for downstream refs.
+
+   Skip semantics:
+   - Failed dep (depends_on entry's :success false) → skip with
+     'dependencies failed' error.
+   - Broken ref (a $ref that resolved to nil or ref-not-found) → skip
+     with 'broken-ref' error. This is the fix for dangling KG edges
+     when a source op produced :id nil under a degraded backend.
+
+   Defensive: a nil result from execute-wave (worker-pool timeout)
+   is normalized into a failed op-result keyed by the input op's id so
+   the wave summary count stays exact."
   [resolve-handler wave-ops all-results]
-  (let [{executable true skipped false}
+  (let [{deps-ok true deps-failed false}
         (group-by #(:ok (check-deps-satisfied % all-results)) wave-ops)
 
-        skip-results (mapv (fn [op]
-                             (let [{:keys [failed-deps]} (check-deps-satisfied op all-results)]
-                               (enrich-op-result
-                                {:id (:id op) :success false
-                                 :error (str "Skipped: dependencies failed — "
-                                             (str/join ", " failed-deps))})))
-                           (or skipped []))
+        dep-skip-results
+        (mapv (fn [op]
+                (let [{:keys [failed-deps]} (check-deps-satisfied op all-results)]
+                  (enrich-op-result
+                    {:id      (:id op)
+                     :tool    (:tool op)
+                     :command (:command op)
+                     :success false
+                     :error   (str "Skipped: dependencies failed — "
+                                   (str/join ", " failed-deps))})))
+              (or deps-failed []))
 
-        resolved-ops (mapv #(resolve-op-refs % all-results) (or executable []))
-        exec-results (mapv enrich-op-result (execute-wave resolve-handler resolved-ops))]
-    (into skip-results exec-results)))
+        ;; For each dep-ok op, classify against the current results:
+        ;; broken-ref ops skip immediately; the rest go to the executor
+        ;; with refs resolved.
+        ref-classified
+        (mapv (fn [op]
+                (if-let [broken (classify-op-refs op all-results)]
+                  [:broken op broken]
+                  [:ok op]))
+              (or deps-ok []))
+
+        broken-ref-results
+        (->> ref-classified
+             (filter #(= :broken (first %)))
+             (mapv (fn [[_ op broken]] (broken-ref-skip op broken))))
+
+        executable-ops
+        (->> ref-classified
+             (filter #(= :ok (first %)))
+             (mapv (fn [[_ op]] op)))
+
+        resolved-ops (mapv #(resolve-op-refs % all-results) executable-ops)
+        raw-results  (execute-wave resolve-handler resolved-ops)
+        ;; Pair input ops with executor outputs by index so a nil result
+        ;; (worker timeout) is synthesized into a failed entry carrying
+        ;; the input op's id — preserves :total invariant.
+        exec-results (mapv (fn [op raw]
+                             (enrich-op-result (normalize-exec-result op raw)))
+                           executable-ops raw-results)]
+    (into (into dep-skip-results broken-ref-results) exec-results)))
 
 ;; =============================================================================
 ;; Pipeline
@@ -327,15 +515,20 @@
                     :error    error
                     :wave-num wave-num}))))
 
-    (let [results     (vals @all-results)
-          success-cnt (count (filter :success results))
-          failed-cnt  (count (remove :success results))]
+    (let [results       (vals @all-results)
+          success-cnt   (count (filter :success results))
+          failed-cnt    (count (remove :success results))
+          timed-out-cnt (count (filter :timed-out results))]
       {:success (zero? failed-cnt)
        :waves   @wave-log
-       :summary {:total   total-count
-                 :success success-cnt
-                 :failed  failed-cnt
-                 :waves   wave-count}})))
+       :summary (cond-> {:total   total-count
+                         :success success-cnt
+                         :failed  failed-cnt
+                         :waves   wave-count}
+                  ;; Surface timeouts distinctly: they're the subset of
+                  ;; failures that MAY have succeeded server-side and are
+                  ;; safe to retry only for idempotent ops.
+                  (pos? timed-out-cnt) (assoc :timed-out timed-out-cnt))})))
 
 (defn run-operations
   "Execute a vector of operations with dependency ordering.

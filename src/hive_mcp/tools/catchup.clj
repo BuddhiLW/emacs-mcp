@@ -19,10 +19,12 @@
   (:require [hive-mcp.agent.context :as ctx]
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.tools.memory.scope :as scope]
+            [hive-mcp.crystal.harvest.collect :as coll]
+            [hive-mcp.crystal.fanout :as fan]
+            [hive-mcp.crystal.persist :as persist]
             [hive-mcp.tools.catchup.scope :as catchup-scope]
             [hive-mcp.tools.catchup.format :as fmt]
             [hive-mcp.tools.catchup.git :as catchup-git]
-            [hive-mcp.tools.catchup.carto :as catchup-carto]
             [hive-mcp.tools.catchup.spawn :as catchup-spawn]
             [hive-mcp.tools.catchup.scope-filter :as sf]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
@@ -32,13 +34,13 @@
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.concurrency.pool :as pool]
             [hive-mcp.project.tree :as project-tree]
-            [hive-mcp.dns.result :refer [rescue]]
-            [hive-mcp.agent.context :as ctx]
+            [hive-mcp.dns.result :refer [rescue ok ok? let-ok try-effect* ok->]]
             [hive-dsl.context.identity :as ctx-id]
             [hive-ttracking.core :as tt]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]
-            [hive-mcp.tools.catchup.relevance :as relevance]))
+            [hive-mcp.tools.catchup.relevance :as relevance]
+            [hive-mcp.vectordb.kanban-facade :as kanban-facade]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -90,48 +92,60 @@
   300000)
 
 (defn- gather-kanban-summary
-  "Direct memory query for kanban summary scoped to project-id.
+  "Direct kanban-facade query for catchup summary scoped to project-id.
    Returns {:counts {:todo n :inprogress n :inreview n :done n}
-            :recent-todos [{:id :title} ...] (top 10 by updated desc)}.
-   Catchup's bundle path doesn't surface kanban notes (hierarchy fairness
-   cap drops them in favor of session-summaries). This is a dedicated
-   query mirroring the kanban-tag scope-filter pattern."
+            :recent-todos [{:id :title} ...] (top 10 by updated desc)
+            :scope-tag str-or-nil}.
+
+   Routes via `kanban-facade/query-entries` so the active store-routing
+   mode is honored (`:default` legacy milvus, `:kanban` qdrant cutover,
+   `:dual-read` soak). Reaching past the facade is a DIP one-seam
+   violation and was the 2026-05-04 catchup regression: the call site
+   read milvus while live writes had moved to qdrant, producing stale
+   bucket counts that did not reconcile with `kanban list`.
+
+   Railway-ROP: each facade query is wrapped in `try-effect*` so a
+   single bad query short-circuits via `ok->` rather than throwing
+   through the whole computation. The full empty result is the
+   fallback when any leg errors. The caller (safe-deref) still expects
+   a plain map, so the Result is unwrapped at the seam."
   [project-id]
-  (rescue {:counts {} :recent-todos [] :scope-tag nil}
-          (let [store (mem-proto/get-store)
-                scope-tag (when project-id (str "scope:project:" project-id))
-                base-tags (cond-> ["kanban"] scope-tag (conj scope-tag))
-                count-status (fn [status]
-                               (count (mem-proto/query-entries
-                                       store
-                                       {:type "note"
-                                        :tags (conj base-tags status)
-                                        :limit 200
-                                        :output-fields ["id"]})))
-                recent-todos (->> (mem-proto/query-entries
-                                   store
-                                   {:type "note"
-                                    :tags (conj base-tags "todo")
-                                    :limit 10
-                                    :order-by [:updated :desc]
-                                    :output-fields ["id" "content" "tags"]})
-                                  (mapv (fn [e]
-                                          {:id    (:id e)
-                                           :title (or (get-in e [:content :title])
-                                                      (when (string? (:content e))
-                                                        (first (clojure.string/split-lines (:content e))))
-                                                      "(no title)")
-                                           :tags  (:tags e)})))]
-            ;; Internal status tags are 'todo' / 'doing' / 'review' / 'done'
-            ;; (see hive-mcp.tools.kanban.predicates/status-enum->tag).
-            ;; Counts are exposed under their MCP-facing names so the catchup
-            ;; block matches what users would pass to `kanban list status=…`.
-            {:counts {:todo       (count-status "todo")
-                      :inprogress (count-status "doing")
-                      :inreview   (count-status "review")
-                      :done       (count-status "done")}
-             :recent-todos recent-todos
-             :scope-tag scope-tag})))
+  (let [scope-tag    (when project-id (str "scope:project:" project-id))
+        base-tags    (cond-> ["kanban"] scope-tag (conj scope-tag))
+        empty-result {:counts {} :recent-todos [] :scope-tag scope-tag}
+        count-into   (fn [acc bucket tag]
+                       (let-ok [n (try-effect* :kanban/count-failed
+                                    (count (kanban-facade/query-entries
+                                            :type "note"
+                                            :tags (conj base-tags tag)
+                                            :limit 200
+                                            :output-fields ["id"])))]
+                         (ok (assoc-in acc [:counts bucket] n))))
+        attach-recent (fn [acc]
+                        (let-ok [rows (try-effect* :kanban/recent-failed
+                                        (kanban-facade/query-entries
+                                         :type "note"
+                                         :tags (conj base-tags "todo")
+                                         :limit 10
+                                         :order-by [:updated :desc]
+                                         :output-fields ["id" "content" "tags"]
+                                         :include-content? true))]
+                          (ok (assoc acc :recent-todos
+                                     (mapv (fn [e]
+                                             {:id    (:id e)
+                                              :title (or (get-in e [:content :title])
+                                                         (when (string? (:content e))
+                                                           (first (clojure.string/split-lines (:content e))))
+                                                         "(no title)")
+                                              :tags  (:tags e)})
+                                           rows)))))
+        result (ok-> (ok empty-result)
+                     (count-into :todo       "todo")
+                     (count-into :inprogress "doing")
+                     (count-into :inreview   "review")
+                     (count-into :done       "done")
+                     attach-recent)]
+    (if (ok? result) (:ok result) empty-result)))
 
 ;; =============================================================================
 ;; Main Catchup Handler
@@ -181,22 +195,30 @@
               ;; under child projects (e.g. hive-mcp under hive) are invisible.
               _ (rescue nil (project-tree/maybe-scan-project-tree! (or directory ".")))
 
-              ;; ── Wave 1: ONE memory bundle + git + carto in parallel ──
+              ;; ── Wave 1: ONE memory bundle + git + extension status in parallel ──
               ;; The bundle replaces 7 per-type Milvus RPCs with 2 queries
               ;; (hierarchy + global-pierce), grouped by :type in memory. Avoids
               ;; Milvus type-filter scalar-scan storms that blew the budget.
+              ;; The :catchup/status-providers extension lets registered
+              ;; addons attach status fields to the response without the
+              ;; core knowing about them — DIP.
               f-bundle (pool/with-io ((tt/timed-query "catchup/bundle-total"
                                                       #(catchup-scope/query-catchup-bundle project-id))))
               f-git    (pool/with-io ((tt/timed-query "catchup/git-total"
                                                       #(catchup-git/gather-git-info directory))))
-              f-carto  (pool/with-io ((tt/timed-query "catchup/carto-total"
-                                                      #(catchup-carto/get-status project-id))))
+              status-providers (or (ext/get-extension :catchup/status-providers) {})
+              f-status (pool/with-io ((tt/timed-query "catchup/status-providers-total"
+                                                      #(reduce-kv (fn [acc k provider-fn]
+                                                                    (assoc acc k
+                                                                           (rescue nil (provider-fn project-id))))
+                                                                  {} status-providers))))
               f-kanban (pool/with-io ((tt/timed-query "catchup/kanban-summary-total"
                                                       #(gather-kanban-summary project-id))))
 
               bundle        (safe-deref f-bundle query-timeout-ms {} "bundle")
               git-info      (safe-deref f-git query-timeout-ms {} "git-info")
-              carto-status  (safe-deref f-carto query-timeout-ms nil "carto-status")
+              addon-status  (safe-deref f-status query-timeout-ms {} "addon-status")
+              carto-status  (:carto-status addon-status)
               kanban-summary (safe-deref f-kanban query-timeout-ms
                                           {:counts {} :recent-todos []}
                                           "kanban-summary")
@@ -267,14 +289,33 @@
               ;; — `catchup-priority` and `scope:project:<current>` still
               ;; pierce. See `hive-mcp.tools.catchup.relevance`.
               ;; Entries without scope tags pass through (global by convention).
+              ;; Optional persona lens (e.g. hive-agent addon, via
+              ;; :catchup/persona-lens) — mirror of :catchup/status-providers.
+              ;; Resolves an OPAQUE per-caller lens (plain EDN) for the current
+              ;; agent, keyed by (caller-id, project-id). rescue-wrapped: a
+              ;; throwing or absent provider yields nil => identity compose
+              ;; downstream (no persona boost). DIP: core never names the
+              ;; persona NOR the lens shape — hive-knowledge.catchup.lens
+              ;; coerces the EDN at the :catchup/lens seam below.
+              persona-lens-fn (ext/get-extension :catchup/persona-lens)
+              persona-lens    (when persona-lens-fn
+                                (rescue nil (persona-lens-fn raw-caller-id project-id)))
               relevance-ctx
-              (relevance/build-context
-               {:project-id project-id
-                :co-loaded-entries (concat priority-conventions
-                                           decisions
-                                           sessions)})
+              (cond-> (relevance/build-context
+                       {:project-id project-id
+                        :co-loaded-entries (concat priority-conventions
+                                                   decisions
+                                                   sessions)})
+                persona-lens (assoc :persona-lens persona-lens))
+              ;; Optional lens provider (hive-knowledge addon, via :catchup/lens).
+              ;; Re-ranks/refines the relevance-filtered axioms against active
+              ;; work. Absent addon => nil => relevant-axioms is byte-for-byte
+              ;; today's filter output (cond-> guard false). DIP: core never
+              ;; names the provider — see hive-knowledge.catchup.lens-addon.
+              lens-fn (ext/get-extension :catchup/lens)
               relevant-axioms
-              (relevance/filter-by-relevance (vec axioms) relevance-ctx)
+              (cond-> (relevance/filter-by-relevance (vec axioms) relevance-ctx)
+                lens-fn (lens-fn relevance-ctx))
               piggyback-raw (into (into (vec relevant-axioms) principles) priority-conventions)
               piggyback-entries
               (let [in-project? (and project-id (not= project-id "global"))]
@@ -359,30 +400,50 @@
 ;; =============================================================================
 
 (defn handle-native-wrap
-  "Native Clojure wrap implementation that persists to the registered
-   IMemoryStore directly. Delegates to :catchup/wrap extension
-   (provided by addon) for harvesting and crystallization."
+  "Native multi-scope wrap implementation — Step 8 of plan
+   `20260504173159-46dc47f1`.
+
+   Pipeline (no extension delegation):
+     1. `coll/harvest-all-by-scope` — flat harvest → attribution → partition
+        → `HarvestByScope`.
+     2. `fan/synthesize-wraps` — fan-out one entry per touched scope plus
+        an umbrella; each entry carries an explicit `scope:project:<pid>`
+        (or `scope:multi-project`) tag from step-6 `with-scope-tag`.
+     3. `persist/persist-wraps!` — direct `mem-proto/add-entry!` per entry
+        with explicit `:project-id` from `:pid` (no pwd derivation).
+
+   Returns MCP text payload with aggregate shape:
+     {:session   <session-id>
+      :directory <dir>
+      :total     <count>
+      :persisted <count>
+      :failed    <count>
+      :wraps     [{:pid :project-id :id :success? :error?} ...]}"
   [args]
   (let [directory (ctx/resolve-caller-directory args)
         agent-id (:agent_id args)]
-    (log/info "native-wrap: crystallizing to memory store" {:directory directory :agent-id agent-id})
+    (log/info "native-wrap: per-scope chain" {:directory directory :agent-id agent-id})
     (if-not (mem-proto/store-set?)
       (fmt/store-not-configured-error)
-      (if-let [wrap-fn (ext/get-extension :catchup/wrap)]
-        (try
-          (let [result (wrap-fn {:directory directory :agent-id agent-id})
-                project-id (scope/get-current-project-id directory)]
-            (if (:error result)
-              {:type "text"
-               :text (json/write-str {:error (:error result) :session (:session result)})
-               :isError true}
-              {:type "text"
-               :text (json/write-str (assoc result :project-id project-id))}))
-          (catch Exception e
-            (log/error e "native-wrap failed")
-            {:type "text"
-             :text (json/write-str {:error (.getMessage e)})
-             :isError true}))
-        {:type "text"
-         :text (json/write-str {:error "Wrap extension not registered. Load the crystal addon."})
-         :isError true}))))
+      (try
+        (let [hbs            (coll/harvest-all-by-scope {:directory directory
+                                                          :agent-id  agent-id})
+              wraps          (fan/synthesize-wraps hbs)
+              persist-result (persist/persist-wraps! wraps)]
+          (log/info "native-wrap: completed"
+                    {:total     (:total persist-result)
+                     :persisted (:persisted persist-result)
+                     :failed    (:failed persist-result)})
+          {:type "text"
+           :text (json/write-str
+                   {:session   (:session hbs)
+                    :directory directory
+                    :total     (:total persist-result)
+                    :persisted (:persisted persist-result)
+                    :failed    (:failed persist-result)
+                    :wraps     (:results persist-result)})})
+        (catch Exception e
+          (log/error e "native-wrap failed")
+          {:type "text"
+           :text (json/write-str {:error (.getMessage e)})
+           :isError true})))))

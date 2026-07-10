@@ -4,11 +4,18 @@
    Built on hive-dsl.adt/defadt. Provides type-safe spawn mode dispatch
    with compile-time exhaustiveness checking via adt-case.
 
-   Variants: :claude | :vterm | :headless | :agent-sdk | :openrouter
+   Variants: :claude | :vterm | :headless | :agent-sdk
 
    This module is the type-safe counterpart to spawn-mode-registry.
-   - spawn-mode-registry: SST for metadata (requires-emacs?, io-model, etc.)
-   - spawn-mode (this ns): ADT for type-safe dispatch + coercion + exhaustiveness
+   - spawn-mode-registry: SST for metadata (requires-emacs?, io-model, etc.),
+     including addon-contributed modes registered at runtime.
+   - spawn-mode (this ns): ADT for type-safe dispatch + coercion +
+     exhaustiveness over the abstract/legacy modes hive-mcp owns.
+
+   Addon-contributed modes (e.g. :hive-agent from hive-agent, :tmux from
+   hive-tmux) are valid runtime keywords but are NOT ADT variants. Code
+   that needs to handle addon modes works on plain keywords + the
+   merged registry, not on this ADT.
 
    Usage:
      (require '[hive-mcp.agent.spawn-mode :as sm])
@@ -17,26 +24,30 @@
      (sm/spawn-mode :vterm)
      ;; => {:adt/type :SpawnMode, :adt/variant :vterm}
 
-     ;; Coerce from keyword (nil if invalid)
+     ;; Coerce from keyword (nil if not an ADT variant)
      (sm/->spawn-mode :headless)
      ;; => {:adt/type :SpawnMode, :adt/variant :headless}
+     (sm/->spawn-mode :hive-agent)  ;; addon mode
+     ;; => nil  (use registry/valid-mode? instead)
 
      ;; Predicate
      (sm/spawn-mode? x) ;; => true/false
 
-     ;; Exhaustive dispatch
+     ;; Exhaustive dispatch over ADT variants
      (adt-case SpawnMode mode
+       :claude     :emacs-claude
        :vterm      :emacs-buffer
-       :headless   :subprocess
-       :agent-sdk  :sdk-subprocess
-       :openrouter :api-call)
+       :headless   :abstract-headless
+       :agent-sdk  :sdk-subprocess)
 
      ;; Extract keyword (for backward compat)
      (sm/to-keyword mode) ;; => :vterm
 
-     ;; Alias resolution
+     ;; Alias resolution — :headless is now abstract (resolved dynamically
+     ;; at spawn time via headless-registry); resolve-alias returns it
+     ;; unchanged unless an explicit static alias is set in the registry.
      (sm/resolve-alias (sm/spawn-mode :headless))
-     ;; => {:adt/type :SpawnMode, :adt/variant :agent-sdk}"
+     ;; => {:adt/type :SpawnMode, :adt/variant :headless}"
   (:require [hive-dsl.adt :refer [defadt adt-variant]]
             [hive-mcp.agent.spawn-mode-registry :as registry]))
 
@@ -49,17 +60,21 @@
 ;; =============================================================================
 
 (defadt SpawnMode
-  "Agent spawn modes — closed sum type.
-   :claude     — Claude Code terminal via hive-claude bridge (default)
-   :vterm      — Raw Emacs vterm buffer via vterm-mcp
-   :headless   — Alias for :agent-sdk (legacy name, auto-mapped since 0.12.0)
-   :agent-sdk  — Claude Agent SDK subprocess (default for headless)
-   :openrouter — Direct OpenRouter API calls (multi-model, no CLI)"
+  "Agent spawn modes — closed sum type over hive-mcp's abstract/legacy modes.
+
+   :claude    — Claude Code terminal via hive-claude bridge
+   :vterm     — Raw Emacs vterm buffer via vterm-mcp
+   :headless  — Abstract headless mode; concrete backend resolved at spawn
+                time via headless-registry/resolve-default-backend.
+   :agent-sdk — Claude Agent SDK subprocess
+
+   Addon-contributed modes (e.g. :hive-agent, :tmux) are valid runtime
+   spawn-mode keywords but are NOT ADT variants — they flow as plain
+   keywords through registry-based validation."
   :claude
   :vterm
   :headless
-  :agent-sdk
-  :openrouter)
+  :agent-sdk)
 
 ;; =============================================================================
 ;; Keyword Coercion (backward compatibility bridge)
@@ -92,12 +107,16 @@
 ;; =============================================================================
 
 (defn resolve-alias
-  "Resolve a SpawnMode to its canonical form.
-   :headless => :agent-sdk, others unchanged.
-   Returns a new SpawnMode ADT value.
+  "Resolve a SpawnMode to its canonical form via the registry's static
+   :alias-of metadata. Returns a new SpawnMode ADT value.
 
-   (resolve-alias (spawn-mode :headless))
-   => {:adt/type :SpawnMode, :adt/variant :agent-sdk}"
+   :headless has no static alias post-cleanup — it's an abstract mode
+   resolved dynamically at spawn time via
+   hive-mcp.agent.ling.headless-registry/resolve-default-backend. This
+   function returns :headless unchanged.
+
+   (resolve-alias (spawn-mode :headless)) => SpawnMode :headless
+   (resolve-alias (spawn-mode :vterm))    => SpawnMode :vterm"
   [sm]
   (let [canonical (registry/resolve-alias (adt-variant sm))]
     (spawn-mode canonical)))
@@ -159,5 +178,7 @@
   #{:claude :vterm})
 
 (def headless-variants
-  "Set of subprocess/API variants (no Emacs required)."
-  #{:headless :agent-sdk :openrouter})
+  "Set of subprocess/API variants (no Emacs required) within the closed
+   ADT. Addon-contributed headless modes (e.g. :hive-agent) are tracked
+   in `hive-mcp.agent.spawn-mode-registry/headless-modes` at runtime."
+  #{:headless :agent-sdk})

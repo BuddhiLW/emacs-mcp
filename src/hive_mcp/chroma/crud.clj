@@ -36,15 +36,44 @@
   (let [entry-id (or id (h/generate-id))
         now (h/iso-timestamp)
         doc-text (h/memory-to-document entry)
-        resolved (rescue nil (embedding-service/resolve-provider-for-type type))
-        _ (when resolved (embedding-service/validate-content-size! doc-text resolved))
+        ;; Size-aware resolution: oversized content auto-escalates to a
+        ;; bigger-context provider (and its collection) — same resolution
+        ;; drives collection + provider + embedding, so dimension stays
+        ;; coherent. No-embed types (structurally-addressed blobs) skip the
+        ;; provider call and store a zero placeholder vector.
+        no-embed? (embedding-service/no-embed-type? type)
+        resolved (rescue nil (embedding-service/resolve-provider-for-type+size type doc-text))
+        _ (when (and resolved (not no-embed?))
+            (embedding-service/validate-content-size! doc-text resolved))
         coll (if resolved
                (conn/get-or-create-named-collection
                  (:collection-name resolved) (:dimension resolved))
                (conn/get-or-create-collection))
         provider (if resolved (:provider resolved) (emb/get-embedding-provider))
-        embedding (gate/with-embedding-gate
-                    (emb/embed-text provider doc-text))
+        embed-1 (fn [p] (gate/with-embedding-gate (emb/embed-text p doc-text)))
+        embedding (if no-embed?
+                    (vec (repeat (or (:dimension resolved) 768) 0.0))
+                    ;; Embed via the resolved provider; on failure (e.g. Venice
+                    ;; slow/unreachable) fail over once to a same-dimension
+                    ;; sibling (venice<->openrouter qwen3, both 4096-d) so the
+                    ;; write is never silently stored unvectorized.
+                    (try
+                      (embed-1 provider)
+                      (catch Throwable e1
+                        (if-let [alt (and resolved (embedding-service/sibling-failover resolved))]
+                          (do (log/warn "Embed via" (:provider-key resolved)
+                                        "failed for entry" entry-id "— failing over to"
+                                        (:provider-key alt) "(" (.getMessage e1) ")")
+                              (try (embed-1 (:provider alt))
+                                   (catch Throwable e2
+                                     (log/error "Embed failover also failed for entry"
+                                                entry-id "providers" (:provider-key resolved)
+                                                "/" (:provider-key alt) "—" (.getMessage e2))
+                                     (throw e2))))
+                          (do (log/error "Embed FAILED (no failover sibling) for entry"
+                                         entry-id "via" (and resolved (:provider-key resolved))
+                                         "—" (.getMessage e1))
+                              (throw e1))))))
         provided {:type type :tags (h/join-tags tags) :content (h/serialize-content content)
                   :content-hash content-hash :created (or created now) :updated (or updated now)
                   :duration duration :expires expires :access-count access-count
@@ -108,6 +137,10 @@
         results (gate/deref-read (chroma/get coll :ids [id] :include #{:documents :metadatas}))
         entry (some-> (first results) h/metadata->entry)]
     (or entry
+        ;; Try local 1024-d (qwen3-embedding:0.6b) collection
+        (rescue nil (let [md-coll (conn/get-or-create-named-collection "hive-mcp-memory-1024d" 1024)
+                          md-results (gate/deref-read (chroma/get md-coll :ids [id] :include #{:documents :metadatas}))]
+                      (some-> (first md-results) h/metadata->entry)))
         ;; Try large-content collection if not found in default
         (rescue nil (let [lg-coll (conn/get-or-create-named-collection "hive-mcp-memory-4096d" 4096)
                 lg-results (gate/deref-read (chroma/get lg-coll :ids [id] :include #{:documents :metadatas}))]
@@ -192,10 +225,13 @@
     (update-entry! entry-id updates)))
 
 (defn delete-entry!
-  "Delete a memory entry from the Chroma index. Tries both collections."
+  "Delete a memory entry from the Chroma index. Tries all collections."
   [id]
   (let [coll (conn/get-or-create-collection)]
     (gate/deref-write (chroma/delete coll :ids [id]))
+    ;; Also try local 1024-d collection (qwen3-embedding:0.6b)
+    (rescue nil (let [md-coll (conn/get-or-create-named-collection "hive-mcp-memory-1024d" 1024)]
+                  (gate/deref-write (chroma/delete md-coll :ids [id]))))
     ;; Also try deleting from large collection (entry might be there)
     (rescue nil (let [lg-coll (conn/get-or-create-named-collection "hive-mcp-memory-4096d" 4096)]
         (gate/deref-write (chroma/delete lg-coll :ids [id]))))

@@ -5,7 +5,8 @@
    domain code never depends on a specific messaging system directly.
 
    Pattern: follows protocols/editor.clj (active atom + NoopBackbone fallback).
-   Headless mode is a first-class citizen — NoopBackbone degrades gracefully.")
+   Headless mode is a first-class citizen — NoopBackbone degrades gracefully."
+  (:require [hive-mcp.protocols.registry :as reg]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -47,32 +48,32 @@
 ;;; Active Backbone Management
 ;;; ============================================================================
 
-(defonce ^:private active-backbone (atom nil))
+(declare ->NoopBackbone)
+
+(defonce ^:private slot
+  (reg/single-slot {:validate #(satisfies? IEventBackbone %)
+                    :on-empty #(->NoopBackbone)}))
 
 (defn set-backbone!
   "Set the active event backbone implementation."
   [backbone]
-  {:pre [(satisfies? IEventBackbone backbone)]}
-  (reset! active-backbone backbone)
-  backbone)
+  (reg/install! slot backbone))
 
 (defn backbone-set?
   "Check if a backbone has been explicitly configured."
   []
-  (some? @active-backbone))
-
-(declare ->NoopBackbone)
+  (reg/present? slot))
 
 (defn get-backbone
   "Get the active backbone. Returns NoopBackbone when none is configured
    (headless mode is a first-class citizen)."
   []
-  (or @active-backbone (->NoopBackbone)))
+  (reg/current slot))
 
 (defn clear-backbone!
   "Clear the active backbone."
   []
-  (reset! active-backbone nil))
+  (reg/clear! slot))
 
 ;;; ============================================================================
 ;;; NoopBackbone (Headless Fallback)

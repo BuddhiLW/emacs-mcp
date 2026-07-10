@@ -8,7 +8,7 @@
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.tools.kanban.transitions :as kt]
             [hive-mcp.tools.memory.scope :as scope]
-            [hive-mcp.vectordb.facade :as facade]))
+            [hive-mcp.vectordb.kanban-facade :as kanban-facade]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -18,9 +18,25 @@
   (let [[_ payload] (:event coeffects)]
     (or payload {})))
 
+(defn- store-failure?
+  "True if `v` is the legacy `{:success? false ...}` failure-map that the
+   Milvus resilience layer returns instead of throwing on non-transient
+   errors (or after reconnect-budget exhaustion). These would otherwise
+   be stuffed into `:kanban/entry`, fail `kanban-entry?`, and surface as
+   a misleading 'Entry not found or not a kanban task'."
+  [v]
+  (and (map? v)
+       (contains? v :success?)
+       (false? (:success? v))))
+
 (defn- entry-cofx [coeffects]
-  (let [{:keys [task-id]} (event-payload coeffects)]
-    (assoc coeffects :kanban/entry (facade/get-entry-by-id task-id))))
+  (let [{:keys [task-id]} (event-payload coeffects)
+        result (kanban-facade/get-entry-by-id task-id)]
+    (when (store-failure? result)
+      (throw (ex-info (str "Memory store read failed for kanban task: " task-id)
+                      {:task-id task-id
+                       :store-failure result})))
+    (assoc coeffects :kanban/entry result)))
 
 (defn- project-id-cofx [coeffects]
   (let [{:keys [directory]} (event-payload coeffects)

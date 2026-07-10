@@ -1,21 +1,19 @@
 (ns hive-mcp.agent.ling.spawn
   "Spawn pipeline for Ling agents: plan computation, preset loading, readiness
-   dispatch, and the `Ling` defrecord itself. Split from `hive-mcp.agent.ling`
-   (hotspot #20) — the `execute-spawn-plan!` god function lived here."
+   dispatch, and the `Ling` defrecord itself."
   (:require [hive-mcp.agent.protocol :refer [IAgent]]
             [hive-mcp.agent.ling.strategy :as strategy]
             [hive-mcp.agent.ling.headless-registry :as headless-reg]
             [hive-mcp.agent.ling.lifecycle :as lifecycle]
             [hive-mcp.agent.ling.spawn-store :as spawn-store]
-            ;; LingResources concretion lives in hive-agent (task c1):
-            ;; resolved lazily below to keep hive-mcp → hive-agent dep inverted.
             [hive-mcp.workflows.catchup-ling :as catchup-ling]
             [hive-mcp.swarm.datascript.lings :as ds-lings]
             [hive-mcp.swarm.datascript.queries :as ds-queries]
             [hive-mcp.protocols.dispatch :as dispatch-ctx]
             [clojure.string :as str]
             [hive-dsl.result :as r]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.extensions.registry :as ext]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -44,7 +42,8 @@
     {:effective-model effective-model
      :mode mode
      :strat (lifecycle/resolve-strategy mode)
-     :ctx (assoc (lifecycle/ling-ctx ling) :model effective-model)
+     :ctx (cond-> (assoc (lifecycle/ling-ctx ling) :model effective-model)
+            (:provider opts) (assoc :provider (:provider opts)))
      :depth depth
      :parent parent
      :kanban-task-id kanban-task-id
@@ -58,7 +57,7 @@
 (defn- load-presets-content
   "Load preset content from preset .md files for headless backends.
    Claude CLI lings load presets from .claude/agents/ automatically;
-   headless backends (OpenRouter, hive-agent) need explicit injection.
+   headless backends need explicit injection.
    Returns concatenated preset markdown string, or nil."
   [preset-names]
   (r/rescue nil
@@ -153,6 +152,9 @@
                  (or (:provider ctx) :openrouter)))}))
 
 (defn- spawn-opts
+  "Build the spawn-opts passed to strategy-spawn!. Backend-agnostic: opts pass
+   through (incl. any :system-prompt), with resolved preset-content and api-key
+   added. Each backend maps these to its own config."
   [opts enriched-task {:keys [preset-content api-key]}]
   (cond-> (if enriched-task
             (assoc opts :task enriched-task)
@@ -252,6 +254,24 @@
                             :effective-model effective-model
                             :enriched-task enriched-task})))
 
+(defn- apply-spawn-overlay
+  "Generic spawn-opts extension seam. Strips the internal :spawn/request key
+   from opts, then applies any extension registered under :spawn/opts-overlay
+   as (f opts ctx) -> opts'. Fail-soft: nil or a throw falls back to the
+   stripped opts. Applied once in spawn! so plan + executor both see merged opts."
+  [opts ling]
+  (let [req  (:spawn/request opts)
+        opts (dissoc opts :spawn/request)]
+    (if-let [f (ext/get-extension :spawn/opts-overlay)]
+      (or (r/rescue nil
+            (f opts {:request req
+                     :cwd (:cwd ling)
+                     :project-id (:project-id ling)
+                     :task (:task opts)
+                     :kanban-task-id (:kanban-task-id opts)}))
+          opts)
+      opts)))
+
 (defn- execute-spawn-plan!
   "Execute spawn effects: catchup enrichment, store pre-registration, strategy
    spawn, store reconciliation, budget registration, and readiness-based dispatch.
@@ -281,7 +301,8 @@
   IAgent
 
   (spawn! [this opts]
-    (let [plan (compute-spawn-plan this opts)]
+    (let [opts (apply-spawn-overlay opts this)
+          plan (compute-spawn-plan this opts)]
       (execute-spawn-plan! plan opts)))
 
   (dispatch! [this task-opts]
@@ -358,8 +379,7 @@
       (if can-kill?
         (do
           ;; Release per-ling owned resources (channels, caches) + unregister.
-          ;; Additive: existing .release-claims! path retained until c6 migrates.
-          ;; Task c1: release fn lives in hive-agent — lazy resolve (no-op if addon absent).
+          ;; Lazy-resolve the release fn so this is a no-op when the addon is absent.
           (r/rescue nil
             (when-let [release (requiring-resolve 'hive-agent.lifecycle.resources/release-ling-resources!)]
               (release id)))
@@ -439,6 +459,8 @@
                         :model model-val}
                  (:provider opts)           (assoc :provider (:provider opts))
                  (some? (:kg-compress? opts)) (assoc :kg-compress? (:kg-compress? opts))
+                 (some? (:verbose? opts))   (assoc :verbose? (:verbose? opts))
+                 (:llm-retries opts)        (assoc :llm-retries (:llm-retries opts))
                  (:sliding-window-size opts) (assoc :sliding-window-size (:sliding-window-size opts))
                  (:agents opts)             (assoc :agents (:agents opts))
                  (:max-budget-usd opts)     (assoc :max-budget-usd (:max-budget-usd opts))))))

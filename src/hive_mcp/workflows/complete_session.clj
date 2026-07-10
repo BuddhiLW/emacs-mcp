@@ -41,7 +41,8 @@
       :eviction       map}     ;; context eviction result"
 
   (:require [hive.events.fsm :as fsm]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [hive-mcp.workflows.support :as support]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -70,7 +71,9 @@
   [data]
   (empty? (:task-ids data)))
 
-(defn always [_data] true)
+(def always
+  "Dispatch predicate — always true. Shared seam (support/always)."
+  support/always)
 
 ;; =============================================================================
 ;; Handlers (pure functions: resources x data -> data')
@@ -95,8 +98,8 @@
                             :else nil)))
         merge-fn (or (:merge-task-ids-fn resources)
                      (fn [ids _] (vec (or ids []))))
-        agent-id (or (:agent-id data) (:agent-id resources))
-        directory (or (:directory data) (:directory resources))
+        {:keys [agent-id directory]} (support/resolve-session-identity
+                                      resources data {:derive-project? false})
         validation-result (validate-fn data)
         merged-tasks (when-not validation-result
                        (merge-fn (:task-ids data) agent-id))]
@@ -185,14 +188,12 @@
    EDN handler key: :evict
 
    Uses resources:
-     :evict-fn (fn [agent-id] -> {:evicted N})"
+     :evict-fn (fn [agent-id] -> {:evicted N})
+
+   Fatal policy (nil): a thrown evict-fn PROPAGATES (no degraded fallback,
+   unlike wrap-session which passes support/continue)."
   [resources data]
-  (let [evict-fn (:evict-fn resources)
-        agent-id (:agent-id data)]
-    (if evict-fn
-      (let [result (evict-fn agent-id)]
-        (assoc data :eviction result))
-      (assoc data :eviction {:evicted 0 :skipped true}))))
+  (support/handle-evict resources data nil))
 
 (defn handle-end
   "Terminal state handler. Returns final session complete summary.
@@ -205,14 +206,11 @@
       (assoc :status :ok
              :tasks-completed (count (:task-ids data)))))
 
-(defn handle-error
-  "Error state handler. Captures error context.
+(def handle-error
+  "Error state handler. Captures error context and throws.
    EDN handler key: :error"
-  [_resources {:keys [error data] :as _fsm}]
-  (throw (ex-info "Session complete workflow error"
-                  {:agent-id (:agent-id data)
-                   :data (select-keys data [:error :commit-msg])
-                   :error error})))
+  (support/default-handle-error "Session complete workflow error"
+                                [:error :commit-msg]))
 
 ;; =============================================================================
 ;; Handler Map (for EDN spec registration in workflow registry)
@@ -289,12 +287,7 @@
    :opts
    {:max-trace 50
 
-    :pre
-    (fn [{:keys [current-state-id] :as fsm} _resources]
-      (update-in fsm [:data :trace-log] (fnil conj [])
-                 {:state current-state-id
-                  :at (str (java.time.Instant/now))
-                  :direction :enter}))}})
+    :pre support/trace-log-enter}})
 
 ;; =============================================================================
 ;; Compilation & Execution API

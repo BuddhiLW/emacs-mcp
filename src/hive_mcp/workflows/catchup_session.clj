@@ -82,7 +82,8 @@
             [hive-mcp.dns.result :as result]
             [hive-mcp.concurrency.pool :as pool]
             [hive-dsl.context.identity :as ctx-id]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.workflows.support :as support]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -432,7 +433,9 @@
 ;; In-Code FSM Spec (inline functions, no EDN needed)
 ;; =============================================================================
 
-(defn always [_data] true)
+(def always
+  "Dispatch predicate — always true. Shared seam (support/always)."
+  support/always)
 
 (def catchup-session-spec
   "hive-events FSM spec for the catchup session workflow.
@@ -488,12 +491,7 @@
    :opts
    {:max-trace 50
 
-    :pre
-    (fn [{:keys [current-state-id] :as fsm} _resources]
-      (update-in fsm [:data :trace-log] (fnil conj [])
-                 {:state current-state-id
-                  :at (str (java.time.Instant/now))
-                  :direction :enter}))}})
+    :pre support/trace-log-enter}})
 
 ;; =============================================================================
 ;; Compilation & Execution API

@@ -7,6 +7,7 @@
    When no extensions are registered, all functions gracefully degrade
    to pass-through (input returned unchanged)."
   (:require [hive-mcp.extensions.registry :as ext]
+            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
             [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -16,15 +17,6 @@
 ;; =============================================================================
 ;; Extension Delegation Helpers
 ;; =============================================================================
-
-(defn- delegate-or-noop
-  "Try to delegate to extension fn, fall back to default value."
-  [ext-key default-val args]
-  (if-let [f (ext/get-extension ext-key)]
-    (apply f args)
-    (do
-      (log/debug "Extension not available, returning default for" ext-key)
-      default-val)))
 
 ;; =============================================================================
 ;; Auto-Detection for Ling Callers

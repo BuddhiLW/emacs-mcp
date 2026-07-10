@@ -2,8 +2,8 @@
   "ISweepable impl that detects IResourceOwner entries whose underlying
    ling process is dead and releases their resources.
 
-   Walks `hive-mcp.system.registry/resource-registry`, asks each owner for
-   its `owner-id`, then consults `hive-mcp.agent.ling.spawn/find-ling` (via
+   Walks `hive-mcp.system.registry/registered-resource-owners`, asks each owner
+   for its `owner-id`, then consults `hive-mcp.agent.ling.spawn/find-ling` (via
    requiring-resolve) to decide liveness:
 
      - find-ling returns nil          → owner is orphaned → release-all! + unregister
@@ -56,7 +56,7 @@
   (sweep-name [_] "channels/orphan")
   (sweep! [_ _ctx]
     (let [find-ling (resolve-find-ling)
-          owners    (vals @reg/resource-registry)
+          owners    (reg/registered-resource-owners)
           orphaned  (filter (partial orphan? find-ling) owners)
           errors    (volatile! [])]
       (doseq [o orphaned]

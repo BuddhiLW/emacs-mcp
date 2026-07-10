@@ -49,28 +49,33 @@
   (log/info ":hive/hooks init — creating hooks registry, registering crystal hooks + shutdown hook")
   (let [hooks-registry-atom       (atom nil)
         shutdown-hook-registered?  (atom false)
-        coordinator-id-atom        (atom (:coordinator-id config))]
-    ;; Delegate to existing lifecycle/init-hooks! which:
-    ;; 1. Creates registry
-    ;; 2. Injects into sync module
-    ;; 3. Registers crystal hooks (auto-wrap)
-    ;; 4. Registers JVM shutdown hook
-    (lifecycle/init-hooks! hooks-registry-atom shutdown-hook-registered? coordinator-id-atom)
-    ;; Register the three in-core IShutdownHook impls (migrated from the
-    ;; transitional tail of run-shutdown-sequence! in task a4). Late-resolved
-    ;; to keep the compile-time dep direction from system → addons thin.
-    (require 'hive-mcp.system.shutdown.in-core)
-    ((resolve 'hive-mcp.system.shutdown.in-core/register-in-core-shutdown!)
-     coordinator-id-atom hooks-registry-atom)
-    ;; Task c1 DONE: `hive-mcp.system.shutdown.kill-all-lings` moved into
-    ;; `hive-agent.lifecycle.kill-all-lings`; hive-agent.init/init! now loads
-    ;; that ns which self-registers into the shutdown registry via defonce.
-    ;; TRANSITIONAL — task c3 moves this ns into a hive-nats addon and registers via IAddon.init!
-    (require 'hive-mcp.nats.lifecycle)
+        coordinator-id-atom        (atom (:coordinator-id config))
+        ok? (try
+              ;; Delegate to existing lifecycle/init-hooks! which:
+              ;; 1. Creates registry
+              ;; 2. Injects into sync module
+              ;; 3. Registers crystal hooks (auto-wrap)
+              ;; 4. Registers JVM shutdown hook
+              (lifecycle/init-hooks! hooks-registry-atom shutdown-hook-registered? coordinator-id-atom)
+              ;; Register the three in-core IShutdownHook impls (migrated from the
+              ;; transitional tail of run-shutdown-sequence! in task a4). Late-resolved
+              ;; to keep the compile-time dep direction from system → addons thin.
+              (require 'hive-mcp.system.shutdown.in-core)
+              ((resolve 'hive-mcp.system.shutdown.in-core/register-in-core-shutdown!)
+               coordinator-id-atom hooks-registry-atom)
+              ;; Task c1 DONE: `hive-mcp.system.shutdown.kill-all-lings` moved into
+              ;; `hive-agent.lifecycle.kill-all-lings`; hive-agent.init/init! now loads
+              ;; that ns which self-registers into the shutdown registry via defonce.
+              ;; TRANSITIONAL — task c3 moves this ns into a hive-nats addon and registers via IAddon.init!
+              (require 'hive-mcp.nats.lifecycle)
+              true
+              (catch Throwable t
+                (log/warn t ":hive/hooks init threw (non-fatal) — continuing with :failed status")
+                false))]
     {:hooks-registry-atom      hooks-registry-atom
      :shutdown-hook-registered? shutdown-hook-registered?
      :coordinator-id-atom      coordinator-id-atom
-     :status                   :running}))
+     :status                   (if ok? :running :failed)}))
 
 (defmethod ig/halt-key! :hive/hooks
   [_ state]
@@ -94,8 +99,11 @@
 (defmethod ig/init-key :hive/events
   [_ _config]
   (log/info ":hive/events init — initializing hive-events system")
-  (init/init-events!)
-  {:status :running})
+  (let [ok? (try (init/init-events!) true
+                 (catch Throwable t
+                   (log/warn t ":hive/events init threw (non-fatal) — continuing with :failed status")
+                   false))]
+    {:status (if ok? :running :failed)}))
 
 (defmethod ig/halt-key! :hive/events
   [_ _state]
@@ -104,17 +112,45 @@
   (log/info ":hive/events halt — noop (process-global event system)"))
 
 ;; =============================================================================
+;; :hive/delivery-channels — frontend-agnostic IDeliveryChannel registry
+;; =============================================================================
+;; Registers every chosen IDeliveryChannel impl UNCONDITIONALLY at startup so
+;; headless hosts (NATS off, Emacs off) still get a working delivery surface.
+;; Selection: explicit ids set > HIVE_DELIVERY_CHANNELS env > every factory.
+
+(defmethod ig/init-key :hive/delivery-channels
+  [_ config]
+  (log/info ":hive/delivery-channels init — registering IDeliveryChannel fanout endpoints" config)
+  (let [registered (result/rescue nil
+                     (init/init-delivery-channels!)
+                     (require 'hive-mcp.protocols.delivery-channel)
+                     (let [get-fn (resolve 'hive-mcp.protocols.delivery-channel/get-channels)
+                           ch-id  (resolve 'hive-mcp.protocols.delivery-channel/channel-id)]
+                       (mapv ch-id (get-fn))))]
+    {:registered registered
+     :status     (if (seq registered) :running :degraded)}))
+
+(defmethod ig/halt-key! :hive/delivery-channels
+  [_ _state]
+  ;; Channel registry is process-global; clearing it on halt would orphan
+  ;; in-flight fanouts. Leave channels registered across reset.
+  (log/info ":hive/delivery-channels halt — noop (registry survives reset)"))
+
+;; =============================================================================
 ;; :hive/coordinator — DataScript registration + hivemind coordinator entry
 ;; =============================================================================
 
 (defmethod ig/init-key :hive/coordinator
   [_ _config]
   (log/info ":hive/coordinator init — registering coordinator in DataScript + hivemind")
-  (let [coordinator-id-atom (atom nil)]
-    (init/register-coordinator! coordinator-id-atom)
+  (let [coordinator-id-atom (atom nil)
+        ok? (try (init/register-coordinator! coordinator-id-atom) true
+                 (catch Throwable t
+                   (log/warn t ":hive/coordinator init threw (non-fatal) — continuing with :failed status")
+                   false))]
     {:coordinator-id-atom coordinator-id-atom
      :coordinator-id      @coordinator-id-atom
-     :status              :running}))
+     :status              (if ok? :running :failed)}))
 
 (defmethod ig/halt-key! :hive/coordinator
   [_ state]

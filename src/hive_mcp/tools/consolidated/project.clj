@@ -6,15 +6,13 @@
    Addons can extend via contribute-commands! \"project\"."
   (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
             [hive-mcp.tools.composite :as composite]
+            [hive-mcp.tools.core :as tcore]
             [hive-mcp.tools.result-bridge :as rb]
             [hive-mcp.tools.projectile :as projectile-handlers]
-            [hive-mcp.tools.consolidated.kanban :as c-kanban]
-            [hive-mcp.tools.consolidated.config :as c-config]
-            [hive-mcp.tools.consolidated.session :as c-session]
-            [hive-mcp.tools.consolidated.workflow :as c-workflow]
             [hive-mcp.project.tree :as tree]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.dns.result :as result]
+            [clojure.string :as str]
             [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -86,12 +84,36 @@
 ;; Canonical Handlers — project flat + kanban/config/session/workflow nested
 ;; =============================================================================
 
+(defn- lazy-subrouter
+  "Nest a folded tool whose handler is itself a command router (it `case`s on
+   :command) as a `:_handler` leaf. Strips the subdomain prefix from :command
+   before delegating, so `project transcript list` reaches the inner router as
+   command=\"list\". Resolves the target fn lazily (DIP — no compile coupling)."
+  [subdomain sym]
+  {:_handler
+   (fn [params]
+     (let [full (str (:command params))
+           pfx  (str subdomain " ")
+           sub  (if (str/starts-with? full pfx) (subs full (count pfx)) full)]
+       (if-let [h (try (requiring-resolve sym) (catch Throwable _ nil))]
+         (h (assoc params :command sub))
+         (tcore/mcp-error (str subdomain " not available (handler unresolved)")))))})
+
 (def canonical-handlers
+  ;; Subdomain handler trees resolved lazily via composite/lazy-resolve-handlers
+  ;; — the four `c-kanban`/`c-config`/`c-session`/`c-workflow` static :requires
+  ;; that previously coupled this ns to those consolidators are gone. Same
+  ;; nested handler-tree shape; same dispatch behaviour at runtime.
   (merge project-handlers
-         {:kanban   c-kanban/handlers
-          :config   c-config/handlers
-          :session  c-session/handlers
-          :workflow c-workflow/handlers}))
+         {:kanban   (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.kanban/handlers)
+          :config   (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.config/handlers)
+          :session  (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.session/handlers)
+          :workflow (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.workflow/handlers)
+          ;; Folded standalone roots re-exposed as ergonomic subdomains.
+          ;; migrate-kanban/handlers is a flat leaf map → lazy-resolve directly.
+          ;; transcript routes on :command → wrap with prefix-strip subrouter.
+          :migrate-kanban (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.migrate-kanban/handlers)
+          :transcript     (lazy-subrouter "transcript" 'hive-mcp.tools.consolidated.transcript/handle-transcript)}))
 
 ;; Keep backward compat alias
 (def handlers canonical-handlers)
@@ -109,7 +131,7 @@
    :description "Projectile project operations: info (project details), files (list files), search (content search), find (find by filename), recent (recently visited), list (all projects), scan (discover .hive-project.edn hierarchy), tree (query cached hierarchy), staleness (check if rescan needed). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :description "Project operation. Subdomains: 'kanban list', 'config get', 'session wrap', 'workflow forge strike'. Use command='help' to list all."}
+                                         :description "Project operation. Subdomains: 'kanban list', 'kanban get' (single task by id, unified across kanban + default memory stores), 'kanban retag', 'config get', 'session wrap', 'workflow forge strike', 'migrate-kanban status', 'transcript list'. Use command='help' to list all."}
                               ;; Project params
                               "pattern" {:type "string"
                                          :description "Glob pattern or search pattern"}
@@ -122,19 +144,29 @@
                               "force" {:type "boolean"
                                        :description "Force rescan even if fresh"}
                               "project_id" {:type "string"
-                                            :description "Project ID to query tree for / [kanban list] exact-match project filter"}
+                                            :description "Project ID to query tree for / [kanban list] exact-match project filter / [kanban retag] alias for new_project_id"}
                               ;; Kanban params
                               "title" {:type "string" :description "[kanban create] Task title"}
                               "description" {:type "string" :description "[kanban create] Task description"}
-                              "task_id" {:type "string" :description "[kanban update|delete] Task ID"}
+                              "task_id" {:type "string" :description "[kanban get|update|delete|retag] Task ID"}
+                              "id" {:type "string" :description "[kanban get] Alias for task_id — entry id to fetch from either store"}
                               "new_status" {:type "string"
                                             :enum ["todo" "inprogress" "inreview" "done"]
                                             :description "[kanban update] Target status"}
+                              "new_project_id" {:type "string"
+                                                :description "[kanban retag] Target project scope (preserves entry id + KG edges)"}
+                              "add_tags" {:type "array" :items {:type "string"}
+                                          :description "[kanban retag] Extra tags to add"}
+                              "remove_tags" {:type "array" :items {:type "string"}
+                                             :description "[kanban retag] Tags to remove"}
                               "status" {:type "string"
                                         :enum ["todo" "inprogress" "inreview" "done"]
-                                        :description "[kanban list] Filter by status"}
+                                        :description "[kanban create] Initial status (default: todo) / [kanban list] Filter by status. Aliases inprogress→doing, inreview→review are normalized."}
                               "include_descendants" {:type "boolean"
-                                                     :description "[kanban] Include child project tasks (HCR). Default true."}
+                                                     :description "[kanban] Include DESCENDANT (child) project tasks (HCR). Default true. Ancestor (parent) tasks are ALWAYS included regardless of this flag ('child sees parent')."}
+                              "scope" {:type "string"
+                                       :enum ["all"]
+                                       :description "[kanban list/status] scope=\"all\" lifts the project filter — whole board across EVERY workspace (opt-in cross-workspace view). Omit for the default scoped view (current project + ancestors [+ descendants])."}
                               "plan_id" {:type "string" :description "[kanban plan-to-kanban] Memory plan entry ID"}
                               "plan_path" {:type "string" :description "[kanban plan-to-kanban] File path to plan"}
                               ;; Kanban list filters (token-flood reduction)

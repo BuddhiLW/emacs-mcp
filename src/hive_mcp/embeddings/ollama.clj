@@ -38,7 +38,8 @@
   {"nomic-embed-text" 768 ; Good balance of speed/quality
    "mxbai-embed-large" 1024 ; Higher quality, slower
    "all-minilm" 384 ; Fastest, lower quality
-   "snowflake-arctic-embed" 1024})
+   "snowflake-arctic-embed" 1024
+   "qwen3-embedding:0.6b" 1024}) ; Local Qwen3 — 32k ctx, dual-run with nomic
 
 (defn- resolve-config!
   "Resolve Ollama host + model via hive-di (env → overrides → defaults).
@@ -85,16 +86,25 @@
                      (some-> (ex-data ex) :body))]
     (boolean (re-find #"(?i)context.*(length|limit|size|exceed)|too (long|large|many)|token.*(limit|exceed)|input.*(too|exceed)" msg))))
 
+(defn- num-ctx-for
+  "Context window (num_ctx) to request per model. qwen3-embedding ships a 32k
+   context; nomic/minilm cap lower. Requesting the larger window only costs
+   VRAM when big content is actually embedded, and lets size-aware escalation
+   to the local qwen3 provider honor its declared 32768 max-tokens."
+  [model]
+  (if (and model (re-find #"(?i)qwen3" (str model))) 32768 8192))
+
 (defn- get-embedding
   "Get embedding for a single text from Ollama.
    Throws helpful error when content exceeds embedding token limit."
   [host model text]
   (try
-    (let [response (make-request host "/api/embeddings"
+    (let [response (make-request host "/api/embed"
                                  {:model model
-                                  :prompt text
-                                  :keep_alive "24h"})]
-      (:embedding response))
+                                  :input text
+                                  :keep_alive "24h"
+                                  :options {:num_ctx (num-ctx-for model)}})]
+      (first (:embeddings response)))
     (catch Exception e
       (if (context-length-error? e)
         (throw (ex-info
@@ -116,12 +126,53 @@
   (let [futures (mapv (fn [text] (pool/with-io (get-embedding host model text))) texts)]
     (mapv deref futures)))
 
-(defrecord OllamaEmbedder [host model dimension]
+(defn- vram-mb-for
+  "Heuristic VRAM estimate per model, declared on every executor-routed
+   request so admission control can budget correctly. Conservative — better
+   to over-declare than OOM."
+  [model]
+  (case model
+    "nomic-embed-text"        700
+    "mxbai-embed-large"       1500
+    "all-minilm"              400
+    "snowflake-arctic-embed"  1500
+    "qwen3-embedding:0.6b"    1200
+    1000))
+
+(defn- executor-embed-one
+  "Route a single embed call through executor-fn. Returns the embedding
+   vector, or throws ex-info matching the direct-HTTP error contract."
+  [executor-fn host model text]
+  (let [resp (executor-fn {:gpu/op       :embed
+                           :gpu/vram-mb  (vram-mb-for model)
+                           :gpu/payload  {:text text}
+                           :gpu/model    model})]
+    (cond
+      (:ok resp)
+      (-> resp :ok :gpu/output :vectors first vec)
+
+      (:error resp)
+      (throw (ex-info "Executor embed failed"
+                      {:executor :executor-fn
+                       :host     host
+                       :model    model
+                       :error    (:error resp)
+                       :data     (dissoc resp :error)}))
+
+      :else
+      (throw (ex-info "Executor returned non-Result shape"
+                      {:resp resp})))))
+
+(defrecord OllamaEmbedder [host model dimension executor-fn]
   emb-proto/EmbeddingProvider
   (embed-text [_ text]
-    (get-embedding host model text))
+    (if executor-fn
+      (executor-embed-one executor-fn host model text)
+      (get-embedding host model text)))
   (embed-batch [_ texts]
-    (get-embeddings-batch host model texts))
+    (if executor-fn
+      (mapv #(executor-embed-one executor-fn host model %) texts)
+      (get-embeddings-batch host model texts)))
   (embedding-dimension [_] dimension))
 
 (defn ->provider
@@ -139,22 +190,26 @@
   ([] (->provider {}))
   ([overrides]
    (let [{:keys [host model]} (resolve-config! (select-keys overrides [:host :model]))
-         dimension (get models model)]
+         dimension   (get models model)
+         executor-fn (:executor-fn overrides)]
      (when-not dimension
        (throw (ex-info (str "Unknown model: " model ". Supported: " (keys models)
                             "\nYou can also add custom models to the `models` map.")
                        {:type :unknown-model
                         :model model
                         :supported (keys models)})))
-     ;; Test connection
-     (try
-       (let [test-result (make-request host "/api/tags" nil)]
-         (log/info "Connected to Ollama at" host)
-         (log/debug "Available models:" (mapv :name (:models test-result))))
-       (catch Exception _e
-         (log/warn "Could not connect to Ollama at" host "- ensure ollama is running")))
-     (log/info "Created Ollama embedder with model:" model "dimension:" dimension)
-     (->OllamaEmbedder host model dimension))))
+     ;; Test connection (skip when an executor-fn is bound — caller owns transport)
+     (when-not executor-fn
+       (try
+         (let [test-result (make-request host "/api/tags" nil)]
+           (log/info "Connected to Ollama at" host)
+           (log/debug "Available models:" (mapv :name (:models test-result))))
+         (catch Exception _e
+           (log/warn "Could not connect to Ollama at" host "- ensure ollama is running"))))
+     (log/info "Created Ollama embedder with model:" model
+               "dimension:" dimension
+               "executor-routed?" (some? executor-fn))
+     (->OllamaEmbedder host model dimension executor-fn))))
 
 (defn list-models
   "List available models on the Ollama server."

@@ -28,7 +28,6 @@
    (<1ms); the fork-join deadline check is O(tasks). Callers see no
    shape change on success — only a structured err body on failure."
   (:require [hive-mcp.protocols.memory :as mem-proto]
-            [hive-mcp.plan.plans :as plans]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.knowledge-graph.scope :as kg-scope]
             [hive-mcp.chroma.search :as chroma-search]
@@ -56,9 +55,12 @@
 
 (def ^:const ^:private memory-search-timeout-ms
   "Overall timeout budget for a memory search (collective ceiling).
-   30s accommodates multi-project fan-out on cold Milvus paths; it
-   also matches the outer wpool/await! safety net."
-  30000)
+
+   90s (was 30s) accommodates multi-project fan-out on cold Milvus paths
+   plus the new 60s vectordb-timeout-ms; it also matches the outer
+   wpool/await! safety net (which the caller must bump separately if
+   tighter)."
+  90000)
 
 (def ^:const ^:private embed-timeout-ms
   "Per-stage timeout for an embedding round-trip. Embedding is nested
@@ -68,9 +70,14 @@
 
 (def ^:const ^:private vectordb-timeout-ms
   "Per-stage timeout for one vectordb query (store or ingest side).
-   15s covers embed→query→filter on the store; the two sides run
-   concurrently so the wall clock is 15s, not 30s."
-  15000)
+
+   60s (was 15s) covers cold-embed → milvus search → filter. Cold Ollama
+   /Venice embedding alone routinely takes 30–60s on the first call after
+   a JVM restart (model load + warm-up); 15s guaranteed-failed on every
+   first semantic search until the embedder warmed.
+
+   Two sides run concurrently so the wall clock is still 60s, not 120s."
+  60000)
 
 (def ^:const ^:private post-filter-timeout-ms
   "Per-stage timeout for merge/rerank/format. Pure CPU work; 5s is
@@ -264,30 +271,6 @@
                                                   limit-val)]
        (mapv format-search-result merged)))))
 
-;; =============================================================================
-;; Plan-routed branch (high-abstraction types)
-;; =============================================================================
-
-(defn- search-plans*
-  "Search high-abstraction plans. Returns Result."
-  [query limit-val type project-id in-project?]
-  (let [results (plans/search-plans query
-                                    :limit limit-val
-                                    :type type
-                                    :project-id (when in-project? project-id))
-        formatted (mapv (fn [{:keys [id type tags distance preview]}]
-                          {:id id
-                           :type (or type "plan")
-                           :tags tags
-                           :distance distance
-                           :preview preview})
-                        results)]
-    (record-co-access! formatted project-id "system:high-abstraction-search")
-    (result/ok {:results formatted
-                :count (count formatted)
-                :query query
-                :scope project-id})))
-
 (def ^:private default-exclude-tags
   "Tags excluded from semantic search by default.
    Carto (L1/L2 codebase-mapping snippets) drowns out high-level knowledge."
@@ -369,16 +352,21 @@
 ;; =============================================================================
 
 (defn- search-semantic*
-  "Pure search logic returning Result. Validates inputs and dispatches to appropriate search backend.
-   exclude_tags defaults to [\"carto\"] — pass [] to include carto snippets explicitly."
+  "Pure search logic returning Result. Validates inputs and dispatches to the
+   default IMemoryStore via search-store*.
+   exclude_tags defaults to [\"carto\"] — pass [] to include carto snippets explicitly.
+   include_descendants defaults to true — pass false to restrict to current project."
   [{:keys [query limit type directory include_descendants scope exclude_tags]}]
   (let [directory (or directory (ctx/current-directory))
-        openrouter? (plans/high-abstraction-type? type)
+        include-descendants? (if (some? include_descendants)
+                               (boolean include_descendants)
+                               true)
         limit-val (coerce-int! limit :limit 10)
         store-ready? (and (mem-proto/store-set?)
                           (mem-proto/supports-semantic-search? (mem-proto/get-store)))]
     (log/info "mcp-memory-search-semantic:" query "type:" type "directory:" directory
-              "scope:" scope "exclude_tags:" exclude_tags)
+              "scope:" scope "exclude_tags:" exclude_tags
+              "include_descendants:" include-descendants?)
     (if-not store-ready?
       (result/err :memory/store-not-configured
                   {:message (str "Semantic search not configured. "
@@ -386,12 +374,10 @@
       (let [project-id (scope/get-current-project-id directory)
             sf (domain/parse-scope scope project-id)
             [effective-pid in-project?] (domain/scope->effective sf)]
-        (if openrouter?
-          (search-plans* query limit-val type effective-pid in-project?)
-          (search-store* query limit-val type effective-pid in-project?
-                         include_descendants (if (some? exclude_tags)
-                                               exclude_tags
-                                               default-exclude-tags)))))))
+        (search-store* query limit-val type effective-pid in-project?
+                       include-descendants? (if (some? exclude_tags)
+                                              exclude_tags
+                                              default-exclude-tags))))))
 
 (defn handle-search-semantic
   "Search project memory using semantic similarity (vector search).

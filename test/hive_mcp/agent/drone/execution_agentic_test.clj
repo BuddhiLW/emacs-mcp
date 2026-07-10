@@ -6,7 +6,7 @@
    - Session store (Datalevin) creation, recording, cleanup
    - Fallback to DataScript in-memory KG when Datalevin unavailable
    - phase:execute-agentic! resolves IDroneExecutionBackend and dispatches
-   - Backend fallback from :hive-agent to :openrouter-loop
+   - Backend fallback from :hive-agent to :agentic-loop
 
    Tests mock backend/resolve-backend to avoid external API calls."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]

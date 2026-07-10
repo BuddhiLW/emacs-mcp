@@ -50,6 +50,14 @@
   "Batch memory edit. Sequential per-op; summary + per-op results."
   crud/handle-batch-edit)
 
+(def handle-mcp-memory-reembed
+  "Re-embed a memory entry by id without rewriting content."
+  crud/handle-reembed)
+
+(def handle-mcp-memory-batch-reembed
+  "Batch re-embed; sequential per-op; summary + per-op results."
+  crud/handle-batch-reembed)
+
 ;; Search Operations
 (def handle-mcp-memory-search-semantic search/handle-search-semantic)
 
@@ -83,8 +91,9 @@
     :description "Add an entry to project memory (Chroma storage). Types: note, snippet, convention, decision, axiom, plan. Optionally specify duration for TTL: ephemeral (1 day), short (7 days), medium (30 days), long (90 days), permanent (never expires). For ling attribution, pass agent_id to tag entry with agent:<id>. Knowledge Graph: Use kg_* params to create edges linking this entry to existing entries (implements, supersedes, depends-on, refines). Plans (type=plan) are stored in a separate collection with OpenRouter embeddings for large content support."
     :inputSchema {:type "object"
                   :properties {"type" {:type "string"
-                                       :enum (type-registry/mcp-enum)
-                                       :description "Type of memory entry. Use 'principle' for architectural design principles. Use 'plan' for large implementation plans (1000-5000+ chars) - stored in dedicated collection with OpenRouter embeddings."}
+                                       :description (str "Type of memory entry. Use 'principle' for architectural design principles. "
+                                                         "Use 'plan' for large implementation plans (1000-5000+ chars) - stored in dedicated collection with OpenRouter embeddings. "
+                                                         (type-registry/mcp-type-hint))}
                                "content" {:type "string"
                                           :description "Content of the memory entry"}
                                "tags" {:type "array"
@@ -117,11 +126,11 @@
     :handler handle-mcp-memory-add}
 
    {:name "mcp_memory_query"
-    :description "Query project memory by type with scope filtering (Chroma storage). Returns stored notes, snippets, conventions, decisions, axioms, or plans filtered by scope (auto-filters by current project + global unless specified). HCR Wave 4: Use include_descendants=true to also see child project memories."
+    :description "Query project memory by type with scope filtering (Chroma storage). Returns stored notes, snippets, conventions, decisions, axioms, or plans filtered by scope (auto-filters by current project + global unless specified). HCR Wave 4: include_descendants defaults to true (also surfaces child project memories); pass false to restrict to the current project."
     :inputSchema {:type "object"
                   :properties {"type" {:type "string"
-                                       :enum (type-registry/mcp-enum {:include-conversation? true})
-                                       :description "Type of memory entries to query"}
+                                       :description (str "Type of memory entries to query. "
+                                                         (type-registry/mcp-type-hint))}
                                "tags" {:type "array"
                                        :items {:type "string"}
                                        :description "Optional tags to filter by"}
@@ -135,7 +144,7 @@
                                "directory" {:type "string"
                                             :description "Working directory to determine project scope (pass your cwd to ensure correct scoping)"}
                                "include_descendants" {:type "boolean"
-                                                      :description "HCR Wave 4: Include child project memories in results (default: false). Use for coordinator-level queries that need visibility into sub-project memories."}}
+                                                      :description "HCR Wave 4: Include child project memories in results (default: true). Pass false to restrict to the current project only."}}
                   :required ["type"]}
     :handler handle-mcp-memory-query}
 
@@ -143,8 +152,8 @@
     :description "Query project memory by type, returning only metadata (id, type, preview, tags, created). Use this for efficient browsing - returns ~10x fewer tokens than full query. Follow up with mcp_memory_get_full to fetch specific entries."
     :inputSchema {:type "object"
                   :properties {"type" {:type "string"
-                                       :enum (type-registry/mcp-enum {:include-conversation? true})
-                                       :description "Type of memory entries to query"}
+                                       :description (str "Type of memory entries to query. "
+                                                         (type-registry/mcp-type-hint))}
                                "tags" {:type "array"
                                        :items {:type "string"}
                                        :description "Optional tags to filter by"}
@@ -184,14 +193,14 @@
                                "limit" {:type "integer"
                                         :description "Maximum number of results to return (default: 10)"}
                                "type" {:type "string"
-                                       :enum (type-registry/mcp-enum)
-                                       :description "Optional filter by memory type. Use 'plan' to search only plan entries (stored in dedicated collection)."}
+                                       :description (str "Optional filter by memory type. Use 'plan' to search only plan entries (stored in dedicated collection). "
+                                                         (type-registry/mcp-type-hint))}
                                "directory" {:type "string"
                                             :description "Working directory to determine project scope (pass your cwd to ensure correct scoping)"}
                                "scope" {:type "string"
                                         :description "Scope filter: nil=auto (project+global), 'all'=no filter, 'global'=only global, or specific scope tag"}
                                "include_descendants" {:type "boolean"
-                                                      :description "Include child project memories in results (HCR Wave 4, default: false)"}}
+                                                      :description "Include child project memories in results (HCR Wave 4, default: true). Pass false to restrict to the current project only."}}
                   :required ["query"]}
     :handler handle-mcp-memory-search-semantic}
 

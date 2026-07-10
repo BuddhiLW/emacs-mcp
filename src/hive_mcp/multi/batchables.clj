@@ -20,7 +20,9 @@
    in use. Property test `batchable_lsp_test/lsp-substitutability` enforces.
 
    Decision: 20260429230453-7e7627cc"
-  (:require [hive-mcp.batch.protocol :as bproto]
+  (:require [hive-mcp.batch.cli-adapter :as bca]
+            [hive-mcp.batch.protocol :as bproto]
+            [hive-mcp.tools.kg.batch :as kg-batch]
             [hive-dsl.result :as r :refer [rescue]]
             [clojure.data.json :as json]))
 
@@ -141,21 +143,33 @@
 ;; MemoryBatchable
 ;; =============================================================================
 
+(defn- iter-handler-from
+  "Lazy-resolve a single-op handler symbol and wrap it in iter-handler.
+   Returns nil if the symbol isn't resolvable (e.g. ns not loaded yet)."
+  [sym]
+  (when-let [h (rescue nil (some-> (requiring-resolve sym) deref))]
+    (iter-handler h)))
+
 (defn- memory-handlers
-  "Lazy-resolve memory's batch handlers. :edit and :get are real single-store
-   batch paths. :add and :feedback fall back to an iter-handler over the
-   single-op handler since memory has no bulk-add path yet (PR4 work)."
+  "Lazy-resolve memory's batch handlers.
+
+   Real single-store paths:
+     :edit, :get          (handle-batch-edit / handle-batch-get)
+
+   Iter-wrapped (single-op handler under iter-handler — PR5+ replaces these
+   with real bulk paths):
+     :add, :feedback, :tags, :duration, :promote, :demote"
   []
-  (let [add-h      (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory.crud/handle-add)
-                                       deref))
-        feedback-h (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory/handle-mcp-memory-feedback)
-                                       deref))]
-    {:add      (when add-h (iter-handler add-h))
-     :feedback (when feedback-h (iter-handler feedback-h))
-     :edit     (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory.crud/handle-batch-edit)
-                                   deref))
-     :get      (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory.crud/handle-batch-get)
-                                   deref))}))
+  {:add      (iter-handler-from 'hive-mcp.tools.memory.crud/handle-add)
+   :feedback (iter-handler-from 'hive-mcp.tools.memory/handle-mcp-memory-feedback)
+   :tags     (iter-handler-from 'hive-mcp.tools.memory.crud.retrieve/handle-update-tags)
+   :duration (iter-handler-from 'hive-mcp.tools.memory.lifecycle/handle-set-duration)
+   :promote  (iter-handler-from 'hive-mcp.tools.memory.lifecycle/handle-promote)
+   :demote   (iter-handler-from 'hive-mcp.tools.memory.lifecycle/handle-demote)
+   :edit     (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory.crud/handle-batch-edit)
+                                 deref))
+   :get      (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.memory.crud/handle-batch-get)
+                                 deref))})
 
 (defrecord MemoryBatchable []
   bproto/Batchable
@@ -173,11 +187,15 @@
 ;; KgBatchable
 ;; =============================================================================
 
+(def ^:private kg-edge-handler
+  (delay (bca/cli-batch-handler {:run-fn kg-batch/run-batch :cmd-kw :edge})))
+
+(def ^:private kg-traverse-handler
+  (delay (bca/cli-batch-handler {:run-fn kg-batch/run-batch :cmd-kw :traverse})))
+
 (defn- kg-handlers []
-  {:edge     (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.consolidated.kg/handle-batch-edge)
-                                 deref))
-   :traverse (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.consolidated.kg/handle-batch-traverse)
-                                 deref))})
+  {:edge     @kg-edge-handler
+   :traverse @kg-traverse-handler})
 
 (defrecord KgBatchable []
   bproto/Batchable
@@ -195,8 +213,9 @@
 ;; =============================================================================
 
 (defn- kanban-handlers []
-  {:update (rescue nil (some-> (requiring-resolve 'hive-mcp.tools.consolidated.kanban/handle-batch-update)
-                               deref))})
+  {:update (iter-handler-from 'hive-mcp.tools.memory-kanban/handle-mem-kanban-move)
+   :delete (iter-handler-from 'hive-mcp.tools.memory-kanban/handle-mem-kanban-delete)
+   :create (iter-handler-from 'hive-mcp.tools.memory-kanban/handle-mem-kanban-create)})
 
 (defrecord KanbanBatchable []
   bproto/Batchable

@@ -42,11 +42,19 @@
                                   [:provider {:optional true} :keyword]
                                   [:model {:optional true} :string]]]])
 
+(def KanbanStoreMode
+  "Kanban-store routing mode enum. Drives the kanban-facade backend choice.
+   :default   — kanban routes through the :default slot (legacy / milvus).
+   :dual-read — read :kanban first, fall back to :default; writes to both.
+   :kanban    — kanban routes only through the :kanban slot."
+  [:enum :default :dual-read :kanban])
+
 (def MemoryConfig
   "Schema for the :memory section of config.edn.
    Defines default store, per-type routes, and store connection definitions."
   [:map
    [:default-store :keyword]
+   [:kanban-store {:optional true} KanbanStoreMode]
    [:routes {:optional true} [:map-of :keyword RouteTarget]]
    [:stores {:optional true} [:map-of :keyword StoreDefinition]]])
 

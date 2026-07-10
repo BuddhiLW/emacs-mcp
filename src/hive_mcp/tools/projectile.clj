@@ -5,8 +5,9 @@
    including project info, file listing, search, and navigation.
 
    Requires the hive-mcp-projectile addon to be loaded in Emacs."
-  (:require [hive-mcp.emacs.client :as ec]
-            [hive-mcp.emacs.elisp :as el]
+  (:require [hive-mcp.agent.context :as ctx]
+            [hive-mcp.emacs-ext.client :as ec]
+            [hive-mcp.emacs-ext.elisp :as el]
             [hive-mcp.tools.core :refer [mcp-error]]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -32,10 +33,22 @@
       (mcp-error (str "Error: " error)))))
 
 (defn handle-projectile-info
-  "Get current project info including name, root, type, and file count."
-  [_]
-  (log/info "projectile-info")
-  (eval-projectile (el/require-and-call-json 'hive-mcp-projectile 'hive-mcp-projectile-api-project-info)))
+  "Get current project info including name, root, type, and file count.
+
+   Honors `directory` param (with ctx fallback) by rebinding Emacs
+   `default-directory` so projectile resolves the requested project
+   rather than the JVM cwd."
+  [{:keys [directory]}]
+  (let [effective-dir (or directory (ctx/current-directory))
+        json-call (el/require-and-call-json 'hive-mcp-projectile
+                                            'hive-mcp-projectile-api-project-info)
+        elisp (if effective-dir
+                (format "(let ((default-directory %s)) %s)"
+                        (pr-str (str effective-dir "/"))
+                        json-call)
+                json-call)]
+    (log/info "projectile-info" {:directory effective-dir})
+    (eval-projectile elisp)))
 
 (defn handle-projectile-files
   "List files in current project, optionally filtered by pattern."

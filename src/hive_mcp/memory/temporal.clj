@@ -55,6 +55,16 @@
   #{:feedback :kanban-done :kanban-move :kanban-delete :expire :decay
     :promote :reground :migrate :log-access :cleanup})
 
+(def ^:private ephemeral-ops
+  "Mutation ops NOT written to the durable trail (access telemetry; the signal
+   already lives in the entry's :access-count counter)."
+  #{:log-access})
+
+(defn- persist-mutation?
+  "True when `op` should be written to the durable audit trail."
+  [op]
+  (not (contains? ephemeral-ops op)))
+
 (defn record-mutation!
   "Record a memory mutation event to Datahike for temporal tracking.
 
@@ -76,7 +86,7 @@
   [{:keys [entry-id op data previous-value agent-id project-id]}]
   {:pre [(string? entry-id) (contains? valid-ops op)]}
   (try
-    (when (kg-conn/temporal-store?)
+    (when (and (persist-mutation? op) (kg-conn/temporal-store?))
       (let [mutation-id (gen-mutation-id)
             agent-id (or agent-id
                          (ctx/current-agent-id)
@@ -140,7 +150,7 @@
                               (assoc :mem-mutation/data (pr-str data))
                               previous-value
                               (assoc :mem-mutation/previous-value (pr-str previous-value))))
-                          mutations)]
+                          (filter (comp persist-mutation? :op) mutations))]
         (kg-conn/transact! tx-data)
         (log/debug "Temporal batch recorded" {:count (count tx-data)})
         {:ok true :count (count tx-data)}))
@@ -217,3 +227,95 @@
             0))
       (catch Exception _
         0))))
+
+;; =============================================================================
+;; Guarded Prune (heap-pressure-gated retention bound)
+;; =============================================================================
+
+(def ^:private default-retention
+  "Retention bounds for prune-mutations!.
+   :max-per-entry — keep at most this many newest events per entry-id.
+   :max-age-ms    — age-out anything older than this TTL (default 30d).
+   :batch-cap     — max retractions per invocation, so one pass cannot itself
+                    spike heap."
+  {:max-per-entry 20
+   :max-age-ms    (* 1000 60 60 24 30)
+   :batch-cap     500})
+
+(defn- heap-pressure-level
+  "Best-effort heap-pressure level -> :ok | :soft | :hard. Never throws.
+   Prefers the canonical hive-knowledge mem-guard when its ns is on the
+   classpath (live combined JVM); hive-mcp must NOT compile-depend on the
+   addon, so it is resolved dynamically. Falls back to an inline Runtime heap
+   fraction against the same default watermarks {:soft 0.80 :hard 0.92}."
+  []
+  (or
+   (try
+     (when-let [check (requiring-resolve 'hive-knowledge.cartography.mem-guard/check)]
+       (:level (check nil nil)))
+     (catch Throwable _ nil))
+   (try
+     (let [rt   (Runtime/getRuntime)
+           used (- (.totalMemory rt) (.freeMemory rt))
+           mx   (.maxMemory rt)
+           frac (if (pos? mx) (/ (double used) (double mx)) 0.0)]
+       (cond (>= frac 0.92) :hard
+             (>= frac 0.80) :soft
+             :else          :ok))
+     (catch Throwable _ :ok))))
+
+(defn prune-mutations!
+  "GUARDED prune of the :mem-mutation audit trail. Best-effort, non-fatal.
+
+   Retracts mutation entities that exceed the retention bound:
+     - older than :max-age-ms (TTL age-out), OR
+     - beyond the newest :max-per-entry events for their entry-id.
+   Retractions are capped at :batch-cap per call.
+
+   Heap-gated: by default only runs when heap pressure is :soft/:hard
+   (mem-guard). Pass :force? true for an unconditional cap-total sweep.
+
+   noHistory caveat (forward-only): with :db/noHistory now on :mem-mutation/*
+   (norm 006) these retractions reclaim datoms cleanly instead of accumulating
+   retraction history — apply norm 006 BEFORE relying on this prune.
+
+   CAVEAT: under :hard pressure this still materializes the whole trail via the
+   query before retracting (:batch-cap bounds only the tx, not the query). For
+   a very large trail, run an age-out-only/windowed pass first. (Follow-up.)
+
+   Returns {:ok true :pruned N :level kw} or {:ok false :error \"...\"}."
+  [& [{:keys [max-per-entry max-age-ms batch-cap force?]
+       :or {max-per-entry (:max-per-entry default-retention)
+            max-age-ms    (:max-age-ms default-retention)
+            batch-cap     (:batch-cap default-retention)}}]]
+  (try
+    (if-not (kg-conn/temporal-store?)
+      {:ok false :error "temporal store unavailable"}
+      (let [level (heap-pressure-level)]
+        (if (and (not force?) (= :ok level))
+          {:ok true :pruned 0 :level level :skipped :no-pressure}
+          (let [cutoff   (java.util.Date. (- (System/currentTimeMillis) (long max-age-ms)))
+                rows     (kg-conn/query '[:find ?e ?eid ?ts
+                                          :where
+                                          [?e :mem-mutation/id _]
+                                          [?e :mem-mutation/entry-id ?eid]
+                                          [?e :mem-mutation/timestamp ?ts]])
+                aged     (filter (fn [[_ _ ts]] (neg? (compare ts cutoff))) rows)
+                overflow (mapcat (fn [[_ es]]
+                                   (->> es
+                                        (sort-by #(nth % 2))
+                                        (drop-last max-per-entry)))
+                                 (group-by second rows))
+                victims  (->> (concat aged overflow)
+                              (map first)
+                              distinct
+                              (take batch-cap)
+                              vec)]
+            (when (seq victims)
+              (kg-conn/transact! (mapv (fn [eid] [:db/retractEntity eid]) victims)))
+            (log/info "Pruned :mem-mutation trail"
+                      {:pruned (count victims) :level level :force? (boolean force?)})
+            {:ok true :pruned (count victims) :level level}))))
+    (catch Exception e
+      (log/warn "Mutation prune failed (non-fatal)" {:error (.getMessage e)})
+      {:ok false :error (.getMessage e)})))

@@ -78,6 +78,62 @@
           (is (= :test/a (:owner hit)) "first-write-wins: original owner retained")
           (is (= :v2 ((:handler hit))) "same-owner replace updated the handler"))))))
 
+(deftest core-seed-overridable-by-addon
+  (testing "A :multi/core seed entry is overridable by any addon owner (last-write-wins core->addon); different non-core owners still conflict"
+    (with-fresh-registry
+      (fn []
+        (r-tools/reset-for-test!)
+        (let [seed     (r-tools/register! :multi/core "kg" {:handler (constantly :core)})
+              override (r-tools/register! "hive.knowledge" "kg" {:handler (constantly :addon)})
+              hit      (r-tools/lookup "kg")
+              by-owner (-> (r-tools/snapshot) :data :by-owner)
+              ;; a second addon must NOT be able to steal it from hive.knowledge
+              steal    (r-tools/register! "other.addon" "kg" {:handler (constantly :nope)})]
+          (is (= :ok seed)                        ":ok seeding the :multi/core entry")
+          (is (= :replaced override)              ":replaced — addon overrides the core seed (the fix)")
+          (is (= "hive.knowledge" (:owner hit))   "owner is now the addon")
+          (is (= :addon ((:handler hit)))         "addon handler wins after override")
+          (is (not (contains? (get by-owner :multi/core #{}) "kg"))
+              "tool removed from :multi/core by-owner set")
+          (is (contains? (get by-owner "hive.knowledge" #{}) "kg")
+              "tool added to addon by-owner set")
+          (is (= :conflict steal)                 ":conflict — non-core owner is not overridable by a different owner")
+          (is (= :addon ((:handler (r-tools/lookup "kg")))) "conflicting steal left the addon handler intact"))))))
+
+(deftest dispatch-divergences-detects-core-shadowing
+  (testing "Flags a core-seeded tool whose advertised handler differs (unreconciled addon override); ignores reconciled/same-handler/unseeded"
+    (let [advertised [{:name "shadowed"   :handler :addon-fn}
+                      {:name "reconciled" :handler :addon-fn}
+                      {:name "same"       :handler :core-fn}
+                      {:name "unseeded"   :handler :addon-fn}]
+          lookup {"shadowed"   {:owner :multi/core  :handler :core-fn}
+                  "reconciled" {:owner "some.addon" :handler :addon-fn}
+                  "same"       {:owner :multi/core  :handler :core-fn}}
+          divs (registry/dispatch-divergences advertised lookup)]
+      (is (= ["shadowed"] (mapv :tool divs))
+          "only the unreconciled, core-seeded, handler-differing tool is flagged")
+      (is (= :multi/core (:dispatch-owner (first divs))))
+      (is (= :addon-fn (:advertised-handler (first divs))))
+      (is (empty? (registry/dispatch-divergences [] lookup))
+          "no advertised tools → no divergences")
+      (is (empty? (registry/dispatch-divergences
+                   [{:name "reconciled" :handler :addon-fn}] lookup))
+          "an addon-owned dispatch entry is never a divergence"))))
+
+(deftest check-dispatch-coherence-returns-divergences
+  (testing "check-dispatch-coherence! (1-arg) returns the divergence vector using the live registry lookup"
+    (with-fresh-registry
+      (fn []
+        (r-tools/reset-for-test!)
+        (r-tools/register! :multi/core "cohere-tool" {:handler (constantly :core)})
+        (let [divs (registry/check-dispatch-coherence!
+                    [{:name "cohere-tool" :handler (constantly :addon)}])]
+          (is (= ["cohere-tool"] (mapv :tool divs))
+              "core-seeded tool with a differing advertised handler is reported")
+          (is (empty? (registry/check-dispatch-coherence!
+                       [{:name "absent-tool" :handler (constantly :x)}]))
+              "a tool with no dispatch entry is not reported"))))))
+
 (deftest verbs-conflict-policy
   (testing "Verb registry: ok → replaced → conflict"
     (with-fresh-registry
@@ -252,4 +308,3 @@
         (is (nil? (r-verbs/lookup "rb!")))
         (is (nil? (r-aliases/lookup "rb")))
         (is (nil? (r-batchables/lookup "rb-tool")))))))
-
