@@ -150,3 +150,33 @@
       (doseq [{:keys [len message]} payload]
         (is (<= len throwable-shout-budget)
             (str "payload too long: " len " :: " message))))))
+
+;; =============================================================================
+;; Subject-token guard — empty/nil components must never yield a dangling
+;; token. NATS rejects "subject cannot end with '.'".  [NATS-SUBJ]
+;; =============================================================================
+
+(defn- well-formed-subject?
+  [s]
+  (and (string? s)
+       (not (str/starts-with? s "."))
+       (not (str/ends-with? s "."))
+       (not (str/includes? s ".."))))
+
+(deftest shout-subject-guards-empty-components
+  (testing "nil / blank project-id and agent-id never produce a dangling token"
+    (doseq [[p a] [[nil nil] ["hive" ""] ["hive" "   "] [nil "ling-1"] ["" "ling-1"]]]
+      (is (well-formed-subject? (bridge/shout-subject p a))
+          (str "malformed for " [p a] ": " (bridge/shout-subject p a)))))
+  (testing "valid components pass through unchanged"
+    (is (= "hive.v1.shout.hive.ling-1" (bridge/shout-subject "hive" "ling-1")))
+    (is (= "hive.v1.shout.kw-proj.kw-agent" (bridge/shout-subject :kw-proj :kw-agent)))))
+
+(deftest tool-subject-guards-empty-name
+  (testing "nil / blank tool-name never throws and never dangles"
+    (doseq [t [nil "" "   "]]
+      (is (well-formed-subject? (bridge/tool-subject t))
+          (str "malformed for " (pr-str t) ": " (bridge/tool-subject t)))))
+  (testing "valid tool-name passes through unchanged"
+    (is (= "hive.v1.tool.memory-add" (bridge/tool-subject :memory-add)))
+    (is (= "hive.v1.tool.memory-add" (bridge/tool-subject "memory-add")))))
