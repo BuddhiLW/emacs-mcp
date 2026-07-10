@@ -13,7 +13,8 @@
             [taoensso.timbre :as log]
             [hive-mcp.swarm.datascript.schema :as schema]
             [hive-mcp.swarm.datascript.connection :as conn]
-            [hive-mcp.swarm.datascript.queries :as queries]))
+            [hive-mcp.swarm.datascript.queries :as queries]
+            [hive-mcp.swarm.ledger.default :as ledger-default]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -243,12 +244,18 @@
         ;; Release file claims for this task
         (release-claims-for-task! task-id)
         ;; Update task status and slave stats (use retract instead of nil)
-        (d/transact! c (cond-> [{:db/id (:db/id task)
-                                 :task/status :completed
-                                 :task/completed-at (conn/now)}
-                                {:db/id slave-eid
-                                 :slave/tasks-completed (inc completed-count)}]
-                         retract-current (conj retract-current)))))))
+        (let [report (d/transact! c (cond-> [{:db/id (:db/id task)
+                                              :task/status :completed
+                                              :task/completed-at (conn/now)}
+                                             {:db/id slave-eid
+                                              :slave/tasks-completed (inc completed-count)}]
+                                      retract-current (conj retract-current)))]
+          (ledger-default/append!
+           {:type :task/completed
+            :payload {:task-id task-id
+                      :slave-id (:slave/id slave)
+                      :tasks-completed (inc completed-count)}})
+          report)))))
 
 (defn fail-task!
   "Mark a task as failed with error or timeout.
@@ -273,10 +280,16 @@
             current-task-ref (:slave/current-task slave)
             retract-current (when current-task-ref
                               [:db/retract slave-eid :slave/current-task (:db/id current-task-ref)])]
-        (d/transact! c (cond-> [{:db/id (:db/id task)
-                                 :task/status status
-                                 :task/completed-at (conn/now)}]
-                         retract-current (conj retract-current)))))))
+        (let [report (d/transact! c (cond-> [{:db/id (:db/id task)
+                                              :task/status status
+                                              :task/completed-at (conn/now)}]
+                                      retract-current (conj retract-current)))]
+          (ledger-default/append!
+           {:type :task/failed
+            :payload {:task-id task-id
+                      :status status
+                      :slave-id (:slave/id slave)}})
+          report)))))
 
 (defn update-task!
   "Update an existing task's attributes.
@@ -602,7 +615,17 @@
     (log/debug "Archiving claim to history:" file-path "slave:" slave-id
                (when (and lines-added lines-removed)
                  (str "+/- " lines-added "/" lines-removed)))
-    (d/transact! c [tx-data])))
+    (let [report (d/transact! c [tx-data])]
+      (ledger-default/append!
+       {:type :claim/released
+        :payload {:file file-path
+                  :slave-id slave-id
+                  :history-id history-id
+                  :prior-hash prior-hash
+                  :released-hash released-hash
+                  :lines-added lines-added
+                  :lines-removed lines-removed}})
+      report)))
 
 ;;; =============================================================================
 ;;; Headless Ling Stdout Ring Buffer

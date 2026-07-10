@@ -92,6 +92,13 @@
          'hive-mcp.swarm.lifecycle.terminal-sweep/sweep-once!
          #(%) {:checked 0 :zombified 0 :alive 0 :errors []})
 
+        ;; Ledger cold sweep — retract terminal tasks/waves/claim-history from the
+        ;; hot DataScript store once past the retain window (durable in the ledger).
+        ledger-cold-result
+        (resolve-and-call
+         'hive-mcp.swarm.datascript.coordination.cleanup/sweep-ledger-cold!
+         #(%) {:tasks 0 :waves 0 :claim-history 0})
+
         ;; 6. JVM GC hint — nudge G1GC to collect old gen.
         ;; G1GC with MaxGCPauseMillis=200 avoids full GC cycles, so old gen
         ;; fills with long-lived garbage. Periodic hint prevents 97%+ old gen.
@@ -112,6 +119,7 @@
                 :saa-states saa-result
                 :gc-sweep gc-sweep-result
                 :terminal-liveness terminal-liveness-result
+                :ledger-cold ledger-cold-result
                 :gc-hint gc-hint-result
                 :sweep-number sweep-num
                 :duration-ms elapsed-ms
