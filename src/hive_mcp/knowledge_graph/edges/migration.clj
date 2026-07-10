@@ -33,8 +33,8 @@
   (when (= old-scope new-scope)
     (throw (ex-info "old-scope and new-scope must be different"
                     {:old-scope old-scope :new-scope new-scope})))
-  (let [get-by-scope (requiring-resolve 'hive-mcp.knowledge-graph.edges/get-edges-by-scope)
-        emit!        (requiring-resolve 'hive-mcp.knowledge-graph.edges/emit-stats-event!)
+  (let [get-by-scope (requiring-resolve 'hive-mcp.knowledge-graph.edges.queries/get-edges-by-scope)
+        emit!        (requiring-resolve 'hive-mcp.knowledge-graph.edges.write/emit-stats-event!)
         stats-mig!   (requiring-resolve 'hive-mcp.knowledge-graph.edges.stats/migrate-scope!)
         edges        (get-by-scope old-scope)
         tx-data      (vec (for [edge edges

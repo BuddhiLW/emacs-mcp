@@ -6,7 +6,9 @@
    `requiring-resolve` (same pattern as edges/migration.clj)."
   (:require [hive-mcp.knowledge-graph.connection :as conn]
             [hive-mcp.knowledge-graph.edges.stats :as stats]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.knowledge-graph.edges.queries :as queries]
+            [hive-mcp.knowledge-graph.edge-cycle :as edge-cycle]))
 
 (def ^:const co-access-decay-rate
   "Confidence decay per wrap cycle for co-access edges.
@@ -56,17 +58,17 @@
     semantic-decay-rate))
 
 (defn- update-edge-confidence!*
-  "Lazy-resolved indirection to edges/update-edge-confidence! to break
-   the edges → decay → edges circular dep at compile time."
+  "Lazy-resolved indirection to edges.write/update-edge-confidence! to break
+   the write -> decay -> write circular dep at compile time."
   [edge-id new-confidence]
-  ((requiring-resolve 'hive-mcp.knowledge-graph.edges/update-edge-confidence!)
+  ((requiring-resolve 'hive-mcp.knowledge-graph.edges.write/update-edge-confidence!)
    edge-id new-confidence))
 
 (defn- emit-stats-event!*
-  "Lazy-resolved indirection to the private edges/emit-stats-event!.
-   Mirrors edges/migration.clj's resolution pattern."
+  "Lazy-resolved indirection to edges.write/emit-stats-event!.
+   Mirrors edges.migration's resolution pattern."
   [event-id payload fallback!]
-  ((requiring-resolve 'hive-mcp.knowledge-graph.edges/emit-stats-event!)
+  ((requiring-resolve 'hive-mcp.knowledge-graph.edges.write/emit-stats-event!)
    event-id payload fallback!))
 
 (defn remove-edge!
@@ -101,3 +103,59 @@
             :pruned)
         (do (update-edge-confidence!* edge-id new-confidence)
             :decayed)))))
+
+(def ^:const default-decay-staleness-days
+  "Minimum days since last-verified before an edge is considered stale.
+   Edges verified within this window are untouched."
+  30)
+
+(def ^:const default-decay-limit
+  "Maximum edges to evaluate per decay cycle.
+   Bounded to prevent long-running cycles on large graphs."
+  100)
+
+(defn last-verified-millis
+  "Extract :kg-edge/last-verified as millis, 0 if missing/non-Date."
+  [edge]
+  (if-let [lv (:kg-edge/last-verified edge)]
+    (if (instance? java.util.Date lv)
+      (.getTime ^java.util.Date lv)
+      0)
+    0))
+
+(defn decay-unverified-edges!
+  "Decay confidence of edges not verified within the staleness window.
+   Edges falling below `prune-threshold` are removed entirely.
+
+   See `decay-step!` for per-edge logic and `edge-cycle/run-cycle!` for
+   the shared skeleton.
+
+   Options:
+     :staleness-days - Days before edge is considered stale (default: 30)
+     :limit          - Max edges to evaluate (default: 100)
+     :scope          - Optional scope filter
+     :created-by     - Agent ID for attribution in logs
+
+   Returns:
+     {:decayed N :pruned N :fresh N :evaluated N :errors N}
+
+   Idempotent. Non-blocking: per-edge errors are tallied, never thrown."
+  [& [{:keys [staleness-days limit scope created-by]
+       :or {staleness-days default-decay-staleness-days
+            limit          default-decay-limit}}]]
+  (conn/with-tx-batch
+    (let [now-millis (System/currentTimeMillis)]
+      (edge-cycle/run-cycle!
+       {:fetch        #(if scope (queries/get-edges-by-scope scope) (queries/get-all-edges))
+        :sort-key     last-verified-millis
+        :limit        limit
+        :outcome-keys [:decayed :pruned :fresh]
+        :step!        #(decay-step! staleness-days now-millis %)
+        :error-log-fn (fn [edge err]
+                        (log/debug "Edge decay failed for edge"
+                                   (:kg-edge/id edge) ":" (:message err)))
+        :log-fn       (fn [tally]
+                        (when (or (pos? (:decayed tally)) (pos? (:pruned tally)))
+                          (log/info "Edge decay:" (:decayed tally) "decayed,"
+                                    (:pruned tally) "pruned"
+                                    (when created-by (str " by:" created-by)))))}))))
