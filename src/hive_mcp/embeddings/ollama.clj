@@ -35,11 +35,13 @@
 (def ^:private models
   "Supported Ollama embedding models with their dimensions.
    Run `ollama pull <model>` to download."
-  {"nomic-embed-text" 768 ; Good balance of speed/quality
-   "mxbai-embed-large" 1024 ; Higher quality, slower
-   "all-minilm" 384 ; Fastest, lower quality
+  {"nomic-embed-text" 768
+   "mxbai-embed-large" 1024
+   "all-minilm" 384
    "snowflake-arctic-embed" 1024
-   "qwen3-embedding:0.6b" 1024}) ; Local Qwen3 — 32k ctx, dual-run with nomic
+   "qwen3-embedding:0.6b" 1024
+   "qwen3-embedding:4b" 2560
+   "qwen3-embedding:8b" 4096})
 
 (defn- resolve-config!
   "Resolve Ollama host + model via hive-di (env → overrides → defaults).
@@ -87,12 +89,13 @@
     (boolean (re-find #"(?i)context.*(length|limit|size|exceed)|too (long|large|many)|token.*(limit|exceed)|input.*(too|exceed)" msg))))
 
 (defn- num-ctx-for
-  "Context window (num_ctx) to request per model. qwen3-embedding ships a 32k
-   context; nomic/minilm cap lower. Requesting the larger window only costs
-   VRAM when big content is actually embedded, and lets size-aware escalation
-   to the local qwen3 provider honor its declared 32768 max-tokens."
+  "num_ctx to request per model."
   [model]
-  (if (and model (re-find #"(?i)qwen3" (str model))) 32768 8192))
+  (let [m (str model)]
+    (cond
+      (re-find #"(?i)qwen3-embedding:8b" m) 8192
+      (re-find #"(?i)qwen3" m)              32768
+      :else                                 8192)))
 
 (defn- get-embedding
   "Get embedding for a single text from Ollama.
@@ -137,6 +140,8 @@
     "all-minilm"              400
     "snowflake-arctic-embed"  1500
     "qwen3-embedding:0.6b"    1200
+    "qwen3-embedding:4b"      4000
+    "qwen3-embedding:8b"      7300
     1000))
 
 (defn- executor-embed-one

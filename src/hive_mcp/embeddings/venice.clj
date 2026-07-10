@@ -77,8 +77,7 @@
                     (.header "Content-Type" "application/json")
                     (.header "Authorization" (str "Bearer " api-key))
                     (.POST (HttpRequest$BodyPublishers/ofString (json/write-str body)))
-                    ;; Embeddings on long inputs (EDN plans) can take time.
-                    (.timeout (Duration/ofSeconds 120))
+                    (.timeout (Duration/ofSeconds 30))
                     (.build))
         response (http/send-with-retry http-client request (HttpResponse$BodyHandlers/ofString))
         status (.statusCode response)

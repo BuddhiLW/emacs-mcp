@@ -298,6 +298,16 @@
          :collection-name base-collection-name
          :provider-key    :fallback}))))
 
+(defn- provider-available?
+  "A provider spec is usable only if its required secret is present; local
+   ollama needs none."
+  [spec]
+  (case (:impl spec)
+    :openrouter (some? (global-config/get-secret :openrouter-api-key))
+    :openai     (some? (global-config/get-secret :openai-api-key))
+    :venice     (some? (global-config/get-secret :venice-api-key))
+    true))
+
 (defn resolve-provider-for-type
   "Resolve embedding provider + metadata for a memory type.
    Returns {:provider EmbeddingProvider, :dimension int, :max-tokens int,
@@ -323,22 +333,15 @@
   [memory-type content]
   (let [cfg  (embedder-config)
         base (build-resolved cfg (resolve-provider-key memory-type))
-        est  (estimate-tokens content)
-        ;; A provider is usable only if its required secret is present; local
-        ;; ollama needs none. Prefer usable providers, smallest that fits,
-        ;; then smallest dimension (favors the key-free local 32k embedder
-        ;; over remote ones, and avoids wasting a 4096-d vector).
-        available? (fn [spec]
-                     (case (:impl spec)
-                       :openrouter (some? (global-config/get-secret :openrouter-api-key))
-                       :openai     (some? (global-config/get-secret :openai-api-key))
-                       :venice     (some? (global-config/get-secret :venice-api-key))
-                       true))]
+        est  (estimate-tokens content)]
+    ;; Prefer usable providers (secret present / local), smallest that fits,
+    ;; then smallest dimension (favors the key-free local 32k embedder over
+    ;; remote ones, and avoids wasting a 4096-d vector).
     (if (<= est (:max-tokens base))
       base
       (let [ladder (->> (:providers cfg)
                         (map (fn [[k spec]] (assoc spec :provider-key k)))
-                        (filter available?)
+                        (filter provider-available?)
                         (sort-by (juxt :max-tokens :dimension)))
             pick   (or (first (filter #(<= est (:max-tokens %)) ladder))
                        (last ladder))]
@@ -357,19 +360,31 @@
    none exists. Lets the venice-qwen3 <-> openrouter-qwen3 pair (both
    Qwen3-Embedding-8B @ 4096-d) cover for each other when one is slow/down."
   [{:keys [dimension provider-key] :as _resolved}]
-  (let [cfg        (embedder-config)
-        available? (fn [spec]
-                     (case (:impl spec)
-                       :openrouter (some? (global-config/get-secret :openrouter-api-key))
-                       :openai     (some? (global-config/get-secret :openai-api-key))
-                       :venice     (some? (global-config/get-secret :venice-api-key))
-                       true))]
+  (let [cfg (embedder-config)]
     (some (fn [[k spec]]
             (when (and (= (:dimension spec) dimension)
                        (not= k provider-key)
-                       (available? spec))
+                       (provider-available? spec))
               (build-resolved cfg k)))
           (:providers cfg))))
+
+(defn resolve-provider-chain-for-type+size
+  "Ordered same-dimension provider chain for a memory type + content size:
+   [primary (size-aware) & other available same-dimension providers, ollama
+   first]. Each element is a resolved-provider map; the chain shares :dimension."
+  [memory-type content]
+  (let [cfg     (embedder-config)
+        primary (resolve-provider-for-type+size memory-type content)
+        dim     (:dimension primary)
+        pk      (:provider-key primary)
+        siblings (->> (:providers cfg)
+                      (filter (fn [[k spec]]
+                                (and (= (:dimension spec) dim)
+                                     (not= k pk)
+                                     (provider-available? spec))))
+                      (sort-by (fn [[_ spec]] (if (= (:impl spec) :ollama) 0 1)))
+                      (map (fn [[k _]] (build-resolved cfg k))))]
+    (into [primary] siblings)))
 
 (defn validate-content-size!
   "Reject content exceeding the resolved provider's max-tokens.
