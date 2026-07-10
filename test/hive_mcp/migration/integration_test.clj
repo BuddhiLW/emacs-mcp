@@ -72,7 +72,7 @@
         datahike-dir (io/file root "datahike")
         store (ds-store/create-store)
         test-store-var (requiring-resolve
-                         'hive-mcp.knowledge-graph.connection/*test-store*)]
+                         'hive-mcp.knowledge-graph.connection.store/*test-store*)]
     (.mkdirs backup-dir)
     (.mkdirs datalevin-dir)
     (.mkdirs datahike-dir)

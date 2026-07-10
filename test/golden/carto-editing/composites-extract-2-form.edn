@@ -1,0 +1,27 @@
+{:create-count 1,
+ :alias-count 2,
+ :op-variants
+ [:patch/create-file
+  :patch/insert-declare
+  :patch/insert-form
+  :patch/insert-form
+  :patch/delete-form
+  :patch/delete-form
+  :patch/add-require
+  :patch/insert-declare
+  :patch/alias-def
+  :patch/alias-def],
+ :alias-names #{"foo" "bar"},
+ :summary
+ {:files-created 1,
+  :ops 10,
+  :requires-added 1,
+  :alias-defs 2,
+  :replaces 0,
+  :inserts 2,
+  :requires-removed 0,
+  :deletes 2},
+ :insert-count 2,
+ :patch-count 10,
+ :require-count 1,
+ :delete-qns #{"test.ns/foo" "test.ns/bar"}}

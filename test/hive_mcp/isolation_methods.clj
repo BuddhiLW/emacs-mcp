@@ -100,6 +100,6 @@
   (fn [f]
     (let [kg-conn  (requiring-resolve 'hive-mcp.knowledge-graph.connection/get-conn)
           ds-store (requiring-resolve 'hive-mcp.knowledge-graph.store.datascript/create-store)
-          test-store-var (requiring-resolve 'hive-mcp.knowledge-graph.connection/*test-store*)]
+          test-store-var (requiring-resolve 'hive-mcp.knowledge-graph.connection.store/*test-store*)]
       (with-bindings* {test-store-var (ds-store)}
         (fn [] (f))))))
