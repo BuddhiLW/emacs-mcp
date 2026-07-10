@@ -269,7 +269,7 @@
     noop-result
     ;; Run the FSM
     (try
-      (let [fsm-result (fsm/run @compiled resources {:data data})
+      (let [fsm-result (fsm/run @compiled resources {:run-id (:drone-id data) :data data})
             result-data (-> (:data fsm-result)
                             clean-internal-fields)]
         ;; Extract the :fsm-result from data (our structured output)

@@ -292,7 +292,10 @@
   "fb/run: Execute a compiled forge belt FSM with initial data."
   [compiled resources opts]
   (fsm/run compiled resources
-           {:data (merge {:quenched?    false
+           {:run-id (or (:run-id opts)
+                        (some->> (:directory resources) (str "forge-belt:"))
+                        "forge-belt")
+            :data (merge {:quenched?    false
                           :continuous?  false
                           :strike-count 0
                           :total-smited 0
