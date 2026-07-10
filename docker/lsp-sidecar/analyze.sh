@@ -24,14 +24,17 @@ analyze_project() {
     local kondo_cache="$CACHE_DIR/kondo-cache/$project_id"
     mkdir -p "$kondo_cache"
 
-    # Build --settings: if project has .lsp/config.edn, clojure-lsp reads it.
-    # Otherwise, force plain classpath (no aliases) to avoid transitive dep
-    # failures from :test/:dev aliases. clojure-lsp auto-discovers aliases
-    # from deps.edn and tries -A:test:dev by default — this breaks projects
-    # with unresolvable transitive deps in test/dev profiles.
-    local settings='{}'
-    if [ ! -f "$project_root/.lsp/config.edn" ]; then
-        settings='{:project-specs [{:project-path "deps.edn" :classpath-cmd ["clojure" "-Spath"]}]}'
+    # Force plain classpath (no aliases) via --settings :project-specs.
+    # clojure-lsp deep-merges --settings OVER the project's .lsp/config.edn,
+    # replacing only :project-specs and keeping the rest (:source-paths, etc).
+    # Default alias discovery tries -A:test:dev, which fails for any project
+    # whose dev/test aliases carry in-container-unresolvable deps. Skip the
+    # override only when the project already declares its own :project-specs
+    # (checked with the EDN reader, not a regex, to avoid false positives).
+    local settings='{:project-specs [{:project-path "deps.edn" :classpath-cmd ["clojure" "-Spath"]}]}'
+    local cfg="$project_root/.lsp/config.edn"
+    if [ -f "$cfg" ] && bb -e '(->> *command-line-args* first slurp clojure.edn/read-string :project-specs some? println)' "$cfg" 2>/dev/null | grep -qx true; then
+        settings='{}'
     fi
 
     if java $JAVA_OPTS -jar "$LSP_JAR" dump --project-root "$project_root" \
