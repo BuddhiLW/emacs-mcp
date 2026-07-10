@@ -64,6 +64,18 @@
   [{:keys [validate on-empty teardown initial]}]
   (->SingleSlot (atom initial) validate on-empty teardown))
 
+(defn watch-slot!
+  "Run `(f old-impl new-impl)` when `slot`'s installed impl transitions."
+  [slot key f]
+  (add-watch (:state slot) key (fn [_ _ old new] (f old new)))
+  slot)
+
+(defn unwatch-slot!
+  "Remove the watch registered under `key` from `slot`. Safe when absent."
+  [slot key]
+  (remove-watch (:state slot) key)
+  slot)
+
 ;;; ============================================================================
 ;;; IRegistry — a keyed multi-impl registry
 ;;; ============================================================================

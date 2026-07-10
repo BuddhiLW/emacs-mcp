@@ -42,6 +42,31 @@
   (when-let [handler (:on-message @server-atom)]
     (handler msg client-id)))
 
+(defonce ^:private on-connect-hooks (atom []))
+
+(defn add-on-connect-hook!
+  "Register `(f emit-to)` to run when a client connects; `emit-to` is
+   `(fn [event-type data])` targeting only that client. Returns hook count."
+  [f]
+  (count (swap! on-connect-hooks conj f)))
+
+(defn clear-on-connect-hooks! []
+  (reset! on-connect-hooks [])
+  nil)
+
+(defn emit-to!
+  "Emit a typed event to a single client socket."
+  [socket event-type data]
+  (when-not (s/closed? socket)
+    (d/catch (s/put! socket (json/write-str (merge {:type (name event-type)
+                                                    :timestamp (System/currentTimeMillis)}
+                                                   data)))
+             (fn [e] (log/warn "emit-to! failed:" (.getMessage e)) nil))))
+
+(defn- run-on-connect-hooks! [socket]
+  (doseq [hook @on-connect-hooks]
+    (rescue nil (hook (fn [event-type data] (emit-to! socket event-type data))))))
+
 (defn- ws-connection-handler
   "Handle WebSocket connection upgrade."
   [req]
@@ -49,6 +74,7 @@
               (let [client-id (str "ws-" (System/currentTimeMillis) "-" (rand-int 10000))]
                 (log/info "WebSocket client connected:" client-id)
                 (swap! clients conj socket)
+                (run-on-connect-hooks! socket)
 
                 (s/consume (fn [raw]
                              (cond
