@@ -36,7 +36,11 @@
 
         ;; Datalevin for durable graph storage (GraphStore backend, optional)
         ;; LMDB-backed Datalog — requires Java 21+
-        datalevin/datalevin {:mvn/version "0.10.7"}
+        datalevin/datalevin {:local/root "../clones-ref/datalevin"}
+
+        ;; sci pinned to latest ecosystem-wide. Requires overarch consumed as
+        ;; source (hive-overarch), not its AOT uberjar which bundles older sci.
+        org.babashka/sci {:mvn/version "0.13.53"}
 
         ;; Datahike for immutable graph storage with branching/time-travel
         ;; Content-addressable, supports branch/merge for multi-ling exploration
@@ -122,6 +126,24 @@
         io.github.hive-agi/hive-dsl
         {:git/tag "v0.5.1" :git/sha "335869e"}
 
+        ;; hive-spi — pure SPI contract leaf (protocols + schemas + ADTs, no impls).
+        ;; REQUIRED at compile time by core namespaces, not just tests:
+        ;;   hive_mcp/diag/{sizer,boot,probe,profiler,cache_datahike,clinic}.clj
+        ;;     -> hive-spi.diag.{ports,schema}
+        ;;   hive_mcp/protocols/workflow.clj -> hive-spi.workflow.engine   (HWF2-D1b)
+        ;;   hive_mcp/workflows/strategy.clj -> hive-spi.workflow.strategy (HWF2-D1b)
+        ;; Sibling :local/root (not a git coord): hive-spi's only remote is a
+        ;; private Gitea (git@gitea.hive-mcp.com:buddhilw/hive-spi.git), so an
+        ;; io.github.* coord cannot resolve it. Same shape as the datalevin entry
+        ;; above. Once hive-spi is published, switch to {:git/tag :git/sha}.
+        io.github.hive-agi/hive-spi {:local/root "../hive-spi"}
+
+        ;; hive-addon — standalone IAddon contract (leaf lib). hive-mcp.addons.protocol
+        ;; re-exports it via def-aliases so the ~30 monorepo addon implementors can
+        ;; depend on hive-addon instead of compile-depending on hive-mcp.
+        io.github.hive-agi/hive-addon
+        {:git/tag "v0.1.0" :git/sha "89e299f"}
+
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
         io.github.hive-agi/hive-di {:git/tag "v0.3.1" :git/sha "ab63fd0"}
@@ -169,7 +191,7 @@
    ;; Heap cap, G1GC tuning, string dedup for prompt/response data,
    ;; bounded core.async pool, Netty access, aggressive GC return-to-OS
    :jvm-opts ["-Xmx8g"
-              "-Xms4g"
+              "-Xms2g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
@@ -205,14 +227,22 @@
   {:extra-paths ["dev" "test"]
    :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}
                 cider/cider-nrepl {:mvn/version "0.58.0"}
-                refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
+                refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}
+                ;; --- Heap/RAM diagnostics (clojure-goes-fast). Toggleable via
+                ;; hive-mcp.diag.heap; needs -Djdk.attach.allowAttachSelf=true
+                ;; (clj-memory-meter self-attach) + DebugNonSafepoints (profiler).
+                com.clojure-goes-fast/clj-memory-meter {:mvn/version "0.4.0"}
+                com.clojure-goes-fast/jvm-alloc-rate-meter {:mvn/version "0.1.4"}
+                com.clojure-goes-fast/clj-async-profiler {:mvn/version "1.6.2"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
    ;; Netty access, Proximum HNSW SIMD, aggressive GC return-to-OS
-   ;; -Xmx16g: the live KG set reached ~8.2G and maxed the old 8g cap on
-   ;; boot (95% post-GC). Box has headroom; MaxHeapFreeRatio=40 returns
-   ;; unused heap to the OS so this is a ceiling, not a reservation.
+   ;; -Xmx16g + SoftMaxHeapSize=12g bound the peak (KG load spikes);
+   ;; -Xms2g floor lets idle committed heap settle at the ratio-driven
+   ;; ~2.5g (working set ~1.75g post query-result-cache fix) instead of
+   ;; pinning 4g. MinHeapFreeRatio=20/MaxHeapFreeRatio=40 + periodic GC
+   ;; return the rest to the OS.
    :jvm-opts ["-Xmx16g"
-              "-Xms4g"
+              "-Xms2g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
@@ -227,20 +257,49 @@
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
               "-Dio.netty.tryReflectionSetAccessible=true"
-              "--add-modules=jdk.incubator.vector"]}
+              "--add-modules=jdk.incubator.vector"
+              ;; --- RAM diagnostics enablement ---
+              ;; clj-memory-meter attaches an agent to the running VM to size
+              ;; live objects; JDK 25 forbids self-attach unless this is set.
+              "-Djdk.attach.allowAttachSelf=true"
+              ;; Accurate async-profiler stacks (alloc/CPU flamegraphs).
+              "-XX:+UnlockDiagnosticVMOptions"
+              "-XX:+DebugNonSafepoints"
+              ;; NOTE: the JFR OldObjectSample leak recording (-XX:StartFlightRecording,
+              ;; settings=leak.jfc) is added at the PRODUCTION launch point instead —
+              ;; ~/dotfiles/.local/bin/blw/hive-mcp — so it runs only for the live
+              ;; coordinator, not for ephemeral dev cider-jack-in REPLs (which would
+              ;; name-collide on the singleton recording + write junk .jfr files).
+              ;; --- RSS containment (HEAP-JVM-FLAGS kanban) ---
+              ;; SoftMaxHeapSize makes G1 treat 12g as a soft ceiling and
+              ;; uncommit toward it, returning RSS to the OS between peaks;
+              ;; -Xmx16g stays the hard cap. ParallelRefProc speeds SoftRef
+              ;; clearing; ExplicitGCInvokesConcurrent keeps our diag System/gc
+              ;; calls concurrent instead of full STW.
+              "-XX:SoftMaxHeapSize=12g"
+              "-XX:+ParallelRefProcEnabled"
+              "-XX:+ExplicitGCInvokesConcurrent"]}
 
   :nrepl
   {:extra-paths ["dev" "test"]
    :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}
                 cider/cider-nrepl {:mvn/version "0.58.0"}
-                refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}}
+                refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}
+                ;; --- Heap/RAM diagnostics (clojure-goes-fast). Toggleable via
+                ;; hive-mcp.diag.heap; needs -Djdk.attach.allowAttachSelf=true
+                ;; (clj-memory-meter self-attach) + DebugNonSafepoints (profiler).
+                com.clojure-goes-fast/clj-memory-meter {:mvn/version "0.4.0"}
+                com.clojure-goes-fast/jvm-alloc-rate-meter {:mvn/version "0.1.4"}
+                com.clojure-goes-fast/clj-async-profiler {:mvn/version "1.6.2"}}
    ;; Heap cap, G1GC tuning, string dedup, bounded core.async pool,
    ;; Netty access, Proximum HNSW SIMD, aggressive GC return-to-OS
-   ;; -Xmx16g: the live KG set reached ~8.2G and maxed the old 8g cap on
-   ;; boot (95% post-GC). Box has headroom; MaxHeapFreeRatio=40 returns
-   ;; unused heap to the OS so this is a ceiling, not a reservation.
+   ;; -Xmx16g + SoftMaxHeapSize=12g bound the peak (KG load spikes);
+   ;; -Xms2g floor lets idle committed heap settle at the ratio-driven
+   ;; ~2.5g (working set ~1.75g post query-result-cache fix) instead of
+   ;; pinning 4g. MinHeapFreeRatio=20/MaxHeapFreeRatio=40 + periodic GC
+   ;; return the rest to the OS.
    :jvm-opts ["-Xmx16g"
-              "-Xms4g"
+              "-Xms2g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
               "-XX:+UseStringDeduplication"
@@ -255,7 +314,28 @@
               "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
               "--add-opens=java.base/java.nio=ALL-UNNAMED"
               "-Dio.netty.tryReflectionSetAccessible=true"
-              "--add-modules=jdk.incubator.vector"]
+              "--add-modules=jdk.incubator.vector"
+              ;; --- RAM diagnostics enablement ---
+              ;; clj-memory-meter attaches an agent to the running VM to size
+              ;; live objects; JDK 25 forbids self-attach unless this is set.
+              "-Djdk.attach.allowAttachSelf=true"
+              ;; Accurate async-profiler stacks (alloc/CPU flamegraphs).
+              "-XX:+UnlockDiagnosticVMOptions"
+              "-XX:+DebugNonSafepoints"
+              ;; NOTE: the JFR OldObjectSample leak recording (-XX:StartFlightRecording,
+              ;; settings=leak.jfc) is added at the PRODUCTION launch point instead —
+              ;; ~/dotfiles/.local/bin/blw/hive-mcp — so it runs only for the live
+              ;; coordinator, not for ephemeral dev cider-jack-in REPLs (which would
+              ;; name-collide on the singleton recording + write junk .jfr files).
+              ;; --- RSS containment (HEAP-JVM-FLAGS kanban) ---
+              ;; SoftMaxHeapSize makes G1 treat 12g as a soft ceiling and
+              ;; uncommit toward it, returning RSS to the OS between peaks;
+              ;; -Xmx16g stays the hard cap. ParallelRefProc speeds SoftRef
+              ;; clearing; ExplicitGCInvokesConcurrent keeps our diag System/gc
+              ;; calls concurrent instead of full STW.
+              "-XX:SoftMaxHeapSize=12g"
+              "-XX:+ParallelRefProcEnabled"
+              "-XX:+ExplicitGCInvokesConcurrent"]
    :main-opts ["-m" "nrepl.cmdline"
                "--port" "7910"
                "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"]}
@@ -267,11 +347,9 @@
                 ;; Generative testing for spec validation
                 org.clojure/test.check {:mvn/version "1.1.1"}
                 ;; Trifecta macro: golden + property + mutation facets
-                io.github.hive-agi/hive-test {:git/tag "v0.2.1" :git/sha "48b480f"}
-                ;; hive-spi: pure SPI leaf (role.card schema). Not in :deps
-                ;; (no git remote yet — see local.deps.edn); wired here so the
-                ;; :role write-gate test can validate against the real schema.
-                io.github.hive-agi/hive-spi {:local/root "../hive-spi"}}
+                io.github.hive-agi/hive-test {:git/tag "v0.2.1" :git/sha "48b480f"}}
+                ;; hive-spi now lives in :deps (core nses require it) — no
+                ;; :test-alias override needed.
    ;; KG test isolation: force ephemeral in-memory DataScript so a cold test
    ;; JVM never opens (and konserve-lock-contends) the prod datahike store.
    :jvm-opts ["-Dhive.kg.backend=datascript"]

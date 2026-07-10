@@ -43,15 +43,20 @@ export HIVE_PROFILE="$PROFILE"
 echo "hive-mcp: profile=$HIVE_PROFILE"
 
 # ── Local deps overlay ──────────────────────────────────────────────
-# If deps.local.edn exists, merge it via -Sdeps for sibling :local/root overrides
-SDEPS_ARG=""
-if [[ -f "$PROJECT_DIR/deps.local.edn" ]]; then
-  SDEPS_ARG="-Sdeps $(cat "$PROJECT_DIR/deps.local.edn")"
-  echo "hive-mcp: merging deps.local.edn"
+# Merge local.deps.edn (gitignored) via -Sdeps for sibling :local/root overrides.
+# The filename is local.deps.edn — matching .gitignore and the deps.edn comment.
+# (It was previously spelled deps.local.edn here, so the overlay never fired.)
+#
+# Must be a bash ARRAY: the EDN payload contains spaces, and an unquoted
+# "$SDEPS_ARG" scalar word-splits it into separate argv entries, so clj would
+# receive `-Sdeps` `{:deps` `{io.github…` and fail to read the map.
+SDEPS_ARG=()
+if [[ -f "$PROJECT_DIR/local.deps.edn" ]]; then
+  SDEPS_ARG=(-Sdeps "$(cat "$PROJECT_DIR/local.deps.edn")")
+  echo "hive-mcp: merging local.deps.edn"
 fi
 
 # ── Launch ──────────────────────────────────────────────────────────
 cd "$PROJECT_DIR"
 
-# shellcheck disable=SC2086
-exec clj $SDEPS_ARG -M:mcp "${PASSTHROUGH_ARGS[@]}"
+exec clj "${SDEPS_ARG[@]}" -M:mcp "${PASSTHROUGH_ARGS[@]}"
