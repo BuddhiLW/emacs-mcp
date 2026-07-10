@@ -299,9 +299,17 @@
   (let [take-type (fn [t limit] (vec (take limit (get by-type t []))))
         tagged    (fn [t tag limit]
                     (vec (take limit
-                               (filter #(hydr/has-tag? % tag) (get by-type t [])))))]
+                               (filter #(hydr/has-tag? % tag) (get by-type t [])))))
+        prio-principles (tagged "principle" "catchup-priority" 50)]
     {:axioms               (take-type "axiom" 100)
-     :principles           (take-type "principle" 50)
+     :priority-principles  (if (seq prio-principles)
+                             prio-principles
+                             (take-type "principle" 50))
+     :principles           (if (seq prio-principles)
+                             (vec (take 50
+                                        (remove #(hydr/has-tag? % "catchup-priority")
+                                                (get by-type "principle" []))))
+                             [])
      :priority-conventions (tagged    "convention" "catchup-priority" 50)
      :sessions             (tagged    "note" "session-summary" 25)
      :recent-wraps         (tagged    "note" "wrap-generated"   10)

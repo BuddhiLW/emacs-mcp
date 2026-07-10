@@ -71,6 +71,26 @@
              (str (subs content 0 cap)
                   " [TRUNCATED - use mcp_memory_get_full " (:id axiom-entry) "]")))))
 
+(defn cap-piggyback-entry
+  "Cap non-axiom entry content for the ---MEMORY--- stream; axioms pass through uncapped."
+  [entry]
+  (if (= "axiom" (str (or (:type entry) "")))
+    entry
+    (cap-axiom-content entry)))
+
+(def wrap-preview-cap
+  "Max chars of wrap-synthesis content surfaced inline in the recent-wraps block."
+  240)
+
+(defn entry->wrap-preview
+  "Project a wrap entry to id + created + tags + bounded content preview."
+  [entry]
+  (let [content (str (:content entry))]
+    {:id (:id entry)
+     :created (:created entry)
+     :tags (vec (or (:tags entry) []))
+     :preview (subs content 0 (min (count content) wrap-preview-cap))}))
+
 (defn trim-kg-insights
   "Trim KG insight lists to bounded sizes."
   [insights]
@@ -106,10 +126,10 @@
   "Build the final catchup response as a vector of content blocks.
    Includes header, context, kg-insights, meta, and (when available) carto-status."
   [{:keys [project-name project-id scopes git-info permeation
-           axioms-meta principles-meta priority-meta sessions-meta decisions-meta
+           axioms-meta principles-meta priority-principles-meta priority-meta sessions-meta decisions-meta
            conventions-meta snippets-meta expiring-meta recent-wraps kg-insights
            project-tree-scan disc-decay carto-status kanban-summary context-refs]}]
-  (let [total-enqueued (+ (count axioms-meta) (count principles-meta) (count priority-meta))]
+  (let [total-enqueued (+ (count axioms-meta) (count priority-principles-meta) (count priority-meta))]
     (filterv some?
     [(make-block "header"
                  {:_block "header"
@@ -120,6 +140,7 @@
                   :permeation permeation
                   :counts {:axioms (count axioms-meta)
                            :principles (count principles-meta)
+                           :priority-principles (count priority-principles-meta)
                            :priority-conventions (count priority-meta)
                            :sessions (count sessions-meta)
                            :recent-wraps (count recent-wraps)
@@ -142,7 +163,7 @@
        (make-block "recent-wraps"
                    {:_block "recent-wraps"
                     :recent-wraps recent-wraps
-                    :hint "Last 10 persisted wrap-generated session syntheses (full content). Read these to recover prior-session insights without re-running synthesis."}))
+                    :hint "Last 10 wrap syntheses (id + created + tags + preview). Full body via mcp__hive__memory get :id <id>, or context_get on the recent-wraps ref."}))
      (make-block "kg-insights"
                  {:_block "kg-insights"
                   :kg-insights (trim-kg-insights kg-insights)})

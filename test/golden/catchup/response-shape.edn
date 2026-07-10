@@ -17,6 +17,7 @@
      :recent-wraps
      :axioms
      :principles
+     :priority-principles
      :priority-conventions
      :sessions
      :expiring
