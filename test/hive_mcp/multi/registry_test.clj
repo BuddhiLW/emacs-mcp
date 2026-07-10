@@ -78,6 +78,28 @@
           (is (= :test/a (:owner hit)) "first-write-wins: original owner retained")
           (is (= :v2 ((:handler hit))) "same-owner replace updated the handler"))))))
 
+(deftest core-seed-overridable-by-addon
+  (testing "A :multi/core seed entry is overridable by any addon owner (last-write-wins core->addon); different non-core owners still conflict"
+    (with-fresh-registry
+      (fn []
+        (r-tools/reset-for-test!)
+        (let [seed     (r-tools/register! :multi/core "kg" {:handler (constantly :core)})
+              override (r-tools/register! "hive.knowledge" "kg" {:handler (constantly :addon)})
+              hit      (r-tools/lookup "kg")
+              by-owner (-> (r-tools/snapshot) :data :by-owner)
+              ;; a second addon must NOT be able to steal it from hive.knowledge
+              steal    (r-tools/register! "other.addon" "kg" {:handler (constantly :nope)})]
+          (is (= :ok seed)                        ":ok seeding the :multi/core entry")
+          (is (= :replaced override)              ":replaced — addon overrides the core seed (the fix)")
+          (is (= "hive.knowledge" (:owner hit))   "owner is now the addon")
+          (is (= :addon ((:handler hit)))         "addon handler wins after override")
+          (is (not (contains? (get by-owner :multi/core #{}) "kg"))
+              "tool removed from :multi/core by-owner set")
+          (is (contains? (get by-owner "hive.knowledge" #{}) "kg")
+              "tool added to addon by-owner set")
+          (is (= :conflict steal)                 ":conflict — non-core owner is not overridable by a different owner")
+          (is (= :addon ((:handler (r-tools/lookup "kg")))) "conflicting steal left the addon handler intact"))))))
+
 (deftest verbs-conflict-policy
   (testing "Verb registry: ok → replaced → conflict"
     (with-fresh-registry
@@ -252,4 +274,3 @@
         (is (nil? (r-verbs/lookup "rb!")))
         (is (nil? (r-aliases/lookup "rb")))
         (is (nil? (r-batchables/lookup "rb-tool")))))))
-

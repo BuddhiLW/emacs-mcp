@@ -23,6 +23,7 @@
 
 (defn register!
   "Register a tool handler under owner. Returns :ok | :replaced | :conflict.
+   A :multi/core-owned entry is overridable by any addon owner (returns :replaced).
 
    entry shape: {:handler ifn :batchable (some-fn nil? any?)}"
   [owner tool-name entry]
@@ -42,6 +43,13 @@
                    (do (reset! outcome :replaced)
                        {:by-name  (assoc by-name tool-name v)
                         :by-owner by-owner})
+
+                   (= :multi/core (:owner existing))
+                   (do (reset! outcome :replaced)
+                       {:by-name  (assoc by-name tool-name v)
+                        :by-owner (-> by-owner
+                                      (update :multi/core disj tool-name)
+                                      (update owner (fnil conj #{}) tool-name))})
 
                    :else
                    (do (reset! outcome :conflict)
