@@ -45,7 +45,7 @@
         ;; Datahike for immutable graph storage with branching/time-travel
         ;; Content-addressable, supports branch/merge for multi-ling exploration
         ;; Part of replikativ ecosystem (pairs with yggdrasil)
-        org.replikativ/datahike {:mvn/version "0.8.1671"}
+        org.replikativ/datahike {:mvn/version "0.8.1719"}
 
         ;; Proximum — pure-JVM HNSW vector index with git-like versioning.
         ;; STORAGE-2 phase 2: backs the :carto-vec / :memory-vec slots
