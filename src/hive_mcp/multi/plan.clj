@@ -1,18 +1,14 @@
 (ns hive-mcp.multi.plan
-  "Persistent compile-then-run for the multi tool — PR5.
-
-   Promotes `hive-events.multi/compile-multi-spec` from an internal stage of
-   handle-batch into a first-class user-facing commands. Two modes:
+  "Persistent compile-then-run for the multi tool. Two modes:
 
    1. `(compile-and-persist! ops opts)` — runs the pure compile pipeline,
       persists the resulting wave plan as a `:plan` memory entry, returns
-      the plan-id + a snapshot of waves. Useful for review-before-execute,
-      audit trail, dry-run-with-replay.
+      the plan-id + a snapshot of waves.
 
    2. `(run! plan-id opts)` — fetches the persisted plan, optionally compares
       the stored `:registry/version` against the current registry snapshot
       (raises `:multi/registry-stale` warn-log on mismatch), then dispatches
-      via the existing `tools.multi/run-multi` executor.
+      via the `tools.multi/run-multi` executor.
 
    Plans are written as memory entries with type=plan, content=EDN form of
    the plan map, tagged `multi-plan`. They decay along normal memory rules.
@@ -22,8 +18,8 @@
             [hive-mcp.multi.registry :as registry]
             [hive-dsl.result :as r :refer [rescue]]
             [clojure.edn :as edn]
-            [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.multi.util :as util]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -49,24 +45,10 @@
 ;; Compile + persist
 ;; =============================================================================
 
-(defn- decode-mcp-text
-  "Best-effort decode of the MCP text envelope. Returns the parsed body or
-   the original input if it's not a parseable text envelope."
-  [v]
-  (if (and (map? v) (string? (:text v)))
-    (rescue v
-      (json/read-str (:text v) :key-fn keyword))
-    v))
-
 (defn- extract-id [add-result]
-  (let [decoded (decode-mcp-text add-result)]
+  (let [decoded (util/decode-mcp-text add-result)]
     (or (:id decoded)
-        (some-> decoded :entry :id)
-        (when (string? (:text add-result))
-          (try (-> (:text add-result)
-                   (json/read-str :key-fn keyword)
-                   :id)
-               (catch Throwable _ nil))))))
+        (some-> decoded :entry :id))))
 
 (defn compile-and-persist!
   "Pure-compile the ops, persist the plan, return summary + plan-id.
@@ -130,7 +112,7 @@
   [plan-id]
   (if-let [get-fn (memory-get)]
     (let [result (rescue nil (get-fn {:id plan-id}))
-          decoded (decode-mcp-text result)
+          decoded (util/decode-mcp-text result)
           content (or (:content decoded)
                       (some-> decoded :entry :content))]
       (cond

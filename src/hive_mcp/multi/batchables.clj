@@ -24,7 +24,8 @@
             [hive-mcp.batch.protocol :as bproto]
             [hive-mcp.tools.kg.batch :as kg-batch]
             [hive-dsl.result :as r :refer [rescue]]
-            [clojure.data.json :as json]))
+            [clojure.data.json :as json]
+            [hive-mcp.multi.util :as util]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -43,15 +44,6 @@
           {}
           ops))
 
-(defn- decode-mcp-text
-  "Best-effort decode of the MCP text envelope into a map. Returns the
-   original value if it isn't a parseable text envelope."
-  [v]
-  (if (and (map? v) (string? (:text v)))
-    (rescue v
-      (json/read-str (:text v) :key-fn keyword))
-    v))
-
 (defn- handler-result->per-op
   "Project a batch handler's response onto per-op result entries.
 
@@ -60,7 +52,7 @@
    a `:results` vector aligned with the input ops. We try that first, then
    fall back to a synthetic ok per op."
   [ops handler-result]
-  (let [decoded (decode-mcp-text handler-result)
+  (let [decoded (util/decode-mcp-text handler-result)
         per-results (when (and (map? decoded) (sequential? (:results decoded)))
                       (:results decoded))]
     (if per-results
@@ -85,12 +77,9 @@
 
 (defn- iter-handler
   "Wrap a single-op handler into a batch-shaped handler for commands that
-   don't (yet) have a true single-store-call batch path. The output mirrors
-   the existing consolidated.memory `make-single-command-batch` shape so the
-   per-op result extractor can decode it.
-
-   PR4 will replace iter-handler with real bulk-store calls for :add /
-   :feedback once the Milvus upsert path is wired."
+   don't have a true single-store-call batch path. The output mirrors the
+   existing consolidated.memory `make-single-command-batch` shape so the
+   per-op result extractor can decode it."
   [single-op-handler]
   (fn [{:keys [operations]}]
     (let [results (mapv (fn [op]
@@ -156,8 +145,7 @@
    Real single-store paths:
      :edit, :get          (handle-batch-edit / handle-batch-get)
 
-   Iter-wrapped (single-op handler under iter-handler — PR5+ replaces these
-   with real bulk paths):
+   Iter-wrapped (single-op handler under iter-handler):
      :add, :feedback, :tags, :duration, :promote, :demote"
   []
   {:add      (iter-handler-from 'hive-mcp.tools.memory.crud/handle-add)
