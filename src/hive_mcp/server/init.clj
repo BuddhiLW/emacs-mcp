@@ -599,7 +599,13 @@
                  (let [load-fn (resolve 'hive-mcp.extensions.loader/load-extensions!)]
                    (when load-fn
                      (let [result (load-fn)]
-                       (log/info "Extension loading complete:" result))))))
+                       (log/info "Extension loading complete:" result)))))
+  ;; Post-init multi-dispatch coherence check (WARN-only)
+  (result/rescue nil
+                 (let [get-adv (requiring-resolve 'hive-mcp.tools.registry/get-advertised-tools)
+                       check!  (requiring-resolve 'hive-mcp.multi.registry/check-dispatch-coherence!)]
+                   (when (and get-adv check!)
+                     (check! (filter :consolidated (get-adv)))))))
 
 ;; =============================================================================
 ;; Workflow Engine Initialization

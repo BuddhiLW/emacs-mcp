@@ -100,6 +100,40 @@
           (is (= :conflict steal)                 ":conflict — non-core owner is not overridable by a different owner")
           (is (= :addon ((:handler (r-tools/lookup "kg")))) "conflicting steal left the addon handler intact"))))))
 
+(deftest dispatch-divergences-detects-core-shadowing
+  (testing "Flags a core-seeded tool whose advertised handler differs (unreconciled addon override); ignores reconciled/same-handler/unseeded"
+    (let [advertised [{:name "shadowed"   :handler :addon-fn}
+                      {:name "reconciled" :handler :addon-fn}
+                      {:name "same"       :handler :core-fn}
+                      {:name "unseeded"   :handler :addon-fn}]
+          lookup {"shadowed"   {:owner :multi/core  :handler :core-fn}
+                  "reconciled" {:owner "some.addon" :handler :addon-fn}
+                  "same"       {:owner :multi/core  :handler :core-fn}}
+          divs (registry/dispatch-divergences advertised lookup)]
+      (is (= ["shadowed"] (mapv :tool divs))
+          "only the unreconciled, core-seeded, handler-differing tool is flagged")
+      (is (= :multi/core (:dispatch-owner (first divs))))
+      (is (= :addon-fn (:advertised-handler (first divs))))
+      (is (empty? (registry/dispatch-divergences [] lookup))
+          "no advertised tools → no divergences")
+      (is (empty? (registry/dispatch-divergences
+                   [{:name "reconciled" :handler :addon-fn}] lookup))
+          "an addon-owned dispatch entry is never a divergence"))))
+
+(deftest check-dispatch-coherence-returns-divergences
+  (testing "check-dispatch-coherence! (1-arg) returns the divergence vector using the live registry lookup"
+    (with-fresh-registry
+      (fn []
+        (r-tools/reset-for-test!)
+        (r-tools/register! :multi/core "cohere-tool" {:handler (constantly :core)})
+        (let [divs (registry/check-dispatch-coherence!
+                    [{:name "cohere-tool" :handler (constantly :addon)}])]
+          (is (= ["cohere-tool"] (mapv :tool divs))
+              "core-seeded tool with a differing advertised handler is reported")
+          (is (empty? (registry/check-dispatch-coherence!
+                       [{:name "absent-tool" :handler (constantly :x)}]))
+              "a tool with no dispatch entry is not reported"))))))
+
 (deftest verbs-conflict-policy
   (testing "Verb registry: ok → replaced → conflict"
     (with-fresh-registry

@@ -121,6 +121,36 @@
              (when-let [tool-def (resolver tool-name)]
                (:handler tool-def))))))
 
+(defn dispatch-divergences
+  "Coherence check between advertised consolidated tools and the multi dispatch
+   registry. Returns a vector of {:tool name :advertised-handler h :dispatch-owner o}
+   for every tool whose multi-dispatch entry is still :multi/core-owned while its
+   advertised handler differs from that seed — an addon override that never reached
+   `multi` (no reconciling :multi/tool hook). `dispatch-lookup` resolves a tool-name
+   to its multi.registry.tools entry (defaults to r-tools/lookup); injectable for tests."
+  ([advertised-tools] (dispatch-divergences advertised-tools r-tools/lookup))
+  ([advertised-tools dispatch-lookup]
+   (into []
+         (keep (fn [{:keys [name handler]}]
+                 (let [entry (dispatch-lookup name)]
+                   (when (and entry
+                              (= :multi/core (:owner entry))
+                              (not= handler (:handler entry)))
+                     {:tool name
+                      :advertised-handler handler
+                      :dispatch-owner (:owner entry)}))))
+         advertised-tools)))
+
+(defn check-dispatch-coherence!
+  "Log a WARN for every advertised/dispatch divergence (see dispatch-divergences)
+   and return the divergence vector. Effect: logging only; never throws."
+  [advertised-tools]
+  (let [divs (rescue [] (dispatch-divergences advertised-tools))]
+    (doseq [{:keys [tool]} divs]
+      (log/warn "[multi.registry] advertised tool overrides core but `multi` dispatches the :multi/core seed — override unreachable via `multi tool`; add a :multi/tool hook from the owning addon"
+                {:tool tool}))
+    divs))
+
 (defn lookup-batchable-or-default
   "Return the explicit Batchable record for a tool, or a DefaultBatchableAdapter
    bound to `resolve-tool-handler` so the caller cannot tell which path is in use
