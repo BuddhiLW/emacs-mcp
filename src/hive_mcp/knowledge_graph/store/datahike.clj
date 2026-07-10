@@ -2,12 +2,14 @@
   "Datahike implementation of IKGStore protocol."
   (:require [datahike.api :as d]
             [datahike.norm.norm :as norm]
+            [datahike.query :as dq]
             [hive-mcp.knowledge-graph.store.datahike-config :as dhc]
             [hive-mcp.protocols.kg :as kg]
             [hive-mcp.dns.result :refer [rescue]]
             [hive-dsl.result :as r]
             [hive-weave.retry :as retry]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -156,9 +158,24 @@
         (norm/ensure-norms! conn resource)))
     conn))
 
+(defn- apply-query-cache-policy!
+  "Constrain datahike's global query-result cache at store init. Env
+   DATAHIKE_QUERY_CACHE: a positive integer caps retained snapshot buckets; any
+   of off/false/none/no/0 (also the default when unset) disables the cache."
+  []
+  (let [setting (some-> (System/getenv "DATAHIKE_QUERY_CACHE") str/trim str/lower-case)
+        size    (some-> setting parse-long)]
+    (if (and size (pos? size))
+      (do (dq/set-query-cache-size! size)
+          (log/info "Datahike query-result cache bounded" {:snapshots size}))
+      (do (alter-var-root #'dq/*query-result-cache?* (constantly false))
+          (dq/clear-query-cache!)
+          (log/info "Datahike query-result cache disabled" {:env (or setting "unset")})))))
+
 (defn- init-conn-result
   [cfg]
   (log/info "Initializing Datahike KG store" {:cfg cfg})
+  (apply-query-cache-policy!)
   (r/let-ok [cfg  (ensure-database-result cfg)
              conn (connect-result cfg)
              conn (ensure-core-norms-result conn)

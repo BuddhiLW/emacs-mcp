@@ -1,0 +1,6 @@
+{:non-edge :ok,
+ :non-seq :ok,
+ :poison-from :rejected,
+ :poison-to :rejected,
+ :retract-vec :ok,
+ :valid-edge :ok}
