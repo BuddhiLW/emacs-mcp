@@ -163,3 +163,19 @@
   (testing "register-relation-type! adds to relation-types"
     (schema/register-relation-type! :test-relation)
     (is (contains? (schema/relation-types) :test-relation))))
+
+(deftest relates-and-normalize-predicate-test
+  (testing ":relates is a core relation (open semantic lane)"
+    (is (contains? (schema/relation-types) :relates))
+    (is (schema/valid-relation? :relates)))
+  (testing "normalize-predicate → kebab-case token"
+    (is (= "causes"  (schema/normalize-predicate "Causes")))
+    (is (= "part-of" (schema/normalize-predicate "  part of  ")))
+    (is (= "leads-to" (schema/normalize-predicate "leads_to")))
+    (is (= "is-a"    (schema/normalize-predicate "is   a")))
+    (is (= "weird"   (schema/normalize-predicate "--weird--"))))
+  (testing "normalize-predicate → nil for nil/blank/non-string"
+    (is (nil? (schema/normalize-predicate nil)))
+    (is (nil? (schema/normalize-predicate "")))
+    (is (nil? (schema/normalize-predicate "   ")))
+    (is (nil? (schema/normalize-predicate :not-a-string)))))

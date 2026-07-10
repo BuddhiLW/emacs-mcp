@@ -1,0 +1,6 @@
+{:tx-data
+ [{:db/ident       :kg-edge/predicate
+   :db/valueType   :db.type/string
+   :db/cardinality :db.cardinality/one
+   :db/index       true
+   :db/doc         "Free-text (normalized, kebab-case) predicate for open :relates edges (e.g. \"causes\", \"part-of\"). Meaningful only when :kg-edge/relation = :relates."}]}

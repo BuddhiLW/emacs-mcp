@@ -3,7 +3,8 @@
 
    Defines the schema for knowledge edges that connect memory entries,
    enabling graph traversal, impact analysis, and knowledge promotion."
-  (:require [hive-mcp.memory.type-registry :as type-registry]))
+  (:require [hive-mcp.memory.type-registry :as type-registry]
+            [clojure.string :as str]))
 
 ;; =============================================================================
 ;; Relation Type Registry (OCP — extensions inject their own relation types)
@@ -11,9 +12,16 @@
 
 (def ^:private core-relation-types
   "Core relation types shipped with hive-mcp.
-   Addons may register additional types via register-relation-type!."
+   Addons may register additional types via register-relation-type!.
+
+   :relates is the OPEN semantic relation — a `:relates` edge carries a
+   free-text `:kg-edge/predicate` (e.g. \"causes\", \"motivates\", \"part-of\")
+   so agents can express arbitrary semantics without expanding the closed
+   structural vocabulary. Structural algos treat it as low-weight (see
+   DefaultEdgeWeights default 0.3); the other relations remain the
+   first-class structural lane."
   #{:implements :supersedes :refines :contradicts
-    :depends-on :derived-from :applies-to})
+    :depends-on :derived-from :applies-to :relates})
 
 ;; Registry atom for addon-contributed relation types.
 ;; Merged into relation-types at call time.
@@ -115,6 +123,24 @@
   "Check if a relation type is valid."
   [relation]
   (contains? (relation-types) relation))
+
+(defn normalize-predicate
+  "Normalize a free-text `:relates` predicate to a stable kebab-case token so
+   semantically-equal predicates converge instead of fragmenting the graph.
+   Lowercases, trims, and collapses runs of whitespace/underscores/hyphens to a
+   single hyphen. Returns nil for nil/blank/non-string input.
+
+   v1 is purely syntactic; semantic canonicalization (synonym / embedding
+   clustering of predicates) is a deferred v2."
+  [predicate]
+  (when (string? predicate)
+    (let [norm (-> predicate
+                   str/trim
+                   str/lower-case
+                   (str/replace #"[\s_]+" "-")
+                   (str/replace #"-{2,}" "-")
+                   (str/replace #"^-+|-+$" ""))]
+      (when (seq norm) norm))))
 
 (defn valid-confidence?
   "Check if confidence score is in valid range [0.0, 1.0]."
