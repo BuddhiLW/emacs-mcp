@@ -35,6 +35,8 @@
             [clojure.test.check.properties :as prop]
             [clojure.test.check.clojure-test :refer [defspec]]
             [hive-mcp.knowledge-graph.edges :as edges]
+            [hive-mcp.knowledge-graph.edges.decay :as edges.decay]
+            [hive-mcp.knowledge-graph.edges.promotion :as edges.promotion]
             [hive-mcp.knowledge-graph.schema :as schema]
             [hive-mcp.knowledge-graph.store.fixtures :as fixtures]))
 
@@ -49,12 +51,24 @@
 (use-fixtures :each fixtures/datascript-fixture)
 
 ;; =============================================================================
-;; Private Var References (for testing pure predicates)
+;; Pure Predicate References
 ;; =============================================================================
+;;
+;; Repointed after 608e8b4 ("refactor(kg/edges): decompose edges.clj into
+;; stratified re-export façade"). The pure predicates moved out of edges.clj
+;; into the slices, and the façade deliberately re-exports *public vars only*
+;; ("the façade carries zero private shims"):
+;;
+;;   edge-stale?               -> edges.decay     (now public)
+;;   decay-rate-for-edge       -> edges.decay     (now public)
+;;   co-access-edge-promotable? -> edges.promotion (still private: defn-)
+;;
+;; So `@#'edges/co-access-edge-promotable?` no longer resolves through the
+;; façade — it is reached via @#' on its real home in edges.promotion.
 
-(def edge-stale? @#'edges/edge-stale?)
-(def decay-rate-for-edge @#'edges/decay-rate-for-edge)
-(def co-access-edge-promotable? @#'edges/co-access-edge-promotable?)
+(def edge-stale? edges.decay/edge-stale?)
+(def decay-rate-for-edge edges.decay/decay-rate-for-edge)
+(def co-access-edge-promotable? @#'edges.promotion/co-access-edge-promotable?)
 
 ;; =============================================================================
 ;; Generators

@@ -78,7 +78,13 @@
    :kg-edge/last-verified {:db/noHistory true
                            :db/doc "Timestamp of last verification that this edge is still valid (inst)"}
    :kg-edge/source-type   {:db/noHistory true
-                           :db/doc "How this edge was established: :manual, :automated, :inferred, :co-access"}})
+                           :db/doc "How this edge was established: :manual, :automated, :inferred, :co-access"}
+   :kg-edge/schema-text    {:db/noHistory true
+                            :db/doc "Attached-schema satellite payload: full source text of the (m/=> ..)/(s/fdef ..) form (a :has-schema edge)"}
+   :kg-edge/schema-head    {:db/noHistory true
+                            :db/doc "Attached-schema satellite head name: \"=>\" (malli) or \"fdef\" (spec)"}
+   :kg-edge/schema-subject {:db/noHistory true
+                            :db/doc "Attached-schema satellite subject qn (the fn the schema constrains); mirrors the :from node's qn for direct datalog"}})
 
 ;; =============================================================================
 ;; =============================================================================

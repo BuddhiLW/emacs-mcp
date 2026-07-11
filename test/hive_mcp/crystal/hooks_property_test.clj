@@ -36,6 +36,7 @@
             [clojure.test.check.properties :as prop]
             [clojure.test.check.clojure-test :refer [defspec]]
             [hive-mcp.crystal.hooks :as hooks]
+            [hive-mcp.crystal.harvest.collect :as collect]
             [hive-mcp.crystal.synthesis :as synthesis]
             [hive-mcp.crystal.core :as crystal]
             [hive-mcp.crystal.recall :as recall]
@@ -54,7 +55,8 @@
 ;; Private Var References (for testing private helpers)
 ;; =============================================================================
 
-(def parse-json-safe @#'hooks/parse-json-safe)
+;; parse-json-safe moved hooks.clj -> harvest/collect.clj in the harvest decomposition.
+(def parse-json-safe @#'collect/parse-json-safe)
 (def surface-rescue-error @#'synthesis/surface-rescue-error)
 
 ;; =============================================================================

@@ -1,12 +1,19 @@
 (ns hive-mcp.server.piggyback-middleware-test
   "Tests for piggyback middleware cursor identity stability.
 
-   Pins down the fix where wrap-handler-memory-piggyback uses _caller_id only
+   Pins down the fix where the MEMORY channel uses _caller_id only
    (session-scoped) for buffer keys, ensuring enqueue and drain always use the
    same key regardless of project-id resolution differences.
 
-   The hivemind piggyback (wrap-handler-piggyback) STILL uses project-scoped
-   identity for cross-project shout filtering — different semantics."
+   The HIVEMIND channel STILL uses project-scoped identity for cross-project
+   shout filtering — different semantics.
+
+   NOTE: the per-channel wrappers (wrap-handler-piggyback,
+   wrap-handler-memory-piggyback) were merged into the single
+   `routes/wrap-handler-piggybacks` (hive-mcp.server.routes.middleware), which
+   drains all four channels — TOOLRESULT, MEMORY, catchup, HIVEMIND — in one
+   pass. Both semantics above are preserved inside it, so the tests below
+   exercise the unified wrapper and assert on the individual blocks."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.server.routes :as routes]
             [hive-mcp.channel.piggyback :as pb]
@@ -68,13 +75,13 @@
 ;; =============================================================================
 
 (deftest hivemind-piggyback-stable-cursor-across-dispatch-targets-test
-  (testing "wrap-handler-piggyback uses stable cursor regardless of agent_id in args"
+  (testing "HIVEMIND channel uses stable cursor regardless of agent_id in args"
     (let [shouts (atom [{:agent-id "ling-1" :event-type :progress
                          :message "working" :timestamp 1000
                          :project-id test-project}])]
       (pb/register-message-source! (fn [] @shouts))
 
-      (let [wrapped (routes/wrap-handler-piggyback dummy-handler)]
+      (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)]
         ;; Call 1: simulate `agent dispatch agent_id="swarm-target-A"`
         (let [r1 (call-wrapped wrapped {:agent_id "swarm-target-A"})]
           (is (some? (extract-hivemind-block r1))
@@ -97,7 +104,7 @@
                          :project-id test-project}])]
       (pb/register-message-source! (fn [] @shouts))
 
-      (let [wrapped (routes/wrap-handler-piggyback dummy-handler)]
+      (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)]
         ;; First call: drains existing shout
         (call-wrapped wrapped {})
 
@@ -116,13 +123,13 @@
 ;; =============================================================================
 
 (deftest memory-piggyback-session-scoped-drain-test
-  (testing "wrap-handler-memory-piggyback drains by _caller_id, not project-id"
+  (testing "MEMORY channel drains by _caller_id, not project-id"
     ;; Enqueue with raw caller-id "coordinator" (matches middleware's key)
     (mp/enqueue! "coordinator"
                  [{:id "ax-1" :type "axiom" :content "Rule 1" :tags ["axiom"]}
                   {:id "cv-1" :type "convention" :content "Conv 1" :tags ["convention"]}])
 
-    (let [wrapped (routes/wrap-handler-memory-piggyback dummy-handler)]
+    (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)]
       ;; Call 1: with target agent_id in args — uses _caller_id (nil → "coordinator")
       (let [r1 (call-wrapped wrapped {:agent_id "swarm-target-X"})]
         (is (some? (extract-memory-block r1))
@@ -138,7 +145,7 @@
     (mp/enqueue! "coordinator"
                  [{:id "n-1" :type "note" :content "A note" :tags []}])
 
-    (let [wrapped (routes/wrap-handler-memory-piggyback dummy-handler)]
+    (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)]
       ;; Call without agent_id in args (e.g., memory query)
       (let [r1 (call-wrapped wrapped {})]
         (is (some? (extract-memory-block r1))
@@ -150,7 +157,7 @@
       (mp/enqueue! caller
                    [{:id "ax-1" :type "axiom" :content "With caller" :tags []}])
 
-      (let [wrapped (routes/wrap-handler-memory-piggyback dummy-handler)]
+      (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)]
         ;; Pass _caller_id in args — middleware uses it directly
         (let [r1 (call-wrapped wrapped {:_caller_id caller})]
           (is (some? (extract-memory-block r1))
@@ -167,7 +174,7 @@
                          :project-id test-project}])]
       (pb/register-message-source! (fn [] @shouts))
 
-      (let [wrapped (routes/wrap-handler-piggyback dummy-handler)]
+      (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)]
         ;; Call 1: memory query (no agent_id in args) — reads shout
         (let [r1 (call-wrapped wrapped {})]
           (is (some? (extract-hivemind-block r1))
@@ -203,7 +210,7 @@
     (mp/enqueue! "coordinator"
                  [{:id "ax-fix" :type "axiom" :content "Delivered axiom" :tags ["axiom"]}])
 
-    (let [wrapped (routes/wrap-handler-memory-piggyback dummy-handler)]
+    (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)]
       ;; Middleware uses (or (:_caller_id args) "coordinator") → "coordinator"
       (let [r1 (call-wrapped wrapped {})]
         (is (some? (extract-memory-block r1))
@@ -215,7 +222,7 @@
       (mp/enqueue! caller-id
                    [{:id "ax-explicit" :type "axiom" :content "Explicit caller" :tags ["axiom"]}])
 
-      (let [wrapped (routes/wrap-handler-memory-piggyback dummy-handler)]
+      (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)]
         (let [r1 (call-wrapped wrapped {:_caller_id caller-id})]
           (is (some? (extract-memory-block r1))
               "explicit _caller_id: enqueue and drain keys match"))))))

@@ -16,6 +16,10 @@
         ;; nREPL client support
         nrepl/bencode {:mvn/version "1.2.0"}
 
+        ;; Compile-time dep of main src (server/transport/nrepl.clj,
+        ;; nrepl/classloader_gc.clj). cider-nrepl stays in :mcp — that one is tooling.
+        nrepl/nrepl {:mvn/version "1.7.0"}
+
         ;; Aleph for robust async TCP/networking (replaces custom sockets)
         aleph/aleph {:mvn/version "0.9.7"}
         manifold/manifold {:mvn/version "0.5.0"}
@@ -137,6 +141,16 @@
         ;; io.github.* coord cannot resolve it. Same shape as the datalevin entry
         ;; above. Once hive-spi is published, switch to {:git/tag :git/sha}.
         io.github.hive-agi/hive-spi {:local/root "../hive-spi"}
+
+        ;; TEMPORARY — scheduled for removal. Required only because
+        ;; tools/migrate/kanban/{qdrant,milvus}.clj and tools/kanban/migration.clj
+        ;; hard-require these backends, which is a DIP violation: core must load
+        ;; backends via IAddon, not compile against them. Removed once those
+        ;; adapters move to their addon repos.
+        io.github.hive-agi/clj-qdrant
+        {:git/tag "v0.1.1" :git/sha "ad9d4bb"}
+        io.github.hive-agi/hive-qdrant
+        {:git/tag "v0.1.1" :git/sha "1c571a5"}
 
         ;; hive-addon — standalone IAddon contract (leaf lib). hive-mcp.addons.protocol
         ;; re-exports it via def-aliases so the ~30 monorepo addon implementors can

@@ -27,6 +27,9 @@
    :kg-edge/created-at    :db.type/instant
    :kg-edge/last-verified :db.type/instant
    :kg-edge/source-type   :db.type/keyword
+   :kg-edge/schema-text    :db.type/string
+   :kg-edge/schema-head    :db.type/string
+   :kg-edge/schema-subject :db.type/string
 
    ;; Knowledge abstraction attributes
    :knowledge/abstraction-level :db.type/long

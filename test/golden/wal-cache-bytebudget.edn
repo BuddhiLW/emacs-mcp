@@ -1,0 +1,4 @@
+{:leak-shape {:segments 40, :segment-mib 256, :total-mib 10240},
+ :prod-0-10-7-mib 10240,
+ :head-count-only-mib 10240,
+ :head-byte-budget-mib 256}

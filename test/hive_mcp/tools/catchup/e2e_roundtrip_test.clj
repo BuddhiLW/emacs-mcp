@@ -226,9 +226,16 @@
       ;; -- KG edges (empty) ----------------------------------------------------
       kg-edges/get-edges-since (fn [& _#] [])
 
-      ;; -- Pool macros (run inline, no thread pool) ----------------------------
-      pool/submit-io!    (fn [f#] (future (f#)))
-      pool/submit-solo!  (fn [f#] (future (f#)))
+      ;; -- Pool macros (run off-pool, no bounded thread pool) ------------------
+      ;; `pool/with-io` expands to (pool/submit-io! (fn [] ...)), so redefining
+      ;; the submit fn is enough to keep every harvest/catchup branch off the
+      ;; bounded executors. Same for `pool/with-catchup` -> submit-catchup!,
+      ;; used by tools.catchup.axiom-cache.
+      ;; NOTE: there is no `pool/submit-solo!` var to redef — `pool/with-solo`
+      ;; (crystal.synthesis/persist-scoped-summary!) is a macro that expands
+      ;; straight to clojure.core/future, which is already off-pool.
+      pool/submit-io!      (fn [f#] (future (f#)))
+      pool/submit-catchup! (fn [f#] (future (f#)))
 
       ;; -- Catchup git (no shell) ----------------------------------------------
       catchup-git/gather-git-info
@@ -327,11 +334,21 @@
                                   {:directory test-directory
                                    :_caller_id "coordinator"})
 
-                  ;; Catchup returns a vector of content blocks (4 blocks)
+                  ;; Catchup returns a vector of content blocks.
+                  ;; Assert on block identity rather than a bare count: since this
+                  ;; test was written, catchup/format gained a conditional
+                  ;; "recent-wraps" block — (when (seq recent-wraps) ...) — which
+                  ;; IS emitted here because Phase 1 just crystallized a wrap.
+                  ;; Order in fmt/build-catchup-response:
+                  ;;   header, context, [recent-wraps], kg-insights, meta,
+                  ;;   [kanban], [carto-status]
                   _ (is (vector? catchup-result)
                         "catchup should return a vector of content blocks")
-                  _ (is (= 4 (count catchup-result))
-                        "catchup should return exactly 4 blocks")
+                  block-names (mapv #(:_block (json/read-str (:text %) :key-fn keyword))
+                                    catchup-result)
+                  _ (is (= ["header" "context" "recent-wraps" "kg-insights" "meta"]
+                           block-names)
+                        "catchup should return header/context/recent-wraps/kg-insights/meta blocks")
 
                   ;; Parse the blocks
                   header-block (json/read-str (:text (nth catchup-result 0)) :key-fn keyword)
@@ -413,12 +430,25 @@
           (deregister-lifecycle-extensions!))))))
 
 ;; =============================================================================
-;; Edge case: empty session produces no phantom sessions in catchup
+;; Edge case: quiet session leaves exactly one minimal breadcrumb
+;;
+;; NOTE (contract change): this deftest used to assert the "no-content => skip"
+;; path (:skipped true / :reason "no-content"). That path was deliberately
+;; removed from src: `crystal.synthesis/store-one-summary!` now falls back to
+;; `crystal.synthesis/minimal-wrap-summary` when no progress/activity was
+;; harvested, so that "every wrap leaves a breadcrumb in the memory store so
+;; catchup can reconstruct session boundaries even for quiet sessions"
+;; (its docstring). `synthesize` has no skip branch left at all.
+;;
+;; The edge case is still worth guarding, so the assertions are repointed at
+;; the *current* contract: a quiet wrap persists exactly ONE minimal summary,
+;; tagged "wrap-minimal", and catchup surfaces that single breadcrumb — no
+;; phantom duplicates, no synthesized progress it never saw.
 ;; =============================================================================
 
-(deftest e2e-empty-wrap-no-phantom-sessions
-  (testing "Wrap with no activity skips crystallization; catchup returns no sessions"
-    (let [[_entries-atom store] (make-memory-store)]
+(deftest e2e-empty-wrap-minimal-breadcrumb
+  (testing "Wrap with no activity persists one minimal breadcrumb; catchup surfaces exactly it"
+    (let [[entries-atom store] (make-memory-store)]
       (register-lifecycle-extensions!)
       (try
         (with-e2e-mocks store
@@ -431,20 +461,35 @@
                                                 :agent-id test-agent})
                   crystal-result (hooks/crystallize-session harvested)]
 
-              ;; No content => skipped
-              (is (true? (:skipped crystal-result))
-                  "empty session should skip crystallization")
-              (is (= "no-content" (:reason crystal-result))
-                  "skip reason should be 'no-content'")
+              ;; No content => minimal breadcrumb, NOT a skip
+              (is (not (:skipped crystal-result))
+                  "quiet session should still crystallize (breadcrumb, not skip)")
+              (is (some? (:summary-id crystal-result))
+                  "quiet session should produce a summary-id")
 
-              ;; Catchup should find no session summaries
+              ;; Exactly one entry lands in the store, and it is the minimal one
+              (is (= 1 (count @entries-atom))
+                  "quiet wrap should persist exactly one entry (no phantom extras)")
+              (let [breadcrumb (first @entries-atom)
+                    tags (set (:tags breadcrumb))]
+                (is (contains? tags "wrap-minimal")
+                    "the breadcrumb should be tagged 'wrap-minimal'")
+                (is (contains? tags "session-summary")
+                    "the breadcrumb should be tagged 'session-summary'")
+                (is (re-find #"Progress notes: 0" (str (:content breadcrumb)))
+                    "the breadcrumb should report zero harvested progress notes"))
+
+              ;; Catchup surfaces exactly that one breadcrumb session
               (let [catchup-result (catchup/handle-native-catchup
                                     {:directory test-directory
                                      :_caller_id "coordinator"})
                     context-block (json/read-str (:text (nth catchup-result 1)) :key-fn keyword)
                     sessions (get-in context-block [:context :sessions])]
-                (is (empty? sessions)
-                    "catchup should return no sessions when wrap produced nothing")))))
+                (is (= 1 (count sessions))
+                    "catchup should return exactly the one breadcrumb session")
+                (is (re-find #"Quiet session|Progress notes: 0|Session Summary"
+                             (str (:P (first sessions))))
+                    "the catchup session preview should be the quiet-session breadcrumb")))))
 
         (finally
           (deregister-lifecycle-extensions!))))))

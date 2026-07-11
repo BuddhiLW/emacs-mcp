@@ -3,7 +3,12 @@
 
    Verifies the full path: shout! stores in agent-registry ->
    all-hivemind-messages reads from it -> piggyback/get-messages
-   returns them -> wrap-handler-piggyback appends ---HIVEMIND--- blocks.
+   returns them -> routes/wrap-handler-piggybacks appends ---HIVEMIND--- blocks.
+
+   (The old hivemind-only `wrap-handler-piggyback` was merged into the unified
+   `wrap-handler-piggybacks` in hive-mcp.server.routes.middleware, which drains
+   TOOLRESULT / MEMORY / catchup / HIVEMIND in a single pass. Its HIVEMIND leg
+   is exactly what these tests assert on.)
 
    These tests complement piggyback_middleware_test.clj (which uses
    mock message sources) by testing the real hivemind integration.
@@ -97,7 +102,7 @@
     (shout-directly! "swarm-test-ling-1" :progress "Found the bug!" test-project)
 
     ;; Step 2: Coordinator calls any tool -> piggyback should include the shout
-    (let [wrapped (routes/wrap-handler-piggyback dummy-handler)
+    (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)
           result (call-with-context wrapped {})]
       (is (some? (extract-hivemind-block result))
           "Coordinator should see ling's shout in ---HIVEMIND--- block")
@@ -119,7 +124,7 @@
     (shout-directly! "ling-alpha" :completed "Task done" test-project)
 
     ;; Coordinator reads all shouts via piggyback
-    (let [wrapped (routes/wrap-handler-piggyback dummy-handler)
+    (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)
           result (call-with-context wrapped {})
           block-text (extract-hivemind-block result)]
       (is (some? block-text) "Should have ---HIVEMIND--- block")
@@ -139,7 +144,7 @@
     ;; Shout
     (shout-directly! "ling-once" :progress "Delivered once" test-project)
 
-    (let [wrapped (routes/wrap-handler-piggyback dummy-handler)]
+    (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)]
       ;; First call: delivered
       (let [r1 (call-with-context wrapped {})]
         (is (some? (extract-hivemind-block r1))
@@ -152,7 +157,7 @@
 
 (deftest e2e-new-shouts-after-cursor-advance-test
   (testing "New shouts after cursor advance are delivered on next call"
-    (let [wrapped (routes/wrap-handler-piggyback dummy-handler)]
+    (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)]
       ;; Old shout
       (shout-directly! "ling-old" :progress "Old message" test-project)
 
@@ -181,7 +186,7 @@
     ;; Shout with global scope
     (shout-directly! "ling-global" :progress "Global shout" "global")
 
-    (let [wrapped (routes/wrap-handler-piggyback dummy-handler)
+    (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)
           result (call-with-context wrapped {})
           block-text (extract-hivemind-block result)]
       (is (some? block-text) "Should have ---HIVEMIND--- block")
@@ -199,7 +204,7 @@
   (testing "Piggyback messages have correct compact format {:a :e :m}"
     (shout-directly! "ling-format" :completed "All done" test-project)
 
-    (let [wrapped (routes/wrap-handler-piggyback dummy-handler)
+    (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)
           result (call-with-context wrapped {})
           block-text (extract-hivemind-block result)
           msgs (clojure.edn/read-string block-text)
@@ -223,7 +228,7 @@
           "Ring buffer should keep only last 10 messages"))
 
     ;; Coordinator should see only the last 10 (0 and 1 evicted)
-    (let [wrapped (routes/wrap-handler-piggyback dummy-handler)
+    (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)
           result (call-with-context wrapped {})
           block-text (extract-hivemind-block result)
           msgs (clojure.edn/read-string block-text)]
@@ -237,7 +242,7 @@
 (deftest e2e-empty-registry-no-hivemind-block-test
   (testing "No ---HIVEMIND--- block when no shouts exist"
     ;; No shouts at all
-    (let [wrapped (routes/wrap-handler-piggyback dummy-handler)
+    (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)
           result (call-with-context wrapped {})]
       (is (nil? (extract-hivemind-block result))
           "Should NOT append ---HIVEMIND--- when no messages"))))
