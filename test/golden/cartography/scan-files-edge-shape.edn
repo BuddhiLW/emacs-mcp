@@ -1,0 +1,7 @@
+{:snippets 3,
+ :updated-files 1,
+ :edges 3,
+ :edge-details
+ [["id-process" "id-log" :depends-on]
+  ["id-process" "id-validate" :depends-on]
+  ["id-validate" "id-format-id" :depends-on]]}
