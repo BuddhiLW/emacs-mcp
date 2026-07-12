@@ -8,7 +8,8 @@
             [hive-mcp.config.secrets :as secrets]
             [hive-mcp.config.schema :as schema]
             [hive-dsl.result :as result]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.config.source :as src]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -27,6 +28,27 @@
 ;; Cached global configuration atom.
 ;; nil = not loaded yet, map = loaded config.
 (defonce ^:private global-config (atom nil))
+
+(def ^:dynamic *config-source*
+  "Bind to an IConfigSource to override where config is read from.
+
+   nil (production) — the disk-loaded `global-config` atom.
+   Tests bind `source/static-source` so they assert against config they declare
+   rather than whatever the developer last wrote to ~/.config/hive-mcp."
+  nil)
+
+(defn- active-config-atom
+  "The atom writes land in: the bound source's when one is bound, else the
+   process-wide config atom. Throws when the bound source is read-only — a
+   write that cannot land must not pretend it did."
+  []
+  (if-let [source *config-source*]
+    (if (satisfies? src/IMutableConfigSource source)
+      (src/-config-atom source)
+      (throw (ex-info "Config source is read-only — bind a mutable source to write"
+                      {:error :config/read-only-source
+                       :source (class source)})))
+    global-config))
 
 ;; =============================================================================
 ;; Loading (Orchestrator)
@@ -92,9 +114,15 @@
 ;; =============================================================================
 
 (defn get-global-config
-  "Return the cached global config, or defaults if not yet loaded."
+  "Return the effective global config.
+
+   Reads through *config-source* when one is bound (tests bind a static EDN map,
+   so they never depend on the developer's ~/.config). Unbound — production —
+   this is the disk-loaded atom, falling back to defaults."
   []
-  (or @global-config merge/default-config))
+  (if-let [source *config-source*]
+    (src/-config source)
+    (or @global-config merge/default-config)))
 
 (defn get-project-roots
   "Return the :project-roots vector from global config."
@@ -236,40 +264,46 @@
 ;; =============================================================================
 
 (defn set-config-value!
-  "Update a value at a dotted key path and persist to disk."
+  "Update a value at a dotted key path and persist to disk.
+
+   Under a bound `*config-source*` the write stays in memory: a test declares
+   config, it does not rewrite the developer's ~/.config/hive-mcp."
   ([key-str value] (set-config-value! key-str value config-io/config-path))
   ([key-str value path]
    (let [kp (merge/parse-key-path key-str)]
      (when (empty? kp)
        (throw (ex-info "Invalid config key path" {:key key-str})))
-     ;; Ensure config is loaded first
-     (when-not @global-config
-       (load-global-config! path))
-     (let [updated (swap! global-config assoc-in kp value)]
-       (config-io/write-config! updated path)
-       (log/info "Config updated:" key-str "=" value)
-       updated))))
+     (if *config-source*
+       (swap! (active-config-atom) assoc-in kp value)
+       (do
+         (when-not @global-config
+           (load-global-config! path))
+         (let [updated (swap! global-config assoc-in kp value)]
+           (config-io/write-config! updated path)
+           (log/info "Config updated:" key-str "=" value)
+           updated))))))
 
 ;; =============================================================================
 ;; Runtime Mutation (in-memory only — does NOT persist to disk)
 ;; =============================================================================
 
 (defn update-in-config!
-  "In-memory `update-in` on the cached global config.
-   Loads defaults if config is unloaded. Does NOT persist to disk —
-   use `set-config-value!` for that. Intended for runtime overrides
-   like service-driven embedder routing wiring.
+  "In-memory `update-in` on the effective config. Does NOT persist to disk —
+   use `set-config-value!` for that.
 
-   IMPORTANT: this bypasses `~/.config/hive-mcp/config.edn`, so the
-   change is per-JVM. On the next boot, `load-global-config!` deep-
-   merges the on-disk user config over defaults — meaning any value
-   the user explicitly placed at `path` via `hive config set` will
-   resurface. Treat this fn as a guarded-override mechanism, not a
-   substitute for persisted user intent."
+   Writes land in whichever atom `*config-source*` designates, so a test that
+   binds a source sees its own writes and leaves the real config alone.
+
+   IMPORTANT (production): this bypasses `~/.config/hive-mcp/config.edn`, so the
+   change is per-JVM. On the next boot, `load-global-config!` deep-merges the
+   on-disk user config over defaults — meaning any value the user explicitly
+   placed at `path` via `hive config set` will resurface. Treat this as a
+   guarded-override mechanism, not a substitute for persisted user intent."
   [path f & args]
-  (when-not @global-config
-    (reset! global-config merge/default-config))
-  (apply swap! global-config update-in path f args))
+  (let [a (active-config-atom)]
+    (when-not @a
+      (reset! a merge/default-config))
+    (apply swap! a update-in path f args)))
 
 ;; =============================================================================
 ;; Reset (for testing)
