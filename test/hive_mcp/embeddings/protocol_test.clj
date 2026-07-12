@@ -12,6 +12,7 @@
             ;; A runtime (require ...) inside a deftest body does not help:
             ;; fully-qualified symbols in the body are resolved at COMPILE
             ;; time, so the ns must already be loaded when this file compiles.
+            [hive-mcp.embeddings.model-spec :as spec]
             [hive-mcp.embeddings.ollama :as ollama]
             [hive-mcp.embeddings.openai :as openai]
             [hive-mcp.embeddings.openrouter :as openrouter]))
@@ -38,11 +39,12 @@
   (testing "OllamaEmbedder, OpenAIEmbedder, OpenRouterEmbedder satisfy the protocol"
     ;; Construct minimal instances via the positional record constructors —
     ;; no ->provider, so no network I/O (->provider pings /api/tags).
-    ;; NOTE: OllamaEmbedder gained a 4th field, :executor-fn, in e99c016
-    ;; ("optional :executor-fn delegation for ollama provider"). nil selects
-    ;; the direct-HTTP path, which we never exercise here.
+    ;; NOTE: OllamaEmbedder carries a resolved ModelSpec and an :executor-fn.
+    ;; nil selects the direct-HTTP path, which we never exercise here.
     (let [ollama-emb     (ollama/->OllamaEmbedder
-                          "http://unused" "nomic-embed-text" 768 nil)
+                          "http://unused" "nomic-embed-text"
+                          (spec/spec-for (spec/default-catalog {}) "nomic-embed-text")
+                          nil)
           openai-emb     (openai/->OpenAIEmbedder
                           "https://unused/v1" "test-key" "text-embedding-3-small" 1536)
           openrouter-emb (openrouter/->OpenRouterEmbedder

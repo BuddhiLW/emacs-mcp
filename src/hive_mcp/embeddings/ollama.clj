@@ -22,6 +22,7 @@
   (:require [hive-mcp.concurrency.pool :as pool]
             [hive-mcp.embeddings.env-config :as env-cfg]
             [hive-mcp.embeddings.http-client :as http]
+            [hive-mcp.embeddings.model-spec :as spec]
             [hive-mcp.embeddings.protocol :as emb-proto]
             [clojure.data.json :as json]
             [taoensso.timbre :as log])
@@ -32,16 +33,10 @@
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-(def ^:private models
-  "Supported Ollama embedding models with their dimensions.
-   Run `ollama pull <model>` to download."
-  {"nomic-embed-text" 768
-   "mxbai-embed-large" 1024
-   "all-minilm" 384
-   "snowflake-arctic-embed" 1024
-   "qwen3-embedding:0.6b" 1024
-   "qwen3-embedding:4b" 2560
-   "qwen3-embedding:8b" 4096})
+(def models
+  "Model -> dimension for the models we ship a default spec for. Config may
+   declare any other."
+  (into {} (for [[m s] spec/built-in] [m (:dimension s)])))
 
 (defn- resolve-config!
   "Resolve Ollama host + model via hive-di (env → overrides → defaults).
@@ -88,25 +83,16 @@
                      (some-> (ex-data ex) :body))]
     (boolean (re-find #"(?i)context.*(length|limit|size|exceed)|too (long|large|many)|token.*(limit|exceed)|input.*(too|exceed)" msg))))
 
-(defn- num-ctx-for
-  "num_ctx to request per model."
-  [model]
-  (let [m (str model)]
-    (cond
-      (re-find #"(?i)qwen3-embedding:8b" m) 8192
-      (re-find #"(?i)qwen3" m)              32768
-      :else                                 8192)))
-
 (defn- get-embedding
   "Get embedding for a single text from Ollama.
    Throws helpful error when content exceeds embedding token limit."
-  [host model text]
+  [host model text num-ctx]
   (try
     (let [response (make-request host "/api/embed"
                                  {:model model
                                   :input text
                                   :keep_alive "24h"
-                                  :options {:num_ctx (num-ctx-for model)}})]
+                                  :options {:num_ctx num-ctx}})]
       (first (:embeddings response)))
     (catch Exception e
       (if (context-length-error? e)
@@ -125,31 +111,16 @@
   "Get embeddings for multiple texts from Ollama.
    Ollama doesn't have native batch API, so we parallelize requests.
    Bounded by shared IO pool — no unbounded thread fan-out."
-  [host model texts]
-  (let [futures (mapv (fn [text] (pool/with-io (get-embedding host model text))) texts)]
+  [host model texts num-ctx]
+  (let [futures (mapv (fn [text] (pool/with-io (get-embedding host model text num-ctx))) texts)]
     (mapv deref futures)))
-
-(defn- vram-mb-for
-  "Heuristic VRAM estimate per model, declared on every executor-routed
-   request so admission control can budget correctly. Conservative — better
-   to over-declare than OOM."
-  [model]
-  (case model
-    "nomic-embed-text"        700
-    "mxbai-embed-large"       1500
-    "all-minilm"              400
-    "snowflake-arctic-embed"  1500
-    "qwen3-embedding:0.6b"    1200
-    "qwen3-embedding:4b"      4000
-    "qwen3-embedding:8b"      7300
-    1000))
 
 (defn- executor-embed-one
   "Route a single embed call through executor-fn. Returns the embedding
    vector, or throws ex-info matching the direct-HTTP error contract."
-  [executor-fn host model text]
+  [executor-fn host model vram-mb text]
   (let [resp (executor-fn {:gpu/op       :embed
-                           :gpu/vram-mb  (vram-mb-for model)
+                           :gpu/vram-mb  vram-mb
                            :gpu/payload  {:text text}
                            :gpu/model    model})]
     (cond
@@ -168,40 +139,43 @@
       (throw (ex-info "Executor returned non-Result shape"
                       {:resp resp})))))
 
-(defrecord OllamaEmbedder [host model dimension executor-fn]
+(defrecord OllamaEmbedder [host model spec executor-fn]
   emb-proto/EmbeddingProvider
   (embed-text [_ text]
     (if executor-fn
-      (executor-embed-one executor-fn host model text)
-      (get-embedding host model text)))
+      (executor-embed-one executor-fn host model (:vram-mb spec) text)
+      (get-embedding host model text (:num-ctx spec))))
   (embed-batch [_ texts]
     (if executor-fn
-      (mapv #(executor-embed-one executor-fn host model %) texts)
-      (get-embeddings-batch host model texts)))
-  (embedding-dimension [_] dimension))
+      (mapv #(executor-embed-one executor-fn host model (:vram-mb spec) %) texts)
+      (get-embeddings-batch host model texts (:num-ctx spec))))
+  (embedding-dimension [_] (:dimension spec)))
 
 (defn ->provider
   "Create an Ollama embedding provider.
-   
+
    Options:
-     :host - Ollama server URL (default: http://localhost:11434)
-     :model - Embedding model (default: nomic-embed-text)
-   
-   Available models (run `ollama pull <model>` first):
-     - nomic-embed-text (768 dims, recommended - good balance)
-     - mxbai-embed-large (1024 dims, higher quality)
-     - all-minilm (384 dims, fastest)
-     - snowflake-arctic-embed (1024 dims)"
+     :host        - Ollama server URL (default: http://localhost:11434)
+     :model       - Embedding model (default: nomic-embed-text)
+     :declared    - Partial ModelSpec from config {:dimension :num-ctx :vram-mb}.
+                    Any key present overrides the built-in default for it.
+     :catalog     - An IModelCatalog to resolve the model against. Defaults to
+                    the built-in table with :declared layered over it.
+     :executor-fn - Route embeds through the GPU executor instead of HTTP."
   ([] (->provider {}))
   ([overrides]
    (let [{:keys [host model]} (resolve-config! (select-keys overrides [:host :model]))
-         dimension   (get models model)
+         catalog     (or (:catalog overrides)
+                         (spec/layered (spec/built-in-catalog)
+                                       (spec/table-catalog {(str model) (:declared overrides)})))
+         resolved    (spec/spec-for catalog model)
          executor-fn (:executor-fn overrides)]
-     (when-not dimension
-       (throw (ex-info (str "Unknown model: " model ". Supported: " (keys models)
-                            "\nYou can also add custom models to the `models` map.")
-                       {:type :unknown-model
-                        :model model
+     (when-not (:dimension resolved)
+       (throw (ex-info (str "Unknown model: " model
+                            ". Declare its :dimension in the provider config, "
+                            "or use one of: " (keys models))
+                       {:type      :unknown-model
+                        :model     model
                         :supported (keys models)})))
      ;; Test connection (skip when an executor-fn is bound — caller owns transport)
      (when-not executor-fn
@@ -212,9 +186,10 @@
          (catch Exception _e
            (log/warn "Could not connect to Ollama at" host "- ensure ollama is running"))))
      (log/info "Created Ollama embedder with model:" model
-               "dimension:" dimension
+               "dimension:" (:dimension resolved)
+               "num-ctx:" (:num-ctx resolved)
                "executor-routed?" (some? executor-fn))
-     (->OllamaEmbedder host model dimension executor-fn))))
+     (->OllamaEmbedder host model resolved executor-fn))))
 
 (defn list-models
   "List available models on the Ollama server."

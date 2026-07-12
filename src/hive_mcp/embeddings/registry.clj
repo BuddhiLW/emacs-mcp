@@ -52,7 +52,12 @@
   (let [factory (resolve 'hive-mcp.embeddings.ollama/->provider)]
     (factory {:host        (get-in config [:options :host])
               :model       (:model config)
-              :executor-fn (get-in config [:options :executor-fn])})))
+              :executor-fn (get-in config [:options :executor-fn])
+              ;; What config declared about this model. Overrides the built-in
+              ;; spec key by key; absent keys fall through to the default.
+              :declared    {:dimension (:dimension config)
+                            :num-ctx   (get-in config [:options :num-ctx])
+                            :vram-mb   (get-in config [:options :vram-mb])}})))
 
 (defn- create-openai-provider
   "Create OpenAI embedding provider from config."

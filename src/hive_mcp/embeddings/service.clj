@@ -262,6 +262,14 @@
        (or (contains? @registered-no-embed-types t)
            (contains? (into #{} (map name) (:no-embed-types (embedder-config))) t))))))
 
+(defn- collection-name-for-dimension
+  "Collection holding vectors of `dimension`. The 768-d collection keeps the
+   unsuffixed legacy name."
+  [dimension]
+  (if (= dimension 768)
+    base-collection-name
+    (str base-collection-name "-" dimension "d")))
+
 (defn- build-resolved
   "Resolved-provider map for an explicit provider-key (or the global provider
    fallback when the key has no configured spec). Shared by the type resolver
@@ -274,19 +282,21 @@
             dimension (:dimension provider-spec)
             max-toks  (:max-tokens provider-spec)
             options   (case impl
-                        :ollama     {:host (get provider-spec :host "http://localhost:11434")}
+                        ;; :num-ctx is the provider's declared :max-tokens. Ollama
+                        ;; sizes the KV cache from it at load time, so a model loaded
+                        ;; far above what it will be asked to embed spills out of VRAM.
+                        :ollama     {:host    (get provider-spec :host "http://localhost:11434")
+                                     :num-ctx max-toks
+                                     :vram-mb (:vram-mb provider-spec)}
                         :openrouter {:api-key (global-config/get-secret :openrouter-api-key)}
                         :openai     {:api-key (global-config/get-secret :openai-api-key)}
                         :venice     {:api-key (global-config/get-secret :venice-api-key)}
                         {})
-            emb-cfg   (config/->EmbeddingConfig impl model dimension options)
-            coll-name (if (= dimension 768)
-                        base-collection-name
-                        (str base-collection-name "-" dimension "d"))]
+            emb-cfg   (config/->EmbeddingConfig impl model dimension options)]
         {:provider        (registry/get-provider emb-cfg)
          :dimension       dimension
          :max-tokens      max-toks
-         :collection-name coll-name
+         :collection-name (collection-name-for-dimension dimension)
          :provider-key    provider-key})
       ;; No embedder config → fall back to global provider
       (let [global (chroma/get-embedding-provider)]
@@ -400,15 +410,26 @@
                        :actual      estimated-tokens
                        :fix         "Use a memory type routed to openrouter-qwen3 (decision, plan, etc.)"})))))
 
+(defn all-collection-names
+  "Every collection a configured provider could have written to, plus the
+   legacy base. Derived from the configured providers' dimensions — a new
+   dimension becomes searchable by configuring it, never by editing a list."
+  []
+  (->> (:providers (embedder-config))
+       vals
+       (keep :dimension)
+       (map collection-name-for-dimension)
+       (cons base-collection-name)
+       distinct
+       vec))
+
 (defn type->collection-names
   "Return the collection name(s) to search for a given type.
    If type is nil (unscoped search), returns all known collection names."
   [memory-type]
   (if memory-type
     [(-> (resolve-provider-for-type memory-type) :collection-name)]
-    [base-collection-name
-     (str base-collection-name "-1024d")
-     (str base-collection-name "-4096d")]))
+    (all-collection-names)))
 
 (defn reset-service!
   "Reset all service state. For testing."

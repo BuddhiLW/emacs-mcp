@@ -32,6 +32,13 @@
               :venice-qwen3     {:impl :venice
                                  :model "text-embedding-qwen3-8b"
                                  :max-tokens 32768
-                                 :dimension 4096}}
+                                 :dimension 4096}
+              ;; A dimension no hardcoded list ever knew about. Nothing routes
+              ;; to it — it exists to prove a configured dimension is searchable
+              ;; on the strength of being configured.
+              :ollama-qwen3-4b  {:impl :ollama
+                                 :model "qwen3-embedding:4b"
+                                 :max-tokens 8192
+                                 :dimension 2560}}
 
   :no-embed-types #{}}}
