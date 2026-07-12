@@ -59,9 +59,7 @@
 ;; =============================================================================
 
 (def ref-not-found
-  "Sentinel for unresolvable reference. Intentionally keyed under the
-   legacy `hive-mcp.tools.multi` namespace to preserve the pre-extraction
-   public contract (tests compare against this exact keyword)."
+  "Sentinel keyword for an unresolvable `$ref`."
   :hive-mcp.tools.multi/ref-not-found)
 
 (defn ref?
@@ -79,54 +77,43 @@
   [handler-result]
   (delegate-or-noop :bx/b handler-result [handler-result]))
 
-(defn- creation-tool?
-  "Tools whose primary effect is producing a new addressable artifact.
-   A creation op that returns `:id nil` has effectively failed even when
-   the call did not throw — downstream $ref to its id resolves to nil
-   and any dependent op runs against a phantom reference."
+(def ^:private creation-tool-specs
+  "Creation tools (primary effect: produce a new addressable artifact),
+   mapped to the result key that must carry the new id. Extend by adding a
+   row — no dispatcher edit."
+  {"memory" :id
+   "kanban" :id
+   "kg"     :edge-id})
+
+(defn- creation-id-key
+  "The id key a creation tool's result must carry, or nil when `tool` does
+   not create an addressable artifact."
   [tool]
-  (contains? #{"memory" "kanban" "kg"} (str tool)))
+  (get creation-tool-specs (str tool)))
 
 (defn enrich-op-result
-  "Enrich an execute-op result with `:data` (parsed handler result) and
-   compose a cross-layer `:success` signal.
-
-   Cross-layer composition: a handler may return a structured result
-   whose data carries an explicit failure signal — typical when a tool
-   call did not throw but its underlying side-effect (memory add, kanban
-   create, kg edge) failed. The composed signal honours those:
-
-   - `(:success data)` is `false`              → wrapper :success false
-   - creation-tool with `(:id data)` literally `nil` → wrapper :success false
-
-   Without composition, batch summaries reported `:success true` for ops
-   the user observed as failed (e.g. `{id: null, success: null}` from a
-   degraded memory backend), and dependent `$ref`-using ops dispatched
-   against null endpoints — silent dangling KG edges in wrap ceremonies.
-
-   Never upgrades `:success`; only downgrades. An op that already
-   threw (`:success false`) keeps its original `:error`."
+  "Enrich an execute-op result with `:data` (parsed handler result) and a
+   composed cross-layer `:success`. Only ever downgrades `:success`, never
+   upgrades: a handler that did not throw but whose data signals failure
+   (inner `:success` false, explicit `:isError`/`:ok` false, a bare `:error`,
+   or a creation tool returning a nil id) is reclassified as failed. An op
+   that already threw keeps its original `:error`."
   [{:keys [tool result success] :as op-result}]
   (let [data                  (extract-result-data result)
         inner-success-false?  (and (map? data)
                                    (contains? data :success)
                                    (false? (:success data)))
-        ;; Explicit error flags: mcp-error envelopes carry {:isError true};
-        ;; hive-dsl Result failures carry {:ok false}. Neither was inspected
-        ;; before, so in-band tool errors surfaced in summaries as failed:0.
         explicit-error-flag?  (and (map? data)
                                    (or (true? (:isError data))
                                        (false? (:ok data))))
-        ;; Bare error map with no :success key — e.g. handle-kg-add-edge's
-        ;; validation failures return {:error "relation is required"} directly.
         bare-error?           (and (map? data)
                                    (some? (:error data))
                                    (not (contains? data :success)))
-        null-id-on-create?    (and (creation-tool? tool)
+        id-key                (creation-id-key tool)
+        null-id-on-create?    (and id-key
                                    (map? data)
-                                   (or (and (contains? data :id) (nil? (:id data)))
-                                       ;; kg edge handler returns :edge-id, not :id
-                                       (and (contains? data :edge-id) (nil? (:edge-id data)))))
+                                   (contains? data id-key)
+                                   (nil? (get data id-key)))
         downgrade?            (and success
                                    (or inner-success-false?
                                        explicit-error-flag?
@@ -257,11 +244,7 @@
    Returns {:id op-id :tool tool-name :command cmd :success bool :result map}
         or {:id op-id :tool tool-name :command cmd :success false :error string}.
 
-   `:tool` and `:command` are echoed back to the caller so downstream
-   stages (enrich-op-result, FX emitters, format-results) can reason
-   about the op without re-joining against the input. Without this,
-   `enrich-op-result`'s creation-tool classifier sees `nil` for `tool`
-   and fails to downgrade memory/kanban/kg ops that returned `:id nil`."
+   `:tool` and `:command` are echoed back for downstream stages."
   [resolve-handler {:keys [id tool command] :as op}]
   (try
     (let [handler (resolve-handler tool)]
@@ -316,11 +299,6 @@
      - the source op-id is missing from results (`ref-not-found`), OR
      - the resolved value is literally `nil`.
 
-   The second case catches the wrap-ceremony footgun where a creation
-   op timed out, was already downgraded to `:success false` by
-   `enrich-op-result`, and its `:data.id` is nil — a dependent k>'s
-   `:from $ref:src.data.id` would otherwise create a phantom edge.
-
    Returns `nil` when all refs OK (or no refs); otherwise
    `{:broken-refs [{:ref str :reason kw} ...]}`."
   [original-op results-by-id]
@@ -366,12 +344,9 @@
                                         broken-refs)))}))
 
 (defn- normalize-exec-result
-  "Defensive: bounded-pmap-style executors can return `nil` on worker
-   timeout; pair each input op with its result by index and synthesise
-   a failed result for any nil position. Without this, the wave-result
-   reduction `(swap! all-results assoc nil {...})` collapses every
-   timed-out op under the nil key, dropping all but one and producing
-   the off-by-one summary count observed during ceremony smoke tests."
+  "Pair each input op with its executor result; when the executor
+   returned `nil` (worker timeout), synthesise a failed result carrying
+   the op's id. Back-fills `:id` from the op when a result lacks one."
   [op exec-result]
   (cond
     (nil? exec-result)
@@ -525,9 +500,7 @@
                          :success success-cnt
                          :failed  failed-cnt
                          :waves   wave-count}
-                  ;; Surface timeouts distinctly: they're the subset of
-                  ;; failures that MAY have succeeded server-side and are
-                  ;; safe to retry only for idempotent ops.
+                  ;; timeouts surfaced distinctly
                   (pos? timed-out-cnt) (assoc :timed-out timed-out-cnt))})))
 
 (defn run-operations
@@ -587,9 +560,9 @@
     (assoc :emit-fx emit-fx)))
 
 (defn- safe-run-operations
-  "`run-operations` wrapped so the Batchable contract (never-throws) holds
-   even if a caller forgets `:resolve-handler`. Any unexpected exception
-   becomes an `{:success false :errors [...]}` payload."
+  "`run-operations` guarded so the Batchable never-throws contract holds even
+   when a caller omits `:resolve-handler`. A missing handler or any thrown
+   exception becomes an `{:success false :errors [...]}` payload."
   [ops opts]
   (try
     (if (ifn? (:resolve-handler opts))
@@ -599,6 +572,7 @@
        :summary {:total (count ops) :success 0 :failed 0 :waves 0}
        :waves   {}})
     (catch Throwable t
+      (log/error t {:event :batch-execute-crash :op-count (count (or ops []))})
       {:success false
        :errors  [(str "batch-execute crashed: " (ex-message t))]
        :summary {:total (count (or ops [])) :success 0 :failed 0 :waves 0}
@@ -613,22 +587,17 @@
 
   proto/DAGBatchable
   (batch-with-deps [this ops opts]
-    ;; The default runner already understands :depends_on — no behavior
-    ;; change vs batch-execute; this arm documents the capability.
     (safe-run-operations ops (coerce-batch-opts this opts)))
 
   proto/StreamingBatchable
   (batch-stream [this ops opts on-event]
-    ;; Minimal bridge: route :emit-fx into the caller-supplied on-event
-    ;; so existing observability FX surface as stream events.
     (let [merged (coerce-batch-opts this opts)
           wrapped (fn [fx-id fx-data]
-                    (try
-                      (when on-event (on-event fx-id fx-data))
-                      (catch Throwable _ nil))
+                    (result/rescue-log "batch-stream/on-event" nil
+                      (when on-event (on-event fx-id fx-data)))
                     (when-let [prior (:emit-fx opts)]
-                      (try (prior fx-id fx-data)
-                           (catch Throwable _ nil))))]
+                      (result/rescue-log "batch-stream/prior-emit-fx" nil
+                        (prior fx-id fx-data))))]
       (safe-run-operations ops (assoc merged :emit-fx wrapped)))))
 
 (defn make-default-runner

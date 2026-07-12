@@ -8,9 +8,20 @@
      Phase 1: DataScript slave entry exists (usually instant after spawn!)
      Phase 2: CLI ready — mode-specific (vterm prompt marker, headless stdout)
 
+   Since commit 508a7e8 the readiness module also:
+     - picks the timeout per spawn-mode (`timeout-ms-for-spawn-mode`):
+       vterm/claude -> `vterm-ling-ready-timeout-ms`,
+       everything else -> config `[:services :forge :readiness-timeout-ms]`
+       falling back to `default-ling-ready-timeout-ms`;
+     - retries the whole poll ONCE after `readiness-retry-wait-ms` on timeout,
+       reporting the CUMULATIVE elapsed-ms across both windows.
+   The old single knob `ling-ready-timeout-ms` no longer exists — tests below
+   drive `vterm-ling-ready-timeout-ms` (all poll tests use :claude mode).
+
    CLARITY: T - Telemetry (test) validates behavioral correctness."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [datascript.core :as d]
+            [hive-mcp.config.core :as config]
             [hive-mcp.tools.consolidated.workflow.readiness :as readiness]
             [hive-mcp.swarm.datascript.connection :as conn]
             [hive-mcp.swarm.datascript.lings :as ds-lings]
@@ -21,6 +32,10 @@
 
 ;; Access private functions via var
 (def wait-for-ling-ready @#'readiness/wait-for-ling-ready)
+(def timeout-ms-for-spawn-mode @#'readiness/timeout-ms-for-spawn-mode)
+
+;; Keep the retry window tiny so timeout tests stay fast; production default is 2s.
+(def ^:const test-retry-wait-ms 20)
 
 ;; =============================================================================
 ;; Test Fixtures
@@ -50,18 +65,21 @@
 
 (deftest test-ds-timeout-when-slave-missing
   (testing "Returns :ds-timeout when slave never appears in DataScript"
-    (with-redefs [readiness/ling-ready-timeout-ms 150
-                  readiness/ling-ready-poll-ms 10]
+    (with-redefs [readiness/vterm-ling-ready-timeout-ms 150
+                  readiness/ling-ready-poll-ms 10
+                  readiness/readiness-retry-wait-ms test-retry-wait-ms]
       (let [result (wait-for-ling-ready "nonexistent-ling" :claude)]
         (is (not (:ready? result)) "Should not be ready")
         (is (>= (:attempts result) 2) "Should have polled multiple times")
         (is (= :ds-timeout (:phase result)) "Should be DS timeout phase")
         (is (nil? (:slave result)) "Should have no slave data")
-        (is (>= (:elapsed-ms result) 100) "Should have waited near timeout")))))
+        ;; Both poll windows (150ms each) plus the retry wait are accounted for.
+        (is (>= (:elapsed-ms result) 300)
+            "Should report cumulative elapsed across the initial poll + retry")))))
 
 (deftest test-ds-delayed-registration
   (testing "Finds slave after delayed DataScript registration + CLI ready"
-    (with-redefs [readiness/ling-ready-timeout-ms 5000
+    (with-redefs [readiness/vterm-ling-ready-timeout-ms 5000
                   readiness/ling-ready-poll-ms 10
                   readiness/ling-cli-ready? (constantly true)]
       ;; Schedule slave registration after ~30ms
@@ -94,8 +112,9 @@
   (testing "Returns :cli-timeout when DS has slave but CLI never becomes ready"
     (ds-lings/add-slave! "stuck-ling" {:status :idle :depth 1 :cwd "/tmp"})
 
-    (with-redefs [readiness/ling-ready-timeout-ms 150
+    (with-redefs [readiness/vterm-ling-ready-timeout-ms 150
                   readiness/ling-ready-poll-ms 10
+                  readiness/readiness-retry-wait-ms test-retry-wait-ms
                   readiness/ling-cli-ready? (constantly false)]
       (let [result (wait-for-ling-ready "stuck-ling" :claude)]
         (is (not (:ready? result)) "Should not be ready")
@@ -108,7 +127,7 @@
     (ds-lings/add-slave! "slow-cli-ling" {:status :idle :depth 1 :cwd "/tmp"})
 
     (let [call-count (atom 0)]
-      (with-redefs [readiness/ling-ready-timeout-ms 5000
+      (with-redefs [readiness/vterm-ling-ready-timeout-ms 5000
                     readiness/ling-ready-poll-ms 10
                     readiness/ling-cli-ready? (fn [_agent-id _mode]
                                               ;; Ready after 3rd CLI check
@@ -119,11 +138,58 @@
           (is (= :cli-ready (:phase result))))))))
 
 ;; =============================================================================
+;; Retry-After-Timeout (added in 508a7e8)
+;; =============================================================================
+
+(deftest test-retry-after-timeout-can-still-succeed
+  (testing "A ling that registers after the first poll window is caught by the retry"
+    (with-redefs [readiness/vterm-ling-ready-timeout-ms 150
+                  readiness/ling-ready-poll-ms 10
+                  readiness/readiness-retry-wait-ms 300
+                  readiness/ling-cli-ready? (constantly true)]
+      ;; Registers at ~250ms: too late for the initial 150ms window,
+      ;; but well inside the retry window that starts at ~450ms.
+      (future
+        (Thread/sleep 250)
+        (ds-lings/add-slave! "late-ling" {:status :idle :depth 1 :cwd "/tmp"}))
+
+      (let [result (wait-for-ling-ready "late-ling" :claude)]
+        (is (:ready? result) "Should become ready on the retry pass")
+        (is (= :cli-ready (:phase result)) "Should reach cli-ready phase")
+        (is (some? (:slave result)) "Should include slave data")
+        (is (>= (:elapsed-ms result) 400)
+            "Elapsed should include the timed-out window + retry wait")))))
+
+;; =============================================================================
+;; Spawn-Mode Timeout Selection (added in 508a7e8)
+;; =============================================================================
+
+(deftest test-timeout-is-spawn-mode-aware
+  (testing "vterm/claude use the short vterm timeout; other modes use configured/default"
+    (with-redefs [readiness/vterm-ling-ready-timeout-ms 111
+                  readiness/default-ling-ready-timeout-ms 222
+                  ;; No config file in CI — resolve to the supplied :default.
+                  config/get-service-value (fn [_service _field & {:keys [default]}] default)]
+      (is (= 111 (timeout-ms-for-spawn-mode :claude)) "claude -> vterm timeout")
+      (is (= 111 (timeout-ms-for-spawn-mode :vterm)) "vterm -> vterm timeout")
+      (is (= 222 (timeout-ms-for-spawn-mode :headless)) "headless -> default timeout")
+      (is (= 222 (timeout-ms-for-spawn-mode :agent-sdk)) "agent-sdk -> default timeout")))
+
+  (testing "config [:services :forge :readiness-timeout-ms] overrides the default"
+    (with-redefs [readiness/vterm-ling-ready-timeout-ms 111
+                  config/get-service-value (fn [_service _field & _opts] 4242)]
+      (is (= 4242 (timeout-ms-for-spawn-mode :headless)) "configured value wins")
+      (is (= 111 (timeout-ms-for-spawn-mode :claude)) "vterm timeout is not configurable"))))
+
+;; =============================================================================
 ;; Mode-Specific Dispatch Tests
 ;; =============================================================================
 
 (deftest test-openrouter-always-cli-ready
   (testing "OpenRouter mode is always CLI-ready (API-based, no CLI startup)"
+    (is (true? (readiness/ling-cli-ready? "or-ling" :openrouter))
+        "ling-cli-ready? short-circuits to true for :openrouter")
+
     (ds-lings/add-slave! "or-ling" {:status :idle :depth 1 :cwd "/tmp"})
 
     ;; No mocking needed — openrouter returns true by default
@@ -131,13 +197,41 @@
       (is (:ready? result) "OpenRouter should be immediately ready")
       (is (= 1 (:attempts result)) "Should pass on first attempt"))))
 
-(deftest test-agent-sdk-always-cli-ready
-  (testing "Agent SDK mode is always CLI-ready (in-process)"
+(deftest test-agent-sdk-delegates-to-agent-sdk-ready
+  ;; NOTE: :agent-sdk is NOT "always ready" any more — ling-cli-ready? dispatches
+  ;; to agent-sdk-ready? (session :idle + live event-loop thread). Asserting
+  ;; unconditional readiness here would just hang on the 60s default timeout.
+  (testing "Agent SDK / Claude SDK modes dispatch to agent-sdk-ready?"
+    (with-redefs [readiness/agent-sdk-ready? (constantly true)]
+      (is (true? (readiness/ling-cli-ready? "sdk-ling" :agent-sdk)))
+      (is (true? (readiness/ling-cli-ready? "sdk-ling" :claude-sdk))))
+    (with-redefs [readiness/agent-sdk-ready? (constantly false)]
+      (is (false? (readiness/ling-cli-ready? "sdk-ling" :agent-sdk)))
+      (is (false? (readiness/ling-cli-ready? "sdk-ling" :claude-sdk)))))
+
+  (testing "An agent-sdk ling with a live session is ready on the first poll"
     (ds-lings/add-slave! "sdk-ling" {:status :idle :depth 1 :cwd "/tmp"})
 
-    (let [result (wait-for-ling-ready "sdk-ling" :agent-sdk)]
-      (is (:ready? result) "Agent SDK should be immediately ready")
-      (is (= 1 (:attempts result)) "Should pass on first attempt"))))
+    (with-redefs [readiness/agent-sdk-ready? (constantly true)]
+      (let [result (wait-for-ling-ready "sdk-ling" :agent-sdk)]
+        (is (:ready? result) "Agent SDK should be ready once its session is idle")
+        (is (= 1 (:attempts result)) "Should pass on first attempt")))))
+
+(deftest test-headless-mode-dispatches-to-headless-ready
+  (testing "Headless / claude-process modes dispatch to headless-ready?"
+    (with-redefs [readiness/headless-ready? (constantly true)]
+      (is (true? (readiness/ling-cli-ready? "hl-ling" :headless)))
+      (is (true? (readiness/ling-cli-ready? "hl-ling" :claude-process))))
+    (with-redefs [readiness/headless-ready? (constantly false)]
+      (is (false? (readiness/ling-cli-ready? "hl-ling" :headless))))))
+
+(deftest test-claude-mode-dispatches-to-vterm-ready
+  (testing "Claude / vterm modes dispatch to vterm-ready?"
+    (with-redefs [readiness/vterm-ready? (constantly true)]
+      (is (true? (readiness/ling-cli-ready? "claude-ling" :claude)))
+      (is (true? (readiness/ling-cli-ready? "claude-ling" :vterm))))
+    (with-redefs [readiness/vterm-ready? (constantly false)]
+      (is (false? (readiness/ling-cli-ready? "claude-ling" :claude))))))
 
 (deftest test-claude-mode-calls-vterm-ready
   (testing "Claude mode delegates to vterm-ready? via ling-cli-ready?"
@@ -167,8 +261,9 @@
 
 (deftest test-poll-timing
   (testing "Poll intervals are fixed at ling-ready-poll-ms (no backoff)"
-    (with-redefs [readiness/ling-ready-timeout-ms 200
+    (with-redefs [readiness/vterm-ling-ready-timeout-ms 200
                   readiness/ling-ready-poll-ms 50
+                  readiness/readiness-retry-wait-ms test-retry-wait-ms
                   readiness/ling-cli-ready? (constantly false)]
       ;; Register slave so we hit CLI check (not DS timeout)
       (ds-lings/add-slave! "timing-ling" {:status :idle :depth 1 :cwd "/tmp"})
@@ -176,7 +271,11 @@
       (let [start (System/currentTimeMillis)
             result (wait-for-ling-ready "timing-ling" :claude)
             elapsed (- (System/currentTimeMillis) start)]
-        ;; With 50ms fixed interval and 200ms timeout, should take ~200ms
-        (is (>= elapsed 150) "Should have spent time polling")
-        (is (<= elapsed 500) "Should not overshoot timeout by too much")
+        ;; Fixed 50ms interval against a 200ms timeout => ~5 attempts per window.
+        ;; Exponential backoff would bail out in far fewer.
+        (is (<= 3 (:attempts result) 8)
+            "Should poll at a fixed interval (~timeout/poll attempts), not back off")
+        ;; Two 200ms windows + the retry wait => ~420ms.
+        (is (>= elapsed 400) "Should have spent time polling both windows")
+        (is (<= elapsed 1200) "Should not overshoot timeout by too much")
         (is (not (:ready? result)) "Should have timed out")))))

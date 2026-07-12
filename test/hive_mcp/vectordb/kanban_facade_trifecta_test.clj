@@ -146,12 +146,12 @@
       (is (contains? ids "default-only"))
       (is (not (contains? ids "kanban-only"))))))
 
-(deftest query-entries--kanban-mode-only-kanban-slot
+(deftest query-entries--kanban-mode-merges-default-fallback
   (register-stubs!)
   (with-redefs [cfg-core/get-kanban-store-mode (constantly :kanban)]
-    (let [ids (set (map :id (kf/query-entries)))]
-      (is (contains? ids "kanban-only"))
-      (is (not (contains? ids "default-only"))))))
+    (let [ids (mapv :id (kf/query-entries))]
+      (is (= ["kanban-only" "in-both" "default-only"] ids)
+          "kanban mode merges + dedupes (kanban-first) so legacy :default entries surface"))))
 
 ;; =============================================================================
 ;; Integration — write fan-out in :dual-read
@@ -231,6 +231,79 @@
       (let [r (kf/update-entry! "task-1" {:tags ["kanban"]})]
         (is (= :stub-kanban (:slot r))
             "primary write succeeds even though :default mirror throws")))))
+
+;; =============================================================================
+;; Integration — :kanban cross-store coverage (legacy :default fallback)
+;; =============================================================================
+
+(defn- routing-stub
+  "Stub whose get-entry reports a hit only for ids in `present`, records
+   writes to `recorder` keyed by slot, and answers queries with `entries`."
+  [slot-name present recorder entries]
+  (reify proto/IMemoryStore
+    (connect!       [_ _] {:success? true})
+    (disconnect!    [_] nil)
+    (connected?     [_] true)
+    (health-check   [_] {:healthy? true})
+    (add-entry!     [_ e]
+      (swap! recorder update slot-name (fnil conj []) [:add (:id e)])
+      {:success? true :id (:id e) :slot slot-name})
+    (get-entry      [_ id] (when (contains? present id) {:id id :slot slot-name}))
+    (update-entry!  [_ id u]
+      (swap! recorder update slot-name (fnil conj []) [:update id u])
+      {:success? true :id id :slot slot-name})
+    (delete-entry!  [_ id]
+      (swap! recorder update slot-name (fnil conj []) [:delete id])
+      {:success? true :id id :slot slot-name})
+    (query-entries  [_ _] entries)
+    (search-similar [_ _ _] [])
+    (supports-semantic-search? [_] false)
+    (cleanup-expired! [_] {:cleaned 0})
+    (entries-expiring-soon [_ _ _] [])
+    (find-duplicate [_ _ _ _] nil)
+    (store-status   [_] {:slot slot-name})
+    (reset-store!   [_] nil)))
+
+(deftest get-entry-by-id--kanban-mode-falls-back-to-default
+  (let [rec (atom {})]
+    (proto/register-store! :kanban  (routing-stub :stub-kanban  #{"in-kanban"} rec []))
+    (proto/register-store! :default (routing-stub :stub-default #{"legacy-1"}  rec []))
+    (with-redefs [cfg-core/get-kanban-store-mode (constantly :kanban)]
+      (is (= :stub-default (:slot (kf/get-entry-by-id "legacy-1")))
+          "kanban slot misses → falls back to :default")
+      (is (= :stub-kanban (:slot (kf/get-entry-by-id "in-kanban")))
+          "kanban hit short-circuits (no default read needed)")
+      (is (nil? (kf/get-entry-by-id "ghost"))
+          "absent in both slots → nil"))))
+
+(deftest update-entry--kanban-mode-routes-to-holding-store
+  (let [rec (atom {})]
+    (proto/register-store! :kanban  (routing-stub :stub-kanban  #{}           rec []))
+    (proto/register-store! :default (routing-stub :stub-default #{"legacy-1"} rec []))
+    (with-redefs [cfg-core/get-kanban-store-mode (constantly :kanban)]
+      (kf/update-entry! "legacy-1" {:status "done"}))
+    (is (nil? (get @rec :stub-kanban)) "no write to kanban slot")
+    (is (= [[:update "legacy-1" {:status "done"}]] (get @rec :stub-default))
+        "update routed to the :default slot that holds the legacy entry")))
+
+(deftest delete-entry--kanban-mode-routes-to-holding-store
+  (let [rec (atom {})]
+    (proto/register-store! :kanban  (routing-stub :stub-kanban  #{}           rec []))
+    (proto/register-store! :default (routing-stub :stub-default #{"legacy-1"} rec []))
+    (with-redefs [cfg-core/get-kanban-store-mode (constantly :kanban)]
+      (kf/delete-entry! "legacy-1"))
+    (is (nil? (get @rec :stub-kanban)))
+    (is (= [[:delete "legacy-1"]] (get @rec :stub-default))
+        "delete routed to the :default slot that holds the legacy entry")))
+
+(deftest update-entry--kanban-mode-new-id-uses-active-slot
+  (let [rec (atom {})]
+    (proto/register-store! :kanban  (routing-stub :stub-kanban  #{} rec []))
+    (proto/register-store! :default (routing-stub :stub-default #{} rec []))
+    (with-redefs [cfg-core/get-kanban-store-mode (constantly :kanban)]
+      (kf/update-entry! "brand-new" {:status "todo"}))
+    (is (= [[:update "brand-new" {:status "todo"}]] (get @rec :stub-kanban))
+        "unknown id routes to active-key (:kanban)")))
 
 ;; =============================================================================
 ;; Integration — boot validation

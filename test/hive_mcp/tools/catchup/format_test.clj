@@ -88,6 +88,40 @@
           result (fmt/cap-axiom-content entry)]
       (is (= exact-content (:content result))))))
 
+(deftest entry->wrap-preview-test
+  (testing "long wrap content truncated to wrap-preview-cap; no :content key"
+    (let [long (apply str (repeat 500 "z"))
+          result (fmt/entry->wrap-preview {:id "w1" :created "2026-07-07"
+                                           :tags ["wrap-generated"] :content long})]
+      (is (= "w1" (:id result)))
+      (is (= "2026-07-07" (:created result)))
+      (is (= ["wrap-generated"] (:tags result)))
+      (is (= fmt/wrap-preview-cap (count (:preview result))))
+      (is (not (contains? result :content)) "full body dropped from inline block")))
+
+  (testing "short content passes through; nil tags default to []"
+    (let [result (fmt/entry->wrap-preview {:id "w2" :content "tiny"})]
+      (is (= "tiny" (:preview result)))
+      (is (= [] (:tags result))))))
+
+(deftest cap-piggyback-entry-test
+  (testing "axiom content is NEVER capped (word-for-word, any size)"
+    (let [long (apply str (repeat 3000 "a"))
+          result (fmt/cap-piggyback-entry {:id "ax" :type "axiom" :content long})]
+      (is (= long (:content result)))
+      (is (= 3000 (count (:content result))))))
+
+  (testing "non-axiom content capped at axiom-content-cap with retrieval hint"
+    (let [long (apply str (repeat 1000 "p"))
+          result (fmt/cap-piggyback-entry {:id "pr" :type "principle" :content long})]
+      (is (.contains (:content result) "[TRUNCATED"))
+      (is (.contains (:content result) "pr"))
+      (is (< (count (:content result)) (+ fmt/axiom-content-cap 100)))))
+
+  (testing "short non-axiom passes through unchanged"
+    (is (= "small" (:content (fmt/cap-piggyback-entry
+                              {:id "c" :type "convention" :content "small"}))))))
+
 (deftest trim-kg-insights-test
   (testing "nil insights returns nil"
     (is (nil? (fmt/trim-kg-insights nil))))

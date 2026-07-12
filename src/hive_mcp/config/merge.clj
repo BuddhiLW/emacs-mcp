@@ -77,55 +77,20 @@
    :embeddings {:ollama {:host "http://localhost:11434"
                          :model "nomic-embed-text"}
                 :openrouter {:model "qwen/qwen3-embedding-8b"}}
-   :embedder {:default :ollama-nomic
+   :embedder {:default :ollama-qwen3-4b
               ;; Memory types that are structurally addressed (fetched by
               ;; tag/id/project-id, never semantic search) — the write path
               ;; skips embedding them. hive-di-configurable per profile; addons
               ;; may also self-register via embeddings.service/register-no-embed-type!
               :no-embed-types #{}
-              ;; Defaults route the heavy 4096-dim types to OpenRouter (the
-              ;; "always available" 4096-d provider). `service/configure-defaults!`
-              ;; flips each of these to :venice-qwen3 at boot when VENICE_API_KEY
-              ;; is present and the user has not pinned a different route. Pre-2026-05
-              ;; these defaults pointed at :venice-qwen3 directly, which silently stalled
-              ;; memory writes for 30s+ whenever Venice was slow/unreachable — even
-              ;; with the key absent. See service/configure-defaults! for the flips.
-              :routes {:type/conversation-turn :openrouter-qwen3
-                       :type/turn-summary      :openrouter-qwen3
-                       :type/decision          :openrouter-qwen3
-                       :type/plan              :openrouter-qwen3
-                       :type/session-summary   :openrouter-qwen3
-                       :type/convention        :openrouter-qwen3
-                       :type/axiom             :ollama-qwen3-local
-                       :type/principle         :ollama-qwen3-local
-                       :type/snippet           :ollama-qwen3-local
-                       :type/note              :ollama-qwen3-local}
-              :providers {:ollama-nomic     {:impl :ollama
-                                             :model "nomic-embed-text"
-                                             :max-tokens 2048
-                                             :dimension 768}
-                          ;; Local Ollama qwen3-embedding:0.6b — 1024-d, 32k ctx.
-                          ;; Replaces nomic for note-class types (note/principle/
-                          ;; snippet/axiom) which routinely exceed nomic's 2048
-                          ;; ceiling. Lives in `hive-mcp-memory-1024d` collection.
-                          ;; Migration plan: /home/leibniz/.claude/plans/let-s-do-what-s-needed-velvety-lemur.md
-                          :ollama-qwen3-local {:impl :ollama
-                                               :model "qwen3-embedding:0.6b"
-                                               :max-tokens 32768
-                                               :dimension 1024}
-                          :openrouter-qwen3 {:impl :openrouter
-                                             :model "qwen/qwen3-embedding-8b"
-                                             :max-tokens 32768
-                                             :dimension 4096}
-                          ;; Venice's qwen3-8b — same dimension/context as
-                          ;; OpenRouter's qwen3-8b, but routed through Venice's
-                          ;; privacy-preserving endpoint. Inert until
-                          ;; service/configure-defaults! flips :type/plan to
-                          ;; :venice-qwen3 (only when VENICE_API_KEY present).
-                          :venice-qwen3     {:impl :venice
-                                             :model "text-embedding-qwen3-8b"
-                                             :max-tokens 32768
-                                             :dimension 4096}}}
+              ;; Every type embeds into one space. A configured provider is also
+              ;; a searched collection, so adding one here fans reads out over it.
+              :routes {}
+              :providers {:ollama-qwen3-4b {:impl :ollama
+                                            :model "qwen3-embedding:4b"
+                                            :max-tokens 8192
+                                            :dimension 2560
+                                            :host "http://localhost:11434"}}}
    :services {:chroma {:mode :local :host "localhost" :port 8000}
               :ollama {:mode :local :host "http://localhost:11434" :model "nomic-embed-text"}
               :datahike {:mode :local :path "data/kg"}

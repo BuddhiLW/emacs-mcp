@@ -15,8 +15,7 @@
    the edge invisible until a manual flush). Kanban 20260629161156-76f4e486."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.knowledge-graph.connection :as conn]
-            [hive-mcp.knowledge-graph.protocol :as proto]
-            [hive-mcp.knowledge-graph.store.datascript :as ds-store]
+            [hive-mcp.knowledge-graph.store.fixtures :as fixtures]
             [hive-mcp.knowledge-graph.edges :as edges]
             [hive-mcp.tools.kg.commands :as cmd]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -30,26 +29,14 @@
 (defn isolated-async-store-fixture
   "Per-test isolated KG store with auto setup + teardown.
 
-   Installs a fresh in-memory DataScript store as the GLOBAL store
-   (proto/set-store!) — not a thread-local *test-store* — so the writer
-   go-loop and any spawned threads resolve the SAME ephemeral store and can
-   never fall through to a real/live backend. Stops the writer before and
-   after, and restores the prior store (or clears) on teardown.
-
-   Deliberately does NOT bind *sync-writes*: these tests must exercise the
-   async coalescing path so the handler's boundary flush is what provides
-   read-your-writes. See convention 20260629150125-3a07e787."
+   Delegates to the disposable test-store harness: a fresh in-memory DataScript
+   store installed as the GLOBAL store (not a thread-local *test-store*) so the
+   writer go-loop and any spawned threads resolve the SAME ephemeral instance.
+   Deliberately async (no *sync-writes*): these tests must exercise the
+   coalescing path so the handler's boundary flush provides read-your-writes.
+   See convention 20260629150125-3a07e787."
   [f]
-  (let [prior (when (proto/store-set?) (proto/get-store))
-        store (ds-store/create-store)]
-    (proto/ensure-conn! store)
-    (proto/set-store! store)
-    (conn/stop-writer!)
-    (try
-      (f)
-      (finally
-        (conn/stop-writer!)
-        (if prior (proto/set-store! prior) (proto/clear-store!))))))
+  (fixtures/global-datascript-fixture f))
 
 (use-fixtures :each isolated-async-store-fixture)
 

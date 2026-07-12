@@ -60,7 +60,10 @@
            hive-test.mutation/deftest-mutation-witness clojure.test/deftest
            ;; hive-test trifecta composite
            hive-test.trifecta/deftrifecta clojure.test/deftest
-           hive-test.trifecta/deftest-facets clojure.test/deftest}
+           hive-test.trifecta/deftest-facets clojure.test/deftest
+           ;; hive-schemas schema-driven synthesis — expand to deftest
+           hive-schemas.test/deftrifecta-from-schema clojure.test/deftest
+           hive-schemas.test/deftrifecta-predicate clojure.test/deftest}
 
  :linters {;; Duplicate aliases are redundant but harmless — warn, don't block CI.
            :conflicting-alias {:level :warning}

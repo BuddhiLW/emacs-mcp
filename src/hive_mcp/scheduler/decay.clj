@@ -60,11 +60,37 @@
    #(% :project-id (:project-id opts))
    {:updated 0 :skipped 0 :errors 1}))
 
+(defn- emit-grounding-event!
+  "Dispatch :scheduler/grounding-completed so the pass is observable rather than
+   silent. Only fires when a handler is registered (mirrors
+   knowledge-graph.edges.write/emit-stats-event!); a missing event bus must never
+   break the tick, hence the rescue."
+  [stats]
+  (result/rescue
+   nil
+   (let [registered? (requiring-resolve 'hive-mcp.events.core/handler-registered?)
+         dispatch! (requiring-resolve 'hive-mcp.events.core/dispatch)]
+     (when (and registered? dispatch! (registered? :scheduler/grounding-completed))
+       (dispatch! [:scheduler/grounding-completed stats])))))
+
+(defn- run-grounding-pass!
+  "Re-ground entries whose source anchor drifted. Unlike the read-mostly passes
+   above this one WRITES, so it is bounded by :limit."
+  [opts]
+  (let [stats (resolve-and-call
+               'hive-mcp.knowledge-graph.grounding/backfill-grounding!
+               #(% opts)
+               {:total-scanned 0 :with-source 0 :processed 0 :by-status {}})]
+    (emit-grounding-event! stats)
+    stats))
+
 (defn run-decay-cycle!
-  "Run a complete decay cycle: memory + edges + discs."
+  "Run a complete decay cycle: memory + edges + discs + grounding."
   ([] (run-decay-cycle! {}))
-  ([{:keys [directory project-id memory-limit edge-limit disc-enabled]
-     :or {memory-limit 50 edge-limit 100 disc-enabled true}}]
+  ([{:keys [directory project-id memory-limit edge-limit disc-enabled
+            grounding-enabled grounding-limit]
+     :or {memory-limit 50 edge-limit 100 disc-enabled true
+          grounding-enabled true grounding-limit 50}}]
    (let [start-ms (System/currentTimeMillis)
          cycle-num (-> (swap! scheduler-state update :cycle-count inc)
                        :cycle-count)
@@ -91,10 +117,17 @@
                       (run-disc-decay! {:project-id resolved-project-id})
                       {:skipped true :reason "disc-decay-disabled"})
 
+         ;; 4. Grounding re-verification (bounded — this pass writes)
+         grounding-stats (if grounding-enabled
+                           (run-grounding-pass! {:project-id resolved-project-id
+                                                 :limit grounding-limit})
+                           {:skipped true :reason "grounding-disabled"})
+
          elapsed-ms (- (System/currentTimeMillis) start-ms)
          result {:memory-stats memory-stats
                  :edge-stats edge-stats
                  :disc-stats disc-stats
+                 :grounding-stats grounding-stats
                  :cycle-number cycle-num
                  :duration-ms elapsed-ms
                  :timestamp (java.time.Instant/now)}]
@@ -110,7 +143,9 @@
                 :memory-expired (or (:expired memory-stats) 0)
                 :edges-decayed (or (:decayed edge-stats) 0)
                 :edges-pruned (or (:pruned edge-stats) 0)
-                :discs-updated (or (:updated disc-stats) 0)})
+                :discs-updated (or (:updated disc-stats) 0)
+                :grounding-processed (or (:processed grounding-stats) 0)
+                :grounding-persistence-lost (or (:persistence-lost grounding-stats) 0)})
      result)))
 
 ;; =============================================================================
@@ -126,6 +161,8 @@
      :memory-limit (get cfg :memory-limit 50)
      :edge-limit (get cfg :edge-limit 100)
      :disc-enabled (get cfg :disc-enabled true)
+     :grounding-enabled (get cfg :grounding-enabled true)
+     :grounding-limit (get cfg :grounding-limit 50)
      :project-id (get cfg :project-id nil)}))
 
 (defn- make-decay-task
@@ -139,6 +176,8 @@
         (run-decay-cycle! {:memory-limit (:memory-limit config)
                            :edge-limit (:edge-limit config)
                            :disc-enabled (:disc-enabled config)
+                           :grounding-enabled (:grounding-enabled config)
+                           :grounding-limit (:grounding-limit config)
                            :project-id (:project-id config)})
         (catch Throwable t
           (log/error t "Scheduler: decay cycle threw (caught at boundary)"))))))
@@ -181,7 +220,9 @@
                     {:interval-minutes interval-minutes
                      :memory-limit (:memory-limit cfg)
                      :edge-limit (:edge-limit cfg)
-                     :disc-enabled (:disc-enabled cfg)})
+                     :disc-enabled (:disc-enabled cfg)
+                     :grounding-enabled (:grounding-enabled cfg)
+                     :grounding-limit (:grounding-limit cfg)})
           {:started true
            :interval-minutes interval-minutes
            :config (dissoc cfg :project-id)})
@@ -237,6 +278,8 @@
                      :edges-decayed (get-in r [:edge-stats :decayed] 0)
                      :edges-pruned (get-in r [:edge-stats :pruned] 0)
                      :discs-updated (get-in r [:disc-stats :updated] 0)
+                     :grounding-processed (get-in r [:grounding-stats :processed] 0)
+                     :grounding-persistence-lost (get-in r [:grounding-stats :persistence-lost] 0)
                      :duration-ms (:duration-ms r)
                      :cycle-number (:cycle-number r)})
      :config cfg}))

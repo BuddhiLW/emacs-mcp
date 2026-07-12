@@ -11,6 +11,7 @@
    maintain isolation between projects."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.data.json :as json]
+            [hive-dsl.bounded-atom :refer [bclear! bget]]
             [hive-mcp.hivemind.core :as hivemind]
             [hive-mcp.channel.piggyback :as piggyback]
             [hive-mcp.swarm.protocol :as proto]
@@ -31,20 +32,15 @@
    - DataScript connection (slave registry)
    - Piggyback cursors"
   [f]
-  ;; Get the var and atom, then reset the atom's value
-  (let [registry-atom (var-get #'hivemind/agent-registry)
-        conn-atom (var-get #'conn/conn)]
-    ;; Reset state before test
-    (reset! registry-atom {})
-    (piggyback/reset-all-cursors!)
-    (reset! conn-atom nil)
+  ;; agent-registry is a bounded-atom (LRU/TTL), not an atom — clear it with bclear!.
+  (let [conn-atom (var-get #'conn/conn)
+        reset-state! (fn []
+                       (bclear! hivemind/agent-registry)
+                       (piggyback/reset-all-cursors!)
+                       (reset! conn-atom nil))]
+    (reset-state!)
     (conn/ensure-conn)
-    ;; Run test
-    (f)
-    ;; Cleanup after test
-    (reset! registry-atom {})
-    (piggyback/reset-all-cursors!)
-    (reset! conn-atom nil)))
+    (try (f) (finally (reset-state!)))))
 
 (use-fixtures :each reset-hivemind-and-datascript-state)
 
@@ -86,8 +82,7 @@
                        {:task "work" :message "doing stuff" :directory "/projects/alpha"})
 
       ;; Verify message was tagged with project-id
-      (let [registry-atom (var-get #'hivemind/agent-registry)
-            messages (get-in @registry-atom ["agent-alpha" :messages])]
+      (let [messages (:messages (bget hivemind/agent-registry "agent-alpha"))]
         (is (= 1 (count messages)))
         (is (= "project-alpha" (:project-id (first messages))))))))
 
@@ -104,8 +99,7 @@
       (hivemind/shout! "agent-beta" :progress {:task "work" :message "busy"})
 
       ;; Verify project-id derived from slave's cwd
-      (let [registry-atom (var-get #'hivemind/agent-registry)
-            messages (get-in @registry-atom ["agent-beta" :messages])]
+      (let [messages (:messages (bget hivemind/agent-registry "agent-beta"))]
         (is (= "beta-project" (:project-id (first messages))))))))
 
 (deftest shout-defaults-to-global-when-no-project-derivable-test
@@ -114,8 +108,7 @@
       ;; Shout from unregistered agent without directory
       (hivemind/shout! "orphan-agent" :progress {:task "solo" :message "alone"})
 
-      (let [registry-atom (var-get #'hivemind/agent-registry)
-            messages (get-in @registry-atom ["orphan-agent" :messages])]
+      (let [messages (:messages (bget hivemind/agent-registry "orphan-agent"))]
         (is (= "global" (:project-id (first messages))))))))
 
 ;;; =============================================================================

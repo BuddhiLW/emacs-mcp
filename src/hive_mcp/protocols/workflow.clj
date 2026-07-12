@@ -1,58 +1,52 @@
 (ns hive-mcp.protocols.workflow
-  "Protocol definitions for workflow execution engines."
-  (:require [hive-mcp.protocols.registry :as reg]))
+  "Active-engine slot + Noop fallback for workflow execution engines.
+
+   The PROTOCOLS themselves moved to hive-spi.workflow.engine (HWF2-D1b) so that
+   hive-workflows can implement IWorkflowEngine without depending on hive-mcp
+   (HWF2-M9). This namespace keeps every historical qualified name resolving for
+   existing callers, and owns the two things that are NOT pure contract: the
+   NoopWorkflowEngine impl and the mutable active-engine slot.
+
+   The protocol and method vars below are plain `def` ALIASES of the hive-spi
+   originals. Do NOT turn them back into `defprotocol` — a second `defprotocol`
+   mints a DISTINCT protocol, and every record implementing the original then
+   fails `satisfies?` silently."
+  (:require [hive-mcp.protocols.registry :as reg]
+            [hive-spi.workflow.engine :as engine]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;;; =============================================================================
-;;; IWorkflowEngine Protocol
+;;; IWorkflowEngine — re-export from hive-spi.workflow.engine
 ;;; =============================================================================
 
-(defprotocol IWorkflowEngine
-  "Protocol for workflow execution engines."
+(def IWorkflowEngine    engine/IWorkflowEngine)
 
-  (load-workflow [this workflow-name opts]
-    "Load a workflow definition by name.")
-
-  (validate-workflow [this workflow]
-    "Validate a loaded workflow definition.")
-
-  (execute-step [this workflow step-id opts]
-    "Execute a single step within a workflow.")
-
-  (execute-workflow [this workflow opts]
-    "Execute all steps in a workflow respecting dependency order.")
-
-  (get-status [this workflow-id]
-    "Get the current status of a workflow execution.")
-
-  (cancel-workflow [this workflow-id opts]
-    "Cancel a running workflow."))
+(def load-workflow      engine/load-workflow)
+(def validate-workflow  engine/validate-workflow)
+(def execute-step       engine/execute-step)
+(def execute-workflow   engine/execute-workflow)
+(def get-status         engine/get-status)
+(def cancel-workflow    engine/cancel-workflow)
 
 ;;; =============================================================================
-;;; IWorkflowPersistence Protocol (Extension)
+;;; IWorkflowPersistence — re-export from hive-spi.workflow.engine
 ;;; =============================================================================
 
-(defprotocol IWorkflowPersistence
-  "Optional extension for durable workflow state."
+(def IWorkflowPersistence engine/IWorkflowPersistence)
 
-  (save-state [this workflow-id state]
-    "Persist current workflow execution state.")
-
-  (load-state [this workflow-id]
-    "Load persisted workflow state.")
-
-  (list-workflows [this opts]
-    "List workflow executions matching criteria."))
+(def save-state         engine/save-state)
+(def load-state         engine/load-state)
+(def list-workflows     engine/list-workflows)
 
 ;;; =============================================================================
 ;;; NoopWorkflowEngine (No-Op Fallback Implementation)
 ;;; =============================================================================
 
 (defrecord NoopWorkflowEngine []
-  IWorkflowEngine
+  engine/IWorkflowEngine
 
   (load-workflow [_ workflow-name _opts]
     {:workflow-id (str "noop-" workflow-name "-" (System/currentTimeMillis))
@@ -110,7 +104,7 @@
 ;;; =============================================================================
 
 (defonce ^:private slot
-  (reg/single-slot {:validate #(satisfies? IWorkflowEngine %)
+  (reg/single-slot {:validate #(satisfies? engine/IWorkflowEngine %)
                     :on-empty ->NoopWorkflowEngine}))
 
 (defn set-workflow-engine!
@@ -140,12 +134,12 @@
 (defn workflow-engine?
   "Check if object implements IWorkflowEngine protocol."
   [x]
-  (satisfies? IWorkflowEngine x))
+  (engine/workflow-engine? x))
 
 (defn persistent-engine?
   "Check if workflow engine supports persistence."
   [x]
-  (satisfies? IWorkflowPersistence x))
+  (engine/persistent-engine? x))
 
 (defn enhanced?
   "Check if a non-noop workflow engine is active."

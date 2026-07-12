@@ -20,7 +20,8 @@
             [hive-mcp.dns.result :as result]
             [hive-mcp.config.core :as config]
             [hive-mcp.server.guards :as guards]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.tools.consolidated.workflow.ir :as ir]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -188,7 +189,18 @@
                                    :status   handle-multi-front-status
                                    :stop     handle-multi-front-stop
                                    :_handler handle-multi-front-status}
-              :_handler           handle-forge-status}})
+              :_handler           handle-forge-status}
+   :ir       {:list       ir/handle-list
+              :get        ir/handle-get
+              :describe   ir/handle-describe
+              :author     ir/handle-author
+              :register   ir/handle-register
+              :run        ir/handle-run
+              :status     ir/handle-status
+              :cancel     ir/handle-cancel
+              :method     ir/handle-describe-method
+              :vocabulary ir/handle-describe-vocabulary
+              :_handler   ir/handle-list}})
 
 (def handlers canonical-handlers)
 
@@ -198,7 +210,7 @@
 (def tool-def
   {:name "workflow"
    :consolidated true
-   :description "Forja Belt workflow: catchup (restore context), wrap (crystallize), complete (full lifecycle), forge-strike (FSM-driven smite->survey->spark cycle), forge-strike-imperative (DEPRECATED legacy path), forge-status (belt dashboard), forge-quench (graceful stop). Use command='help' to list all."
+   :description "Forja Belt workflow: catchup (restore context), wrap (crystallize), complete (full lifecycle), forge-strike (FSM-driven smite->survey->spark cycle), forge-strike-imperative (DEPRECATED legacy path), forge-status (belt dashboard), forge-quench (graceful stop). HWF2 combinator IR: ir list/get/describe/author/register/run/status/cancel, ir method (describe method strategies), ir vocabulary (describe effect verbs). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :enum ["catchup" "wrap" "complete"
@@ -208,6 +220,10 @@
                                                 "forge multi-front start"
                                                 "forge multi-front status"
                                                 "forge multi-front stop"
+                                                "ir list" "ir get" "ir describe"
+                                                "ir author" "ir register" "ir run"
+                                                "ir status" "ir cancel"
+                                                "ir method" "ir vocabulary"
                                                 "help"]
                                          :description "Workflow operation to perform"}
                               "commit_msg" {:type "string"
@@ -220,7 +236,23 @@
                               "agent_id" {:type "string"
                                           :description "Agent ID for session attribution"}
                               "directory" {:type "string"
-                                           :description "Working directory for project scoping"}}
+                                           :description "Working directory for project scoping"}
+                              "ast" {:type "string"
+                                     :description "wf-IR AST as an EDN string (ir author / ir register)"}
+                              "workflow_id" {:type "string"
+                                             :description "Stored workflow id (ir get/describe/run/status/cancel)"}
+                              "method" {:type "string"
+                                        :description "Method key to describe (ir method); omit for all"}
+                              "verb" {:type "string"
+                                      :description "Effect verb to describe (ir vocabulary); omit for all"}
+                              "predicates" {:type "array"
+                                            :items {:type "string"}
+                                            :description "Named predicates available at run time (ir author/register)"}
+                              "tags" {:type "array"
+                                      :items {:type "string"}
+                                      :description "Tag filter for ir list"}
+                              "limit" {:type "integer"
+                                       :description "Row cap for ir list"}}
                  :required ["command"]}
    :handler handle-workflow})
 

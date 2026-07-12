@@ -5,7 +5,7 @@
             [clojure.string :as str]
             [hive-mcp.tools.registry :as tools]
             [hive-mcp.tools.cider :as cider]
-            [hive-mcp.tools.kanban :as kanban]
+            [hive-mcp.tools.consolidated.kanban :as kanban]
             [hive-mcp.tools.swarm :as swarm]))
 
 ;; =============================================================================
@@ -52,7 +52,7 @@
     (let [start (System/currentTimeMillis)
           ;; Use a timeout wrapper
           result (deref
-                  (future (kanban/handle-mcp-kanban-status {}))
+                  (future (kanban/handle-kanban {:command "status"}))
                   5000 ; 5 second timeout
                   {:timeout true})]
       (is (not (:timeout result))

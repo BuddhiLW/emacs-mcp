@@ -58,7 +58,7 @@
 (defn- add-edge*
   "Create a relationship between two knowledge nodes. Raw impl — the public
    handle-kg-add-edge wraps this with with-kg-flush for durable-on-return."
-  [{:keys [from to relation scope confidence created_by]}]
+  [{:keys [from to relation scope confidence created_by predicate]}]
   (log/info "kg_add_edge" {:from from :to to :relation relation})
   (try
     ;; Validate inputs
@@ -72,7 +72,8 @@
                             :relation relation-kw}
                      scope (assoc :scope scope)
                      confidence (assoc :confidence confidence)
-                     created_by (assoc :created-by created_by))
+                     created_by (assoc :created-by created_by)
+                     predicate (assoc :predicate predicate))
               edge-id (edges/add-edge! opts)]
           (mcp-json {:success true
                      :edge-id edge-id

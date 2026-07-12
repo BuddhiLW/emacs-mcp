@@ -71,8 +71,14 @@
                               "to" {:type "string"
                                     :description "Target node ID for edge"}
                               "relation" {:type "string"
-                                          :enum ["implements" "supersedes" "refines" "contradicts" "depends-on" "derived-from" "applies-to" "projects-to" "co-accessed"]
-                                          :description "Relation type for edge (server validates against kg-schema/relation-types; addons may register more)"}
+                                          :enum ["implements" "supersedes" "refines" "contradicts" "depends-on" "derived-from" "applies-to" "relates"]
+                                          :description (str "Relation type for edge. `relates` is the OPEN relation: pair it with `predicate` "
+                                                            "for arbitrary semantics. Server validates against kg-schema/relation-types; "
+                                                            "addons may register more.")}
+                              "predicate" {:type "string"
+                                           :description (str "[edge] Free-text semantic predicate for an OPEN `relates` edge "
+                                                             "(e.g. \"causes\", \"part-of\", \"motivates\"). Use with relation=\"relates\"; "
+                                                             "normalized to kebab-case; ignored for structural relations.")}
                               "confidence" {:type "number"
                                             :description "Confidence score 0.0-1.0"}
                               "node_id" {:type "string"

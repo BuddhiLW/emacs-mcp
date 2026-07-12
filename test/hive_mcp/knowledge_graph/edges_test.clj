@@ -99,6 +99,25 @@
             edge-id (edges/add-edge! {:from from :to to :relation rel})]
         (is (string? edge-id) (str "Failed for relation: " rel))))))
 
+(deftest add-edge-predicate-test
+  (testing ":relates edge stores a normalized free-text predicate"
+    (let [from (gen-node-id)
+          to   (gen-node-id)
+          eid  (edges/add-edge! {:from from :to to :relation :relates
+                                 :predicate "Leads To"})
+          e    (edges/get-edge eid)]
+      (is (= :relates (:kg-edge/relation e)))
+      (is (= "leads-to" (:kg-edge/predicate e))
+          "free-text predicate normalized to kebab-case")))
+  (testing "predicate is ignored for non-:relates relations"
+    (let [from (gen-node-id)
+          to   (gen-node-id)
+          eid  (edges/add-edge! {:from from :to to :relation :implements
+                                 :predicate "should be dropped"})
+          e    (edges/get-edge eid)]
+      (is (nil? (:kg-edge/predicate e))
+          "predicate is meaningful only on :relates edges"))))
+
 (deftest add-edge-rejects-invalid-relation-test
   (testing "add-edge! rejects invalid relation"
     (is (thrown? clojure.lang.ExceptionInfo

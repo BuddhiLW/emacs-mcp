@@ -1,105 +1,68 @@
 (ns hive-mcp.knowledge-graph.store.fixtures
   "Shared test fixtures for dual-backend KG testing.
 
-   Provides fixtures that run tests against both DataScript (in-memory)
-   and Datalevin (temp directory, cleaned after test).
+   Thin, backward-compatible facade over the disposable test-store harness
+   (hive-mcp.knowledge-graph.store.harness). Every fixture here delegates to a
+   `harness/with-disposable-store` composition of a StoreFactory (creates +
+   disposes an ephemeral store) and an IsolationStrategy (thread-local for the
+   in-memory DataScript backend, global save/restore for the persistent
+   Datalevin/Datahike backends). The public names, arities, and dynamic-var
+   contract are preserved:
+
+     - datascript-fixture / datalevin-fixture / datahike-fixture  [f]
+     - backend-fixture                                            [backend]
+     - dual-backend-fixture                                       [f]
+     - *current-backend*                                          dynamic var
 
    Usage in test ns:
      (use-fixtures :each (fixtures/backend-fixture :datascript))
      ;; or for dual-backend:
      (use-fixtures :each fixtures/dual-backend-fixture)"
-  (:require [hive-mcp.knowledge-graph.protocol :as proto]
-            [hive-mcp.knowledge-graph.store.datascript :as ds-store]
-            [hive-mcp.knowledge-graph.edges :as edges]
-            [clojure.java.io :as io]))
+  (:require [hive-mcp.knowledge-graph.store.harness :as harness]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
-;; Backend-Specific Fixtures
+;; Backend-Specific Fixtures (thin delegations to the harness)
 ;; =============================================================================
 
 (defn datascript-fixture
   "Fixture that runs test f against a per-thread fresh DataScript store.
 
-   Binds `connection/*test-store*` so the override-aware ensure-store!
-   returns the test store, leaving the global proto store untouched
-   (test isolation). Also binds `connection/*sync-writes*` true: transact!
-   then writes synchronously on the calling thread instead of routing
+   Thread-local isolation: binds `connection.store/*test-store*` so the
+   override-aware ensure-store! returns the test store, leaving the global
+   proto store untouched. Also binds `connection/*sync-writes*` true so
+   transact! writes synchronously on the calling thread instead of routing
    through the async coalescing writer (a pool thread that does not inherit
    *test-store*), guaranteeing deterministic read-after-write."
   [f]
-  (let [store           (ds-store/create-store)
-        test-store-var  (requiring-resolve
-                          'hive-mcp.knowledge-graph.connection/*test-store*)
-        sync-writes-var (requiring-resolve
-                          'hive-mcp.knowledge-graph.connection/*sync-writes*)]
-    (proto/ensure-conn! store)
-    (edges/reset-stats-cache!)
-    (with-bindings* {test-store-var store
-                     sync-writes-var true}
-      (fn []
-        (try
-          (f)
-          (finally
-            (proto/reset-conn! store)
-            (edges/reset-stats-cache!)))))))
+  (harness/datascript-store-fixture f))
 
 (defn datalevin-fixture
   "Fixture that runs test f with a fresh Datalevin store in a temp dir.
-   Cleans up the temp directory after the test."
+   Global save/restore isolation; cleans up the temp directory after the test.
+   Skipped when Datalevin is unavailable."
   [f]
-  (let [tmp-dir (io/file (System/getProperty "java.io.tmpdir")
-                         (str "hive-kg-test-" (System/nanoTime)))
-        db-path (.getAbsolutePath tmp-dir)]
-    (try
-      ;; Dynamically require datalevin store to avoid hard dep
-      (require 'hive-mcp.knowledge-graph.store.datalevin)
-      (let [create-fn (resolve 'hive-mcp.knowledge-graph.store.datalevin/create-store)
-            store (create-fn {:db-path db-path})]
-        (proto/set-store! store)
-        (proto/ensure-conn! store)
-        (edges/reset-stats-cache!)
-        (try
-          (f)
-          (finally
-            (proto/close! store)
-            (edges/reset-stats-cache!)
-            ;; Clean up temp directory
-            (when (.exists tmp-dir)
-              (doseq [file (reverse (file-seq tmp-dir))]
-                (.delete file))))))
-      (catch Exception e
-        (println "Datalevin fixture failed, skipping:" (.getMessage e))))))
+  (harness/datalevin-store-fixture f))
 
 (defn datahike-fixture
   "Fixture that runs test f with a fresh Datahike store in a temp dir.
-   Cleans up the temp directory after the test."
+   Global save/restore isolation; cleans up the temp directory after the test.
+   Skipped when Datahike is unavailable."
   [f]
-  (let [tmp-dir (io/file (System/getProperty "java.io.tmpdir")
-                         (str "hive-kg-datahike-test-" (System/nanoTime)))
-        db-path (.getAbsolutePath tmp-dir)]
-    (try
-      ;; Dynamically require datahike store to avoid hard dep
-      (require 'hive-mcp.knowledge-graph.store.datahike)
-      (let [create-fn (resolve 'hive-mcp.knowledge-graph.store.datahike/create-store)
-            store (create-fn {:db-path db-path})]
-        (proto/set-store! store)
-        (proto/ensure-conn! store)
-        (edges/reset-stats-cache!)
-        (try
-          (f)
-          (finally
-            (proto/close! store)
-            (edges/reset-stats-cache!)
-            ;; Clean up temp directory
-            (when (.exists tmp-dir)
-              (doseq [file (reverse (file-seq tmp-dir))]
-                (.delete file))))))
-      (catch Exception e
-        (println "Datahike fixture failed, skipping:" (.getMessage e))))))
+  (harness/datahike-store-fixture f))
+
+(defn global-datascript-fixture
+  "Fixture that runs test f against a fresh in-memory DataScript store installed
+   as the GLOBAL store (proto/set-store!) with the shared writer reset around
+   the body and the prior store restored on teardown. Use for tests that
+   exercise the async coalescing writer or spawn threads (which cannot see a
+   thread-local *test-store*). Pass :sync-writes? true for deterministic
+   read-after-write on the calling thread. See convention 20260629150125-3a07e787."
+  [f & {:keys [sync-writes?] :or {sync-writes? false}}]
+  (harness/global-datascript-store-fixture f :sync-writes? sync-writes?))
 
 ;; =============================================================================
 ;; Dual-Backend Fixture

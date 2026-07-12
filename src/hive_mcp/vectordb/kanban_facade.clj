@@ -87,12 +87,14 @@
 ;;; ============================================================================
 
 (defn get-entry-by-id
-  "Read a kanban entry by id. In :dual-read, returns the :kanban hit
-   when present, else falls through to :default."
+  "Read a kanban entry by id. In :kanban and :dual-read modes, falls back
+   across the :kanban and :default stores so legacy entries in either slot
+   stay retrievable."
   [id]
   (case (mode)
     :default   (proto/get-entry (proto/get-store) id)
-    :kanban    (proto/get-entry (proto/get-store :kanban) id)
+    :kanban    (or (rescue nil (proto/get-entry (proto/get-store :kanban) id))
+                   (rescue nil (proto/get-entry (proto/get-store) id)))
     :dual-read (or (when (registered? :kanban)
                      (rescue nil (proto/get-entry (proto/get-store :kanban) id)))
                    (proto/get-entry (proto/get-store) id))))
@@ -103,9 +105,9 @@
    call sites). The :order-by opt is preserved end-to-end so
    per-backend post-fetch sort kicks in.
 
-   :dual-read merges :kanban + :default result sets, de-duped by :id,
-   so soak comparisons don't lose entries that exist in only one slot.
-   Caller still applies its own kanban-tag predicate afterwards."
+   :kanban and :dual-read both merge :kanban + :default result sets,
+   de-duped by :id (kanban-first), so entries that exist in only one slot
+   are not lost. Caller still applies its own kanban-tag predicate."
   [& {:keys [type project-id project-ids tags exclude-tags limit
              include-expired? include-content? output-fields order-by]
       :or   {limit 100 include-expired? false
@@ -125,35 +127,50 @@
                           :include-expired? include-expired?
                           :include-content? include-content?}
                    output-fields (assoc :output-fields output-fields)
-                   order-by      (assoc :order-by order-by))]
+                   order-by      (assoc :order-by order-by))
+        merged-query
+        (fn []
+          (let [primary   (when (registered? :kanban)
+                            (rescue nil
+                              (vec (proto/query-entries
+                                    (proto/get-store :kanban) opts-map))))
+                fallback  (rescue nil
+                            (vec (proto/query-entries
+                                  (proto/get-store) opts-map)))
+                seen      (volatile! #{})
+                keep-once (fn [e]
+                            (let [id (:id e)]
+                              (when-not (contains? @seen id)
+                                (vswap! seen conj id)
+                                e)))
+                merged    (vec (keep keep-once
+                                     (concat (or primary [])
+                                             (or fallback []))))]
+            ;; Trim back to caller's :limit after dedupe — the merged
+            ;; result can otherwise be 2x the cap.
+            (if (and limit (> (count merged) limit))
+              (vec (take limit merged))
+              merged)))]
     (case (mode)
       :default   (proto/query-entries (proto/get-store) opts-map)
-      :kanban    (proto/query-entries (proto/get-store :kanban) opts-map)
-      :dual-read (let [primary   (when (registered? :kanban)
-                                   (rescue nil
-                                     (vec (proto/query-entries
-                                           (proto/get-store :kanban) opts-map))))
-                       fallback  (rescue nil
-                                   (vec (proto/query-entries
-                                         (proto/get-store) opts-map)))
-                       seen      (volatile! #{})
-                       keep-once (fn [e]
-                                   (let [id (:id e)]
-                                     (when-not (contains? @seen id)
-                                       (vswap! seen conj id)
-                                       e)))
-                       merged    (vec (keep keep-once
-                                            (concat (or primary [])
-                                                    (or fallback []))))]
-                   ;; Trim back to caller's :limit after dedupe — the
-                   ;; merged result can otherwise be 2x the cap.
-                   (if (and limit (> (count merged) limit))
-                     (vec (take limit merged))
-                     merged)))))
+      :kanban    (merged-query)
+      :dual-read (merged-query))))
 
 ;;; ============================================================================
 ;;; CRUD — write path
 ;;; ============================================================================
+
+(defn- store-for-id
+  "Store slot that actually holds `id` — prefer :kanban, else :default,
+   else the active-key slot (new-entry path). Lets writes reach a legacy
+   entry that lives only in the :default slot."
+  [id]
+  (cond
+    (some? (rescue nil (proto/get-entry (proto/get-store :kanban) id)))
+    (proto/get-store :kanban)
+    (some? (rescue nil (proto/get-entry (proto/get-store) id)))
+    (proto/get-store)
+    :else (proto/get-store (active-key))))
 
 (defn add-entry!
   "Index a kanban entry. Used by migration tooling — the create path
@@ -174,7 +191,7 @@
   [id updates]
   (case (mode)
     :default   (proto/update-entry! (proto/get-store) id updates)
-    :kanban    (proto/update-entry! (proto/get-store :kanban) id updates)
+    :kanban    (proto/update-entry! (store-for-id id) id updates)
     :dual-read (let [primary (proto/update-entry! (proto/get-store :kanban) id updates)]
                  (mirror-write! (fn [s] (proto/update-entry! s id updates)))
                  primary)))
@@ -185,7 +202,7 @@
   [id]
   (case (mode)
     :default   (proto/delete-entry! (proto/get-store) id)
-    :kanban    (proto/delete-entry! (proto/get-store :kanban) id)
+    :kanban    (proto/delete-entry! (store-for-id id) id)
     :dual-read (let [primary (proto/delete-entry! (proto/get-store :kanban) id)]
                  (mirror-write! (fn [s] (proto/delete-entry! s id)))
                  primary)))

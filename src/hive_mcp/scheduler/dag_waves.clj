@@ -12,7 +12,8 @@
             [clojure.core.async :as async :refer [go-loop <! close!]]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive.events :as ev]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -30,6 +31,24 @@
          :completed  #{}     ; set of kanban-task-ids
          :failed     #{}     ; set of kanban-task-ids
          :opts       {}}))   ; original start opts
+
+(defn- wave-progress-payload
+  "Current DAG parity snapshot for the drone-roster panel."
+  []
+  (let [s @dag-state]
+    {:run-id        (str (:plan-id s))
+     :dispatched    (count (:dispatched s))
+     :completed     (count (:completed s))
+     :failed        (count (:failed s))
+     :in-flight     (mapv (fn [[tid lid]] {:task-id tid :ling-id lid :status "dispatched"})
+                          (:dispatched s))
+     :completed-ids (vec (:completed s))
+     :failed-ids    (vec (:failed s))}))
+
+(defn- emit-wave!
+  "Fail-soft emit of a swarm wave event on the generic hive.events multi-bus."
+  [variant]
+  (result/rescue nil (ev/dispatch-multi [variant (wave-progress-payload)])))
 
 ;; =============================================================================
 ;; Kanban Helpers
@@ -79,6 +98,17 @@
 ;; Core Pure Functions
 ;; =============================================================================
 
+(defn- task-role
+  "Extract a role for a task, fail-soft. Reads an explicit :role, else a
+   `role:<name>` tag from :tags. Returns nil when absent."
+  [task]
+  (or (:role task)
+      (some (fn [t]
+              (let [s (str t)]
+                (when (str/starts-with? s "role:")
+                  (subs s (count "role:")))))
+            (:tags task))))
+
 (defn find-ready-tasks
   "Find tasks whose all dependencies have been completed."
   [directory completed dispatched failed]
@@ -95,6 +125,7 @@
                    (when all-deps-done?
                      {:task-id task-id
                       :title   (:title task)
+                      :role    (task-role task)
                       :deps    deps
                       :dep-count (count deps)}))))
          vec)))
@@ -103,17 +134,28 @@
 ;; Stateful Dispatch Functions
 ;; =============================================================================
 
+(defn- normalize-role
+  "Fail-soft role coercion: nil for absent/blank, else the role value."
+  [role]
+  (when (and (some? role)
+             (not (and (string? role) (str/blank? role))))
+    role))
+
 (defn- spawn-ling-for-task
   "Attempt to spawn a ling for a single DAG task. Returns Result.
+   Threads the task :role (when present) into create-ling! via the
+   :spawn/request seam so Stage-A role overlay applies. Fail-soft: a
+   nil/blank role adds no request.
    When :prefer-lightweight? is true (default), uses :headless spawn mode
    which routes to TransparentAgenticLoop (~2MB vs ~280MB ProcessBuilder)."
-  [task-id title {:keys [cwd presets project-id prefer-lightweight?]
-                  :or {prefer-lightweight? true}}]
+  [task-id title role {:keys [cwd presets project-id prefer-lightweight?]
+                       :or {prefer-lightweight? true}}]
   (let [safe-title (-> (or title "task")
                        str/lower-case
                        (str/replace #"[^a-z0-9]+" "-"))
         truncated (subs safe-title 0 (min 30 (count safe-title)))
-        ling-id (str "swarm-dag-" truncated "-" (System/currentTimeMillis))]
+        ling-id (str "swarm-dag-" truncated "-" (System/currentTimeMillis))
+        role* (normalize-role role)]
     (result/try-effect* :dag/spawn-failed
                         (ling/create-ling! ling-id
                                            (cond-> {:cwd cwd
@@ -122,7 +164,9 @@
                                                     :kanban-task-id task-id
                                                     :task title}
                                              prefer-lightweight?
-                                             (assoc :spawn-mode :headless)))
+                                             (assoc :spawn-mode :headless)
+                                             role*
+                                             (assoc :spawn/request {:role role*})))
                         ling-id)))
 
 (defn dispatch-wave!
@@ -139,8 +183,8 @@
 
     (let [dispatched-results
           (doall
-           (for [{:keys [task-id title]} tasks-to-dispatch]
-             (let [r (spawn-ling-for-task task-id title opts)]
+           (for [{:keys [task-id title role]} tasks-to-dispatch]
+             (let [r (spawn-ling-for-task task-id title role opts)]
                (if-let [ling-id (:ok r)]
                  (do
                    ;; Track dispatch in state
@@ -157,6 +201,9 @@
                    ;; Mark as failed so we don't keep retrying
                    (swap! dag-state update :failed conj task-id)
                    {:task-id task-id :status :failed :error (:message r)})))))]
+
+      (when (pos? (count tasks-to-dispatch))
+        (emit-wave! :workflow/wave-dispatched))
 
       {:dispatched-count (count (filter #(= :dispatched (:status %)) dispatched-results))
        :dispatched-tasks dispatched-results
@@ -200,7 +247,8 @@
                                                 :task-id kanban-task-id
                                                 :ling-id agent-id
                                                 :timestamp (System/currentTimeMillis)}))))
-                (log/warn "DAGWaves: task" kanban-task-id "FAILED via" agent-id))
+                (log/warn "DAGWaves: task" kanban-task-id "FAILED via" agent-id)
+                (emit-wave! :workflow/wave-completed))
 
               ;; Success: mark done, dispatch next wave
               (do
@@ -217,6 +265,8 @@
                                                 :task-id kanban-task-id
                                                 :ling-id agent-id
                                                 :timestamp (System/currentTimeMillis)}))))
+
+                (emit-wave! :workflow/wave-completed)
 
                 ;; Auto-dispatch next wave
                 (let [ready (find-ready-tasks directory

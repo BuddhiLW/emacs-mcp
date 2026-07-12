@@ -5,11 +5,8 @@
    map verbatim and the memory-type keyword/string; returns a
    `hive-dsl.result/Result` of `ProviderSpec`.
 
-   This is the canonical type→spec resolver. The L2 `IRouter` impl
-   (`router/default.clj`) is a 5-line wrapper that reads the global
-   config and delegates here. Keeping resolution pure means property
-   tests can probe every (config, type) pair without spinning up a
-   system.
+   This is the canonical type→spec resolver; the L2 `IRouter` impl
+   (`router/default.clj`) wraps it.
 
    Resolution order (highest to lowest precedence):
      1. `[:routes <:type/X>]`                  — explicit kw-namespaced route
@@ -19,13 +16,7 @@
 
    Once the provider key is known, `[:providers <key>]` produces the
    `ProviderSpec` via `embedder.spec/make`. Unknown provider keys
-   surface as `:router/unknown-provider`.
-
-   Why bare-keyword fallback (rule 2): existing user configs at
-   `~/.config/hive-mcp/config.edn` may carry routes like
-   `:note → :ollama-nomic` rather than `:type/note → ...`. Honor both
-   shapes during the cutover; rules collapse to rule 1 once the
-   migration is complete."
+   surface as `:router/unknown-provider`."
   (:require [hive-dsl.result :as r]
             [hive-mcp.embedder.spec :as spec]))
 

@@ -48,11 +48,15 @@
    - :created-by    - Agent ID that created edge
    - :source-type   - How edge was established (:manual, :automated, :inferred, :co-access)
    - :last-verified - Timestamp of last verification (defaults to creation time)
+   - :predicate     - Free-text semantic predicate for OPEN :relates edges
+                      (e.g. causes, part-of). Normalized to kebab-case via
+                      schema/normalize-predicate. Ignored for non-:relates
+                      relations (a warning is logged).
 
    :from and :to must be non-blank strings (schema/valid-node-id?).
 
    Returns the edge ID on success, throws on validation failure."
-  [{:keys [from to relation scope confidence created-by source-type last-verified]
+  [{:keys [from to relation scope confidence created-by source-type last-verified predicate]
     :or {confidence 1.0}}]
   ;; Validate required fields
   (when-not (and (schema/valid-node-id? from) (schema/valid-node-id? to))
@@ -69,9 +73,14 @@
     (throw (ex-info "Invalid source type"
                     {:source-type source-type
                      :valid-source-types schema/source-types})))
+  ;; Predicate is meaningful only on the open :relates relation.
+  (when (and predicate (not= relation :relates))
+    (log/warn "kg add-edge: :predicate ignored for non-:relates relation"
+              {:relation relation :predicate predicate}))
 
   (let [edge-id (ids/generate-edge-id)
         now (java.util.Date.)
+        norm-pred (when (= relation :relates) (schema/normalize-predicate predicate))
         edge-data (cond-> {:kg-edge/id edge-id
                            :kg-edge/from from
                            :kg-edge/to to
@@ -81,7 +90,8 @@
                            :kg-edge/last-verified (or last-verified now)}
                     scope (assoc :kg-edge/scope scope)
                     created-by (assoc :kg-edge/created-by created-by)
-                    source-type (assoc :kg-edge/source-type source-type))]
+                    source-type (assoc :kg-edge/source-type source-type)
+                    norm-pred (assoc :kg-edge/predicate norm-pred))]
     (conn/transact! [edge-data])
     (emit-stats-event! :kg.edges/added
                        {:relation relation :scope scope}

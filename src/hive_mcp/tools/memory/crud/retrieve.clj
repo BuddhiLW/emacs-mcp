@@ -1,6 +1,7 @@
 (ns hive-mcp.tools.memory.crud.retrieve
   "Retrieval operations for memory: get-full, batch-get, check-duplicate, update-tags."
-  (:require [hive-mcp.tools.memory.core :refer [with-store]]
+  (:require [clojure.string :as str]
+            [hive-mcp.tools.memory.core :refer [with-store]]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.format :as fmt]
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
@@ -54,6 +55,24 @@
                        (seq incoming) (assoc :kg_incoming incoming))]
           (mcp-json result))
         (mcp-json {:error "Entry not found" :id id})))))
+
+(defn handle-get-metadata
+  "Get a single entry by ID, projected to the metadata shape.
+
+   Exists because `memory metadata` is otherwise an alias onto the QUERY path,
+   whose handler cannot consume an :id — the param was silently dropped and the
+   call degraded into an unfiltered in-scope scan. An id lookup must resolve the
+   id or fail; it must never answer with an unrelated result set.
+
+   Returns a ONE-ELEMENT array so the response keeps the metadata-listing shape."
+  [{:keys [id]}]
+  (log/info "mcp-memory-get-metadata:" id)
+  (if (or (not (string? id)) (str/blank? id))
+    (mcp-error "memory metadata: id must be a non-empty string")
+    (with-store
+      (if-let [entry (with-resilience (mem-proto/get-entry (mem-proto/get-store) id))]
+        (mcp-json [(fmt/entry->metadata entry)])
+        (mcp-error (str "Entry not found: " id))))))
 
 (defn handle-batch-get
   "Get multiple memory entries by IDs in a single call with KG edges.

@@ -1,6 +1,7 @@
 (ns hive-mcp.swarm.datascript.coordination.wave
   (:require [datascript.core :as d]
             [hive-mcp.swarm.datascript.connection :as conn]
+            [hive-mcp.swarm.ledger.default :as ledger-default]
             [taoensso.timbre :as log]))
 
 (declare create-wave! get-wave get-all-waves update-wave-counts! complete-wave!)
@@ -96,7 +97,11 @@
         db @c]
     (when-let [eid (:db/id (d/entity db [:wave/id wave-id]))]
       (log/info "Completing wave:" wave-id "with status:" status)
-      (d/transact! c [{:db/id eid
-                       :wave/status status
-                       :wave/active-count 0
-                       :wave/completed-at (conn/now)}]))))
+      (let [report (d/transact! c [{:db/id eid
+                                    :wave/status status
+                                    :wave/active-count 0
+                                    :wave/completed-at (conn/now)}])]
+        (ledger-default/append!
+         {:type :wave/completed
+          :payload {:wave-id wave-id :status status}})
+        report))))

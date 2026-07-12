@@ -86,6 +86,21 @@
              :handler (mw/build-middleware-chain handler name default-async-commands)}
       deprecated (assoc :deprecated true))))
 
+(defn- select-base-tools-for-role
+  "Role-appropriate base tool set: the restricted set for a child ling,
+   otherwise the full coordinator set including deprecated shims."
+  []
+  (if (guards/child-ling?)
+    (tools/get-child-ling-tools)
+    (tools/get-all-tools :include-deprecated? true)))
+
+(defn- gated-tool-set
+  "Fold dynamic (extension) + addon tools onto the base set and apply the
+   visibility gate, yielding the <=10-root surface with old names still callable."
+  [base-tools dynamic-tools addon-tools]
+  (tools/apply-visibility-gate
+   (concat base-tools dynamic-tools addon-tools)))
+
 
 ;; =============================================================================
 ;; Server Spec Building
@@ -99,13 +114,11 @@
    - Child ling (HIVE_MCP_ROLE=child-ling): Restricted tool set"
   []
   (let [dynamic-tools (ext/get-registered-tools)
-        addon-tools   (addons/active-addon-tools)]
-    (if-let [_ (when (guards/child-ling?) true)]
-      ;; Child ling: restricted tool set (also visibility-gated for parity)
-      (let [child-tools (tools/get-child-ling-tools)
-            gated (tools/apply-visibility-gate
-                   (concat child-tools dynamic-tools addon-tools))
-            role (guards/get-role)
+        addon-tools   (addons/active-addon-tools)
+        base          (select-base-tools-for-role)
+        gated         (gated-tool-set base dynamic-tools addon-tools)]
+    (if (guards/child-ling?)
+      (let [role (guards/get-role)
             depth (guards/ling-depth)]
         (log/info "Building CHILD LING server spec with" (count gated) "tools"
                   "(role:" role "depth:" depth
@@ -114,13 +127,7 @@
         {:name "hive-mcp"
          :version "0.1.0"
          :tools (mapv make-tool gated)})
-      ;; Coordinator: full tool set including deprecated shims.
-      ;; Visibility gate marks non-allowlisted tools :deprecated so tools/list
-      ;; shows <=10 roots while tools/call keeps every old name callable.
-      (let [all-tools (tools/get-all-tools :include-deprecated? true)
-            gated (tools/apply-visibility-gate
-                   (concat all-tools dynamic-tools addon-tools))
-            deprecated-count (count (filter :deprecated gated))
+      (let [deprecated-count (count (filter :deprecated gated))
             visible-count (- (count gated) deprecated-count)]
         (log/info "Building server spec with" (count gated) "tools"
                   "(" visible-count "visible," deprecated-count "deprecated/gated)"
@@ -140,16 +147,10 @@
   (when-let [context @server-context-atom]
     (let [tools-atom (:tools context)
           child? (guards/child-ling?)
-          base-tools (if child?
-                       (tools/get-child-ling-tools)
-                       (tools/get-all-tools :include-deprecated? true))
-          ;; Match build-server-spec: fold dynamic + addon tools and apply the
-          ;; visibility gate so hot-reload reproduces the same <=10-root surface
-          ;; (old names stay callable via tools/call).
-          selected-tools (tools/apply-visibility-gate
-                          (concat base-tools
-                                  (ext/get-registered-tools)
-                                  (addons/active-addon-tools)))
+          base-tools (select-base-tools-for-role)
+          selected-tools (gated-tool-set base-tools
+                                         (ext/get-registered-tools)
+                                         (addons/active-addon-tools))
           new-tools (mapv make-tool selected-tools)
           deprecated-count (if child?
                              0
@@ -181,9 +182,7 @@
   (require 'hive-mcp.agent.core)
   (let [register-tools! (resolve 'hive-mcp.agent.core/register-tools!)
         child? (guards/child-ling?)
-        selected-tools (if child?
-                         (tools/get-child-ling-tools)
-                         (tools/get-all-tools :include-deprecated? true))
+        selected-tools (select-base-tools-for-role)
         deprecated-count (if child?
                            0
                            (count (filter :deprecated selected-tools)))]

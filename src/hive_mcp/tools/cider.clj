@@ -62,9 +62,11 @@
 
 (defn- handle-elisp
   "Common handler: execute elisp via try-result boundary, return MCP response.
-   DRYs the repeated pattern: eval-elisp -> if success -> mcp-success/mcp-error."
-  [category elisp]
-  (result->mcp (try-result category #(elisp->result elisp))))
+   DRYs the repeated pattern: eval-elisp -> if success -> mcp-success/mcp-error.
+   Optional timeout-ms overrides the default emacsclient timeout."
+  ([category elisp] (handle-elisp category elisp nil))
+  ([category elisp timeout-ms]
+   (result->mcp (try-result category #(elisp->result elisp timeout-ms)))))
 
 ;;; =============================================================================
 ;;; Auto-Connect Fallback Helpers (Result-returning)
@@ -352,12 +354,17 @@
 
 (defn handle-cider-eval-session
   "Evaluate Clojure code in a specific named CIDER session.
-   Supports optional :timeout param (seconds)."
+   Supports optional :timeout param (seconds). The caller's timeout is applied
+   to BOTH the inner CIDER nREPL eval AND the outer emacsclient call (seconds
+   ->ms + 2s buffer, default 62s) so a long eval is not aborted by the 5s
+   emacsclient default."
   [{:keys [session_name code timeout]}]
   (log/info "cider-eval-session" {:session session_name :code-length (count code) :timeout timeout})
-  (handle-elisp :cider/eval-session-failed
-                (el/require-and-call-text 'hive-mcp-cider 'hive-mcp-cider-eval-in-session
-                                          session_name code (or timeout nil))))
+  (let [ec-timeout-ms (+ (* (or timeout 60) 1000) 2000)]
+    (handle-elisp :cider/eval-session-failed
+                  (el/require-and-call-text 'hive-mcp-cider 'hive-mcp-cider-eval-in-session
+                                            session_name code (or timeout nil))
+                  ec-timeout-ms)))
 
 (defn- kill-session*
   "Kill a named session. Returns Result with confirmation message."

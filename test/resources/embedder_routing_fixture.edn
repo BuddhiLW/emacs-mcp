@@ -1,0 +1,44 @@
+;; The embedder config the routing tests assert against.
+;;
+;; This file IS the test's model of the world. It is deliberately NOT the
+;; developer's ~/.config/hive-mcp/config.edn: routing is retuned as hardware and
+;; models change, and a test that reads live config asserts against whatever was
+;; last tuned. (That is exactly how service-routing-test rotted — it pinned
+;; note -> nomic/768 while the machine had moved to qwen3/1024.)
+;;
+;; Change a route here and the expectation changes with it, in one place.
+{:embedder
+ {:default :ollama-nomic
+
+  :routes {:type/conversation-turn :openrouter-qwen3
+           :type/turn-summary      :openrouter-qwen3
+           :type/decision          :openrouter-qwen3
+           :type/plan              :openrouter-qwen3
+           :type/session-summary   :openrouter-qwen3
+           :type/convention        :openrouter-qwen3
+           :type/axiom             :ollama-nomic
+           :type/principle         :ollama-nomic
+           :type/snippet           :ollama-nomic
+           :type/note              :ollama-nomic}
+
+  :providers {:ollama-nomic     {:impl :ollama
+                                 :model "nomic-embed-text"
+                                 :max-tokens 2048
+                                 :dimension 768}
+              :openrouter-qwen3 {:impl :openrouter
+                                 :model "qwen/qwen3-embedding-8b"
+                                 :max-tokens 32768
+                                 :dimension 4096}
+              :venice-qwen3     {:impl :venice
+                                 :model "text-embedding-qwen3-8b"
+                                 :max-tokens 32768
+                                 :dimension 4096}
+              ;; A dimension no hardcoded list ever knew about. Nothing routes
+              ;; to it — it exists to prove a configured dimension is searchable
+              ;; on the strength of being configured.
+              :ollama-qwen3-4b  {:impl :ollama
+                                 :model "qwen3-embedding:4b"
+                                 :max-tokens 8192
+                                 :dimension 2560}}
+
+  :no-embed-types #{}}}

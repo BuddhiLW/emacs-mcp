@@ -78,13 +78,21 @@
   [event-type]
   (str drone-prefix "." (name event-type) ".>"))
 
+;; --- Subject token guard ---
+
+(defn- safe-token
+  "Coerce a subject-token candidate to a non-empty NATS token; nil/blank -> fallback."
+  [x fallback]
+  (let [s (some-> x name)]
+    (if (or (nil? s) (re-matches #"\s*" s)) fallback s)))
+
 ;; --- Shout subjects ---
 
 (defn shout-subject
   "Build subject for a hivemind shout.
    E.g. hive.v1.shout.hive.forja-cl-123"
   [project-id agent-id]
-  (str shout-prefix "." (or project-id "global") "." agent-id))
+  (str shout-prefix "." (safe-token project-id "global") "." (safe-token agent-id "unknown")))
 
 (defn shout-wildcard
   "Build wildcard subject for all shouts in a project.
@@ -128,7 +136,7 @@
   "Build subject for tool notifications.
    E.g. hive.v1.tool.memory-add"
   [tool-name]
-  (str tool-prefix "." (name tool-name)))
+  (str tool-prefix "." (safe-token tool-name "unknown")))
 
 (defn tool-wildcard
   "Build wildcard subject for all tool notifications.

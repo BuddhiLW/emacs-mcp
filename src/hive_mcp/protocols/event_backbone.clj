@@ -75,6 +75,16 @@
   []
   (reg/clear! slot))
 
+(defn add-backbone-watch!
+  "Run `(f old new)` when the active backbone changes (e.g. Noop->Nats)."
+  [key f]
+  (reg/watch-slot! slot key f))
+
+(defn remove-backbone-watch!
+  "Remove the backbone watch registered under `key`. Safe when absent."
+  [key]
+  (reg/unwatch-slot! slot key))
+
 ;;; ============================================================================
 ;;; NoopBackbone (Headless Fallback)
 ;;; ============================================================================

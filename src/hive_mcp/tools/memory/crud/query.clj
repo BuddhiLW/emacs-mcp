@@ -144,6 +144,22 @@
     (some tag-encodes-scope? tags)      "all"
     :else                                nil))
 
+(defn- unconstrained?
+  "True when NOTHING narrows the result set: no type, no tags, no exclude-tags,
+   no scope, no duration.
+
+   Such a query has no predicate at all — the backend filter collapses to
+   project-scope + not-expired and the `limit` default silently caps it at 20
+   arbitrary rows. That is a noop default masquerading as an answer, so it is
+   rejected rather than served. Any single narrowing predicate is enough to keep
+   type-less browsing legal (tag-only and scope-only queries are supported paths)."
+  [type tags exclude-tags scope duration]
+  (and (nil? type)
+       (empty? tags)
+       (empty? exclude-tags)
+       (nil? scope)
+       (nil? duration)))
+
 (defn handle-query
   "Query project memory by type with scope and verbosity filtering."
   [{:keys [type tags exclude_tags limit duration scope directory include_descendants verbosity]}]
@@ -154,20 +170,25 @@
         metadata-only? (not= verbosity "full")
         tags         (coerce-vec! tags :tags [])
         exclude-tags (coerce-vec! exclude_tags :exclude_tags [])
+        raw-scope    scope
         scope        (resolve-scope scope tags)]
     (log/info "mcp-memory-query:" type "scope:" scope "directory:" directory
               "include_descendants:" include-descendants? "verbosity:" (or verbosity "metadata"))
     (try
-      (let [limit-val (coerce-int! limit :limit 20)]
-        (with-store
-          (let [project-id  (scope/get-current-project-id directory)
-                sf          (domain/parse-scope scope project-id)
-                project-ids (resolve-project-ids-for-db sf include-descendants?)
-                entries     (fetch-entries type project-ids tags limit-val include-descendants?
-                                           :exclude-tags exclude-tags)
-                filtered    (apply-scope-filter entries sf include-descendants?)
-                results     (apply-post-filters filtered tags duration limit-val)]
-            (format-query-results results project-id metadata-only?))))
+      (if (unconstrained? type tags exclude-tags raw-scope duration)
+        (mcp-error (str "memory query: no filter given. Provide :type "
+                        "(or narrow with :tags / :exclude_tags / :scope / :duration) — "
+                        "an unfiltered query would return an arbitrary slice of memory, not an answer."))
+        (let [limit-val (coerce-int! limit :limit 20)]
+          (with-store
+            (let [project-id  (scope/get-current-project-id directory)
+                  sf          (domain/parse-scope scope project-id)
+                  project-ids (resolve-project-ids-for-db sf include-descendants?)
+                  entries     (fetch-entries type project-ids tags limit-val include-descendants?
+                                             :exclude-tags exclude-tags)
+                  filtered    (apply-scope-filter entries sf include-descendants?)
+                  results     (apply-post-filters filtered tags duration limit-val)]
+              (format-query-results results project-id metadata-only?)))))
       (catch clojure.lang.ExceptionInfo e
         (if (= :coercion-error (:type (ex-data e)))
           (mcp-error (.getMessage e))

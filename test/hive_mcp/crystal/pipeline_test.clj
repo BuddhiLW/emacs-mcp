@@ -9,7 +9,7 @@
    Property tests:
    - P1: N harvest sources → merged SynthesisInput has all synthesis keys
    - P2: any source returning :error doesn't block others (fault isolation)
-   - P3: HarvestOutcome ADT exhaustiveness — all variants constructible
+   - P3: PipelineOutcome ADT exhaustiveness — all variants constructible
    - P4: merge-outcomes preserves source-id keys from ok outcomes
    - P5: run-pipeline always returns a Result (ok or err)"
   (:require [clojure.test :refer [deftest testing is are]]
@@ -109,23 +109,23 @@
 ;; =============================================================================
 
 (deftest harvest-outcome-adt-construction
-  (testing "All HarvestOutcome variants constructible"
-    (let [ok      (pipeline/harvest-outcome :harvest/ok      {:source-id :git :data {:commits []}})
-          timeout (pipeline/harvest-outcome :harvest/timeout {:source-id :git :elapsed-ms 10000.0})
-          error   (pipeline/harvest-outcome :harvest/error   {:source-id :git :message "boom"})]
+  (testing "All PipelineOutcome variants constructible"
+    (let [ok      (pipeline/pipeline-outcome :harvest/ok      {:source-id :git :data {:commits []}})
+          timeout (pipeline/pipeline-outcome :harvest/timeout {:source-id :git :elapsed-ms 10000.0})
+          error   (pipeline/pipeline-outcome :harvest/error   {:source-id :git :message "boom"})]
       (is (adt/adt? ok))
       (is (adt/adt? timeout))
       (is (adt/adt? error))
       (is (= :harvest/ok      (:adt/variant ok)))
       (is (= :harvest/timeout (:adt/variant timeout)))
       (is (= :harvest/error   (:adt/variant error)))
-      (is (= :HarvestOutcome  (:adt/type ok))))))
+      (is (= :PipelineOutcome  (:adt/type ok))))))
 
 (deftest harvest-outcome-exhaustive-case
   (testing "adt-case covers all variants"
-    (let [ok (pipeline/harvest-outcome :harvest/ok {:source-id :x :data {:a 1}})]
+    (let [ok (pipeline/pipeline-outcome :harvest/ok {:source-id :x :data {:a 1}})]
       (is (= :matched
-             (adt/adt-case pipeline/HarvestOutcome ok
+             (adt/adt-case pipeline/PipelineOutcome ok
                :harvest/ok      :matched
                :harvest/timeout :timeout
                :harvest/error   :error))))))
@@ -136,8 +136,8 @@
 
 (deftest merge-outcomes-unit
   (testing "merge-outcomes collects ok data by source-id"
-    (let [outcomes [(pipeline/harvest-outcome :harvest/ok {:source-id :a :data {:x 1}})
-                    (pipeline/harvest-outcome :harvest/ok {:source-id :b :data {:y 2}})]
+    (let [outcomes [(pipeline/pipeline-outcome :harvest/ok {:source-id :a :data {:x 1}})
+                    (pipeline/pipeline-outcome :harvest/ok {:source-id :b :data {:y 2}})]
           result   (pipeline/merge-outcomes outcomes)]
       (is (result/ok? result))
       (let [merged (:ok result)]
@@ -146,8 +146,8 @@
         (is (nil? (:source-errors merged))))))
 
   (testing "merge-outcomes separates errors"
-    (let [outcomes [(pipeline/harvest-outcome :harvest/ok    {:source-id :a :data {:x 1}})
-                    (pipeline/harvest-outcome :harvest/error {:source-id :b :message "fail"})]
+    (let [outcomes [(pipeline/pipeline-outcome :harvest/ok    {:source-id :a :data {:x 1}})
+                    (pipeline/pipeline-outcome :harvest/error {:source-id :b :message "fail"})]
           result   (pipeline/merge-outcomes outcomes)]
       (is (result/ok? result))
       (let [merged (:ok result)]
@@ -222,9 +222,9 @@
 
 (defspec p3-harvest-outcome-adt-always-valid 100
   (prop/for-all [id gen-source-id]
-    (let [ok      (pipeline/harvest-outcome :harvest/ok      {:source-id id :data {}})
-          timeout (pipeline/harvest-outcome :harvest/timeout {:source-id id :elapsed-ms 1000.0})
-          error   (pipeline/harvest-outcome :harvest/error   {:source-id id :message "err"})]
+    (let [ok      (pipeline/pipeline-outcome :harvest/ok      {:source-id id :data {}})
+          timeout (pipeline/pipeline-outcome :harvest/timeout {:source-id id :elapsed-ms 1000.0})
+          error   (pipeline/pipeline-outcome :harvest/error   {:source-id id :message "err"})]
       (and (adt/adt-valid? ok)
            (adt/adt-valid? timeout)
            (adt/adt-valid? error)))))

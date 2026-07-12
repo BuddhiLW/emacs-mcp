@@ -11,184 +11,19 @@
    4. Default: config/default-kg-backend (persistent — compounding axiom)"
 
   (:require [hive-mcp.knowledge-graph.protocol :as proto]
-            [hive-mcp.knowledge-graph.store.datascript :as ds-store]
-            [hive-mcp.knowledge-graph.scope :as scope]
-            [hive-mcp.config.core :as config]
-            [hive-mcp.protocols.kg :as pkg]
-            [hive-dsl.result :as r]
             [hive-dsl.batch :as dsl-batch]
-            [clojure.core.async :as async]
-            [clojure.java.io :as io]
-            [taoensso.timbre :as log]
-            [hive-mcp.events.core :as events]))
+            [hive-mcp.knowledge-graph.connection.store :as store]
+            [hive-mcp.knowledge-graph.connection.writer :as writer]
+            [hive-mcp.knowledge-graph.connection.strategy :as strategy]
+            [hive-mcp.knowledge-graph.connection.temporal :as temporal]))
+
+(declare ensure-writer! stop-writer! writer-stats flush-pending! drain-writer! in-flight)
+
+(declare store-live? ensure-store! get-conn ensure-conn! ensure-conn reset-conn! delete-database! close! set-backend!)
 
 ;; =============================================================================
 ;; Config-based Backend Auto-detection
 ;; =============================================================================
-
-(defn- walk-hierarchy-for-kg-backend
-  "Walk up .hive-project.edn hierarchy to find :kg-backend.
-   Parent is more authoritative than child — first match walking UP wins.
-   Returns keyword or nil."
-  []
-  (r/rescue nil
-            (let [cwd (System/getProperty "user.dir")
-                  home (System/getProperty "user.home")]
-              (loop [dir (io/file cwd)
-               ;; Collect configs child→parent, then reverse for parent-first
-                     configs []]
-                (cond
-                  (nil? dir) nil
-                  (= (.getAbsolutePath dir) home)
-            ;; Check home dir then stop
-                  (let [all-configs (if-let [cfg (scope/read-direct-project-config (.getAbsolutePath dir))]
-                                      (conj configs cfg)
-                                      configs)
-                  ;; Parent-first: last found = most ancestral = highest authority
-                        parent-first (reverse all-configs)]
-                    (some :kg-backend parent-first))
-
-                  :else
-                  (let [cfg (scope/read-direct-project-config (.getAbsolutePath dir))]
-                    (recur (.getParentFile dir)
-                           (if cfg (conj configs cfg) configs))))))))
-
-(defn- detect-backend
-  "Detect the desired KG backend from configuration sources.
-
-   Priority (highest → lowest):
-   0. `hive.kg.backend` system property — explicit JVM override. The :test
-      aliases set -Dhive.kg.backend=datascript so cold test JVMs use an
-      ephemeral in-memory store and never open (and lock-contend) a prod
-      file backend. See axiom 20260122235103-7151cc29.
-   1. .hive-project.edn hierarchy (parent > child > grandchild)
-   2. HIVE_KG_BACKEND env var (explicit override)
-   3. config.edn :services.kg.backend (global default)
-   4. Fallback: config/default-kg-backend"
-  []
-  (let [prop-backend (some-> (System/getProperty "hive.kg.backend") keyword)
-        hierarchy-backend (walk-hierarchy-for-kg-backend)
-        env-backend (some-> (System/getenv "HIVE_KG_BACKEND") keyword)
-        config-backend (config/get-service-value :kg :backend :parse keyword)
-        backend (or prop-backend hierarchy-backend env-backend config-backend
-                    config/default-kg-backend)]
-    (log/info "KG backend detection"
-              {:property prop-backend
-               :hierarchy hierarchy-backend
-               :env env-backend
-               :config config-backend
-               :selected backend})
-    backend))
-
-(defn- detect-writer-config
-  "Detect the writer backend config from :services.kg.writer in config.edn.
-   Returns nil for :self (local) or the writer map for remote backends.
-
-   Example config.edn:
-     {:services {:kg {:backend :datahike
-                      :writer {:backend :datahike-server
-                               :url \"http://localhost:4444\"
-                               :token \"your-token\"}}}}
-
-   Or for kabel:
-     {:services {:kg {:backend :datahike
-                      :writer {:backend :kabel
-                               :peer-id #uuid \"aaaa...\"
-                               :local-peer <peer-atom>}}}}"
-  []
-  (r/rescue nil
-            (let [writer-cfg (config/get-service-value :kg :writer)]
-              (when (and (map? writer-cfg)
-                         (not= :self (:backend writer-cfg)))
-                (log/info "KG writer config detected" {:writer writer-cfg})
-                writer-cfg))))
-
-(defn- store-live?
-  "True iff a store is configured AND still satisfies the current
-   IKGStore protocol object. Guards against a common live-REPL hazard:
-   the protocol ns gets reloaded after the store was constructed, leaving
-   a reify/defrecord instance that no longer satisfies the new protocol.
-   `satisfies?` then returns false at every write call site, and the
-   downstream `r/rescue nil` swallows the resulting AssertionError —
-   producing silent transaction drops."
-  []
-  (and (proto/store-set?)
-       (satisfies? pkg/IKGStore (proto/get-store))))
-
-(def ^:dynamic *test-store*
-  "Per-thread override for the active KG store.
-   When non-nil, `ensure-store!` returns this directly without
-   touching the global proto/store atom. Bound by the :kg-conn
-   isolation fixture (hive-mcp.isolation-methods) so KG tests run
-   against a fresh ephemeral store without polluting prod state.
-   Honors axiom 20260122235103-7151cc29 (Test Isolation Silent Server Death)."
-  nil)
-
-(defn- ensure-store!
-  "Ensure a store is configured. Auto-detects backend from config.
-   Re-initializes when the current store is stale (see `store-live?`).
-   Returns *test-store* directly when bound (test-isolation override).
-
-   Fires `:kg.store/ready` on every successful (re)initialization so
-   subscribers (e.g. edge-stats warm-up) can react without coupling
-   to the wiring path."
-  []
-  (or *test-store*
-      (do
-        (when-not (store-live?)
-          (when (proto/store-set?)
-            (log/warn "Active KG store failed satisfies? IKGStore — recreating"
-                      "(likely stale protocol reference after ns reload)")
-            (proto/clear-store!))
-          (let [backend (detect-backend)]
-            (log/info "Auto-initializing KG backend" {:backend backend})
-            (case backend
-              :datalevin
-              (let [store (r/guard Exception nil
-                                   (require 'hive-mcp.knowledge-graph.store.datalevin)
-                                   (let [create-fn (resolve 'hive-mcp.knowledge-graph.store.datalevin/create-store)]
-                                     (create-fn)))]
-                (if store
-                  (do (proto/set-store! store)
-                      (events/dispatch [:kg.store/ready {:backend :datalevin}]))
-                  (do
-                    (log/error "CRITICAL: Failed to initialize Datalevin, falling back to ephemeral DataScript. KG data on disk will NOT be accessible.")
-                    (proto/set-store! (ds-store/create-store))
-                    (events/dispatch [:kg.store/ready {:backend :datascript :fallback? true}]))))
-
-              :datahike
-              (let [writer-cfg (detect-writer-config)
-                    store (r/guard Exception nil
-                                   ;; Pre-load konserve namespaces in correct order before datahike.
-                                   ;; konserve.impl.defaults requires konserve.impl.storage-layout
-                                   ;; which defines -atomic-move. If storage-layout is partially
-                                   ;; loaded (e.g. from a concurrent require), method vars don't
-                                   ;; get interned and defaults.cljc fails with
-                                   ;; "-atomic-move does not exist". Loading the full chain here
-                                   ;; prevents the race.
-                                   (require 'konserve.protocols)
-                                   (require 'konserve.impl.storage-layout)
-                                   (require 'konserve.impl.defaults)
-                                   (require 'konserve.cache)
-                                   (require 'hive-mcp.knowledge-graph.store.datahike)
-                                   (let [create-fn (resolve 'hive-mcp.knowledge-graph.store.datahike/create-store)]
-                                     (create-fn (when writer-cfg {:writer writer-cfg}))))]
-                (if (and store
-                         (r/ok? (r/try-effect*
-                                 :datahike/ensure-conn-failed
-                                 (pkg/ensure-conn! store))))
-                  (do (proto/set-store! store)
-                      (events/dispatch [:kg.store/ready {:backend :datahike}]))
-                  (do
-                    (log/error "CRITICAL: Failed to initialize Datahike. Refusing to substitute another KG backend because :kg-backend requested :datahike.")
-                    (throw (ex-info "Datahike KG backend unavailable"
-                                    {:backend :datahike
-                                     :hint "Check :services.datahike.path / HIVE_KG_DB_PATH. The configured path must be a Datahike database, not a container directory."})))))
-
-              ;; Default: DataScript
-              (do (proto/set-store! (ds-store/create-store))
-                  (events/dispatch [:kg.store/ready {:backend :datascript}])))))
-        (proto/get-store))))
 
 ;; =============================================================================
 ;; Transaction Batching (Dynamic Var)
@@ -221,287 +56,14 @@
 ;; This eliminates the "Transacting 1 objects" pattern that causes
 ;; high CPU on sequential single-entity writes.
 
-(def ^:private coalesce-window-ms
-  "Time window to drain additional items before flushing batch.
-   Balances latency vs batch size. 25ms gives good coalescing
-   without noticeable delay on interactive operations."
-  25)
-
-(def ^:private coalesce-max-batch
-  "Maximum batch size before forcing a flush, even within the window."
-  200)
-
-(defonce ^:private writer-state
-  (atom {:running? false :tx-chan nil :ctrl-chan nil}))
-
-(defonce ^:private writer-metrics
-  (atom {:batches-flushed 0 :items-written 0 :items-dropped 0 :largest-batch 0}))
-
 ;; in-flight: count of items enqueued on tx-chan but not yet flushed.
 ;; Incremented by transact! on successful put!, decremented by flush-batch!
 ;; after proto/transact! completes. Used by flush-pending! to detect drain.
-(defonce ^:private in-flight (atom 0))
-
-(defn- flush-batch!
-  "Flush accumulated tx-data as a single transaction.
-   `batch-item-count` is the number of producer-side items this batch drained
-   from tx-chan (used to decrement in-flight); it may differ from (count batch)
-   after dsl-batch/normalize-tx-datum expansion."
-  [batch batch-item-count]
-  (when (seq batch)
-    (let [n (count batch)]
-      (try
-        (proto/transact! (ensure-store!) batch)
-        (swap! writer-metrics (fn [m]
-                                (-> m
-                                    (update :batches-flushed inc)
-                                    (update :items-written + n)
-                                    (update :largest-batch max n))))
-        (catch Throwable t
-          (log/error "Coalesced batch transact failed, falling back to individual writes"
-                     {:batch-size n :error (.getMessage t)})
-          ;; Fallback: retry items individually so we don't lose data
-          (doseq [item batch]
-            (try
-              (proto/transact! (ensure-store!) [item])
-              (swap! writer-metrics update :items-written inc)
-              (catch Throwable t2
-                (log/error "Individual fallback transact also failed"
-                           {:item item :error (.getMessage t2)})
-                (swap! writer-metrics update :items-dropped inc)))))
-        (finally
-          (swap! in-flight - batch-item-count))))))
-
-(defn- start-writer-loop!
-  "Start the background write-coalescing consumer loop.
-   Creates fresh tx-chan + ctrl-chan each time (fixes channel death on stop).
-   Returns map with :tx-chan :ctrl-chan :go-chan."
-  []
-  (let [tx-chan   (async/chan 4096)
-        ctrl-chan (async/chan)
-        go-chan   (async/go-loop []
-                    (let [[val port] (async/alts! [ctrl-chan tx-chan])]
-                      (cond
-                       ;; ctrl-chan closed or signaled — graceful shutdown
-                        (= port ctrl-chan)
-                        (log/debug "Writer loop received shutdown signal")
-
-                       ;; tx-chan closed — also done
-                        (nil? val)
-                        (log/debug "Writer loop tx-chan closed")
-
-                        :else
-                        (let [first-item val
-                              [batch producer-count]
-                              (loop [batch (into [] (dsl-batch/normalize-tx-datum first-item))
-                                     producer-count 1
-                                     remaining coalesce-window-ms]
-                                (if (or (<= remaining 0)
-                                        (>= (count batch) coalesce-max-batch))
-                                  [batch producer-count]
-                                  (let [t0 (System/currentTimeMillis)
-                                        [item port] (async/alts! [ctrl-chan
-                                                                  tx-chan
-                                                                  (async/timeout remaining)])]
-                                    (cond
-                                      (= port ctrl-chan) [batch producer-count]
-                                      (nil? item)        [batch producer-count]
-                                      :else
-                                      (recur (into batch (dsl-batch/normalize-tx-datum item))
-                                             (inc producer-count)
-                                             (- remaining (- (System/currentTimeMillis) t0)))))))]
-                          (flush-batch! batch producer-count)
-                          (recur)))))]
-    {:tx-chan tx-chan :ctrl-chan ctrl-chan :go-chan go-chan}))
-
-(defn- ensure-writer!
-  "Ensure the write-coalescing loop is running.
-   Uses locking + double-check to prevent concurrent starts."
-  []
-  (when-not (:running? @writer-state)
-    (locking writer-state
-      (when-not (:running? @writer-state)
-        (let [{:keys [tx-chan ctrl-chan go-chan]} (start-writer-loop!)]
-          (reset! writer-state {:running? true
-                                :tx-chan   tx-chan
-                                :ctrl-chan ctrl-chan
-                                :go-chan   go-chan})
-          (log/debug "Started KG write-coalescing queue"))))))
-
-(defn stop-writer!
-  "Stop the write-coalescing loop. Idempotent — safe to call multiple times."
-  []
-  (locking writer-state
-    (let [{:keys [running? ctrl-chan tx-chan]} @writer-state]
-      (when running?
-        (when ctrl-chan (async/close! ctrl-chan))
-        (when tx-chan (async/close! tx-chan))
-        (reset! writer-state {:running? false :tx-chan nil :ctrl-chan nil})
-        (log/debug "Stopped KG write-coalescing queue")))))
-
-(defn writer-stats
-  "Return writer metrics + running state for observability."
-  []
-  (merge @writer-metrics
-         {:running? (:running? @writer-state)}))
-
-(defn flush-pending!
-  "Busy-wait until the write-coalescing queue is empty and no items are in flight.
-   Deterministic replacement for (Thread/sleep N) after transact! in tests.
-   Bounded deadline prevents indefinite hang if the writer is dead — returns
-   `:weave/timeout` after deadline-ms (default 5000ms) rather than blocking forever.
-   Returns `:ok` when drained. No-op (returns `:ok`) if writer not running."
-  ([] (flush-pending! 5000))
-  ([deadline-ms]
-   (if-not (:running? @writer-state)
-     :ok
-     (let [deadline (+ (System/currentTimeMillis) deadline-ms)]
-       (loop []
-         (cond
-           (zero? @in-flight) :ok
-           (> (System/currentTimeMillis) deadline)
-           (do (log/warn "flush-pending! deadline exceeded, items still in flight:" @in-flight)
-               :weave/timeout)
-           :else
-           (do (Thread/sleep 5)
-               (recur))))))))
-
-(defn drain-writer!
-  "Deprecated — prefer flush-pending!. Retained as alias for callers and tests
-   that still reference the old name."
-  {:deprecated "use flush-pending!"}
-  []
-  (flush-pending!))
-
 ;; =============================================================================
 ;; Backward-Compatible API
 ;; =============================================================================
 
-(defn get-conn
-  "Get the current connection, initializing if needed.
-   Preferred entry point for accessing the KG database.
-   Returns the raw backend connection."
-  []
-  (proto/ensure-conn! (ensure-store!)))
-
-(defn ensure-conn!
-  "Ensure connection is initialized. Creates if nil.
-   Returns the connection."
-  []
-  (get-conn))
-
 ;; Alias for ensure-conn! without the bang (for backward compatibility)
-(def ensure-conn ensure-conn!)
-
-(defn reset-conn!
-  "Close and reopen the active KG connection. NON-DESTRUCTIVE — does NOT
-   delete data on disk. The same on-disk DB is re-attached for persistent
-   stores (Datahike, Datalevin); in-memory stores (DataScript) get a fresh
-   empty conn since there is no persistent backing.
-
-   For destructive wipe, use `delete-database!` with `:i-mean-it`.
-
-   Renamed semantics 2026-04-28 — see AXIOM 'Never NUKE Data'."
-  []
-  (proto/reset-conn! (ensure-store!)))
-
-(defn delete-database!
-  "DESTRUCTIVE — delete the active KG database from disk. Requires
-   `confirm` to be `:i-mean-it`; any other value throws.
-
-   Only persistent backends (`(satisfies? IPersistentKGStore store)`)
-   support deletion. Calling against an ephemeral backend (DataScript)
-   throws — destruction has no meaning when there is no persistent state.
-
-   Test code that needs a fresh persistent store MUST create a temp
-   directory (e.g. via `(System/getProperty \"java.io.tmpdir\")`) and
-   call this only against that temp path, never the production data path.
-
-   Emits high-severity telemetry events before and after deletion."
-  [confirm]
-  (let [store (ensure-store!)]
-    (when-not (proto/persistent-store? store)
-      (throw (ex-info "delete-database! not supported on ephemeral backend"
-                      {:store-class (str (class store))
-                       :hint "Ephemeral backends (DataScript) have no persistent state. Use reset-conn! for a fresh in-memory conn."})))
-    (proto/delete-database! store confirm)))
-
-(defn- offer-coalesced!
-  "Enqueue tx-data on the write-coalescing channel. Pre-increments in-flight
-   before put! so flush-pending! never observes a transient zero while an item
-   is mid-enqueue. Returns true when accepted, false when the channel is
-   full/closed (compensating the in-flight bump)."
-  [tx-data]
-  (let [tx-chan (:tx-chan @writer-state)]
-    (swap! in-flight inc)
-    (if (and tx-chan (async/put! tx-chan tx-data))
-      true
-      (do (swap! in-flight dec) false))))
-
-(defn- write-sync-fallback!
-  "Direct synchronous write used when the coalescing queue cannot accept an
-   item, so data is never lost. Records the queue-miss in writer-metrics."
-  [store tx-data]
-  (log/warn "Write-coalescing queue put! failed, falling back to sync transact"
-            {:tx-data-count (if (sequential? tx-data) (count tx-data) 1)})
-  (swap! writer-metrics update :items-dropped
-         + (if (sequential? tx-data) (count tx-data) 1))
-  (r/rescue nil
-            (proto/transact! store (dsl-batch/normalize-tx-datum tx-data))))
-
-(defprotocol IWriteStrategy
-  "One discipline for applying tx-data to the KG store. SRP: each record owns a
-   single write mode; OCP: add a mode by adding a record, not by editing
-   `transact!`."
-  (apply-tx! [strategy tx-data]
-    "Apply tx-data under this strategy. Returns nil. Throws when a required
-     backend is unavailable so callers never receive a false success."))
-
-(defrecord BatchAccumulator [batch-atom]
-  IWriteStrategy
-  (apply-tx! [_ tx-data]
-    (swap! batch-atom into (dsl-batch/normalize-tx-datum tx-data))))
-
-(defrecord SyncWriter [store]
-  IWriteStrategy
-  (apply-tx! [_ tx-data]
-    (r/rescue nil
-              (proto/transact! store (dsl-batch/normalize-tx-datum tx-data)))))
-
-(defrecord CoalescingWriter [store]
-  IWriteStrategy
-  (apply-tx! [_ tx-data]
-    (ensure-writer!)
-    (when-not (offer-coalesced! tx-data)
-      (write-sync-fallback! store tx-data))))
-
-(defn- write-strategy
-  "Select the active write strategy from dynamic context (Collect + Promote).
-   The store is resolved eagerly for store-backed strategies so an unavailable
-   backend surfaces to the caller here, not silently in the async flush."
-  []
-  (cond
-    *tx-batch*    (->BatchAccumulator *tx-batch*)
-    *sync-writes* (->SyncWriter (ensure-store!))
-    :else         (->CoalescingWriter (ensure-store!))))
-
-(defn- assert-edge-node-ids!
-  "Reject tx-data containing a KG edge datom whose :kg-edge/from or
-   :kg-edge/to is not a string. A non-string edge node id crashes the
-   datahike AVET writer thread; rejecting it synchronously keeps the
-   writer alive and surfaces a catchable error to the caller."
-  [tx-data]
-  (when (sequential? tx-data)
-    (doseq [d tx-data
-            :when (map? d)]
-      (when (or (contains? d :kg-edge/from)
-                (contains? d :kg-edge/to))
-        (let [from (:kg-edge/from d)
-              to   (:kg-edge/to d)]
-          (when-not (and (string? from) (string? to))
-            (throw (ex-info "Poison KG edge datom rejected: :kg-edge/from and :kg-edge/to must be strings"
-                            {:kg-edge/from from :kg-edge/to to}))))))))
-
 (defn transact!
   "Transact data to the KG database via the active write strategy:
      - *tx-batch* bound   → accumulate for an explicit batch flush
@@ -511,8 +73,8 @@
    The coalescing queue drains items within a 25ms window and flushes as a
    single transaction, eliminating the 'Transacting 1 objects' pattern."
   [tx-data]
-  (assert-edge-node-ids! tx-data)
-  (apply-tx! (write-strategy) tx-data))
+  (strategy/assert-edge-node-ids! tx-data)
+  (strategy/apply-tx! (strategy/select-strategy *tx-batch* *sync-writes* ensure-store!) tx-data))
 
 (defn transact-sync!
   "Synchronous transact — bypasses the coalescing queue.
@@ -520,7 +82,7 @@
    (e.g., extracting entity IDs from :tx-data).
    Most callers should use transact! (async coalesced) instead."
   [tx-data]
-  (assert-edge-node-ids! tx-data)
+  (strategy/assert-edge-node-ids! tx-data)
   (proto/transact! (ensure-store!) tx-data))
 
 (defmacro with-tx-batch
@@ -615,63 +177,9 @@
       ;; Fallback: ignore db, query live store.
       (apply query q inputs))))
 
-(defn close!
-  "Close the active store connection.
-   Required for Datalevin to flush LMDB."
-  []
-  (when (proto/store-set?)
-    (proto/close! (proto/get-store))))
-
 ;; =============================================================================
 ;; Store Configuration
 ;; =============================================================================
-
-(defn set-backend!
-  "Configure the KG storage backend.
-
-   Arguments:
-     backend - :datascript, :datalevin, or :datahike
-     opts    - Backend-specific options:
-               :datalevin {:db-path \"data/kg/datalevin\"}
-               :datahike  {:db-path \"data/kg/datahike\" :backend :file}"
-
-  [backend & [opts]]
-  (log/info "Setting KG backend" {:backend backend :opts opts})
-  (case backend
-    :datascript
-    (proto/set-store! (ds-store/create-store))
-
-    :datalevin
-    (let [;; Require datalevin store dynamically to avoid hard dep
-          _ (require 'hive-mcp.knowledge-graph.store.datalevin)
-          create-fn (resolve 'hive-mcp.knowledge-graph.store.datalevin/create-store)
-          store (create-fn opts)]
-      (if store
-        (proto/set-store! store)
-        (do
-          (log/warn "Datalevin store creation failed, falling back to DataScript")
-          (proto/set-store! (ds-store/create-store)))))
-
-    :datahike
-    (let [;; Pre-load konserve namespaces in correct order (see ensure-store! comment)
-          _ (require 'konserve.protocols)
-          _ (require 'konserve.impl.storage-layout)
-          _ (require 'konserve.impl.defaults)
-          _ (require 'konserve.cache)
-          _ (require 'hive-mcp.knowledge-graph.store.datahike)
-          create-fn (resolve 'hive-mcp.knowledge-graph.store.datahike/create-store)
-          ;; Pass writer config if present (for datahike-server/kabel backends)
-          store (create-fn (cond-> (or opts {})
-                             (:writer opts) (assoc :writer (:writer opts))))]
-      (if store
-        (proto/set-store! store)
-        (do
-          (log/warn "Datahike store creation failed, falling back to DataScript")
-          (proto/set-store! (ds-store/create-store)))))
-
-    ;; Unknown backend
-    (throw (ex-info "Unknown KG backend" {:backend backend
-                                          :valid #{:datascript :datalevin :datahike}}))))
 
 ;; =============================================================================
 ;; ID and Timestamp Utilities
@@ -698,109 +206,47 @@
 ;; Temporal Query Facade (W3)
 ;; =============================================================================
 
-(defn temporal-store?
-  "Check if the current store supports temporal queries (time-travel).
-   Returns true for Datahike, false for DataScript/Datalevin.
+(def temporal-store? temporal/temporal-store?)
 
-   Use this to guard temporal query calls in application code."
-  []
-  (proto/temporal-store? (ensure-store!)))
+(def history-db temporal/history-db)
 
-(defn history-db
-  "Get a database containing all historical facts.
+(def as-of-db temporal/as-of-db)
 
-   Returns a DB value that includes retracted datoms, enabling
-   queries over the complete history of the store.
+(def since-db temporal/since-db)
 
-   Returns nil if the store does not support temporal queries.
+(def query-history temporal/query-history)
 
-   Example:
-     (when (temporal-store?)
-       (query '[:find ?e ?attr ?v ?added
-                :where [?e ?attr ?v _ ?added]]
-              (history-db)))"
-  []
-  (let [store (ensure-store!)]
-    (when (proto/temporal-store? store)
-      (proto/history-db store))))
+(def query-as-of temporal/query-as-of)
 
-(defn as-of-db
-  "Get the database as of a specific point in time.
+(def ^:private store-live? hive-mcp.knowledge-graph.connection.store/store-live?)
 
-   Arguments:
-     tx-or-time - Transaction ID (integer) or java.util.Date timestamp
+(def ^:private ensure-store! hive-mcp.knowledge-graph.connection.store/ensure-store!)
 
-   Returns a DB value representing the state at that point,
-   or nil if the store does not support temporal queries.
+(def get-conn hive-mcp.knowledge-graph.connection.store/get-conn)
 
-   Example:
-     ;; Query state from 1 hour ago
-     (as-of-db (java.util.Date. (- (System/currentTimeMillis) 3600000)))"
-  [tx-or-time]
-  (let [store (ensure-store!)]
-    (when (proto/temporal-store? store)
-      (proto/as-of-db store tx-or-time))))
+(def ensure-conn! hive-mcp.knowledge-graph.connection.store/ensure-conn!)
 
-(defn since-db
-  "Get a database containing only facts added since a point in time.
+(def ensure-conn hive-mcp.knowledge-graph.connection.store/ensure-conn)
 
-   Arguments:
-     tx-or-time - Transaction ID (integer) or java.util.Date timestamp
+(def reset-conn! hive-mcp.knowledge-graph.connection.store/reset-conn!)
 
-   Returns a DB value with only facts added after that point,
-   or nil if the store does not support temporal queries.
+(def delete-database! hive-mcp.knowledge-graph.connection.store/delete-database!)
 
-   Useful for incremental change tracking and sync operations."
-  [tx-or-time]
-  (let [store (ensure-store!)]
-    (when (proto/temporal-store? store)
-      (proto/since-db store tx-or-time))))
+(def close! hive-mcp.knowledge-graph.connection.store/close!)
 
-(defn query-history
-  "Query against the full history database.
+(def set-backend! hive-mcp.knowledge-graph.connection.store/set-backend!)
 
-   Arguments:
-     q      - Datalog query
-     inputs - Optional additional query inputs
+(def ^:private ensure-writer! hive-mcp.knowledge-graph.connection.writer/ensure-writer!)
 
-   Returns query results against history DB, enabling queries
-   that span all historical states (including retracted facts).
+(def stop-writer! hive-mcp.knowledge-graph.connection.writer/stop-writer!)
 
-   Returns nil if the store does not support temporal queries.
+(def writer-stats hive-mcp.knowledge-graph.connection.writer/writer-stats)
 
-   Example:
-     ;; Find all values an attribute ever had
-     (query-history '[:find ?v ?added
-                      :in $ ?e ?attr
-                      :where [?e ?attr ?v _ ?added]]
-                    [:kg-edge/id \"some-id\"] :kg-edge/weight)"
-  [q & inputs]
-  (when-let [hdb (history-db)]
-    ;; Dynamically require datahike.api to avoid hard dependency
-    (require 'datahike.api)
-    (if (seq inputs)
-      (apply (resolve 'datahike.api/q) q hdb inputs)
-      ((resolve 'datahike.api/q) q hdb))))
+(def flush-pending! hive-mcp.knowledge-graph.connection.writer/flush-pending!)
 
-(defn query-as-of
-  "Query the database as it was at a specific point in time.
+(def drain-writer! hive-mcp.knowledge-graph.connection.writer/drain-writer!)
 
-   Arguments:
-     tx-or-time - Transaction ID (integer) or java.util.Date timestamp
-     q          - Datalog query
-     inputs     - Optional additional query inputs
-
-   Returns query results from the point-in-time snapshot,
-   or nil if the store does not support temporal queries.
-
-   Example:
-     ;; What edges existed yesterday?
-     (query-as-of yesterday
-                  '[:find ?id
-                    :where [?e :kg-edge/id ?id]])"
-  [tx-or-time q & inputs]
-  (when-let [aodb (as-of-db tx-or-time)]
-    (require 'datahike.api)
-    (if (seq inputs)
-      (apply (resolve 'datahike.api/q) q aodb inputs)
-      ((resolve 'datahike.api/q) q aodb))))
+;; in-flight: re-exported (^:private) because hive-ingestor's writer_guard
+;; requiring-resolves connection/in-flight to observe queue depth; the canonical
+;; counter lives in connection.writer.
+(def ^:private in-flight hive-mcp.knowledge-graph.connection.writer/in-flight)

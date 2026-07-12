@@ -22,14 +22,21 @@
   11. Real tool output verification (result data, not just success flags)
   12. Cross-tool batch with result forwarding
   13. Wave FX emission with real tool execution
-  14. events/multi orchestration pipeline integration
-  15. Config/preset/kanban real command execution (beyond help)"
+  14. Config/preset/kanban real command execution (beyond help)
+
+   NOTE (2026): the `hive-mcp.events.multi` orchestration layer (orchestrate /
+   execute! / chain / fan-out / merge-results / wrap-orchestrator, plus the
+   :multi/ping and :multi/echo demo orchestrators) was DELETED in 2bbd1d7 along
+   with its own unit test (test/hive_mcp/events/multi_test.clj). It has no
+   successor: the similarly-named `hive.events.multi` in the hive-events library
+   is a *different* subsystem (handler dispatch + pure batch-op compilation —
+   normalize-op/validate-ops/assign-waves), consumed by src/hive_mcp/multi/plan.clj.
+   The orchestration tests that lived here are documented as obsolete below."
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [clojure.string :as str]
             [clojure.data.json :as json]
             [hive-mcp.tools.multi :as multi]
-            [hive-mcp.tools.consolidated.multi :as c-multi]
-            [hive-mcp.events.multi :as events-multi]))
+            [hive-mcp.tools.consolidated.multi :as c-multi]))
 
 ;; =============================================================================
 ;; Helpers
@@ -1007,95 +1014,44 @@
       (is (str/includes? (:text result) "Multi tool")))))
 
 ;; =============================================================================
-;; Part 16: events/multi Orchestration Pipeline Integration
+;; Part 16: events/multi Orchestration Pipeline — REMOVED (obsolete)
 ;; =============================================================================
+;;
+;; The `hive-mcp.events.multi` namespace was deleted in 2bbd1d7 together with
+;; its unit test (test/hive_mcp/events/multi_test.clj). The orchestration API it
+;; exposed — the `orchestrate` defmulti, `execute!`, `effects`, `next-event`,
+;; `orchestration-ctx`, `halt?`, `merge-results`, `chain`, `fan-out`,
+;; `fan-out-events`, `wrap-orchestrator`, `registered-orchestrators`,
+;; `orchestrator-registered?` — and its two demo orchestrators (:multi/ping,
+;; :multi/echo) have NO successor anywhere in src/ or on the classpath.
+;;
+;; Do not "repoint" these at `hive.events.multi` (hive-events lib): despite the
+;; matching name it is a different subsystem — multimethod handler dispatch
+;; (handle / register-handler! / dispatch-sync) plus pure batch-op compilation
+;; (normalize-op / validate-ops / expand-batch-macro / assign-waves /
+;; compile-multi-spec). It has no orchestrate/ctx/chain/fan-out semantics, and
+;; it is already covered by its own tests in the hive-events repo and, via
+;; src/hive_mcp/multi/plan.clj, by the batch tests in this file (Parts 1-15).
+;;
+;; The 12 orchestration deftests that lived here (Parts 16, 16b and 34) are kept
+;; as documentation of the removed behaviour, per the precedent in
+;; test/hive_mcp/bug_regression_test.clj.
 
-(deftest events-multi-ping-integration-test
-  (testing "events/multi :multi/ping orchestrator returns health check"
-    (let [result (events-multi/orchestrate [:multi/ping])]
-      (is (map? result))
-      (is (= :info (get-in result [:effects :log :level])))
-      (is (str/includes? (get-in result [:effects :log :message]) "pong")))))
-
-(deftest events-multi-echo-integration-test
-  (testing "events/multi :multi/echo returns data in context"
-    (let [result (events-multi/orchestrate [:multi/echo {:key "value" :num 42}])]
-      (is (= {:key "value" :num 42} (events-multi/orchestration-ctx result))))))
-
-(deftest events-multi-execute-ping-test
-  (testing "events/multi execute! pipeline processes :multi/ping"
-    (let [result (events-multi/execute! [:multi/ping])]
-      (is (map? result))
-      (is (some? (events-multi/effects result))))))
-
-(deftest events-multi-execute-echo-test
-  (testing "events/multi execute! pipeline processes :multi/echo"
-    (let [result (events-multi/execute! [:multi/echo {:tool "multi" :status "ok"}])]
-      (is (map? result))
-      (is (= {:tool "multi" :status "ok"} (events-multi/orchestration-ctx result))))))
-
-(deftest events-multi-unknown-event-returns-nil-test
-  (testing "events/multi unknown event returns nil"
-    (is (nil? (events-multi/orchestrate [:unknown/integration-test-event {}])))
-    (is (nil? (events-multi/execute! [:unknown/integration-test-event {}])))))
-
-(deftest events-multi-registered-orchestrators-test
-  (testing "events/multi has built-in orchestrators registered"
-    (let [registered (events-multi/registered-orchestrators)]
-      (is (contains? registered :multi/ping))
-      (is (contains? registered :multi/echo)))))
-
-(deftest events-multi-orchestrator-registered-check-test
-  (testing "events/multi orchestrator-registered? works for known/unknown"
-    (is (true? (events-multi/orchestrator-registered? :multi/ping)))
-    (is (true? (events-multi/orchestrator-registered? :multi/echo)))
-    (is (false? (events-multi/orchestrator-registered? :nonexistent/test)))))
+(deftest events-multi-orchestration-removed-test
+  (testing "hive-mcp.events.multi orchestration layer removed — tests obsolete"
+    (is true "events/multi orchestration layer removed in 2bbd1d7 — no successor API")))
 
 ;; =============================================================================
-;; Part 16b: events/multi Composition Helpers Integration
+;; Part 17: tools/multi Batch Execution (standalone)
 ;; =============================================================================
 
-(deftest events-multi-merge-results-integration-test
-  (testing "merge-results combines orchestration outputs"
-    (let [r1 (events-multi/orchestrate [:multi/ping])
-          r2 (events-multi/orchestrate [:multi/echo {:data "test"}])
-          merged (events-multi/merge-results r1 r2)]
-      (is (map? merged))
-      ;; Both results' effects should be merged
-      (is (some? (get-in merged [:effects :log])))
-      ;; Echo's ctx should be present
-      (is (= {:data "test"} (events-multi/orchestration-ctx merged))))))
-
-(deftest events-multi-fan-out-integration-test
-  (testing "fan-out creates parallel dispatch events"
-    (let [result (events-multi/fan-out
-                  [[:multi/ping]
-                   [:multi/echo {:msg "a"}]
-                   [:multi/echo {:msg "b"}]])]
-      (is (= 3 (count (events-multi/fan-out-events result)))))))
-
-(deftest events-multi-chain-integration-test
-  (testing "chain creates sequential pipeline"
-    (let [result (events-multi/chain
-                  [:multi/ping]
-                  [:multi/echo {:step 2}])]
-      (is (= [:multi/ping] (events-multi/next-event result))))))
-
-;; =============================================================================
-;; Part 17: Cross-Domain Integration (tools/multi + events/multi)
-;; =============================================================================
-
-(deftest cross-domain-batch-and-orchestrate-test
-  (testing "Batch execution can coexist with orchestration pipeline"
-    ;; Run a batch through tools/multi
+(deftest batch-execution-standalone-test
+  (testing "Batch execution runs a real op through tools/multi"
+    ;; Was `cross-domain-batch-and-orchestrate-test`: the events/multi half of
+    ;; this test is gone (see Part 16). The batch half is real coverage — kept.
     (let [batch-result (multi/run-multi
-                        [{:id "a" :tool "config" :command "help"}])
-          ;; And simultaneously orchestrate an event through events/multi
-          orch-result (events-multi/execute! [:multi/echo {:from "batch-test"}])]
-      ;; Both should work independently
-      (is (:success batch-result))
-      (is (map? orch-result))
-      (is (= {:from "batch-test"} (events-multi/orchestration-ctx orch-result))))))
+                        [{:id "a" :tool "config" :command "help"}])]
+      (is (:success batch-result)))))
 
 ;; =============================================================================
 ;; Part 18: Batch with Large Operation Count
@@ -1630,57 +1586,18 @@
           (multi/register-fx!))))))
 
 ;; =============================================================================
-;; Part 34: events/multi wrap-orchestrator with Custom Orchestrator
+;; Part 34: events/multi wrap-orchestrator — REMOVED (obsolete)
 ;; =============================================================================
+;;
+;; The custom-orchestrator lifecycle and wrap-orchestrator middleware tests that
+;; lived here exercised `hive-mcp.events.multi/orchestrate`, `execute!` and
+;; `wrap-orchestrator`, all deleted in 2bbd1d7 with no successor. See the Part 16
+;; note above for why `hive.events.multi` (hive-events lib) is NOT a valid
+;; repoint target.
 
-(deftest events-multi-custom-orchestrator-lifecycle-test
-  (testing "events/multi: register custom orchestrator → execute → deregister"
-    ;; Register a custom orchestrator
-    (defmethod events-multi/orchestrate :test/custom-integ
-      [[_ data]]
-      {:effects {:test-result {:data data :processed true}}
-       :ctx     (assoc data :orchestrated true)})
-    (try
-      ;; Should be registered
-      (is (true? (events-multi/orchestrator-registered? :test/custom-integ)))
-      ;; Execute through pipeline
-      (let [result (events-multi/execute! [:test/custom-integ {:val 42}])]
-        (is (map? result))
-        (is (= {:val 42 :orchestrated true}
-               (events-multi/orchestration-ctx result)))
-        (is (true? (get-in (events-multi/effects result) [:test-result :processed]))))
-      (finally
-        ;; Cleanup: remove the method
-        (remove-method events-multi/orchestrate :test/custom-integ)
-        (is (false? (events-multi/orchestrator-registered? :test/custom-integ)))))))
-
-(deftest events-multi-wrap-orchestrator-integration-test
-  (testing "events/multi: wrap-orchestrator adds middleware to execution"
-    ;; Register a simple orchestrator
-    (defmethod events-multi/orchestrate :test/wrap-integ
-      [[_ data]]
-      {:effects {:core-result data}
-       :ctx     data})
-    (try
-      ;; Wrap with before/after hooks
-      (let [call-log (atom [])
-            wrapped (events-multi/wrap-orchestrator
-                     :test/wrap-integ
-                     {:before (fn [event]
-                                (swap! call-log conj [:before event])
-                                event)
-                      :after  (fn [result _event]
-                                (swap! call-log conj [:after])
-                                result)})]
-        ;; Execute via the wrapper
-        (let [result (wrapped [:test/wrap-integ {:step "one"}])]
-          (is (map? result))
-          ;; Before and after should have been called
-          (is (= 2 (count @call-log)))
-          (is (= :before (ffirst @call-log)))
-          (is (= :after (first (second @call-log))))))
-      (finally
-        (remove-method events-multi/orchestrate :test/wrap-integ)))))
+(deftest events-multi-wrap-orchestrator-removed-test
+  (testing "events/multi wrap-orchestrator middleware removed — test obsolete"
+    (is true "wrap-orchestrator removed in 2bbd1d7 — no successor API")))
 
 ;; =============================================================================
 ;; Part 35: Stress Tests — Long Chains and Wide Parallel

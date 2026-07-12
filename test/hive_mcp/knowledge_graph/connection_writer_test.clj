@@ -12,10 +12,9 @@
    `hive-mcp.knowledge-graph.connection/flush-pending!`."
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [clojure.string :as string]
-            [clojure.core.async :as async]
             [hive-mcp.knowledge-graph.connection :as conn]
-            [hive-mcp.knowledge-graph.protocol :as proto]
-            [hive-mcp.knowledge-graph.store.datascript :as ds-store])
+            [hive-mcp.knowledge-graph.connection.strategy :as strategy]
+            [hive-mcp.knowledge-graph.store.fixtures :as fixtures])
   (:import [java.util.concurrent CountDownLatch TimeUnit]))
 
 ;; =============================================================================
@@ -25,22 +24,14 @@
 (defn writer-fixture
   "Per-test isolated KG store with auto setup + teardown.
 
-   Installs a fresh in-memory DataScript store as the GLOBAL store
-   (proto/set-store!) — not a thread-local *test-store* — so the writer
-   go-loop and any spawned threads resolve the SAME ephemeral store and can
-   never fall through to a real/live backend. Stops the writer before and
-   after, and restores the prior store (or clears) on teardown."
+   Delegates to the disposable test-store harness: a fresh in-memory DataScript
+   store installed as the GLOBAL store so the writer go-loop and any spawned
+   threads resolve the SAME ephemeral instance (a pool thread cannot see a
+   thread-local *test-store*). The shared coalescing writer is stopped before
+   and after and the prior store restored on teardown. Async (no *sync-writes*)
+   so these tests exercise the real coalescing queue."
   [f]
-  (let [prior (when (proto/store-set?) (proto/get-store))
-        store (ds-store/create-store)]
-    (proto/ensure-conn! store)
-    (proto/set-store! store)
-    (conn/stop-writer!)
-    (try
-      (f)
-      (finally
-        (conn/stop-writer!)
-        (if prior (proto/set-store! prior) (proto/clear-store!))))))
+  (fixtures/global-datascript-fixture f))
 
 (deftest transact-rejects-poison-edge-datom-test
   (testing "transact! rejects a KG edge datom with a non-string node id (writer-survival guard)"
@@ -54,11 +45,11 @@
 
 (deftest assert-edge-node-ids-allows-clean-tx-test
   (testing "guard is a no-op for string-id edges, non-edge datoms, and vector ops"
-    (is (nil? (#'conn/assert-edge-node-ids!
+    (is (nil? (strategy/assert-edge-node-ids!
                [{:kg-edge/from "a" :kg-edge/to "b" :kg-edge/relation :implements}])))
-    (is (nil? (#'conn/assert-edge-node-ids! [{:memory/id "m1" :memory/content "x"}])))
-    (is (nil? (#'conn/assert-edge-node-ids! [[:db/add 1 :kg-edge/confidence 0.5]])))
-    (is (nil? (#'conn/assert-edge-node-ids! nil)))))
+    (is (nil? (strategy/assert-edge-node-ids! [{:memory/id "m1" :memory/content "x"}])))
+    (is (nil? (strategy/assert-edge-node-ids! [[:db/add 1 :kg-edge/confidence 0.5]])))
+    (is (nil? (strategy/assert-edge-node-ids! nil)))))
 
 (use-fixtures :each writer-fixture)
 

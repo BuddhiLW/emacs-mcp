@@ -4,12 +4,7 @@
    Thin wrapper over the pure resolvers in
    `hive-mcp.router.{resolve,escalate}`. Reads the `:embedder` block
    lazily on each call so hot-flips (`apply-route-flip!`) propagate
-   immediately — never captures the resolved snapshot in a closure.
-
-   Wraps a tiny `defrecord` rather than a `reify` so the impl can be
-   passed around as data (e.g. registered in the system map, swapped
-   in tests via `with-redefs`-style binding) without cross-referencing
-   a private fn."
+   immediately — never captures the resolved snapshot in a closure."
   (:require [hive-mcp.embedder.config :as econfig]
             [hive-mcp.router.escalate :as esc]
             [hive-mcp.router.protocol :as proto]
@@ -31,9 +26,8 @@
   (resolve-for-type [_ memory-type]
     (resolve/resolve-spec (read-block block-fn) memory-type))
   (invalidate! [_]
-    ;; The pure resolver re-reads the block on every call, so there is
-    ;; nothing to evict. The flag exists for observability — a flip
-    ;; observer can poll `:invalidated?` to confirm its hook fired.
+    ;; nothing to evict — resolver re-reads the block each call; flag is
+    ;; observability only (a flip observer polls :invalidated?)
     (reset! invalidated? true))
 
   proto/IEscalator

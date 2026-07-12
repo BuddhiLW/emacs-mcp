@@ -270,3 +270,16 @@
               (str name " must return :isError true on error"))
           (is (str/includes? (:text result) "Error:")
               (str name " must include 'Error:' prefix")))))))
+
+(deftest eval-session-threads-timeout-to-emacsclient
+  (testing "handle-cider-eval-session sends the caller's :timeout (sec->ms +2s) to the emacsclient call, not the 5s default"
+    (let [captured (atom nil)]
+      (with-redefs [ec/eval-elisp-with-timeout (fn [_elisp timeout-ms]
+                                                 (reset! captured timeout-ms)
+                                                 {:success true :result "2" :duration-ms 1})]
+        (tools/handle-cider-eval-session {:session_name "s" :code "(+ 1 1)"})
+        (is (= 62000 @captured)
+            "no :timeout -> 60s nREPL default + 2s emacsclient buffer (not the 5000ms default)")
+        (tools/handle-cider-eval-session {:session_name "s" :code "(+ 1 1)" :timeout 120})
+        (is (= 122000 @captured)
+            "caller :timeout 120s -> 122000ms emacsclient budget")))))

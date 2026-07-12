@@ -42,8 +42,10 @@
 ;; HarvestOutcome ADT
 ;; =============================================================================
 
-(defadt HarvestOutcome
-  "Result of harvesting a single source — closed sum type."
+;; Name must stay distinct from crystal.harvest.protocol/HarvestOutcome: defadt's
+;; registry is global and keyed by type name, so a duplicate name silently overwrites.
+(defadt PipelineOutcome
+  "Result of harvesting a single source in the pipeline — closed sum type."
   [:harvest/ok      {:source-id keyword? :data map?}]
   [:harvest/timeout {:source-id keyword? :elapsed-ms number?}]
   [:harvest/error   {:source-id keyword? :message string?}])
@@ -61,11 +63,11 @@
   (let [sid (source-id source)]
     (try
       (let [data (harvest source ctx)]
-        (harvest-outcome :harvest/ok {:source-id sid :data (or data {})}))
+        (pipeline-outcome :harvest/ok {:source-id sid :data (or data {})}))
       (catch Exception e
         (log/warn "harvest-one: source" sid "failed:" (.getMessage e))
-        (harvest-outcome :harvest/error {:source-id sid
-                                         :message   (.getMessage e)})))))
+        (pipeline-outcome :harvest/error {:source-id sid
+                                          :message   (.getMessage e)})))))
 
 (defn harvest-all
   "Run all harvest sources in parallel via futures, returning vec of HarvestOutcomes.
@@ -86,9 +88,9 @@
                             (if (= result ::timeout)
                               (do (future-cancel (:future tf))
                                   (log/warn "harvest-all: source" sid "timed out after" timeout-ms "ms")
-                                  (harvest-outcome :harvest/timeout
-                                                   {:source-id  sid
-                                                    :elapsed-ms (double timeout-ms)}))
+                                  (pipeline-outcome :harvest/timeout
+                                                    {:source-id  sid
+                                                     :elapsed-ms (double timeout-ms)}))
                               result)))
                         tagged-futures)]
      (log/info "harvest-all:" (count outcomes) "sources collected"

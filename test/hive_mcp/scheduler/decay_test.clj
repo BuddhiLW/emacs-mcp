@@ -58,6 +58,32 @@
       (is (true? (get-in result [:disc-stats :skipped]))
           "disc-stats should show skipped"))))
 
+(deftest test-run-decay-cycle-includes-grounding-pass
+  (testing "decay cycle runs a bounded grounding pass and reports it"
+    (let [result (decay/run-decay-cycle! {:memory-limit 1
+                                          :edge-limit 1
+                                          :disc-enabled false
+                                          :grounding-enabled true
+                                          :grounding-limit 1})]
+      (is (contains? result :grounding-stats) "cycle must report a grounding pass")
+      (is (map? (:grounding-stats result))))))
+
+(deftest test-run-decay-cycle-grounding-disabled
+  (testing "grounding pass skipped when :grounding-enabled false"
+    (let [result (decay/run-decay-cycle! {:memory-limit 1
+                                          :edge-limit 1
+                                          :disc-enabled false
+                                          :grounding-enabled false})]
+      (is (true? (get-in result [:grounding-stats :skipped]))
+          "grounding-stats should show skipped"))))
+
+(deftest test-scheduler-config-exposes-grounding-knobs
+  (testing "status :config carries the grounding knobs with code-side defaults"
+    (let [cfg (:config (decay/status))]
+      (is (contains? cfg :grounding-enabled))
+      (is (contains? cfg :grounding-limit))
+      (is (integer? (:grounding-limit cfg))))))
+
 (deftest test-run-decay-cycle-error-isolation
   (testing "individual decay failures don't crash the full cycle"
     ;; Even if the underlying fns fail (e.g., Chroma not running),

@@ -225,6 +225,7 @@
 
               axioms               (:axioms bundle [])
               principles           (:principles bundle [])
+              priority-principles  (:priority-principles bundle [])
               priority-conventions (:priority-conventions bundle [])
               sessions             (:sessions bundle [])
               recent-wraps-raw     (:recent-wraps bundle [])
@@ -236,9 +237,10 @@
               ;; Convert to metadata (pure, fast)
               axioms-meta (mapv fmt/entry->axiom-meta axioms)
               principles-meta (mapv #(fmt/entry->catchup-meta % 80) principles)
+              priority-principles-meta (mapv #(fmt/entry->catchup-meta % 80) priority-principles)
               priority-meta (mapv fmt/entry->priority-meta priority-conventions)
               sessions-meta (mapv #(fmt/entry->catchup-meta % 80) sessions)
-              recent-wraps (mapv #(select-keys % [:id :created :tags :content]) recent-wraps-raw)
+              recent-wraps (mapv fmt/entry->wrap-preview recent-wraps-raw)
               decisions-base (mapv #(fmt/entry->catchup-meta % 80) decisions)
               conventions-base (mapv #(fmt/entry->catchup-meta % 80) conventions)
               snippets-meta (mapv #(fmt/entry->catchup-meta % 60) snippets)
@@ -257,6 +259,7 @@
                               :sessions-raw sessions
                               :axioms axioms
                               :principles principles
+                              :priority-principles priority-principles
                               :priority-conventions priority-conventions}))
 
               ;; Memory piggyback: enqueue axioms + priority conventions for
@@ -316,7 +319,7 @@
               relevant-axioms
               (cond-> (relevance/filter-by-relevance (vec axioms) relevance-ctx)
                 lens-fn (lens-fn relevance-ctx))
-              piggyback-raw (into (into (vec relevant-axioms) principles) priority-conventions)
+              piggyback-raw (into (into (vec relevant-axioms) priority-principles) priority-conventions)
               piggyback-entries
               (let [in-project? (and project-id (not= project-id "global"))]
                 (if-not in-project?
@@ -357,6 +360,9 @@
                                    :principles            {:data principles
                                                            :tags #{"catchup" "principles" scope-tag}
                                                            :ttl-ms catchup-ttl}
+                                   :priority-principles   {:data priority-principles
+                                                           :tags #{"catchup" "priority-principles" scope-tag}
+                                                           :ttl-ms catchup-ttl}
                                    :priority-conventions  {:data priority-conventions
                                                            :tags #{"catchup" "priority-conventions" scope-tag}
                                                            :ttl-ms catchup-ttl}
@@ -371,6 +377,9 @@
                                                            :ttl-ms catchup-ttl}
                                    :snippets              {:data snippets
                                                            :tags #{"catchup" "snippets" scope-tag}
+                                                           :ttl-ms catchup-ttl}
+                                   :recent-wraps          {:data recent-wraps-raw
+                                                           :tags #{"catchup" "recent-wraps" scope-tag}
                                                            :ttl-ms catchup-ttl}})]
                         (when (seq refs)
                           (log/info "catchup: stored" (count refs) "categories in context-store"
@@ -378,12 +387,15 @@
                         refs))
 
               _ (when (seq piggyback-entries)
-                  (memory-piggyback/enqueue! raw-caller-id piggyback-entries context-refs))]
+                  (memory-piggyback/enqueue! raw-caller-id
+                                             (mapv fmt/cap-piggyback-entry piggyback-entries)
+                                             context-refs))]
 
           (fmt/build-catchup-response
            {:project-name project-name :project-id project-id
             :scopes scopes :git-info git-info
             :axioms-meta axioms-meta :principles-meta principles-meta
+            :priority-principles-meta priority-principles-meta
             :priority-meta priority-meta
             :sessions-meta sessions-meta :decisions-meta decisions-base
             :conventions-meta conventions-base :snippets-meta snippets-meta

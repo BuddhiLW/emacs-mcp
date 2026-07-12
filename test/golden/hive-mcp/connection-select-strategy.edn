@@ -1,0 +1,4 @@
+{:batch "BatchAccumulator",
+ :batch-precedence "BatchAccumulator",
+ :coalesce "CoalescingWriter",
+ :sync "SyncWriter"}

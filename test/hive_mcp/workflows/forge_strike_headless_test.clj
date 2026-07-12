@@ -31,8 +31,20 @@
             [hive-mcp.swarm.datascript.schema :as schema]
             [hive-mcp.agent.headless :as headless]
             [hive-mcp.agent.context-envelope :as envelope]
+            ;; Required for the fully-qualified `hive-mcp.agent.protocol/kill!`
+            ;; with-redefs targets below (previously only loaded transitively).
+            [hive-mcp.agent.protocol]
             [hive-mcp.tools.memory.scope :as scope]
-            [hive-mcp.tools.consolidated.workflow.forge-cycle :as forge-cycle]))
+            [hive-mcp.tools.consolidated.workflow.forge-cycle :as forge-cycle]
+            ;; Since the workflow.clj decomposition (commit bb40986), `spark!` and
+            ;; `ling-cli-ready?` no longer live in hive-mcp.tools.consolidated.workflow:
+            ;;   spark!           -> hive-mcp.tools.consolidated.workflow.spawn
+            ;;   ling-cli-ready?  -> hive-mcp.tools.consolidated.workflow.readiness
+            ;; workflow.spawn/spark! still funnels readiness checks through
+            ;; readiness/wait-for-ling-ready -> readiness/ling-cli-ready?, so the
+            ;; with-redefs mocks below intercept exactly the same call site as before.
+            [hive-mcp.tools.consolidated.workflow.spawn :as w-spawn]
+            [hive-mcp.tools.consolidated.workflow.readiness :as readiness]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -260,7 +272,7 @@
                                               :success true})})
 
                     ;; Mock ling readiness — always ready immediately
-                    workflow/ling-cli-ready? (constantly true)
+                    readiness/ling-cli-ready? (constantly true)
 
                     ;; Mock agent dispatch
                     dispatch/handle-dispatch
@@ -365,7 +377,7 @@
                                             :spawn-mode "headless"
                                             :success true})})
 
-                  workflow/ling-cli-ready? (constantly true)
+                  readiness/ling-cli-ready? (constantly true)
 
                   dispatch/handle-dispatch
                   (fn [_] {:text (json/write-str {:success true})})
@@ -420,7 +432,7 @@
                                                   :spawn-mode "headless"
                                                   :success true})})
 
-                  workflow/ling-cli-ready? (constantly true)
+                  readiness/ling-cli-ready? (constantly true)
 
                   dispatch/handle-dispatch
                   (fn [_] {:text (json/write-str {:success true})})
@@ -456,7 +468,7 @@
                                                   :spawn-mode "headless"
                                                   :success true})})
 
-                  workflow/ling-cli-ready? (constantly true)
+                  readiness/ling-cli-ready? (constantly true)
 
                   dispatch/handle-dispatch
                   (fn [_] {:text (json/write-str {:success true})})]
@@ -543,7 +555,7 @@
                       {:text (json/write-str {:agent-id (str "forja-slot-" @spawn-calls)
                                               :spawn-mode "headless"
                                               :success true})})
-                    workflow/ling-cli-ready? (constantly true)
+                    readiness/ling-cli-ready? (constantly true)
                     dispatch/handle-dispatch (fn [_] {:text (json/write-str {:success true})})]
 
         (let [result (parse-mcp-result
@@ -571,7 +583,7 @@
                       nil))
                   spawn/handle-spawn
                   (fn [_] (throw (ex-info "Headless spawn failed: no claude binary" {})))
-                  workflow/ling-cli-ready? (constantly true)
+                  readiness/ling-cli-ready? (constantly true)
                   dispatch/handle-dispatch (fn [_] nil)]
 
       (let [result (parse-mcp-result
@@ -605,7 +617,7 @@
                           {:text (json/write-str {:agent-id "forja-mixed-1"
                                                   :spawn-mode "headless"
                                                   :success true})})))
-                    workflow/ling-cli-ready? (constantly true)
+                    readiness/ling-cli-ready? (constantly true)
                     dispatch/handle-dispatch (fn [_] {:text (json/write-str {:success true})})]
         (let [result (parse-mcp-result
                       (workflow/handle-forge-strike-imperative
@@ -639,7 +651,7 @@
                   (fn [_] {:text (json/write-str {:agent-id "forja-acc"
                                                   :spawn-mode "headless"
                                                   :success true})})
-                  workflow/ling-cli-ready? (constantly true)
+                  readiness/ling-cli-ready? (constantly true)
                   dispatch/handle-dispatch (fn [_] {:text (json/write-str {:success true})})]
 
       ;; Run two headless strikes via imperative path (avoids DS readiness poll)
@@ -670,7 +682,7 @@
   (testing "spark! with real headless subprocess using echo command"
     (let [;; We need to bypass the spawn/handle-spawn and directly test spark!
           ;; at the workflow level with real headless processes
-          spark! @#'workflow/spark!]
+          spark! w-spawn/spark!]
 
       ;; Test spark! directly with echo command
       ;; This tests that the spawn-mode propagation works end-to-end
@@ -684,7 +696,7 @@
                       {:text (json/write-str {:agent-id (str "echo-" (System/currentTimeMillis))
                                               :spawn-mode "headless"
                                               :success true})})
-                    workflow/ling-cli-ready? (constantly true)
+                    readiness/ling-cli-ready? (constantly true)
                     dispatch/handle-dispatch
                     (fn [params]
                       (is (str/includes? (:prompt params) "Echo test task")
@@ -722,7 +734,7 @@
                   (fn [_] {:text (json/write-str {:agent-id "forja-sum"
                                                   :spawn-mode "headless"
                                                   :success true})})
-                  workflow/ling-cli-ready? (constantly true)
+                  readiness/ling-cli-ready? (constantly true)
                   dispatch/handle-dispatch (fn [_] {:text (json/write-str {:success true})})]
 
       (let [result (parse-mcp-result

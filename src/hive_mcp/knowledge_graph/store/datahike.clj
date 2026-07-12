@@ -2,12 +2,14 @@
   "Datahike implementation of IKGStore protocol."
   (:require [datahike.api :as d]
             [datahike.norm.norm :as norm]
+            [datahike.query :as dq]
             [hive-mcp.knowledge-graph.store.datahike-config :as dhc]
             [hive-mcp.protocols.kg :as kg]
             [hive-mcp.dns.result :refer [rescue]]
             [hive-dsl.result :as r]
             [hive-weave.retry :as retry]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -156,9 +158,60 @@
         (norm/ensure-norms! conn resource)))
     conn))
 
+(defn- apply-query-cache-policy!
+  "Constrain datahike's global query-result cache at store init. Env
+   DATAHIKE_QUERY_CACHE: a positive integer caps retained snapshot buckets; any
+   of off/false/none/no/0 (also the default when unset) disables the cache."
+  []
+  (let [setting (some-> (System/getenv "DATAHIKE_QUERY_CACHE") str/trim str/lower-case)
+        size    (some-> setting parse-long)]
+    (if (and size (pos? size))
+      (do (dq/set-query-cache-size! size)
+          (log/info "Datahike query-result cache bounded" {:snapshots size}))
+      (do (alter-var-root #'dq/*query-result-cache?* (constantly false))
+          (dq/clear-query-cache!)
+          (log/info "Datahike query-result cache disabled" {:env (or setting "unset")})))))
+
+(defn- apply-index-ref-type-policy!
+  "Constrain the reference strength of datahike's in-memory persistent-sorted-set
+   index nodes at store init. Env DATAHIKE_INDEX_REF_TYPE in {strong,soft,weak}:
+     - weak   -> nodes released at the next GC (lazy re-read from konserve);
+                 lowest heap residency, highest re-fetch I/O.
+     - soft   -> nodes released only under heap pressure (datahike's own default).
+     - strong -> nodes pinned (never released).
+   Unset/unrecognized => no-op, leaving datahike's default (SOFT). This overrides
+   datahike.index.persistent-set/map->settings, which hardcodes a nil RefType
+   (== SOFT) despite its 'weak ref default' comment. Takes effect on the NEXT
+   store open (already-open indexes keep their original Settings)."
+  []
+  (when-let [choice (some-> (System/getenv "DATAHIKE_INDEX_REF_TYPE")
+                            str/trim str/lower-case not-empty)]
+    (if (#{"strong" "soft" "weak"} choice)
+      (try
+        (require 'datahike.index.persistent-set)
+        (let [rt-class (Class/forName "org.replikativ.persistent_sorted_set.RefType")
+              settings (Class/forName "org.replikativ.persistent_sorted_set.Settings")
+              ctor     (.getConstructor settings (into-array Class [Integer/TYPE rt-class]))
+              reftype  (some #(when (= choice (str/lower-case (str %))) %)
+                             (.getEnumConstants rt-class))
+              v        (resolve 'datahike.index.persistent-set/map->settings)]
+          (alter-var-root v
+                          (constantly
+                           (fn [m]
+                             (.newInstance ctor (object-array
+                                                 [(int (or (:branching-factor m) 0)) reftype])))))
+          (log/info "Datahike index ref-type override applied" {:ref-type choice}))
+        (catch Throwable e
+          (log/warn "Datahike index ref-type override failed; leaving default"
+                    {:choice choice :error (.getMessage e)})))
+      (log/warn "Unrecognized DATAHIKE_INDEX_REF_TYPE; leaving default (soft)"
+                {:value choice}))))
+
 (defn- init-conn-result
   [cfg]
   (log/info "Initializing Datahike KG store" {:cfg cfg})
+  (apply-query-cache-policy!)
+  (apply-index-ref-type-policy!)
   (r/let-ok [cfg  (ensure-database-result cfg)
              conn (connect-result cfg)
              conn (ensure-core-norms-result conn)

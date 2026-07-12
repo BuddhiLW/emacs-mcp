@@ -16,7 +16,9 @@
    CLARITY: Layers stay pure (DataScript = infrastructure, hivemind = coordination)"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.data.json :as json]
+            [hive-dsl.bounded-atom :refer [bclear!]]
             [hive-mcp.hivemind.core :as hivemind]
+            [hive-mcp.hivemind.state :as hm-state]
             [hive-mcp.swarm.datascript :as ds]
             [hive-test.isolation :as iso]
             [hive-mcp.isolation-methods]))
@@ -26,16 +28,15 @@
 ;;; =============================================================================
 
 (defn- hivemind-atoms-fixture
-  "Reset hivemind agent-registry and message-history atoms before/after."
+  "Clear the hivemind agent-registry before and after each test.
+   agent-registry is a bounded-atom (LRU/TTL), so it is cleared with bclear!,
+   not reset!. state/clear-agent-registry! is deliberately NOT used here: it is
+   guarded and no-ops while a coordinator is running, which would silently leave
+   state behind between tests."
   [f]
-  (let [reset-atoms!
-        (fn []
-          (when-let [agent-reg (resolve 'hive-mcp.hivemind.core/agent-registry)]
-            (reset! @agent-reg {}))
-          (when-let [msg-history (resolve 'hive-mcp.hivemind.core/message-history)]
-            (reset! @msg-history {})))]
-    (reset-atoms!)
-    (try (f) (finally (reset-atoms!)))))
+  (let [clear! #(bclear! hm-state/agent-registry)]
+    (clear!)
+    (try (f) (finally (clear!)))))
 
 (use-fixtures :each
   (iso/with-isolations :swarm-ds)

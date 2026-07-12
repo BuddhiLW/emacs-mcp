@@ -198,16 +198,25 @@
         (is (str/includes? metrics "tool=\"timing-test\"")
             "timing-test tool label recorded")))))
 
-(deftest test-with-chroma-timing-macro
-  (testing "with-chroma-timing records duration and returns result"
-    (let [result (prom/with-chroma-timing :search
+;; Renamed upstream: prom/with-chroma-timing -> prom/with-store-timing
+;; (commit 2bbd1d7). Same arity [operation & body], same underlying
+;; observe-chroma-query! / hive_mcp_chroma_query_seconds histogram.
+(deftest test-with-store-timing-macro
+  (testing "with-store-timing records duration and returns result"
+    (let [result (prom/with-store-timing :add
                    (Thread/sleep 5) ; Sleep for 5ms
                    [{:id "doc1"} {:id "doc2"}])]
       ;; Verify result is returned
       (is (= [{:id "doc1"} {:id "doc2"}] result) "Macro returns body result")
 
-      ;; Verify metric was recorded (operation=search already tested above)
-      )))
+      ;; Verify metric was recorded. Uses :add (not :search, which
+      ;; test-chroma-query-histogram already records) so the label below can
+      ;; only have been emitted by the macro under test.
+      (let [metrics (prom/metrics-response)]
+        (is (str/includes? metrics "hive_mcp_chroma_query_seconds")
+            "chroma-query-seconds histogram present")
+        (is (str/includes? metrics "operation=\"add\"")
+            "add operation label recorded by with-store-timing")))))
 
 ;;; =============================================================================
 ;;; Export Format Tests

@@ -29,6 +29,10 @@
   "Get full content of a memory entry by ID with KG edges."
   retrieve/handle-get-full)
 
+(def handle-get-metadata
+  "Get a single memory entry by ID, projected to the metadata shape."
+  retrieve/handle-get-metadata)
+
 (def handle-batch-get
   "Get multiple memory entries by IDs in a single call."
   retrieve/handle-batch-get)
