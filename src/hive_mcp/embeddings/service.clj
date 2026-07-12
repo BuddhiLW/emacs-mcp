@@ -42,7 +42,10 @@
             [hive-mcp.config.core :as global-config]
             [hive-mcp.dns.result :refer [rescue]]
             [taoensso.timbre :as log]
-            [hive-mcp.embeddings.routing :as routing]))
+            [hive-mcp.embeddings.routing :as routing]
+            [clojure.string :as str]))
+
+(declare provider-for-collection dimension-for-collection)
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -111,24 +114,25 @@
              [k (config/describe v)])))
 
 (defn- resolve-provider-for
-  "Resolve embedding provider for a collection.
-
-   Fallback chain:
-   1. Collection-specific config
-   2. Global fallback (chroma/get-embedding-provider)
-   3. nil (no provider available)"
+  "Provider for `collection-name`, in order:
+   1. explicit per-collection config
+   2. the configured provider whose dimension matches the collection's own
+   3. the global fallback — but NEVER for a memory collection, whose dimension
+      is knowable from its name. A vector of the wrong dimension is not a
+      degraded answer, it is a wrong one.
+   4. nil"
   [collection-name]
   (if-let [config (get @collection-configs collection-name)]
-    ;; Collection has explicit config
     (do
       (log/debug "Using collection-specific provider for" collection-name
                  ":" (config/describe config))
       (registry/get-provider config))
-    ;; Fall back to global provider
-    (let [global (chroma/get-embedding-provider)]
-      (when global
-        (log/debug "Using global fallback provider for" collection-name))
-      global)))
+    (or (provider-for-collection collection-name)
+        (when-not (dimension-for-collection collection-name)
+          (let [global (chroma/get-embedding-provider)]
+            (when global
+              (log/debug "Using global fallback provider for" collection-name))
+            global)))))
 
 (defn get-provider-for
   "Get embedding provider for a collection.
@@ -218,6 +222,10 @@
 
 (def ^:private base-collection-name "hive-mcp-memory")
 
+(def ^:private legacy-dimension
+  "The dimension whose collection carries the unsuffixed name."
+  768)
+
 (defn- embedder-config
   "Read :embedder block from global config, with merge.clj defaults."
   []
@@ -270,6 +278,17 @@
     base-collection-name
     (str base-collection-name "-" dimension "d")))
 
+(defn- dimension-for-collection
+  "The dimension of the vectors `collection-name` holds, read back from its
+   name. Accepts the Chroma (`-2560d`) and Milvus (`_2560d`) spellings. Nil
+   when the name is not a memory collection."
+  [collection-name]
+  (let [n (str/replace (str collection-name) "_" "-")]
+    (when (str/starts-with? n base-collection-name)
+      (if-let [[_ d] (re-find #"-(\d+)d$" n)]
+        (parse-long d)
+        legacy-dimension))))
+
 (defn- build-resolved
   "Resolved-provider map for an explicit provider-key (or the global provider
    fallback when the key has no configured spec). Shared by the type resolver
@@ -307,6 +326,32 @@
          :max-tokens      2048
          :collection-name base-collection-name
          :provider-key    :fallback}))))
+
+(defn provider-key-for-collection
+  "Key of the configured provider whose dimension matches `collection-name`'s
+   own. Pure config lookup — builds nothing, so it is safe to call before the
+   provider registry is initialized. Nil when the name is not a memory
+   collection or no configured provider carries its dimension."
+  [collection-name]
+  (when-let [dim (dimension-for-collection collection-name)]
+    (some (fn [[k spec]] (when (= dim (:dimension spec)) k))
+          (:providers (embedder-config)))))
+
+(defn collection-backed?
+  "True when a configured provider can embed into `collection-name`'s space.
+   Config-only, so boot-time callers (store preload) may ask before the
+   registry exists."
+  [collection-name]
+  (some? (provider-key-for-collection collection-name)))
+
+(defn provider-for-collection
+  "The configured provider that embeds into `collection-name`'s own vector
+   space, matched by dimension. Nil when nothing backs that dimension —
+   embedding a query with a provider of another dimension yields a vector the
+   collection cannot be searched with."
+  [collection-name]
+  (when-let [k (provider-key-for-collection collection-name)]
+    (:provider (build-resolved (embedder-config) k))))
 
 (defn- provider-available?
   "A provider spec is usable only if its required secret is present; local
@@ -411,15 +456,14 @@
                        :fix         "Use a memory type routed to openrouter-qwen3 (decision, plan, etc.)"})))))
 
 (defn all-collection-names
-  "Every collection a configured provider could have written to, plus the
-   legacy base. Derived from the configured providers' dimensions — a new
-   dimension becomes searchable by configuring it, never by editing a list."
+  "Every collection a configured provider could have written to. Derived from
+   the configured providers' dimensions — a dimension becomes searchable by
+   configuring its provider, and stops being searched when it is unconfigured."
   []
   (->> (:providers (embedder-config))
        vals
        (keep :dimension)
        (map collection-name-for-dimension)
-       (cons base-collection-name)
        distinct
        vec))
 
