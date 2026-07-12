@@ -363,7 +363,13 @@
                 ;; Generative testing for spec validation
                 org.clojure/test.check {:mvn/version "1.1.1"}
                 ;; Trifecta macro: golden + property + mutation facets
-                io.github.hive-agi/hive-test {:git/tag "v0.3.0" :git/sha "763e4bc"}}
+                io.github.hive-agi/hive-test {:git/tag "v0.3.0" :git/sha "763e4bc"}
+                ;; hive-schemas.test — a malli schema drives hive-test property +
+                ;; mutation facets with no hand-written generator, oracle, or
+                ;; mutant. Must come from the JAR, not :local/root — the macros
+                ;; live in src/synth, which ships but is not on the project's
+                ;; :paths.
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.1"}}
                 ;; hive-spi now lives in :deps (core nses require it) — no
                 ;; :test-alias override needed.
    ;; KG test isolation: force ephemeral in-memory DataScript so a cold test
