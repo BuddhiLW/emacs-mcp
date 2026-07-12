@@ -45,6 +45,14 @@
         handler (requiring-resolve 'hive-mcp.tools.memory.crud.retrieve/handle-get-full)]
     {:mcp-response (handler params)}))
 
+(defn handle-memory-get-metadata
+  "Handler for :memory/get-metadata events.
+   Delegates to hive-mcp.tools.memory.crud.retrieve/handle-get-metadata."
+  [_coeffects event]
+  (let [params (second event)
+        handler (requiring-resolve 'hive-mcp.tools.memory.crud.retrieve/handle-get-metadata)]
+    {:mcp-response (handler params)}))
+
 ;; =============================================================================
 ;; Registration
 ;; =============================================================================
@@ -55,4 +63,5 @@
   []
   (ev/reg-event :memory/query  [ev/metrics] handle-memory-query)
   (ev/reg-event :memory/search [ev/metrics] handle-memory-search)
-  (ev/reg-event :memory/get    [ev/metrics] handle-memory-get))
+  (ev/reg-event :memory/get    [ev/metrics] handle-memory-get)
+  (ev/reg-event :memory/get-metadata [ev/metrics] handle-memory-get-metadata))

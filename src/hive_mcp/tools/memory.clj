@@ -38,6 +38,7 @@
 (def handle-mcp-memory-query crud/handle-query)
 (def handle-mcp-memory-query-metadata crud/handle-query-metadata)
 (def handle-mcp-memory-get-full crud/handle-get-full)
+(def handle-mcp-memory-get-metadata crud/handle-get-metadata)
 (def handle-mcp-memory-batch-get crud/handle-batch-get)
 (def handle-mcp-memory-check-duplicate crud/handle-check-duplicate)
 (def handle-mcp-memory-update-tags crud/handle-update-tags)

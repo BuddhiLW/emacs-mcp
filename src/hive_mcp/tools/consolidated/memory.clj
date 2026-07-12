@@ -24,13 +24,21 @@
     (case event-id
       :memory/query  (mem/handle-mcp-memory-query params)
       :memory/search (mem/handle-mcp-memory-search-semantic params)
-      :memory/get    (mem/handle-mcp-memory-get-full params))))
+      :memory/get    (mem/handle-mcp-memory-get-full params)
+      :memory/get-metadata (mem/handle-mcp-memory-get-metadata params))))
 
 (def handlers
   {:add         mem/handle-mcp-memory-add
    :query       (fn [params] (dispatch-memory-read :memory/query params))
-   :metadata    (fn [params] (dispatch-memory-read :memory/query
-                                                   (assoc params :verbosity "metadata")))
+   ;; `metadata` is an alias onto the QUERY path, which cannot consume an :id
+   ;; (handle-query's destructuring drops it) — so an id-bearing call must be
+   ;; routed to the by-id RETRIEVAL path instead, or it degrades into an
+   ;; unfiltered in-scope scan that answers with unrelated entries.
+   :metadata    (fn [{:keys [id] :as params}]
+                  (if (some? id)
+                    (dispatch-memory-read :memory/get-metadata params)
+                    (dispatch-memory-read :memory/query
+                                          (assoc params :verbosity "metadata"))))
    :get         (fn [params] (dispatch-memory-read :memory/get params))
    :search      (fn [params] (dispatch-memory-read :memory/search params))
    :duration    mem/handle-mcp-memory-set-duration
@@ -150,7 +158,7 @@
                                            :enum ["full" "metadata"]
                                            :description "[query] Output detail: 'metadata' (default) or 'full'"}
                               "id" {:type "string"
-                                    :description "[get/promote/demote/feedback/tags/reembed] Memory entry ID"}
+                                    :description "[get/metadata/promote/demote/feedback/tags/reembed] Memory entry ID. On 'metadata' it is a by-id lookup: returns that one entry in metadata shape, or an error if it does not exist."}
                               "ids" {:type "array"
                                      :items {:type "string"}
                                      :description "[batch-get/batch-reembed] Array of memory entry IDs"}
@@ -172,8 +180,12 @@
                               "from" {:type "string" :description "[kg edge] Source node ID"}
                               "to" {:type "string" :description "[kg edge] Target node ID"}
                               "relation" {:type "string"
-                                          :enum ["implements" "supersedes" "refines" "contradicts" "depends-on" "derived-from" "applies-to" "projects-to" "co-accessed"]
-                                          :description "[kg edge] Relation type (server validates against kg-schema/relation-types; addons may register more)"}
+                                          :enum ["implements" "supersedes" "refines" "contradicts" "depends-on" "derived-from" "applies-to" "relates"]
+                                          :description (str "[kg edge] Relation type. `relates` is the OPEN relation: pair it with `predicate` "
+                                                            "to express arbitrary semantics instead of forcing a structural type. "
+                                                            "Relations advertised beyond the core set (e.g. co-accessed, projects-to, contains) are "
+                                                            "system-generated — do not hand-author them. "
+                                                            "Server validates against kg-schema/relation-types; addons may register more.")}
                               "node_id" {:type "string" :description "[kg] Node ID for analysis"}
                               "start_node" {:type "string" :description "[kg traverse] Start node"}
                               "confidence" {:type "number" :description "[kg edge] Confidence 0.0-1.0"}
@@ -194,5 +206,34 @@
                               "tag-filter" {:type "string" :description "[migrate-scoped] Tag filter"}}
                  :required ["command"]}
    :handler handle-memory})
+
+(defn tool-defs
+  "Advertisement-time tool-defs for the memory supertool.
+
+   A FN, not a def: the `relation` enum is registry-backed
+   (hive-mcp.knowledge-graph.schema/relation-types) and addons register their
+   relation types during initialize!, AFTER this namespace loads. A static enum
+   freezes at ns-load and drifts from the set the store actually accepts — that
+   is how the core `:relates` relation became a dead capability (advertised
+   nowhere, therefore never chosen). Resolving here (registry/get-base-tools
+   runs per tools/list, post-init) keeps the advertised enum a faithful mirror.
+
+   Also advertises `predicate`, the free-text lane of the OPEN `:relates`
+   relation. Falls back to the static `tool-def` (core enum) if the KG schema
+   ns is unresolvable (KG addon absent).
+
+   requiring-resolve, not a static :require — memory.clj lazily resolves the KG
+   namespace by design (DIP; see canonical-handlers)."
+  []
+  (try
+    (let [relation-names (mapv name ((requiring-resolve 'hive-mcp.knowledge-graph.schema/relation-types)))]
+      [(-> tool-def
+           (assoc-in [:inputSchema :properties "relation" :enum] relation-names)
+           (assoc-in [:inputSchema :properties "predicate"]
+                     {:type "string"
+                      :description (str "[kg edge] Free-text semantic predicate for an OPEN `relates` edge "
+                                        "(e.g. \"causes\", \"part-of\", \"motivates\"). Use with relation=\"relates\"; "
+                                        "normalized to kebab-case; ignored for structural relations.")}))])
+    (catch Exception _ [tool-def])))
 
 (def tools [tool-def])

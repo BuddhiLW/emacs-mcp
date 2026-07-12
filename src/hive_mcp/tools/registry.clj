@@ -116,7 +116,9 @@
   []
   (let [domain-roots (vec (concat c-code/tools
                                   c-swarm/tools
-                                  c-memory/tools
+                                  ;; fn, not a static vec: the memory tool's `relation` enum is
+                                  ;; registry-backed and must resolve at advertisement time.
+                                  (c-memory/tool-defs)
                                   c-project/tools
                                   c-fs/tools
                                   c-git/tools
