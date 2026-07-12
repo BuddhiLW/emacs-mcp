@@ -4,7 +4,8 @@
    Defines the schema for knowledge edges that connect memory entries,
    enabling graph traversal, impact analysis, and knowledge promotion."
   (:require [hive-mcp.memory.type-registry :as type-registry]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [malli.core :as m]))
 
 ;; =============================================================================
 ;; Relation Type Registry (OCP — extensions inject their own relation types)
@@ -159,11 +160,25 @@
   [source-type]
   (contains? source-types source-type))
 
+(def NodeId
+  "The canonical KG node id: a non-blank string that is not an unsubstituted
+   placeholder.
+
+   A leading `$` means a batch/DSL reference ($0, $ref:$0.id, $mem) reached the
+   write path unresolved. Persisting one mints a phantom node that accumulates
+   edges and skews every structural algorithm that reads degree — PPR/recall,
+   PageRank/impact, community, bridges, link-predict — so it is not a node id."
+  [:and
+   :string
+   [:re #"\S"]
+   [:not [:re #"^\$"]]])
+
 (defn valid-node-id?
-  "Check if a value is usable as a KG node id: a non-blank string."
+  "Check if a value is usable as a KG node id — see NodeId."
   [node-id]
-  (and (string? node-id)
-       (boolean (re-find #"\S" node-id))))
+  (m/validate NodeId node-id))
+
+(m/=> valid-node-id? [:=> [:cat :any] :boolean])
 
 (defn valid-abstraction-level?
   "Check if abstraction level is valid (1-4).
