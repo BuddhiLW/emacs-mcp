@@ -324,10 +324,7 @@
               (let [in-project? (and project-id (not= project-id "global"))]
                 (if-not in-project?
                   piggyback-raw
-                  (let [scope-tags (sf/compute-full-scope-tags project-id)
-                        visible-ids (set (conj (or (rescue [] (kg-scope/visible-scopes project-id))
-                                                   [project-id])
-                                               "global"))]
+                  (let [scope-tags (sf/compute-full-scope-tags project-id)]
                     (filterv (fn [entry]
                                (let [tags (set (or (:tags entry) []))
                                      entry-type (str (or (:type entry) ""))]
@@ -340,8 +337,7 @@
                                   ;; No scope tag = global, passes through
                                   (not-any? #(.startsWith ^String % "scope:project:") tags)
                                   ;; Scope-matching entries pass through
-                                  (some tags scope-tags)
-                                  (contains? visible-ids (:project-id entry)))))
+                                  (some tags scope-tags))))
                              piggyback-raw))))
 
               ;; Dual-write: Cache entry categories in context-store for pass-by-ref mode.
