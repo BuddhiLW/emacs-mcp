@@ -363,7 +363,7 @@
                 ;; Generative testing for spec validation
                 org.clojure/test.check {:mvn/version "1.1.1"}
                 ;; Trifecta macro: golden + property + mutation facets
-                io.github.hive-agi/hive-test {:git/tag "v0.3.0" :git/sha "763e4bc"}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.1"}
                 ;; hive-schemas.test — a malli schema drives hive-test property +
                 ;; mutation facets with no hand-written generator, oracle, or
                 ;; mutant. Must come from the JAR, not :local/root — the macros
@@ -387,7 +387,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}
-                io.github.hive-agi/hive-test {:git/tag "v0.3.0" :git/sha "763e4bc"}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.1"}
                 ;; Must match :test. The runner LOADS every test namespace before
                 ;; it filters by selector, so a test ns requiring hive-schemas.test
                 ;; aborts this whole alias — all 405 namespaces — if the dep is
@@ -405,8 +405,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}
-                io.github.hive-agi/hive-test
-                {:git/tag "v0.3.0" :git/sha "763e4bc"}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.1"}
                 ;; Same reason as :test-unit — this alias also puts test/ on the
                 ;; path, so it loads every test ns before selecting :integration.
                 io.github.hive-agi/hive-schemas {:mvn/version "0.1.1"}}
