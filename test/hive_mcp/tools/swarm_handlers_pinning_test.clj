@@ -15,6 +15,11 @@
             [clojure.string :as str]
             [clojure.data.json :as json]
             [hive-mcp.tools.swarm :as swarm]
+            ;; Stub the journal HERE, not via the hive-mcp.tools.swarm
+            ;; re-export: swarm.collect resolves channel/check-event-journal
+            ;; directly, so redefining the facade's var rebinds something the
+            ;; poll loop never reads.
+            [hive-mcp.tools.swarm.channel :as swarm-channel]
             [hive-mcp.tools.swarm.core :as core]
             [hive-mcp.tools.swarm.registry :as registry]
             [hive-mcp.emacs.client :as ec]
@@ -64,22 +69,28 @@
     {:success true :result "nil" :duration-ms 5 :timed-out false}))
 
 (defmacro with-addon-available
-  "Execute body with swarm addon available and custom response mock."
+  "Execute body with the swarm addon reported available, and every elisp eval
+   answered by `response-mock`.
+
+   Stubs the availability predicate directly instead of letting it consume an
+   elisp call. It previously counted calls and answered the FIRST one with \"t\"
+   on the assumption that the first eval is always core/swarm-addon-available?'s
+   `(featurep 'hive-mcp-swarm)` probe. That bound the mock to the exact number
+   and order of elisp calls each handler happens to make: as soon as the count
+   slipped, the availability probe consumed a *response* instead of \"t\",
+   swarm-addon-available? returned false, and collect fell back to
+   :strategy/jvm — polling to the 300000ms default and stalling the suite for
+   five minutes per test. Bind the seam, not the call ordinal."
   [response-mock & body]
-  `(let [call-count# (atom 0)]
-     (with-redefs [ec/eval-elisp-with-timeout
-                   (fn [elisp# timeout#]
-                     (swap! call-count# inc)
-                     ;; First call is addon check, rest use response mock
-                     (if (= @call-count# 1)
-                       {:success true :result "t" :duration-ms 5 :timed-out false}
-                       (~response-mock elisp# timeout#)))]
-       ~@body)))
+  `(with-redefs [core/swarm-addon-available? (constantly true)
+                 ec/eval-elisp-with-timeout ~response-mock]
+     ~@body))
 
 (defmacro with-addon-unavailable
   "Execute body with swarm addon unavailable."
   [& body]
-  `(with-redefs [ec/eval-elisp-with-timeout (mock-addon-unavailable)]
+  `(with-redefs [core/swarm-addon-available? (constantly false)
+                 ec/eval-elisp-with-timeout (mock-addon-unavailable)]
      ~@body))
 
 ;; -- Spawn/Kill lifecycle mocks (ling.clj delegation) --
@@ -360,7 +371,7 @@
     ;; Single JSON string - unwrap-emacs-string already handles emacsclient quoting
     (let [json-str "{\"task_id\":\"task-001\",\"status\":\"completed\",\"result\":\"Success\"}"]
       (with-addon-available (mock-elisp-timeout-success json-str)
-        (with-redefs [swarm/check-event-journal (constantly nil)]
+        (with-redefs [swarm-channel/check-event-journal (constantly nil)]
           (let [result (swarm/handle-swarm-collect {:task_id "task-001"})
                 parsed (json/read-str (:text result) :key-fn keyword)]
             (is (= "text" (:type result)))
@@ -373,7 +384,7 @@
 (deftest handle-swarm-collect-from-journal-test
   (testing "Returns result from event journal (push-based)"
     (with-redefs [swarm/swarm-addon-available? (constantly true)
-                  swarm/check-event-journal (constantly {:status "completed"
+                  swarm-channel/check-event-journal (constantly {:status "completed"
                                                          :result "Done via push"
                                                          :slave-id "slave-1"
                                                          :timestamp 1234567890})]
@@ -389,7 +400,7 @@
     ;; Single JSON string - unwrap-emacs-string already handles emacsclient quoting
     (let [json-str "{\"task_id\":\"task-001\",\"status\":\"error\",\"error\":\"Task crashed\"}"]
       (with-addon-available (mock-elisp-timeout-success json-str)
-        (with-redefs [swarm/check-event-journal (constantly nil)]
+        (with-redefs [swarm-channel/check-event-journal (constantly nil)]
           (let [result (swarm/handle-swarm-collect {:task_id "task-001"})
                 parsed (json/read-str (:text result) :key-fn keyword)]
             (is (= "text" (:type result)))
@@ -403,7 +414,7 @@
     ;; Single JSON string - unwrap-emacs-string already handles emacsclient quoting
     (let [json-str "{\"task_id\":\"task-001\",\"status\":\"polling\"}"]
       (with-addon-available (mock-elisp-timeout-success json-str)
-        (with-redefs [swarm/check-event-journal (constantly nil)]
+        (with-redefs [swarm-channel/check-event-journal (constantly nil)]
           ;; Use very short timeout to trigger timeout
           (let [result (swarm/handle-swarm-collect {:task_id "task-001"
                                                     :timeout_ms 1})
@@ -416,7 +427,7 @@
 (deftest handle-swarm-collect-elisp-timeout-test
   (testing "Returns error when elisp evaluation times out"
     (with-addon-available (mock-elisp-timeout-timed-out)
-      (with-redefs [swarm/check-event-journal (constantly nil)]
+      (with-redefs [swarm-channel/check-event-journal (constantly nil)]
         ;; Pin the poll budget. handle-swarm-collect defaults timeout_ms to
         ;; 300000, and the redef above does not stop the poll: collect.clj calls
         ;; swarm.channel/check-event-journal directly, so stubbing the re-export
@@ -523,7 +534,7 @@
   (testing "All swarm handlers return consistent response format"
     (with-redefs [core/swarm-addon-available? (constantly true)
                   coord/dispatch-or-queue! (constantly {:action :dispatch :files []})
-                  swarm/check-event-journal (constantly {:status "completed"
+                  swarm-channel/check-event-journal (constantly {:status "completed"
                                                          :result "ok"
                                                          :slave-id "s1"
                                                          :timestamp 0})
@@ -560,7 +571,14 @@
       ;; Test each handler returns proper error format when addon not loaded
       (doseq [[name handler-fn] [["swarm-spawn" #(swarm/handle-swarm-spawn {:name "s"})]
                                  ["swarm-status" #(swarm/handle-swarm-status {})]
-                                 ["swarm-collect" #(swarm/handle-swarm-collect {:task_id "t"})]
+                                 ;; Bound the poll. handle-swarm-collect is
+                                 ;; deliberately JVM-first — it has no Emacs gate —
+                                 ;; so an unavailable addon does not short-circuit
+                                 ;; it; it polls to :timeout_ms, defaulting to
+                                 ;; 300000. Left unpinned this spends five minutes
+                                 ;; reaching a verdict it reaches instantly.
+                                 ["swarm-collect" #(swarm/handle-swarm-collect {:task_id "t"
+                                                                                :timeout_ms 1})]
                                  ["swarm-kill" #(swarm/handle-swarm-kill {:slave_id "s"})]]]
         (let [result (handler-fn)]
           (is (= "text" (:type result))

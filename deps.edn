@@ -357,7 +357,7 @@
                "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"]}
 
   :test
-  {:extra-paths ["test"]
+  {:extra-paths ["test" "test/resources"]
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 ;; Generative testing for spec validation
@@ -378,12 +378,22 @@
    :main-opts ["-m" "cognitect.test-runner"]}
 
   ;; CI-friendly: Run only unit tests (excludes tests requiring Emacs)
+  ;; :extra-paths and :extra-deps MUST track :test. Anything :test can load, this
+  ;; alias has to be able to load too — it is the one CI runs, and the runner
+  ;; loads every test ns before it filters, so a path/dep present only on :test
+  ;; takes the whole run down here rather than failing one namespace.
   :test-unit
-  {:extra-paths ["test"]
+  {:extra-paths ["test" "test/resources"]
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}
-                io.github.hive-agi/hive-test {:git/tag "v0.3.0" :git/sha "763e4bc"}}
+                io.github.hive-agi/hive-test {:git/tag "v0.3.0" :git/sha "763e4bc"}
+                ;; Must match :test. The runner LOADS every test namespace before
+                ;; it filters by selector, so a test ns requiring hive-schemas.test
+                ;; aborts this whole alias — all 405 namespaces — if the dep is
+                ;; only declared on :test. This is the CI alias; it is the one that
+                ;; must not be able to fail at load.
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.1"}}
    :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
    :exec-fn cognitect.test-runner.api/test
@@ -391,11 +401,15 @@
 
   ;; Run only integration tests (requires Emacs with emacs-mcp loaded)
   :test-integration
-  {:extra-paths ["test"]
+  {:extra-paths ["test" "test/resources"]
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                org.clojure/test.check {:mvn/version "1.1.1"}
                 io.github.hive-agi/hive-test
-                {:git/tag "v0.3.0" :git/sha "763e4bc"}}
+                {:git/tag "v0.3.0" :git/sha "763e4bc"}
+                ;; Same reason as :test-unit — this alias also puts test/ on the
+                ;; path, so it loads every test ns before selecting :integration.
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.1"}}
    :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
