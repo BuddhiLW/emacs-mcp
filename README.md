@@ -16,15 +16,27 @@ You explain your codebase to Claude. Architecture, constraints, patterns. Then y
 ```
 Session 1                         Session 2
 ───────────────────────────────────────────────────
-You: "Our auth uses JWT..."       You: /catchup
+You: "Our auth uses JWT..."       You: catch me up
 Claude: *learns*                  Claude: "I remember:
          ↓                         - Auth uses JWT with refresh
-     /wrap                         - Convention: validate at boundaries
+    *wrap up*                      - Convention: validate at boundaries
          ↓                         What should we work on?"
     [Memory]  ────────────────►
 ```
 
 Persistent, project-scoped memory with semantic search. Conventions, decisions, snippets — stored locally, never forgotten.
+
+### The two rituals
+
+**Catch up** — reconstruct everything at the start of a session:
+
+> hive `project workflow catchup` using pwd as dir
+
+**Wrap up** — crystallize what you learned before you lose it:
+
+> make memories on all learnings this session, kg connect them, sync kanban, create remaining kanban tasks if any, and `workflow wrap`. Can use `multi` command to do all at once.
+
+Both are plain requests to the model, not slash commands — it reaches for the `project`, `memory`, `kg`, and `kanban` tools itself. `multi` batches the whole wrap into a single call.
 
 ---
 

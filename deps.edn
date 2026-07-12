@@ -167,8 +167,10 @@
         ;; Overrides default Chroma store when Milvus is reachable.
         io.github.hive-agi/hive-milvus {:git/tag "v0.2.4" :git/sha "20ef619"}
 
-        ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj
-        io.github.hive-agi/hive-weave {:git/tag "v0.2.5" :git/sha "5895a2a"}
+        ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj;
+        ;; hive-weave.retry/with-recovery used by knowledge-graph/store/datahike.clj
+        ;; (first released in 0.2.6 — 0.2.5 does not contain the retry ns).
+        io.github.hive-agi/hive-weave {:mvn/version "0.2.6"}
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
         io.github.hive-agi/hive-emacs {:git/tag "v0.4.4" :git/sha "ec98ce8"}
