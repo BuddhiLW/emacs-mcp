@@ -115,15 +115,39 @@
           (log/debug "Started KG write-coalescing queue"))))))
 
 (defn stop-writer!
-  "Stop the write-coalescing loop. Idempotent — safe to call multiple times."
-  []
-  (locking writer-state
-    (let [{:keys [running? ctrl-chan tx-chan]} @writer-state]
-      (when running?
-        (when ctrl-chan (async/close! ctrl-chan))
-        (when tx-chan (async/close! tx-chan))
-        (reset! writer-state {:running? false :tx-chan nil :ctrl-chan nil})
-        (log/debug "Stopped KG write-coalescing queue")))))
+  "Stop the write-coalescing loop and BLOCK until it has actually terminated.
+   Idempotent — safe to call multiple times.
+
+   Order matters, and both steps are load-bearing:
+
+   1. Close tx-chan FIRST. A closed channel still yields its buffered items
+      before yielding nil, so the loop drains the backlog and then exits.
+      Closing ctrl-chan first (the previous behaviour) let the loop's `alts!`
+      pick the control port while tx-chan still held items, silently dropping
+      queued edges.
+
+   2. Join the loop before returning. The loop may be parked inside
+      flush-batch! -> proto/transact! -> LMDB. Callers stop the writer and then
+      close the store and delete its files (see the KG store test harness), so
+      returning early frees an env and unmaps files underneath a live
+      transaction. LMDB does not throw for that — it walks a dangling page
+      pointer and takes the whole JVM down with SIGSEGV in
+      mdb_page_search_root. `stop` has to mean stopped, not asked-to-stop."
+  ([] (stop-writer! 5000))
+  ([timeout-ms]
+   (locking writer-state
+     (let [{:keys [running? ctrl-chan tx-chan go-chan]} @writer-state]
+       (when running?
+         (when tx-chan (async/close! tx-chan))
+         (when go-chan
+           (let [[_ port] (async/alts!! [go-chan (async/timeout timeout-ms)])]
+             (when-not (= port go-chan)
+               (log/warn "Writer loop did not terminate within deadline; the store"
+                         "must not be closed while it may still be transacting"
+                         {:timeout-ms timeout-ms :in-flight @in-flight}))))
+         (when ctrl-chan (async/close! ctrl-chan))
+         (reset! writer-state {:running? false :tx-chan nil :ctrl-chan nil :go-chan nil})
+         (log/debug "Stopped KG write-coalescing queue"))))))
 
 (defn writer-stats
   "Return writer metrics + running state for observability."

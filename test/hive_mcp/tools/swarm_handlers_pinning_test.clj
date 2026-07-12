@@ -417,7 +417,13 @@
   (testing "Returns error when elisp evaluation times out"
     (with-addon-available (mock-elisp-timeout-timed-out)
       (with-redefs [swarm/check-event-journal (constantly nil)]
-        (let [result (swarm/handle-swarm-collect {:task_id "task-001"})]
+        ;; Pin the poll budget. handle-swarm-collect defaults timeout_ms to
+        ;; 300000, and the redef above does not stop the poll: collect.clj calls
+        ;; swarm.channel/check-event-journal directly, so stubbing the re-export
+        ;; in hive-mcp.tools.swarm rebinds a var the poll loop never reads. This
+        ;; test therefore polled for the full five minutes on every suite run.
+        (let [result (swarm/handle-swarm-collect {:task_id "task-001"
+                                                  :timeout_ms 1})]
           (is (= "text" (:type result)))
           (is (true? (:isError result)))
           (let [parsed (json/read-str (:text result) :key-fn keyword)]
