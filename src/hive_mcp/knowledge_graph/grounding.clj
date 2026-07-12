@@ -10,27 +10,49 @@
             [taoensso.timbre :as log])
   (:import [java.time Instant Duration]))
 
+(defn entry-attr
+  "Read a grounding attribute from an entry, tolerating both backend shapes.
+
+   Chroma's metadata->entry FLATTENS :grounded-at/:source-file/:source-hash to
+   top-level keys; a nested {:metadata {...}} map is the legacy shape. Blank
+   strings (Chroma's metadata-defaults writes \"\") count as absent.
+
+   This is the single lookup used by BOTH reground-entry-impl and
+   backfill-grounding! — they must never disagree on what 'has a source' means."
+  [entry k]
+  (let [v (or (get-in entry [:metadata k]) (get entry k))]
+    (when-not (str/blank? (str v))
+      v)))
+
+(defn- grounded-instant
+  "Coerce a :grounded-at value to an Instant, or nil if never grounded.
+   Accepts java.util.Date (what this ns stamps) or an ISO-8601 String (what
+   Chroma round-trips it back as). Unparseable values are treated as absent."
+  [grounded-at]
+  (r/rescue nil
+            (cond
+              (instance? java.util.Date grounded-at) (.toInstant ^java.util.Date grounded-at)
+              (string? grounded-at) (Instant/parse ^String grounded-at)
+              :else nil)))
+
 (defn needs-regrounding?
   "Returns true if entry needs re-grounding.
-   
+
    An entry needs re-grounding if:
-   - :grounded-at is nil (never grounded)
+   - :grounded-at is absent/blank/unparseable (never grounded)
    - :grounded-at is older than max-age-days
-   
+
    Arguments:
      entry        - Knowledge entry map with :grounded-at key
      max-age-days - Maximum age in days before regrounding is needed
-   
+
    Returns:
      true if entry needs re-grounding, false otherwise"
   [entry max-age-days]
   (when entry
-    (let [grounded-at (:grounded-at entry)]
-      (or (nil? grounded-at)
-          (let [grounded-instant (Instant/ofEpochMilli (.getTime grounded-at))
-                now-instant (Instant/now)
-                max-age-duration (Duration/ofDays max-age-days)]
-            (.isBefore (.plus grounded-instant max-age-duration) now-instant))))))
+    (let [inst (grounded-instant (entry-attr entry :grounded-at))]
+      (or (nil? inst)
+          (.isBefore (.plus inst (Duration/ofDays max-age-days)) (Instant/now))))))
 
 (defn- read-source-hash
   "Read file and compute hash.
@@ -54,6 +76,20 @@
                   {:hash hash-hex :exists? true})
                 {:exists? false}))))
 
+(defn- grounding-persisted?
+  "Read the entry back and report whether :grounded-at actually survived the write.
+
+   The Milvus record schema is a closed column set with no grounded_at column, so
+   `update-entry!` accepts the key and silently discards it — the caller still gets
+   a merged map that LOOKS written. That silent write-loss is what hid the broken
+   grounding channel; on a schedule it would become a success report on a timer.
+   This read-back is the loud signal: false means the store cannot hold grounding."
+  [entry-id]
+  (boolean
+   (r/rescue nil
+             (some-> (mem-proto/get-entry (mem-proto/get-store) entry-id)
+                     (entry-attr :grounded-at)))))
+
 (defn- reground-entry-impl
   "Pure implementation of re-grounding logic (no top-level try/catch)."
   [entry-id]
@@ -61,15 +97,14 @@
   (let [entry (mem-proto/get-entry (mem-proto/get-store) entry-id)]
     (if (nil? entry)
       {:status :not-found :entry-id entry-id}
-      (let [metadata (:metadata entry)
-            source-file (:source-file metadata)]
-        (if (or (nil? source-file) (str/blank? source-file))
+      (let [source-file (some-> (entry-attr entry :source-file) str)]
+        (if (nil? source-file)
           {:status :no-source-metadata :entry-id entry-id}
           (let [source-info (read-source-hash source-file)]
             (if (nil? source-info)
               {:status :hash-failed :entry-id entry-id :source-file source-file}
               (let [{:keys [hash exists?]} source-info
-                    stored-hash (:source-hash metadata)
+                    stored-hash (some-> (entry-attr entry :source-hash) str)
                     hash-differs? (and stored-hash hash (not= stored-hash hash))
                     status (cond
                              (not exists?) :source-missing
@@ -77,18 +112,23 @@
                              :else :regrounded)
                     update-data (when exists?
                                   {:grounded-at (java.util.Date.)
-                                   :source-hash hash})]
-                (when (and update-data (not= :source-missing status))
-                  (mem-proto/update-entry! (mem-proto/get-store) entry-id update-data)
-                  ;; Temporal dual-write: record reground verification
-                  (temporal/record-mutation-silent!
-                   {:entry-id   entry-id
-                    :op         :reground
-                    :data       {:status status
-                                 :drift? hash-differs?
-                                 :source-file source-file
-                                 :current-hash hash}
-                    :previous-value {:source-hash stored-hash}}))
+                                   :source-hash hash})
+                    wrote? (boolean (and update-data (not= :source-missing status)))
+                    persisted? (when wrote?
+                                 (mem-proto/update-entry! (mem-proto/get-store) entry-id update-data)
+                                 ;; Temporal dual-write: record reground verification
+                                 (temporal/record-mutation-silent!
+                                  {:entry-id   entry-id
+                                   :op         :reground
+                                   :data       {:status status
+                                                :drift? hash-differs?
+                                                :source-file source-file
+                                                :current-hash hash}
+                                   :previous-value {:source-hash stored-hash}})
+                                 (grounding-persisted? entry-id))]
+                (when (false? persisted?)
+                  (log/warn "Grounding write did not survive read-back — the store dropped :grounded-at"
+                            {:entry-id entry-id :source-file source-file}))
                 {:status status
                  :drift? hash-differs?
                  :entry-id entry-id
@@ -96,7 +136,8 @@
                  :source-exists? exists?
                  :stored-hash stored-hash
                  :current-hash hash
-                 :updated? (some? update-data)}))))))))
+                 :updated? wrote?
+                 :persisted? persisted?}))))))))
 
 (defn reground-entry!
   "Re-ground a single knowledge entry by verifying against source file.
@@ -151,7 +192,10 @@
     {:total (count results)
      :by-status by-status
      :results results
-     :drifted-entries drifted-entries}))
+     :drifted-entries drifted-entries
+     ;; Writes the store accepted and then discarded. Non-zero means the backend
+     ;; cannot represent grounding — the batch "succeeded" and persisted nothing.
+     :persistence-lost (count (filter #(false? (:persisted? %)) results))}))
 
 (defn backfill-grounding!
   "Discover and ground all Chroma entries that have source-file metadata.
@@ -183,10 +227,7 @@
                                                                       :include-expired? true})
                                     total-scanned (count entries)
                                     with-source (->> entries
-                                                     (filter (fn [entry]
-                                                               (let [sf (or (get-in entry [:metadata :source-file])
-                                                                            (:source-file entry))]
-                                                                 (and sf (not (str/blank? (str sf)))))))
+                                                     (filter #(entry-attr % :source-file))
                                                      vec)
                                     needs-work (if force?
                                                  with-source
@@ -198,11 +239,13 @@
                                           {:total-scanned total-scanned
                                            :with-source (count with-source)
                                            :processed (count entry-ids)
-                                           :by-status (:by-status batch-result)})
+                                           :by-status (:by-status batch-result)
+                                           :persistence-lost (:persistence-lost batch-result)})
                                 {:total-scanned total-scanned
                                  :with-source (count with-source)
                                  :processed (count entry-ids)
                                  :by-status (or (:by-status batch-result) {})
+                                 :persistence-lost (or (:persistence-lost batch-result) 0)
                                  :drifted-entries (or (:drifted-entries batch-result) [])}))]
     (if (r/ok? result)
       (:ok result)
