@@ -33,6 +33,16 @@
     (filter #(= (:duration %) duration) entries)
     entries))
 
+(defn entry-after?
+  "True iff the entry timestamp under `k` (:created or :updated) is strictly
+   greater than `threshold` (ISO-8601 lexicographic compare, same contract as
+   kanban filters/entry-after-ts?). Nil threshold matches every entry; a
+   non-nil threshold with no entry timestamp excludes the entry."
+  [entry k threshold]
+  (or (nil? threshold)
+      (let [ts (get entry k)]
+        (boolean (and ts (pos? (compare (str ts) (str threshold))))))))
+
 (defn- record-batch-co-access!
   "Record co-access pattern for batch query results (non-blocking)."
   [result-ids scope]
@@ -76,19 +86,34 @@
 (defn- fetch-entries
   "Fetch entries from the IMemoryStore with over-fetch factor.
 
+   Temporal thresholds are pushed INTO the store query (stores that predate
+   them ignore unknown opts and degrade to client-side filtering); `:order-by`
+   asks for newest-first. Milvus scalar query cannot sort server-side, so a
+   temporal query ALSO widens the fetch window (min 200, cap 500) — otherwise
+   per-collection limit truncation favors the oldest qualifying rows and the
+   client-side sort never sees the newest. Qualifying sets beyond the cap
+   need a narrower threshold.
+
    Wraps the IMemoryStore `query-entries` call in `with-resilience` so a
    dropped Milvus HTTP transport is recovered via the heal loop and the
    call retries once before surfacing an error."
   [type project-ids-for-db tags limit-val include-descendants?
-   & {:keys [exclude-tags]}]
-  (let [over-fetch-factor (if include-descendants? 4 3)]
+   & {:keys [exclude-tags created-after updated-after]}]
+  (let [over-fetch-factor (if include-descendants? 4 3)
+        base-limit        (* limit-val over-fetch-factor)
+        fetch-limit       (if (or created-after updated-after)
+                            (min 500 (max 200 base-limit))
+                            base-limit)]
     (with-resilience
       (mem-proto/query-entries (mem-proto/get-store)
                                {:type type
                                 :project-ids project-ids-for-db
                                 :tags tags
                                 :exclude-tags exclude-tags
-                                :limit (* limit-val over-fetch-factor)}))))
+                                :created-after created-after
+                                :updated-after updated-after
+                                :order-by [:created :desc]
+                                :limit fetch-limit}))))
 
 (defn- apply-scope-filter
   "Apply in-memory scope filter as safety net.
@@ -107,11 +132,15 @@
             :scope/auto    (apply-auto-scope-filter entries (:project-id sf) include-descendants?)))
 
 (defn- apply-post-filters
-  "Chain tag, duration, and limit filters on scope-filtered entries."
-  [entries tags duration limit-val]
+  "Chain tag, duration, and temporal filters on scope-filtered entries,
+   sort newest-first by :created, then cap at limit."
+  [entries {:keys [tags duration created-after updated-after limit-val]}]
   (->> entries
        (apply-tag-filter tags)
        (apply-duration-filter duration)
+       (filter #(entry-after? % :created created-after))
+       (filter #(entry-after? % :updated updated-after))
+       (sort-by (comp str :created) #(compare %2 %1))
        (take limit-val)))
 
 (defn- format-query-results
@@ -146,23 +175,30 @@
 
 (defn- unconstrained?
   "True when NOTHING narrows the result set: no type, no tags, no exclude-tags,
-   no scope, no duration.
+   no scope, no duration, no temporal threshold.
 
    Such a query has no predicate at all — the backend filter collapses to
    project-scope + not-expired and the `limit` default silently caps it at 20
    arbitrary rows. That is a noop default masquerading as an answer, so it is
    rejected rather than served. Any single narrowing predicate is enough to keep
-   type-less browsing legal (tag-only and scope-only queries are supported paths)."
-  [type tags exclude-tags scope duration]
+   type-less browsing legal (tag-only, scope-only, and since-timestamp queries
+   are supported paths)."
+  [type tags exclude-tags scope duration created-after updated-after]
   (and (nil? type)
        (empty? tags)
        (empty? exclude-tags)
        (nil? scope)
-       (nil? duration)))
+       (nil? duration)
+       (nil? created-after)
+       (nil? updated-after)))
 
 (defn handle-query
-  "Query project memory by type with scope and verbosity filtering."
-  [{:keys [type tags exclude_tags limit duration scope directory include_descendants verbosity]}]
+  "Query project memory by type with scope, temporal, and verbosity filtering.
+   `created_after` / `updated_after` are ISO-8601 strings — entries whose
+   timestamp is strictly greater survive (pushed down to the store filter
+   AND re-checked client-side). Results sort newest-first."
+  [{:keys [type tags exclude_tags limit duration scope directory include_descendants verbosity query
+           created_after updated_after]}]
   (let [directory (or directory (ctx/current-directory))
         include-descendants? (if (some? include_descendants)
                                (boolean include_descendants)
@@ -175,19 +211,34 @@
     (log/info "mcp-memory-query:" type "scope:" scope "directory:" directory
               "include_descendants:" include-descendants? "verbosity:" (or verbosity "metadata"))
     (try
-      (if (unconstrained? type tags exclude-tags raw-scope duration)
+      (cond
+        (some? query)
+        (mcp-error (str "memory query is structured filtering and does not accept :query text. "
+                        "Use command=search with :query for semantic retrieval."))
+
+        (unconstrained? type tags exclude-tags raw-scope duration created_after updated_after)
         (mcp-error (str "memory query: no filter given. Provide :type "
-                        "(or narrow with :tags / :exclude_tags / :scope / :duration) — "
-                        "an unfiltered query would return an arbitrary slice of memory, not an answer."))
+                        "(or narrow with :tags / :exclude_tags / :scope / :duration / "
+                        ":created_after / :updated_after) — an unfiltered query would "
+                        "return an arbitrary slice of memory, not an answer."))
+
+        :else
         (let [limit-val (coerce-int! limit :limit 20)]
           (with-store
             (let [project-id  (scope/get-current-project-id directory)
                   sf          (domain/parse-scope scope project-id)
                   project-ids (resolve-project-ids-for-db sf include-descendants?)
                   entries     (fetch-entries type project-ids tags limit-val include-descendants?
-                                             :exclude-tags exclude-tags)
+                                             :exclude-tags exclude-tags
+                                             :created-after created_after
+                                             :updated-after updated_after)
                   filtered    (apply-scope-filter entries sf include-descendants?)
-                  results     (apply-post-filters filtered tags duration limit-val)]
+                  results     (apply-post-filters filtered
+                                                  {:tags tags
+                                                   :duration duration
+                                                   :created-after created_after
+                                                   :updated-after updated_after
+                                                   :limit-val limit-val})]
               (format-query-results results project-id metadata-only?)))))
       (catch clojure.lang.ExceptionInfo e
         (if (= :coercion-error (:type (ex-data e)))
