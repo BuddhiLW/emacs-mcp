@@ -1,124 +1,46 @@
 (ns hive-mcp.protocols.memory
-  "Protocol definitions for memory storage backends."
+  "IMemoryStore protocol family — re-exported from hive-spi.memory.ports.
+
+   The protocols moved to the hive-spi SPI leaf so storage backends can
+   implement them without compile-depending on hive-mcp. Every historical
+   hive-mcp.protocols.memory/* qualified name still resolves via the plain
+   `def` ALIASES below (never a second defprotocol). Predicates + the
+   registry validator call `satisfies?` on the CANONICAL ports vars, not the
+   local aliases: a protocol extended via extend-protocol mutates the ports
+   var's root, so an alias snapshot would miss those impls.
+
+   Registry (register-store!/get-store/set-store!) + id utils stay here."
   (:require [clojure.string]
             [hive-mcp.protocols.registry :as reg]
-            [hive-mcp.memory.ids :as ids]))
+            [hive-mcp.memory.ids :as ids]
+            [hive-spi.memory.ports :as ports]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;;; ============================================================================
-;;; IMemoryStore Protocol (Core CRUD + Search)
+;;; Protocol re-exports (def aliases of hive-spi.memory.ports — NOT defprotocol)
 ;;; ============================================================================
-;;;
-;;; Reload-safety: `defprotocol` is NOT idempotent. Re-evaluating this form
-;;; generates a fresh host interface class in the current classloader,
-;;; silently invalidating every defrecord extender that was compiled against
-;;; the previous interface. That shows up as `satisfies?` returning false
-;;; and protocol dispatch failing with "No implementation of method ... for
-;;; class: <record>" — the exact failure mode observed after L2 multi-store
-;;; registry refactor when nREPL / addon load races caused the protocol ns
-;;; to re-evaluate after addons had already compiled their stores.
-;;;
-;;; The `defonce`-guarded block below ensures `defprotocol` runs exactly
-;;; once per JVM. On subsequent reloads of this namespace, the existing
-;;; interface class and method Vars are preserved, so extenders compiled
-;;; against them keep dispatching correctly.
 
-(defonce ^:private -imemorystore-defined? (atom false))
-
-(when (compare-and-set! -imemorystore-defined? false true)
-  (defprotocol IMemoryStore
-  "Storage backend protocol for memory entries."
-
-  ;;; =========================================================================
-  ;;; Connection Lifecycle
-  ;;; =========================================================================
-
-  (connect! [this config]
-    "Initialize connection to the storage backend.")
-
-  (disconnect! [this]
-    "Close connection and release backend resources.")
-
-  (connected? [this]
-    "Check if this store has an active connection.")
-
-  (health-check [this]
-    "Verify backend health and reachability.")
-
-;;; =========================================================================
-  ;;; CRUD Operations
-  ;;; =========================================================================
-
-  (add-entry! [this entry]
-    "Add a new memory entry to the store.")
-
-  (get-entry [this id]
-    "Get a memory entry by ID.")
-
-  (update-entry! [this id updates]
-    "Update an existing entry's attributes.")
-
-  (delete-entry! [this id]
-    "Delete an entry from the store.")
-
-  (query-entries [this opts]
-    "Query entries with filtering.
-
-     Opts (map):
-       :type             — entry type filter (e.g. \"note\", \"axiom\")
-       :project-id       — single project scope
-       :project-ids      — collection of project scopes (OR)
-       :tags             — required tags (AND)
-       :exclude-tags     — excluded tags
-       :limit            — max rows returned
-       :include-expired? — include expired entries (default false)
-       :output-fields    — projection of field names
-       :order-by         — [field direction] e.g. [:created :desc] | [:created :asc].
-                           When set, returned rows are sorted by `field` in
-                           `direction`. Backends without server-side ordering
-                           (e.g. Milvus query-scalar) sort post-fetch — caller
-                           MUST set `:limit` high enough to cover the desired
-                           top-N. Unspecified ⇒ backend-native scan order.")
-
-  ;;; =========================================================================
-  ;;; Semantic Search (Vector-based)
-  ;;; =========================================================================
-
-  (search-similar [this query-text opts]
-    "Semantic similarity search.")
-
-  (supports-semantic-search? [this]
-    "Check if this store supports semantic search.")
-
-  ;;; =========================================================================
-  ;;; Expiration Management
-  ;;; =========================================================================
-
-  (cleanup-expired! [this]
-    "Delete all expired entries.")
-
-  (entries-expiring-soon [this days opts]
-    "Get entries expiring within the given number of days.")
-
-  ;;; =========================================================================
-  ;;; Duplicate Detection
-  ;;; =========================================================================
-
-  (find-duplicate [this type content-hash opts]
-    "Find entry with matching content-hash.")
-
-  ;;; =========================================================================
-  ;;; Store Management
-  ;;; =========================================================================
-
-  (store-status [this]
-    "Get store status and configuration info.")
-
-  (reset-store! [this]
-    "Reset the store to empty state.")))
+(do
+  (def IMemoryStore ports/IMemoryStore)
+  (def connect! ports/connect!)
+  (def disconnect! ports/disconnect!)
+  (def connected? ports/connected?)
+  (def health-check ports/health-check)
+  (def add-entry! ports/add-entry!)
+  (def get-entry ports/get-entry)
+  (def update-entry! ports/update-entry!)
+  (def delete-entry! ports/delete-entry!)
+  (def query-entries ports/query-entries)
+  (def search-similar ports/search-similar)
+  (def supports-semantic-search? ports/supports-semantic-search?)
+  (def cleanup-expired! ports/cleanup-expired!)
+  (def entries-expiring-soon ports/entries-expiring-soon)
+  (def find-duplicate ports/find-duplicate)
+  (def store-status ports/store-status)
+  (def reset-store! ports/reset-store!))
 
 ;;; ============================================================================
 ;;; Store Registry (Multi-Store)
@@ -130,7 +52,7 @@
 ;;; existing code.
 
 (defonce ^:private slot
-  (reg/multi-slot {:validate #(satisfies? IMemoryStore %)}))
+  (reg/multi-slot {:validate #(satisfies? ports/IMemoryStore %)}))
 
 (defn register-store!
   "Register `store` under `key` in the multi-store registry.
@@ -175,7 +97,7 @@
   "Legacy single-store setter. Routes to the :default slot of the
    multi-store registry for backward compatibility with existing callers."
   [store]
-  {:pre [(satisfies? IMemoryStore store)]}
+  {:pre [(satisfies? ports/IMemoryStore store)]}
   (register-store! :default store)
   store)
 
@@ -222,128 +144,53 @@
                   (catch Exception e
                     {:healthy? false :errors [(.getMessage e)]}))))))
 
-;;; ============================================================================
-;;; IMemoryStoreWithAnalytics Protocol (Optional Extension)
-;;; ============================================================================
-;;; Reload-safe: see note on IMemoryStore above.
+;;; --- IMemoryStoreWithAnalytics ---
 
-(defonce ^:private -iwithanalytics-defined? (atom false))
-
-(when (compare-and-set! -iwithanalytics-defined? false true)
-  (defprotocol IMemoryStoreWithAnalytics
-    "Optional extension for analytics tracking."
-
-    (log-access! [this id]
-      "Log an access event for an entry.")
-
-    (record-feedback! [this id feedback]
-      "Record helpfulness feedback for an entry.")
-
-    (get-helpfulness-ratio [this id]
-      "Calculate helpfulness ratio for an entry.")))
+(do
+  (def IMemoryStoreWithAnalytics ports/IMemoryStoreWithAnalytics)
+  (def log-access! ports/log-access!)
+  (def record-feedback! ports/record-feedback!)
+  (def get-helpfulness-ratio ports/get-helpfulness-ratio))
 
 (defn analytics-store?
   "Check if the store supports analytics tracking."
   [store]
-  (satisfies? IMemoryStoreWithAnalytics store))
+  (satisfies? ports/IMemoryStoreWithAnalytics store))
 
-;;; ============================================================================
-;;; IMemoryStoreMetadataWrite Protocol (Optional Extension)
-;;; ============================================================================
-;;; Reload-safe: see note on IMemoryStore above.
-;;;
-;;; ISP split for the write surface: the base IMemoryStore/update-entry! is a
-;;; one-size-fits-all method whose default implementation re-runs the embedder
-;;; on every field change (see `hive-milvus.store.entries/update-entry!` →
-;;; `relocate.pipeline/relocate-update` → `relocate.promoters.record/build-target-record`
-;;; → `embedder/embed-for-entry`). That makes pure-metadata updates (e.g.
-;;; appending an edge id to :kg-incoming, bumping :access-count) pay the
-;;; full HTTP-embedding cost — a 4096d Venice round-trip — for nothing.
-;;;
-;;; This optional extension provides a metadata-only write surface that
-;;; preserves the existing embedding. Stores that satisfy it should reuse
-;;; the entry's stored vector verbatim; stores that don't satisfy it fall
-;;; back to update-entry! (slow path).
-;;;
-;;; Architectural rule (idempotence law for compound writes):
-;;;   add(content, refs=[r1...rN]) ≡ add(content) ; for r in refs: edge(r)
-;;; Both forms must produce the same final state at the same (or lower)
-;;; cost. The base IMemoryStore made the compound form strictly worse by
-;;; re-embedding once per back-edge; this protocol is the proper fix.
+;;; --- IMemoryStoreMetadataWrite (no-embed metadata writes) ---
 
-(defonce ^:private -imetawrite-defined? (atom false))
-
-(when (compare-and-set! -imetawrite-defined? false true)
-  (defprotocol IMemoryStoreMetadataWrite
-    "Optional extension for metadata-only writes that preserve the
-     existing embedding. Implementors MUST NOT re-run the embedder."
-
-    (update-metadata! [this id updates]
-      "Update non-content fields on entry `id` without re-embedding.
-
-       `updates` is a map of fields to merge into the existing entry —
-       must NOT contain :content or :type (those change embedding
-       identity; use update-entry! instead). Implementations are
-       expected to read the existing record (including its :embedding
-       vector), merge `updates`, and upsert with the retrieved vector.
-
-       Returns the merged entry on success, nil if id not found.")))
+(do
+  (def IMemoryStoreMetadataWrite ports/IMemoryStoreMetadataWrite)
+  (def update-metadata! ports/update-metadata!))
 
 (defn metadata-write-store?
   "Check if the store supports the no-embed metadata write surface."
   [store]
-  (satisfies? IMemoryStoreMetadataWrite store))
+  (satisfies? ports/IMemoryStoreMetadataWrite store))
 
-;;; ============================================================================
-;;; IMemoryStoreWithStaleness Protocol (Optional Extension)
-;;; ============================================================================
-;;; Reload-safe: see note on IMemoryStore above.
+;;; --- IMemoryStoreWithStaleness ---
 
-(defonce ^:private -iwithstaleness-defined? (atom false))
-
-(when (compare-and-set! -iwithstaleness-defined? false true)
-  (defprotocol IMemoryStoreWithStaleness
-    "Optional extension for staleness tracking."
-
-    (update-staleness! [this id staleness-opts]
-      "Update staleness tracking fields for an entry.")
-
-    (get-stale-entries [this threshold opts]
-      "Get entries with staleness probability above threshold.")
-
-    (propagate-staleness! [this source-id depth]
-      "Propagate staleness from source entry to dependents.")))
+(do
+  (def IMemoryStoreWithStaleness ports/IMemoryStoreWithStaleness)
+  (def update-staleness! ports/update-staleness!)
+  (def get-stale-entries ports/get-stale-entries)
+  (def propagate-staleness! ports/propagate-staleness!))
 
 (defn staleness-store?
   "Check if the store supports staleness tracking."
   [store]
-  (satisfies? IMemoryStoreWithStaleness store))
+  (satisfies? ports/IMemoryStoreWithStaleness store))
 
-;;; ============================================================================
-;;; IMemoryStoreBatch Protocol (Optional Extension)
-;;; ============================================================================
-;;; Reload-safe: see note on IMemoryStore above.
-;;;
-;;; Batch fetch — single round-trip to the backend for multiple IDs. Introduced
-;;; to collapse N per-item RPCs (e.g. catchup enrichment) into one call.
-;;; Callers should prefer vectordb.facade/get-entries-by-ids which falls back
-;;; to per-item get-entry for stores that don't implement this.
+;;; --- IMemoryStoreBatch (batched reads) ---
 
-(defonce ^:private -iwithbatch-defined? (atom false))
-
-(when (compare-and-set! -iwithbatch-defined? false true)
-  (defprotocol IMemoryStoreBatch
-    "Optional extension for batched reads."
-
-    (get-entries [this ids]
-      "Fetch multiple entries by ID in a single backend round-trip.
-       Returns a seq of entry maps (missing IDs omitted). Order is not
-       guaranteed — callers must index by :id.")))
+(do
+  (def IMemoryStoreBatch ports/IMemoryStoreBatch)
+  (def get-entries ports/get-entries))
 
 (defn batch-store?
   "Check if the store supports batched reads."
   [store]
-  (satisfies? IMemoryStoreBatch store))
+  (satisfies? ports/IMemoryStoreBatch store))
 
 (defn get-entries-projected
   "Batch-fetch entries by IDs, then trim to `output-fields` when provided.
@@ -361,83 +208,31 @@
          (mapv #(select-keys % ks) entries))
        entries))))
 
-;;; ============================================================================
-;;; IMemoryStoreWithRouting Protocol (Optional)
-;;; ============================================================================
-;;;
-;;; Backends that shard entries across multiple physical containers (Milvus
-;;; per-dimension collections, Pinecone indexes, sharded Postgres tables)
-;;; declare their routing rules here so callers can ask:
-;;;   - Where SHOULD this entry live now? (target-collection-for)
-;;;   - Move it if it's in the wrong place. (relocate-entry!)
-;;;
-;;; Backends with no sharding (Datalevin, single-collection Chroma) need not
-;;; implement this protocol; routing-aware callers must check `routing-store?`
-;;; before invoking. Reload-safe: see note on IMemoryStore above.
+;;; --- IMemoryStoreWithRouting (multi-container routing) ---
 
-(defonce ^:private -iwithrouting-defined? (atom false))
-
-(when (compare-and-set! -iwithrouting-defined? false true)
-  (defprotocol IMemoryStoreWithRouting
-    "Optional extension for backends with multi-container routing.
-
-     Routing rules are owned by the backend; callers ask 'where should this
-     entry live according to current config?' and 'move it if it is in the
-     wrong place.' Used to recover from embedder/dimension drift without a
-     manual collection-by-collection migration."
-
-    (target-collection-for [this entry]
-      "Resolve the canonical container (collection / index / shard / table)
-       where `entry` should live according to current routing config.
-       Returns a backend-specific identifier (string for Milvus, etc.) or
-       nil when the backend has no routing concept.")
-
-    (relocate-entry! [this id]
-      "If the entry's current physical location differs from its target
-       (per `target-collection-for`), move it: read existing, re-vectorize
-       under the target's embedder, write to target, delete from source.
-       No-op when entry is already canonical or when no entry exists for
-       `id`. Returns {:moved? bool :from container :to container :id id}
-       for observability.")))
+(do
+  (def IMemoryStoreWithRouting ports/IMemoryStoreWithRouting)
+  (def target-collection-for ports/target-collection-for)
+  (def relocate-entry! ports/relocate-entry!))
 
 (defn routing-store?
   "Check if the store supports container-routing introspection + relocation."
   [store]
-  (satisfies? IMemoryStoreWithRouting store))
+  (satisfies? ports/IMemoryStoreWithRouting store))
 
-;;; ============================================================================
-;;; IMemoryStoreTemporal Protocol (Bitemporal Extension)
-;;; ============================================================================
-;;; Reload-safe: see note on IMemoryStore above.
-;;; Only proximum implements this; other stores return :not-supported.
+;;; --- IMemoryStoreTemporal (bitemporal queries) ---
 
-(defonce ^:private -iwithtemporal-defined? (atom false))
-
-(when (compare-and-set! -iwithtemporal-defined? false true)
-  (defprotocol IMemoryStoreTemporal
-    "Bitemporal query extension for memory stores.
-     Provides as-of, history, and between queries over immutable fact logs."
-
-    (asof-entry [this id timestamp]
-      "Return the value of entry `id` as it was known at `timestamp`.
-       Returns nil if entry did not exist at that time.")
-
-    (history-entry [this id]
-      "Return seq of [timestamp value] pairs for all versions of entry `id`,
-       ordered oldest-first.")
-
-    (asof-query [this criteria timestamp]
-      "Return entries matching `criteria` as they were known at `timestamp`.
-       Criteria is a map with optional :type, :tags keys.")
-
-    (between-query [this criteria t1 t2]
-      "Return entries matching `criteria` that existed between t1 and t2.
-       Criteria is a map with optional :type, :tags keys.")))
+(do
+  (def IMemoryStoreTemporal ports/IMemoryStoreTemporal)
+  (def asof-entry ports/asof-entry)
+  (def history-entry ports/history-entry)
+  (def asof-query ports/asof-query)
+  (def between-query ports/between-query))
 
 (defn temporal-store?
   "Check if the store supports bitemporal queries."
   [store]
-  (satisfies? IMemoryStoreTemporal store))
+  (satisfies? ports/IMemoryStoreTemporal store))
 
 ;;; IMemoryStoreLiveness lives in its own ns to keep this file from
 ;;; needing reloads. See `hive-mcp.protocols.memory-liveness`.
