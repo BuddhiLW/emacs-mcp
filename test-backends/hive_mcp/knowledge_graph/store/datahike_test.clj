@@ -1,15 +1,20 @@
 (ns hive-mcp.knowledge-graph.store.datahike-test
-  "Tests for Datahike IGraphStore implementation.
+  "Datahike-SPECIFIC store behaviour — the semantics no other backend shares.
 
-   Tests the Datahike backend including:
-   - Basic IGraphStore protocol operations
-   - Temporal query extensions (history, as-of, since)
-   - Database lifecycle (create, connect, reset, close)"
+   The shared IKGStore behaviour (ensure-conn!, transact!/query roundtrip,
+   entid/lookup-ref, pull-entity, db-snapshot, every relation kind, edge and
+   disc CRUD) is NOT duplicated here: it lives once in
+   hive-mcp.knowledge-graph.store.contract and is applied to this driver by
+   store.datahike-contract-test.
+
+   What remains is what only Datahike does:
+   - reset-conn! is NON-destructive (close + reopen; on-disk data survives)
+   - delete-database! is guarded behind an explicit confirm token
+   - it satisfies IPersistentKGStore
+   - temporal queries: history-db, query-history, as-of-db"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.knowledge-graph.protocol :as proto]
-            [hive-mcp.knowledge-graph.store.fixtures :as fixtures]
-            [hive-mcp.knowledge-graph.edges :as edges]
-            [hive-mcp.knowledge-graph.schema :as schema]))
+            [hive-mcp.knowledge-graph.store.fixtures :as fixtures]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -18,74 +23,8 @@
 (use-fixtures :each fixtures/datahike-fixture)
 
 ;; =============================================================================
-;; Helpers
+;; Durability / destruction guards (on-disk backend)
 ;; =============================================================================
-
-(defn gen-node-id []
-  (str "test-node-" (subs (str (java.util.UUID/randomUUID)) 0 8)))
-
-;; =============================================================================
-;; Basic Protocol Operations
-;; =============================================================================
-
-(deftest ensure-conn-returns-non-nil-test
-  (testing "ensure-conn! returns non-nil connection [datahike]"
-    (let [store (proto/get-store)]
-      (is (some? (proto/ensure-conn! store))))))
-
-(deftest transact-and-query-roundtrip-test
-  (testing "transact! + query roundtrip [datahike]"
-    (let [store (proto/get-store)
-          edge-id (str "test-edge-" (random-uuid))]
-      (proto/transact! store [{:kg-edge/id edge-id
-                               :kg-edge/from "node-a"
-                               :kg-edge/to "node-b"
-                               :kg-edge/relation :implements
-                               :kg-edge/confidence 1.0}])
-      (let [results (proto/query store
-                                 '[:find ?from ?to
-                                   :in $ ?eid
-                                   :where
-                                   [?e :kg-edge/id ?eid]
-                                   [?e :kg-edge/from ?from]
-                                   [?e :kg-edge/to ?to]]
-                                 [edge-id])]
-        (is (= #{["node-a" "node-b"]} (set results)))))))
-
-(deftest entid-resolves-lookup-ref-test
-  (testing "entid resolves lookup ref [datahike]"
-    (let [store (proto/get-store)
-          edge-id (str "test-edge-" (random-uuid))]
-      (proto/transact! store [{:kg-edge/id edge-id
-                               :kg-edge/from "a"
-                               :kg-edge/to "b"
-                               :kg-edge/relation :implements
-                               :kg-edge/confidence 1.0}])
-      (let [eid (proto/entid store [:kg-edge/id edge-id])]
-        (is (some? eid))
-        (is (number? eid))))))
-
-(deftest pull-entity-returns-full-entity-test
-  (testing "pull-entity returns full entity [datahike]"
-    (let [store (proto/get-store)
-          edge-id (str "test-edge-" (random-uuid))]
-      (proto/transact! store [{:kg-edge/id edge-id
-                               :kg-edge/from "a"
-                               :kg-edge/to "b"
-                               :kg-edge/relation :refines
-                               :kg-edge/confidence 0.7}])
-      (let [eid (proto/entid store [:kg-edge/id edge-id])
-            pulled (proto/pull-entity store '[*] eid)]
-        (is (= edge-id (:kg-edge/id pulled)))
-        (is (= "a" (:kg-edge/from pulled)))
-        (is (= :refines (:kg-edge/relation pulled)))
-        (is (= 0.7 (:kg-edge/confidence pulled)))))))
-
-(deftest db-snapshot-returns-value-test
-  (testing "db-snapshot returns immutable value [datahike]"
-    (let [store (proto/get-store)
-          snap (proto/db-snapshot store)]
-      (is (some? snap)))))
 
 (deftest reset-conn-is-non-destructive-test
   (testing "reset-conn! preserves on-disk data [datahike] — close + reopen, NOT delete"
@@ -137,30 +76,6 @@
         (is (= 0 (count after)) "data wiped after explicit delete-database! call")))))
 
 ;; =============================================================================
-;; Edge Operations
-;; =============================================================================
-
-(deftest edges-add-and-get-test
-  (testing "edges add and get [datahike]"
-    (let [from (gen-node-id)
-          to (gen-node-id)
-          edge-id (edges/add-edge! {:from from :to to :relation :implements})]
-      (is (string? edge-id))
-      (let [edge (edges/get-edge edge-id)]
-        (is (some? edge))
-        (is (= from (:kg-edge/from edge)))
-        (is (= to (:kg-edge/to edge)))
-        (is (= :implements (:kg-edge/relation edge)))))))
-
-(deftest edges-all-relations-test
-  (testing "all relation types work [datahike]"
-    (doseq [rel (schema/relation-types)]
-      (let [edge-id (edges/add-edge! {:from (gen-node-id)
-                                      :to (gen-node-id)
-                                      :relation rel})]
-        (is (string? edge-id) (str "Failed for relation: " rel))))))
-
-;; =============================================================================
 ;; Temporal Query Extensions (Datahike-specific)
 ;; =============================================================================
 
@@ -200,18 +115,13 @@
 
 (deftest as-of-db-returns-past-state-test
   (testing "as-of-db returns database at past point [datahike]"
-    (require 'hive-mcp.knowledge-graph.store.datahike)
-    (let [as-of-db-fn (resolve 'hive-mcp.knowledge-graph.store.datahike/as-of-db)
-          store (proto/get-store)]
-      ;; Get a timestamp before changes
-      (let [before-time (java.util.Date.)]
-        (Thread/sleep 10) ; Ensure time difference
-        ;; Add data after the timestamp
-        (proto/transact! store [{:kg-edge/id "asof-test"
-                                 :kg-edge/from "a"
-                                 :kg-edge/to "b"
-                                 :kg-edge/relation :implements
-                                 :kg-edge/confidence 1.0}])
-        ;; The as-of database should exist
-        (let [past-db (as-of-db-fn store before-time)]
-          (is (some? past-db)))))))
+    (let [store       (proto/get-store)
+          before-time (java.util.Date.)]
+      (is (proto/temporal-store? store) "datahike satisfies ITemporalKGStore")
+      (Thread/sleep 10) ; ensure the tx lands strictly after before-time
+      (proto/transact! store [{:kg-edge/id "asof-test"
+                               :kg-edge/from "a"
+                               :kg-edge/to "b"
+                               :kg-edge/relation :implements
+                               :kg-edge/confidence 1.0}])
+      (is (some? (proto/as-of-db store before-time))))))

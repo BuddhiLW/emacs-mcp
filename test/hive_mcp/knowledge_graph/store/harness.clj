@@ -49,7 +49,9 @@
             [hive-mcp.knowledge-graph.connection.store :as cstore]
             [hive-mcp.knowledge-graph.edges :as edges]
             [hive-mcp.knowledge-graph.protocol :as proto]
-            [hive-mcp.knowledge-graph.store.datascript :as ds-store]))
+            [hive-mcp.knowledge-graph.store.datascript :as ds-store]
+            [hive-mcp.knowledge-graph.schema :as schema]
+            [hive-mcp.knowledge-graph.slots :as slots]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -79,6 +81,10 @@
   "Creates and disposes one ephemeral, throwaway KG store. One impl per
    backend (SRP/OCP). Knows nothing about how the store is INSTALLED — that is
    the IsolationStrategy's concern."
+  (available? [factory]
+    "True when this backend's driver is loadable on the CURRENT classpath.
+     A backend whose driver is absent must be SKIPPED, never failed, so a
+     driver-free classpath stays green.")
   (create [factory]
     "Acquire a fresh ephemeral store with its connection opened. Returns an
      EphemeralStore. In-memory backends carry a nil :temp-dir; persistent
@@ -90,6 +96,7 @@
 
 (defrecord DatascriptStoreFactory []
   StoreFactory
+  (available? [_] true)
   (create [_]
     (let [store (ds-store/create-store)]
       (proto/ensure-conn! store)
@@ -99,17 +106,21 @@
     ;; is a no-op for DataScript, so a fresh empty conn is the disposal.
     (proto/reset-conn! (:store ephemeral))))
 
-(defrecord TempDirStoreFactory [require-ns create-sym dir-prefix]
+(defrecord TempDirStoreFactory [require-ns create-sym dir-prefix store-opts]
   StoreFactory
+  (available? [_]
+    ;; requiring-resolve is the probe: an absent driver must skip, not fail.
+    (try (some? (requiring-resolve create-sym))
+         (catch Throwable _ false)))
   (create [_]
     (let [tmp-dir (io/file (System/getProperty "java.io.tmpdir")
                            (str dir-prefix (System/nanoTime)))
           db-path (.getAbsolutePath tmp-dir)]
       ;; Load the backend lazily: a machine lacking it should skip the test
-      ;; (see skip-if-unavailable), not fail to compile the harness.
+      ;; (see available?), not fail to compile the harness.
       (require require-ns)
       (let [create-fn (resolve create-sym)
-            store     (create-fn {:db-path db-path})]
+            store     (create-fn (merge {:db-path db-path} store-opts))]
         (proto/ensure-conn! store)
         (->EphemeralStore store tmp-dir))))
   (dispose! [_ ephemeral]
@@ -125,18 +136,25 @@
   (->DatascriptStoreFactory))
 
 (defn datalevin-factory
-  "StoreFactory for a fresh Datalevin store in a private temp dir."
+  "StoreFactory for a fresh Datalevin store in a private temp dir.
+
+   Injects the canonical KG schema as :base-schema. Datalevin is schemaless
+   unless the host supplies one, and a lookup-ref on :kg-edge/id requires that
+   attribute to carry :db.unique/identity."
   []
   (->TempDirStoreFactory 'hive-datalevin.kg.store
                          'hive-datalevin.kg.store/create-store
-                         "hive-kg-test-"))
+                         "hive-kg-test-"
+                         {:base-schema (schema/full-schema)}))
 
 (defn datahike-factory
-  "StoreFactory for a fresh Datahike store in a private temp dir."
+  "StoreFactory for a fresh Datahike store in a private temp dir.
+   Datahike installs the KG schema from its own norms, so no :base-schema."
   []
   (->TempDirStoreFactory 'hive-datahike.kg.store
                          'hive-datahike.kg.store/create-store
-                         "hive-kg-datahike-test-"))
+                         "hive-kg-datahike-test-"
+                         {}))
 
 ;; =============================================================================
 ;; Port 2 — IsolationStrategy: install / uninstall the ephemeral store
@@ -157,18 +175,26 @@
     ;; store slot is NEVER touched. When sync-writes? is set, transact! runs on
     ;; the calling thread so it honors the override (a writer pool thread would
     ;; not inherit these thread-local bindings). with-bindings* pops on return.
+    ;;
+    ;; The :carto slot is overridden too: disc CRUD targets that slot, not the
+    ;; default KG store, so without this a test would read/write the AMBIENT
+    ;; carto store — the production one on a live image.
     (with-bindings*
-      (cond-> {#'cstore/*test-store* store}
+      (cond-> {#'cstore/*test-store*   store
+               #'slots/*slot-overrides* (assoc slots/*slot-overrides* :carto store)}
         sync-writes? (assoc #'conn/*sync-writes* true))
       thunk)))
 
 (defrecord GlobalSaveRestoreIsolation [sync-writes?]
   IsolationStrategy
   (with-installed [_ store thunk]
-    (let [prior (when (proto/store-set?) (proto/get-store))
-          run   (if sync-writes?
-                  (fn [] (with-bindings* {#'conn/*sync-writes* true} thunk))
-                  thunk)]
+    (let [prior    (when (proto/store-set?) (proto/get-store))
+          ;; The :carto slot is overridden as well: disc CRUD targets that slot,
+          ;; not the default KG store, so without this a test would read/write
+          ;; the AMBIENT carto store — the production one on a live image.
+          bindings (cond-> {#'slots/*slot-overrides* (assoc slots/*slot-overrides* :carto store)}
+                     sync-writes? (assoc #'conn/*sync-writes* true))
+          run      (fn [] (with-bindings* bindings thunk))]
       (proto/set-store! store)
       ;; Reset the shared coalescing writer: its go-loop is a process-wide
       ;; defonce that may still reference a prior store. Stopping it here and at
