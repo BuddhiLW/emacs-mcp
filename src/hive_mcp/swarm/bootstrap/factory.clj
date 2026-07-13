@@ -11,7 +11,6 @@
      3. fallback default — `:emacs` (preserves legacy behavior)"
   (:require [hive-mcp.swarm.bootstrap.protocol :as proto]
             [hive-mcp.swarm.bootstrap.emacs :as emacs]
-            [hive-mcp.swarm.bootstrap.datahike :as datahike]
             [hive-mcp.swarm.bootstrap.noop :as noop]
             [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -39,7 +38,10 @@
 
 (defmethod build-bootstrap :datahike
   [_ opts]
-  (datahike/make-datahike-bootstrap opts))
+  (if-let [make (rescue nil (requiring-resolve 'hive-mcp.swarm.bootstrap.datahike/make-datahike-bootstrap))]
+    (make opts)
+    (do (log/warn "swarm.bootstrap.factory: :datahike backend not on classpath — using NoopBootstrap")
+        (noop/make-noop-bootstrap))))
 
 (defmethod build-bootstrap :none
   [_ _opts]

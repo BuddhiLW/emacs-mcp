@@ -1,12 +1,12 @@
 (ns hive-mcp.agent.drone.session-kg
   "Per-drone session store with observation recording, reasoning tracking, and context reconstruction."
-  (:require [hive-mcp.knowledge-graph.store.datalevin :as dtlv-store]
-            [hive-mcp.protocols.kg :as kg]
+  (:require [hive-mcp.protocols.kg :as kg]
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.dns.result :as result]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.knowledge-graph.slots.factory :as kg-factory]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -86,13 +86,15 @@
   (str "/tmp/drone-" drone-id "/kg"))
 
 (defn create-session-kg!
-  "Create an isolated Datalevin-backed session store for a drone."
+  "Create an isolated Datalevin-backed session store for a drone.
+   Returns nil when the datalevin backend is not on the classpath."
   [drone-id]
   (let [db-path (session-db-path drone-id)]
     (log/info "Creating session store for drone" {:drone-id drone-id :path db-path})
     (result/rescue nil
-                   (let [store (dtlv-store/create-store {:db-path db-path
-                                                         :extra-schema session-schema})]
+                   (let [store (kg-factory/backend->store :datalevin
+                                                          {:db-path db-path
+                                                           :extra-schema session-schema})]
                      (when store
                        (kg/ensure-conn! store)
                        (log/info "Session Store initialized" {:drone-id drone-id :path db-path
