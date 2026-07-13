@@ -166,8 +166,8 @@
 
 (deftest history-db-available-test
   (testing "history-db returns a database value [datahike]"
-    (require 'hive-mcp.knowledge-graph.store.datahike)
-    (let [history-db-fn (resolve 'hive-mcp.knowledge-graph.store.datahike/history-db)
+    (require 'hive-datahike.kg.store)
+    (let [history-db-fn (resolve 'hive-datahike.kg.store/history-db)
           store (proto/get-store)]
       ;; Add some data first
       (proto/transact! store [{:kg-edge/id "hist-test"
@@ -180,8 +180,8 @@
 
 (deftest query-history-returns-results-test
   (testing "query-history queries historical data [datahike]"
-    (require 'hive-mcp.knowledge-graph.store.datahike)
-    (let [query-history-fn (resolve 'hive-mcp.knowledge-graph.store.datahike/query-history)
+    (require 'hive-datahike.kg.store)
+    (let [query-history-fn (resolve 'hive-datahike.kg.store/query-history)
           store (proto/get-store)
           edge-id (str "hist-edge-" (random-uuid))]
       ;; Add and then update an edge

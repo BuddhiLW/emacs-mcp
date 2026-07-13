@@ -31,16 +31,10 @@
   "Full scan of the KG to compute edge aggregates. Expensive on large graphs;
    only used for cold start and explicit refresh.
 
-   Cold reads on a multi-million-edge Datahike store can blow past the
-   60s default read-timeout when the schema/AVET page cache is empty.
-   When the active backend exposes `*read-timeout-ms*` (currently the
-   Datahike store), `binding` it up to 5 minutes scoped to this call
-   only — so entity lookups and other fast paths keep their tight bound.
-
-   Total-edges count walks the :aevt index directly via `eids-by-attr`
-   instead of `[:find (count ?e) ...]` — skips the datalog planner over
-   3M+ datoms. Per-relation/per-scope still need group-by aggregation,
-   so those stay as datalog queries."
+   When the active backend exposes `*read-timeout-ms*` (the Datahike sibling
+   store), `binding` it up to 5 minutes scoped to this call only — so entity
+   lookups and other fast paths keep their tight bound. Total-edges count walks
+   the :aevt index directly via `eids-by-attr`."
   []
   (let [run #(let [total (or (some-> (conn/eids-by-attr :kg-edge/id) count) 0)
                    by-relation-q '[:find ?rel (count ?e)
@@ -56,7 +50,7 @@
                 :by-relation  (into {} (conn/query by-relation-q))
                 :by-scope     (into {} (conn/query by-scope-q))})
         timeout-var (try (requiring-resolve
-                          'hive-mcp.knowledge-graph.store.datahike/*read-timeout-ms*)
+                          'hive-datahike.kg.store/*read-timeout-ms*)
                          (catch Throwable _ nil))]
     (if timeout-var
       (with-bindings* {timeout-var 300000} run)

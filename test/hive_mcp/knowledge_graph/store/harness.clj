@@ -127,15 +127,15 @@
 (defn datalevin-factory
   "StoreFactory for a fresh Datalevin store in a private temp dir."
   []
-  (->TempDirStoreFactory 'hive-mcp.knowledge-graph.store.datalevin
-                         'hive-mcp.knowledge-graph.store.datalevin/create-store
+  (->TempDirStoreFactory 'hive-datalevin.kg.store
+                         'hive-datalevin.kg.store/create-store
                          "hive-kg-test-"))
 
 (defn datahike-factory
   "StoreFactory for a fresh Datahike store in a private temp dir."
   []
-  (->TempDirStoreFactory 'hive-mcp.knowledge-graph.store.datahike
-                         'hive-mcp.knowledge-graph.store.datahike/create-store
+  (->TempDirStoreFactory 'hive-datahike.kg.store
+                         'hive-datahike.kg.store/create-store
                          "hive-kg-datahike-test-"))
 
 ;; =============================================================================
