@@ -5,7 +5,8 @@
             [hive-mcp.knowledge-graph.protocol :as proto]
             [hive-mcp.knowledge-graph.store.datascript :as ds-store]
             [hive-mcp.protocols.kg :as pkg]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.knowledge-graph.slots.factory :as factory]))
 
 (declare store-live? ensure-store! get-conn ensure-conn! ensure-conn reset-conn! delete-database! close! set-backend!)
 
@@ -51,9 +52,7 @@
             (case backend
               :datalevin
               (let [store (r/guard Exception nil
-                                   (require 'hive-mcp.knowledge-graph.store.datalevin)
-                                   (let [create-fn (resolve 'hive-mcp.knowledge-graph.store.datalevin/create-store)]
-                                     (create-fn)))]
+                                   (factory/backend->store :datalevin))]
                 (if store
                   (do (proto/set-store! store)
                       (events/dispatch [:kg.store/ready {:backend :datalevin}]))
@@ -65,20 +64,13 @@
               :datahike
               (let [writer-cfg (detect/detect-writer-config)
                     store (r/guard Exception nil
-                                   ;; Pre-load konserve namespaces in correct order before datahike.
-                                   ;; konserve.impl.defaults requires konserve.impl.storage-layout
-                                   ;; which defines -atomic-move. If storage-layout is partially
-                                   ;; loaded (e.g. from a concurrent require), method vars don't
-                                   ;; get interned and defaults.cljc fails with
-                                   ;; "-atomic-move does not exist". Loading the full chain here
-                                   ;; prevents the race.
+                                   ;; Preload konserve in order before datahike loads (the sibling
+                                   ;; store requires datahike.api via the factory's requiring-resolve).
                                    (require 'konserve.protocols)
                                    (require 'konserve.impl.storage-layout)
                                    (require 'konserve.impl.defaults)
                                    (require 'konserve.cache)
-                                   (require 'hive-mcp.knowledge-graph.store.datahike)
-                                   (let [create-fn (resolve 'hive-mcp.knowledge-graph.store.datahike/create-store)]
-                                     (create-fn (when writer-cfg {:writer writer-cfg}))))]
+                                   (factory/backend->store :datahike (when writer-cfg {:writer writer-cfg})))]
                 (if (and store
                          (r/ok? (r/try-effect*
                                  :datahike/ensure-conn-failed
@@ -159,7 +151,6 @@
      opts    - Backend-specific options:
                :datalevin {:db-path \"data/kg/datalevin\"}
                :datahike  {:db-path \"data/kg/datahike\" :backend :file}"
-
   [backend & [opts]]
   (log/info "Setting KG backend" {:backend backend :opts opts})
   (case backend
@@ -167,10 +158,7 @@
     (proto/set-store! (ds-store/create-store))
 
     :datalevin
-    (let [;; Require datalevin store dynamically to avoid hard dep
-          _ (require 'hive-mcp.knowledge-graph.store.datalevin)
-          create-fn (resolve 'hive-mcp.knowledge-graph.store.datalevin/create-store)
-          store (create-fn opts)]
+    (let [store (factory/backend->store :datalevin opts)]
       (if store
         (proto/set-store! store)
         (do
@@ -178,16 +166,13 @@
           (proto/set-store! (ds-store/create-store)))))
 
     :datahike
-    (let [;; Pre-load konserve namespaces in correct order (see ensure-store! comment)
-          _ (require 'konserve.protocols)
+    (let [_ (require 'konserve.protocols)
           _ (require 'konserve.impl.storage-layout)
           _ (require 'konserve.impl.defaults)
           _ (require 'konserve.cache)
-          _ (require 'hive-mcp.knowledge-graph.store.datahike)
-          create-fn (resolve 'hive-mcp.knowledge-graph.store.datahike/create-store)
-          ;; Pass writer config if present (for datahike-server/kabel backends)
-          store (create-fn (cond-> (or opts {})
-                             (:writer opts) (assoc :writer (:writer opts))))]
+          ;; :fresh? — explicit reconfigure must build a distinct store, never
+          ;; reuse the live global (which the datahike defmethod would otherwise return).
+          store (factory/backend->store :datahike (assoc (or opts {}) :fresh? true))]
       (if store
         (proto/set-store! store)
         (do

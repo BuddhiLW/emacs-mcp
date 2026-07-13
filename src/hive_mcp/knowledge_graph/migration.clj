@@ -8,12 +8,12 @@
 
   (:require [hive-mcp.knowledge-graph.connection :as conn]
             [hive-mcp.knowledge-graph.protocol :as proto]
-            [hive-mcp.knowledge-graph.store.datascript :as ds-store]
             [hive-dsl.result :as r]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.knowledge-graph.slots.factory :as factory]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -189,28 +189,17 @@
 ;; =============================================================================
 
 (defn- create-target-store
-  "Create a store for the target backend.
+  "Create a FRESH store for the target backend via the KG factory.
 
    Arguments:
      backend - :datascript, :datalevin, or :datahike
-     opts    - Backend-specific options
+     opts    - backend-specific target options (:db-path, :store-name, ...)
 
-   Returns IGraphStore implementation."
+   Returns IKGStore. `:fresh? true` forces a distinct store so a migration
+   target never aliases the live source store. Throws on unknown backend."
   [backend opts]
-  (case backend
-    :datascript (ds-store/create-store)
-
-    :datalevin
-    (do
-      (require 'hive-mcp.knowledge-graph.store.datalevin)
-      ((resolve 'hive-mcp.knowledge-graph.store.datalevin/create-store) opts))
-
-    :datahike
-    (do
-      (require 'hive-mcp.knowledge-graph.store.datahike)
-      ((resolve 'hive-mcp.knowledge-graph.store.datahike/create-store) opts))
-
-    (throw (ex-info "Unknown target backend" {:backend backend}))))
+  (or (factory/backend->store backend (assoc (or opts {}) :fresh? true))
+      (throw (ex-info "Unknown target backend" {:backend backend}))))
 
 (defn migrate-store!
   "Migrate all KG data from source backend to target backend.

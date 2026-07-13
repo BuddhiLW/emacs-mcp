@@ -19,7 +19,10 @@
   (:require [hive-dsl.result :as r]
             [hive-mcp.protocols.kg :as pkg]
             [hive-mcp.knowledge-graph.slots.protocol :as p]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.knowledge-graph.schema :as schema]
+            [hive-mcp.knowledge-graph.store.datalevin-config :as dlc]
+            [hive-mcp.knowledge-graph.store.datahike-config :as dhc]))
 
 ;; -----------------------------------------------------------------------------
 ;; Resolution helpers
@@ -41,6 +44,30 @@
      (r/rescue nil
        (if (seq opts) (create-fn opts) (create-fn))))))
 
+(defn- datalevin-opts
+  "Host-owned injection for the domain-agnostic datalevin sibling. Caller opts
+   win over resolved config defaults."
+  [opts]
+  (let [cfg (let [res (dlc/resolve-DatalevinKGConfig)] (if (r/ok? res) (:ok res) {}))]
+    (merge {:db-path     (:db-path cfg)
+            :cache-limit (:cache-limit cfg)
+            :base-schema (schema/full-schema)}
+           opts)))
+
+(defn- datahike-opts
+  "Host-owned injection for the domain-agnostic datahike sibling. :store-name +
+   raw :store-id reproduce the legacy store-id UUID via the sibling make-config.
+   Caller opts win."
+  [opts]
+  (let [cfg (let [res (dhc/resolve-DatahikeKGConfig)] (if (r/ok? res) (:ok res) {}))]
+    (merge {:db-path             (:db-path cfg)
+            :backend             (:backend cfg)
+            :id                  (:store-id cfg)
+            :store-name          "hive-mcp-kg"
+            :index               :datahike.index/persistent-set
+            :core-norms-resource "hive_mcp/norms/kg"}
+           opts)))
+
 ;; -----------------------------------------------------------------------------
 ;; Per-backend factories — multimethod gives OCP for new backends
 ;;
@@ -61,16 +88,15 @@
 (defmethod backend->store :datalevin
   ([be] (backend->store be {}))
   ([_ opts]
-   (invoke-create-fn 'hive-mcp.knowledge-graph.store.datalevin/create-store opts)))
+   (invoke-create-fn 'hive-datalevin.kg.store/create-store (datalevin-opts opts))))
 
 (defmethod backend->store :datahike
   ([be] (backend->store be {}))
-  ([_ _opts]
-   ;; Reuse the live global active-store when one is already configured —
-   ;; the :default slot must return the same handle that legacy
-   ;; `connection.clj` callers see, so reads/writes don't split-brain.
-   (or (when (pkg/store-set?) (pkg/get-store))
-       (invoke-create-fn 'hive-mcp.knowledge-graph.store.datahike/create-store))))
+  ([_ opts]
+   ;; Reuse the live active-store unless the caller demands a distinct store
+   ;; (:fresh?), so the :default slot doesn't split-brain vs connection.clj.
+   (or (when (and (not (:fresh? opts)) (pkg/store-set?)) (pkg/get-store))
+       (invoke-create-fn 'hive-datahike.kg.store/create-store (datahike-opts opts)))))
 
 (defmethod backend->store :datascript
   ([be] (backend->store be {}))
