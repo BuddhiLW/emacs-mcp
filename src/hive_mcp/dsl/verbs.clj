@@ -24,7 +24,8 @@
   (:require [clojure.string :as str]
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.dsl.param-domain :as pd]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -176,11 +177,11 @@
 
 (defn collect-refs
   "Collect all $ref op-id targets from an operation's param values.
-   Walks maps and vectors recursively. Skips meta keys.
-   Returns a set of op-id strings."
+   Walks maps and vectors recursively. Skips meta keys AND prose params
+   (pd/prose-param-keys) — a `$ref:` inside prose is quotation, not a
+   dependency. Returns a set of op-id strings."
   [op]
-  (let [meta-keys #{:tool :command :id :depends_on :wave}
-        refs      (volatile! #{})]
+  (let [refs (volatile! #{})]
     (letfn [(walk [v]
               (cond
                 (string? v)     (when-let [target (ref-target v)]
@@ -188,8 +189,7 @@
                 (map? v)        (run! walk (vals v))
                 (sequential? v) (run! walk v)
                 :else           nil))]
-      (doseq [[k v] op
-              :when (not (contains? meta-keys k))]
+      (doseq [[_ v] (pd/ref-walkable-entries op)]
         (walk v)))
     @refs))
 

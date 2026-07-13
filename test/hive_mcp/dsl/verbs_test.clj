@@ -460,20 +460,20 @@
       (is (= ["$0" "$1"] (:depends_on (nth ops 2)))))))
 
 (deftest compile-paragraph-self-ref-not-filtered-test
-  (testing "self-referencing $ref is collected (validation catches this downstream)"
-    ;; compile-paragraph collects refs mechanically — multi/validate-ops catches self-deps
+  (testing "a $ref quoted in prose content wires NO dependency (quotation)"
+    ;; Prose params (param-domain) are quotation: the self-dep incident class
+    ;; is impossible from :content. Addressable params still collect refs.
     (let [ops (verbs/compile-paragraph [["m+" {"c" "$ref:$0.data.id"}]])]
-      ;; $0 refs $0 — compile-paragraph should include it; validate-ops will reject
-      (is (= ["$0"] (:depends_on (first ops)))))))
+      (is (nil? (:depends_on (first ops)))))))
 
 (deftest compile-paragraph-chained-refs-test
-  (testing "chain of refs: $0 → $1 → $2"
+  (testing "refs wire deps only from addressable params; prose quotes"
     (let [ops (verbs/compile-paragraph [["m+" {"c" "first"}]
                                         ["m+" {"c" "$ref:$0.data.id"}]
                                         ["k>" {"from" "$ref:$1.data.id" "to" "x"}]])]
       (is (nil? (:depends_on (nth ops 0))))
-      (is (= ["$0"] (:depends_on (nth ops 1))))
-      (is (= ["$1"] (:depends_on (nth ops 2)))))))
+      (is (nil? (:depends_on (nth ops 1))) "content ref is quotation, no dep")
+      (is (= ["$1"] (:depends_on (nth ops 2))) "node-id ref still wires"))))
 
 (deftest compile-paragraph-duplicate-ref-deduped-test
   (testing "same ref appearing twice in params is deduped in depends_on"

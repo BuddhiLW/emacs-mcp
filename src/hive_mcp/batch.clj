@@ -24,7 +24,8 @@
             [hive-mcp.dns.result :as result]
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.dsl.param-domain :as pd]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -294,7 +295,8 @@
 (defn- classify-op-refs
   "After `resolve-op-refs` has run, walk the ORIGINAL op's params to
    spot every `$ref:...` string and look up how it actually resolved
-   against `results-by-id`. A ref is `:broken` when:
+   against `results-by-id`. Prose params (pd/prose-param-keys) are never
+   walked — a `$ref:` inside prose is quotation. A ref is `:broken` when:
 
      - the source op-id is missing from results (`ref-not-found`), OR
      - the resolved value is literally `nil`.
@@ -302,8 +304,7 @@
    Returns `nil` when all refs OK (or no refs); otherwise
    `{:broken-refs [{:ref str :reason kw} ...]}`."
   [original-op results-by-id]
-  (let [meta-keys #{:id :tool :command :depends_on :wave}
-        refs (atom [])
+  (let [refs (atom [])
         walk! (fn walk! [v]
                 (cond
                   (ref? v)
@@ -322,9 +323,8 @@
                   (run! walk! v)
 
                   :else nil))]
-    (doseq [[k v] original-op]
-      (when-not (contains? meta-keys k)
-        (walk! v)))
+    (doseq [[_ v] (pd/ref-walkable-entries original-op)]
+      (walk! v))
     (when (seq @refs)
       {:broken-refs @refs})))
 
