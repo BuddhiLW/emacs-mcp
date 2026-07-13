@@ -143,7 +143,7 @@
         ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
         ;; Overrides default Chroma store when Milvus is reachable.
-        io.github.hive-agi/hive-milvus {:git/tag "v0.4.0" :git/sha "4729bb6"}
+        io.github.hive-agi/hive-milvus {:git/tag "v0.4.5" :git/sha "8ad32bd"}
 
         ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj;
         ;; hive-weave.retry/with-recovery used by knowledge-graph/store/datahike.clj
@@ -320,6 +320,16 @@
    :main-opts ["-m" "nrepl.cmdline"
                "--port" "7910"
                "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"]}
+
+  ;; Read-only, fixed-corpus embedding retrieval experiment.
+  ;; Usage:
+  ;;   clojure -X:embedding-retrieval
+  ;;   clojure -X:embedding-retrieval :model '"qwen3-embedding:8b"'
+  :embedding-retrieval
+  {:extra-paths ["dev/experiments"]
+   :exec-fn hive-mcp.experiments.embedding-retrieval/run!
+   :exec-args {:host "http://localhost:11434"
+               :model "qwen3-embedding:4b"}}
 
   :test
   {:extra-paths ["test" "test/resources"]
