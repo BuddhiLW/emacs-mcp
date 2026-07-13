@@ -14,9 +14,9 @@
 
    Idempotency: the row-enumeration query filters out :slave/alive? false,
    so subsequent sweeps don't re-touch already-zombied rows."
-  (:require [datalevin.core :as dl]
-            [hive-system.process.liveness :as liveness]
-            [taoensso.timbre :as log]))
+  (:require [hive-system.process.liveness :as liveness]
+            [taoensso.timbre :as log]
+            [hive-mcp.swarm.datalevin.driver :as dl]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
