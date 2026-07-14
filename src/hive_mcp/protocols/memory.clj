@@ -13,7 +13,8 @@
   (:require [clojure.string]
             [hive-mcp.protocols.registry :as reg]
             [hive-mcp.memory.ids :as ids]
-            [hive-spi.memory.ports :as ports]))
+            [hive-spi.memory.ports :as ports]
+            [malli.core :as m]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -252,3 +253,13 @@
 (def iso-timestamp
   "Return current ISO 8601 timestamp."
   ids/iso-timestamp)
+
+(def MemoryStore
+  "Any value satisfying the canonical hive-spi.memory.ports/IMemoryStore protocol."
+  [:fn #(satisfies? ports/IMemoryStore %)])
+
+(m/=> get-store [:function
+                 [:=> [:cat] MemoryStore]
+                 [:=> [:cat :keyword] MemoryStore]])
+
+(m/=> store-set? [:=> [:cat] :boolean])

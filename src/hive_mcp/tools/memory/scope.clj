@@ -5,7 +5,8 @@
             [hive-dsl.adt :refer [adt-case]]
             [clojure.set]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [malli.core :as m]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -163,3 +164,12 @@
     true
     (let [tags (set (or (:tags entry) []))]
       (some tags valid-scopes))))
+
+(def ProjectId
+  "Non-blank project identifier string; \"global\" is the root scope."
+  [:and :string [:fn (fn [s] (not (str/blank? s)))]])
+
+(m/=> get-current-project-id
+      [:function
+       [:=> [:cat] ProjectId]
+       [:=> [:cat [:maybe :string]] ProjectId]])

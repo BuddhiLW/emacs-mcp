@@ -16,7 +16,8 @@
 
    Thread safety: All operations are atomic via atom + swap!.
    Idempotent: Re-registering the same key replaces silently."
-  (:require [hive-mcp.protocols.registry :as reg]))
+  (:require [hive-mcp.protocols.registry :as reg]
+            [malli.core :as m]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -181,3 +182,12 @@
   "Return vector of tool names that have command contributions."
   []
   (vec (keys @command-contributions)))
+
+(def ExtensionFn
+  "Schema for a registered extension value: any invokable."
+  [:fn ifn?])
+
+(m/=> get-extension
+      [:function
+       [:=> [:cat :keyword] [:maybe ExtensionFn]]
+       [:=> [:cat :keyword :any] :any]])

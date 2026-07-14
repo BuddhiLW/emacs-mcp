@@ -9,7 +9,8 @@
   (:require [datascript.core :as d]
             [taoensso.timbre :as log]
             [hive-mcp.swarm.datascript.schema :as schema]
-            [hive-mcp.server.guards :as guards]))
+            [hive-mcp.server.guards :as guards]
+            [malli.core :as m]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -75,3 +76,9 @@
   "Generate a unique ID with optional prefix."
   ([] (str (java.util.UUID/randomUUID)))
   ([prefix] (str prefix "-" (java.util.UUID/randomUUID))))
+
+(def DSConn
+  "DataScript connection: atom wrapping a DB, satisfies d/conn?."
+  [:fn {:error/message "must be a DataScript connection"} d/conn?])
+
+(m/=> ensure-conn [:=> [:cat] DSConn])

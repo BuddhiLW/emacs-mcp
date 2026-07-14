@@ -8,7 +8,8 @@
 
    Also provides `keywordize-map` for normalizing string-keyed maps from MCP JSON."
   (:require [hive-mcp.tools.core :refer [mcp-success mcp-error mcp-json]]
-            [hive-mcp.dns.result :as result]))
+            [hive-mcp.dns.result :as result]
+            [malli.core :as m]))
 
 ;; ── Exception Capture ─────────────────────────────────────────────────────────
 
@@ -61,3 +62,30 @@
    Used to normalize MCP JSON params which arrive with string keys."
   [m]
   (into {} (map (fn [[k v]] [(keyword k) v]) m)))
+
+(def OkResult
+  "Success Result: open map carrying the :ok payload."
+  [:map [:ok :any]])
+
+(def ErrResult
+  "Error Result: :error category keyword plus optional exception detail keys."
+  [:map
+   [:error :keyword]
+   [:message {:optional true} [:maybe :string]]
+   [:class {:optional true} :string]
+   [:data {:optional true} [:maybe map?]]])
+
+(def Result
+  "hive-dsl Result: success ({:ok ...}) or error ({:error ...})."
+  [:or OkResult ErrResult])
+
+(def McpResponse
+  "MCP tool response content map; :isError marks error responses."
+  [:map
+   [:type [:= "text"]]
+   [:text :string]
+   [:isError {:optional true} :boolean]])
+
+(m/=> try-result [:=> [:cat :keyword [:=> [:cat] Result]] Result])
+
+(m/=> result->mcp [:=> [:cat Result] McpResponse])

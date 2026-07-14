@@ -1,5 +1,6 @@
 (ns hive-mcp.agent.context
-  "Thread-local execution context for agent tool calls. Minimal dependencies to avoid cycles.")
+  "Thread-local execution context for agent tool calls. Minimal dependencies to avoid cycles."
+  (:require [malli.core :as m]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -167,3 +168,5 @@
     (let [entries @cache]
       {:entry-count (count entries)
        :keys (keys entries)})))
+
+(m/=> current-directory [:=> [:cat] [:maybe :string]])
