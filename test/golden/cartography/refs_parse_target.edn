@@ -1,0 +1,6 @@
+{:bare {:ns nil, :name "foo"},
+ :dotted-ns {:ns "hive.core", :name "map"},
+ :nested-slash {:ns "a/b", :name "c"},
+ :qualified {:ns "a.b", :name "c"},
+ :single-slash {:ns nil, :name "/"},
+ :trailing-slash {:ns nil, :name "ns/"}}
