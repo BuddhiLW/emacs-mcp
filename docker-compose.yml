@@ -63,10 +63,21 @@ services:
       - ANALYSIS_INTERVAL_SECONDS=300
       - JAVA_OPTS=-Xmx1g -Xms256m
       - SSH_AUTH_SOCK=/ssh-agent
-      # LSP_PROJECTS unset → auto-discovers deps.edn via find (maxdepth 3,
-      # so /workspace/<group>/<project>/deps.edn is found).
-      # Set to comma-separated RELATIVE paths for explicit projects
-      # (e.g. "hive/hive-mcp,hive/lsp-mcp"). Absolute paths are stripped.
+      # Carto requests exact projects through the shared cache inbox. Keep the
+      # expensive whole-${HOME}/PP sweep off by default; opt in explicitly for
+      # legacy periodic discovery.
+      - LSP_AUTO_DISCOVER=${LSP_AUTO_DISCOVER:-false}
+      # Analyze independent on-demand projects concurrently. Each clojure-lsp
+      # process is capped by JAVA_OPTS, so tune this with available RAM/CPU.
+      - LSP_WORKER_COUNT=${LSP_WORKER_COUNT:-2}
+      - LSP_PROJECT_TIMEOUT_SECONDS=${LSP_PROJECT_TIMEOUT_SECONDS:-300}
+      # LSP_PROJECTS applies only when LSP_AUTO_DISCOVER=true. Set it to a
+      # comma-separated list to avoid discovering the entire workspace.
+      - LSP_PROJECTS=${LSP_PROJECTS:-}
+    # Docker's embedded resolver currently forwards to a broken host resolver
+    # on this workstation. This default is known-good and remains overridable.
+    dns:
+      - ${HIVE_LSP_DNS:-1.1.1.1}
     restart: unless-stopped
 
   # =============================================================================

@@ -5,8 +5,21 @@ set -euo pipefail
 WORKSPACE=${WORKSPACE:-/workspace}
 CACHE_DIR=${CACHE_DIR:-/cache}
 INTERVAL=${ANALYSIS_INTERVAL_SECONDS:-300}
+AUTO_DISCOVER=${LSP_AUTO_DISCOVER:-false}
+WORKER_COUNT=${LSP_WORKER_COUNT:-2}
+PROJECT_TIMEOUT=${LSP_PROJECT_TIMEOUT_SECONDS:-300}
 LSP_JAR=/opt/clojure-lsp.jar
 REQUEST_FILE="$CACHE_DIR/_request.edn"
+
+[[ "$WORKER_COUNT" =~ ^[1-9][0-9]*$ ]] || WORKER_COUNT=2
+[[ "$PROJECT_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || PROJECT_TIMEOUT=300
+
+enabled() {
+    case "${1,,}" in
+        1|true|yes|on) return 0 ;;
+        *)             return 1 ;;
+    esac
+}
 
 analyze_project() {
     local project_root=$1
@@ -38,7 +51,8 @@ analyze_project() {
         settings='{}'
     fi
 
-    if java $JAVA_OPTS -jar "$LSP_JAR" dump --project-root "$project_root" \
+    if timeout --signal=TERM --kill-after=15s "${PROJECT_TIMEOUT}s" \
+        java $JAVA_OPTS -jar "$LSP_JAR" dump --project-root "$project_root" \
         --output '{:format :edn :filter-keys [:analysis :dep-graph]}' \
         --analysis '{:type :project-only}' \
         --settings "$settings" \
@@ -61,13 +75,23 @@ analyze_project() {
 
         local final_end
         final_end=$(date +%s)
+        local completed_at_ms
+        completed_at_ms=$(date +%s%3N)
         local total_ms=$(( (final_end - start_time) * 1000 ))
-        echo "{:timestamp $start_time :duration-ms $total_ms :project-root \"$project_root\" :project-id \"$project_id\" :status :ok :extracted true}" > "$cache_path/meta.edn"
+        echo "{:timestamp $start_time :completed-at-ms $completed_at_ms :duration-ms $total_ms :project-root \"$project_root\" :project-id \"$project_id\" :status :ok :extracted true}" > "$cache_path/meta.edn"
         echo "Analysis + extraction successful for $project_id (${total_ms}ms)"
     else
         local exit_code=$?
-        rm -f "$cache_path/dump.edn.tmp"
-        echo "{:timestamp $start_time :project-root \"$project_root\" :project-id \"$project_id\" :status :error :exit-code $exit_code}" > "$cache_path/meta.edn"
+        local completed_at_ms
+        completed_at_ms=$(date +%s%3N)
+        rm -f "$cache_path/dump.edn.tmp" \
+              "$cache_path/dump.edn" \
+              "$cache_path/var-defs.edn" \
+              "$cache_path/call-graph.edn" \
+              "$cache_path/ns-graph.edn" \
+              "$cache_path/ns-defs.edn" \
+              "$cache_path/summary.edn"
+        echo "{:timestamp $start_time :completed-at-ms $completed_at_ms :project-root \"$project_root\" :project-id \"$project_id\" :status :error :exit-code $exit_code}" > "$cache_path/meta.edn"
         echo "Analysis failed for $project_id with exit code $exit_code"
     fi
 }
@@ -100,26 +124,86 @@ discover_projects() {
     fi
 }
 
-# Process dynamic request file (written by MCP tool, consumed here)
-# Format: one project-id per line
-process_requests() {
-    if [ -f "$REQUEST_FILE" ]; then
-        echo "Processing dynamic request: $REQUEST_FILE"
-        while IFS= read -r project_id; do
-            # Strip whitespace and skip empty/comment lines
-            project_id=$(echo "$project_id" | tr -d '[:space:]')
-            [[ -z "$project_id" || "$project_id" == \#* ]] && continue
-            local project_root="$WORKSPACE/$project_id"
-            if [ -d "$project_root" ]; then
-                analyze_project "$project_root" "$project_id"
-            else
-                echo "Requested project not found: $project_root"
+# Atomically move the shared inbox out of the producer's path. A producer that
+# opens the old inode before the move writes into this claim; a producer that
+# opens it after the move creates a fresh inbox for the next drain. This removes
+# the former read-then-rm window that could delete concurrent appends.
+claim_request_file() {
+    [ -s "$REQUEST_FILE" ] || return 1
+    local claim="${REQUEST_FILE}.processing.$$.$RANDOM"
+    mv "$REQUEST_FILE" "$claim" 2>/dev/null || return 1
+    printf '%s\n' "$claim"
+}
+
+# `wait PID` is interrupted by SIGHUP even though PID keeps running. Retry the
+# wait while the child is alive so a later request signal cannot make the main
+# loop forget an in-flight analyzer.
+wait_for_worker() {
+    local worker_pid=$1
+    local status=0
+    while kill -0 "$worker_pid" 2>/dev/null; do
+        if wait "$worker_pid"; then
+            return 0
+        else
+            status=$?
+        fi
+        if ! kill -0 "$worker_pid" 2>/dev/null; then
+            return "$status"
+        fi
+    done
+    wait "$worker_pid" 2>/dev/null || true
+}
+
+process_request_batch() {
+    local claim=$1
+    local -a worker_pids=()
+    local project_id project_root
+
+    echo "Processing dynamic request batch: $claim (workers: $WORKER_COUNT)"
+    while IFS= read -r project_id; do
+        project_id=$(printf '%s' "$project_id" | tr -d '[:space:]')
+        [[ -z "$project_id" || "$project_id" == \#* ]] && continue
+        project_root="$WORKSPACE/$project_id"
+        if [ -d "$project_root" ]; then
+            analyze_project "$project_root" "$project_id" &
+            worker_pids+=("$!")
+            if (( ${#worker_pids[@]} >= WORKER_COUNT )); then
+                wait_for_worker "${worker_pids[0]}" || true
+                worker_pids=("${worker_pids[@]:1}")
             fi
-        done < "$REQUEST_FILE"
-        rm -f "$REQUEST_FILE"
-        return 0
-    fi
-    return 1
+        else
+            echo "Requested project not found: $project_root"
+        fi
+    done < <(sort -u "$claim")
+
+    local worker_pid
+    for worker_pid in "${worker_pids[@]}"; do
+        wait_for_worker "$worker_pid" || true
+    done
+    rm -f "$claim"
+}
+
+# Drain every batch available. New appends made while a claimed batch runs are
+# left in a fresh inbox and picked up before scheduled/idle work can start.
+process_requests() {
+    local processed=1
+    local claim
+    while claim=$(claim_request_file); do
+        processed=0
+        process_request_batch "$claim"
+    done
+    return "$processed"
+}
+
+run_scheduled_discovery() {
+    local project_dir project_id
+    while IFS=: read -r project_dir project_id; do
+        if [ -s "$REQUEST_FILE" ]; then
+            echo "Dynamic request pending; preempting scheduled discovery"
+            return 0
+        fi
+        analyze_project "$project_dir" "$project_id"
+    done < <(discover_projects)
 }
 
 echo "Starting clojure-lsp sidecar analysis with interval: ${INTERVAL}s"
@@ -127,27 +211,41 @@ echo "Workspace: $WORKSPACE"
 echo "Cache directory: $CACHE_DIR"
 echo "Request file: $REQUEST_FILE"
 echo "LSP JAR: $LSP_JAR"
+echo "Auto-discovery: $AUTO_DISCOVER"
+echo "On-demand workers: $WORKER_COUNT"
+echo "Per-project timeout: ${PROJECT_TIMEOUT}s"
 
 # Flag for immediate re-run on SIGHUP
 rerun_immediately=0
 
-trap 'rerun_immediately=1' SIGHUP
+main() {
+    trap 'rerun_immediately=1' SIGHUP
 
-while true; do
-    # Check for dynamic requests first (on-demand indexing)
-    if ! process_requests; then
-        # No requests — run scheduled discovery
-        discover_projects | while IFS=: read -r project_dir project_id; do
-            analyze_project "$project_dir" "$project_id"
-        done
-    fi
+    while true; do
+        if process_requests; then
+            :
+        elif enabled "$AUTO_DISCOVER"; then
+            run_scheduled_discovery
+        else
+            echo "No dynamic requests; automatic workspace discovery disabled"
+        fi
 
-    if [ $rerun_immediately -eq 1 ]; then
-        rerun_immediately=0
-        echo "Re-running immediately due to SIGHUP"
-    else
-        echo "Sleeping for ${INTERVAL}s"
-        sleep "$INTERVAL" &
-        wait $! || true
-    fi
-done
+        if [ "$rerun_immediately" -eq 1 ]; then
+            rerun_immediately=0
+            echo "Re-running immediately due to SIGHUP"
+        else
+            echo "Sleeping for ${INTERVAL}s"
+            sleep "$INTERVAL" &
+            local sleep_pid=$!
+            wait "$sleep_pid" || true
+            if kill -0 "$sleep_pid" 2>/dev/null; then
+                kill "$sleep_pid" 2>/dev/null || true
+                wait "$sleep_pid" 2>/dev/null || true
+            fi
+        fi
+    done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
