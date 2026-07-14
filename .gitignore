@@ -87,3 +87,12 @@ hive-hot
 local.deps.edn
 .clj-kondo/
 .worktrees/
+
+# Retrieval experiment inputs are private by default. Only deliberately
+# sanitized example fixtures may be tracked.
+dev/experiments/**/fixtures/*.edn
+!dev/experiments/**/fixtures/*.example.edn
+dev/experiments/private/
+dev/experiments/**/*.private.edn
+dev/experiments/**/*.local.edn
+.lsp/.cache/

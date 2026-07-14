@@ -62,3 +62,12 @@
                  {:id 3} ; missing :tags entirely
                  {:id 4 :tags ["scope:project:hive"]}]]
     (is (= [4] (mapv :id (sf/scope-filter-entries-strict entries hive-tags))))))
+
+(deftest permissive--scope-tag-is-authoritative-over-project-id
+  (testing "foreign scope tag drops the entry even when :project-id is visible"
+    (let [entries [{:id 1 :project-id "hive"      :tags ["scope:project:hive"]}
+                   {:id 2 :project-id "hive"      :tags ["scope:project:funeraria"]}
+                   {:id 3 :project-id "hive"      :tags []}
+                   {:id 4 :project-id "funeraria" :tags []}]]
+      (is (= [1 3]
+             (mapv :id (sf/scope-filter-entries entries hive-tags #{"hive"})))))))

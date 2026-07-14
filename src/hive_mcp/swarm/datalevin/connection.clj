@@ -7,13 +7,14 @@
    - Shared helper functions (now, gen-id)
    - db accessor (replaces DataScript's @conn deref pattern)
 
-   Boundary: This is the ONLY namespace that touches datalevin.core directly
-   for connection lifecycle. All other datalevin.* namespaces go through here."
+   Boundary: connection lifecycle for swarm state. datalevin.core access is
+   late-bound through hive-mcp.swarm.datalevin.driver, so this namespace
+   compiles and loads without the datalevin jar on the classpath."
 
-  (:require [datalevin.core :as dl]
-            [taoensso.timbre :as log]
+  (:require [taoensso.timbre :as log]
             [hive-mcp.swarm.datalevin.schema :as schema]
-            [hive-mcp.server.guards :as guards]))
+            [hive-mcp.server.guards :as guards]
+            [hive-mcp.swarm.datalevin.driver :as dl]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

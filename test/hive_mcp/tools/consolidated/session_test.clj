@@ -481,19 +481,19 @@
         (is (= 1 (:total (ctx-store/context-stats))))))))
 
 (deftest test-wrap-evicts-context
-  (testing "handle-wrap evicts agent context after crystallization"
-    ;; Store entries tagged with agent ID
+  (testing "wrap background work evicts agent context after crystallization"
     (ctx-store/context-put! {:axioms "cached"} :tags #{"agent:swarm-wrap-test-1" "catchup"})
     (ctx-store/context-put! {:convs "cached"} :tags #{"agent:swarm-wrap-test-1" "catchup"})
     (is (= 2 (:total (ctx-store/context-stats))))
-    ;; Mock crystal/handle-wrap-crystallize to avoid real DB calls
     (with-redefs [crystal/handle-wrap-crystallize
                   (fn [_] {:type "text" :text "{\"status\":\"ok\"}"})]
-      (session/handle-session {:command "wrap"
-                               :agent_id "swarm-wrap-test-1"
-                               :directory "/tmp/test"})
-      ;; Context should be evicted after wrap
-      (is (= 0 (:total (ctx-store/context-stats)))))))
+      (let [result (deref (#'session/wrap-async!
+                           "swarm-wrap-test-1"
+                           "/tmp/test")
+                          2000
+                          ::timeout)]
+        (is (not= ::timeout result))
+        (is (= 0 (:total (ctx-store/context-stats))))))))
 
 (deftest test-complete-evicts-context
   (testing "handle-complete evicts agent context after session completion"

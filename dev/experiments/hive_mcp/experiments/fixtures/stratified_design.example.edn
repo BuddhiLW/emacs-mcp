@@ -1,0 +1,47 @@
+{:name "stratified-design-synthetic-recall"
+ :query "Stratified Design"
+ :target-id "target-stratified-design"
+ :qrels {"target-stratified-design" 2
+         "related-stratification-map" 1
+         "related-stratified-refactor" 1}
+ :entries
+ [{:id "target-stratified-design"
+   :type "convention"
+   :tags ["functional-design" "stratified-design" "architecture"]
+   :content "Stratified Design: build software in layers where each layer uses functions from lower layers. Keep function bodies at one abstraction level. Hide implementations behind abstraction barriers, keep barrier interfaces minimal, and stop adding layers when the code is comfortable. Lower layers are more reusable and more critical to test because they have more dependents."}
+  {:id "related-stratified-refactor"
+   :type "decision"
+   :tags ["stratified-design" "refactor"]
+   :content "Refactor a large module into a Stratified Design facade and small focused submodules while preserving public API compatibility."}
+  {:id "related-stratification-map"
+   :type "note"
+   :tags ["stratification" "architecture-map"]
+   :content "Architecture map connecting Stratified Design, onion architecture, abstraction barriers, domain boundaries, and functional pipelines."}
+  {:id "distractor-orchestration"
+   :type "note"
+   :tags ["orchestration" "workflow"]
+   :content "Coordination system containing batch execution, state machine workflows, schema validation, and registry-based extension."}
+  {:id "distractor-survey-a"
+   :type "note"
+   :tags ["refactor-survey"]
+   :content "Survey extension harness: zero hotspots. Clean."}
+  {:id "distractor-survey-b"
+   :type "note"
+   :tags ["refactor-survey"]
+   :content "Survey code counting service: zero hotspots. Clean."}
+  {:id "distractor-memory-chunking"
+   :type "convention"
+   :tags ["memory" "embedding" "chunking"]
+   :content "Break long memory entries into smaller logical sections before embedding. Link related parts explicitly."}
+  {:id "distractor-tooling"
+   :type "convention"
+   :tags ["tooling" "batch"]
+   :content "Batch related tool operations and inspect each individual result instead of trusting only a summary envelope."}
+  {:id "distractor-permission-design"
+   :type "decision"
+   :tags ["architecture" "permissions" "tiered"]
+   :content "Use declarative rules for tiered permission escalation. Low-risk changes run directly, source changes need review, and external writes require approval."}
+  {:id "distractor-graph-design"
+   :type "decision"
+   :tags ["architecture" "graph" "ui" "design"]
+   :content "Graph interface design with sidebar filters, main canvas, detail panel, streaming data flow, and separate views for runtime entities."}]}

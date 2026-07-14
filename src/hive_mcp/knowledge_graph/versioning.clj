@@ -125,8 +125,8 @@
     (log/info "Creating versioned KG store" {:db-path db-path :backend backend :system-name system-name})
 
     ;; Create Datahike store
-    (require 'hive-mcp.knowledge-graph.store.datahike)
-    (let [create-store-fn (resolve 'hive-mcp.knowledge-graph.store.datahike/create-store)
+    (require 'hive-datahike.kg.store)
+    (let [create-store-fn (resolve 'hive-datahike.kg.store/create-store)
           store (create-store-fn {:db-path db-path :backend backend})]
 
       (if-not store

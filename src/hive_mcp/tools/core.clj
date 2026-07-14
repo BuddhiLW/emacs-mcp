@@ -11,7 +11,8 @@
             [clojure.string :as str]
             [hive-mcp.channel.piggyback :as piggyback]
             [hive-mcp.emacs-ext.client :as ec]
-            [hive-mcp.tools.diagnostics :as diag]))
+            [hive-mcp.tools.diagnostics :as diag]
+            [malli.core :as m]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -435,3 +436,24 @@ HINT: Provide a JSON array like [\"item1\", \"item2\"]
     (if (seq hm)
       (assoc base :_hm hm)
       base)))
+
+(def McpErrorResponse
+  "MCP error response map: text content flagged with :isError.
+   :text is nil only when a nil exception message reaches mcp-error."
+  [:map
+   [:type [:= "text"]]
+   [:text [:maybe :string]]
+   [:isError [:= true]]])
+
+(def McpJsonResponse
+  "MCP success response map with JSON-encoded :text.
+   :pending_instructions is attached only when the agent had queued
+   instructions; payloads are opaque pass-through values."
+  [:map
+   [:type [:= "text"]]
+   [:text :string]
+   [:pending_instructions {:optional true} [:vector :any]]])
+
+(m/=> mcp-error [:=> [:cat [:maybe :string]] McpErrorResponse])
+
+(m/=> mcp-json [:=> [:cat :any [:? [:cat [:= :agent-id] [:maybe :string]]]] McpJsonResponse])

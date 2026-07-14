@@ -44,15 +44,18 @@
       in-project? (disj "scope:global"))))
 
 (defn scope-filter-entries
-  "Apply in-memory scope filter as safety net. Keeps entries whose tags
-   intersect `scope-tags` or whose :project-id is in `visible-ids`."
+  "Scope filter. An entry's `scope:project:*` tag is authoritative: when present
+   it must intersect `scope-tags`. Entries with no `scope:project:*` tag fall
+   back to `:project-id ∈ visible-ids`."
   [entries scope-tags visible-ids]
-  (filter (fn [entry]
-            (let [entry-tags (set (or (:tags entry) []))]
-              (or
-               (some entry-tags scope-tags)
-               (contains? visible-ids (:project-id entry)))))
-          entries))
+  (let [scope-tags (set scope-tags)
+        scope-tag? (fn [t] (.startsWith ^String (str t) "scope:project:"))]
+    (filter (fn [entry]
+              (let [entry-tags (set (or (:tags entry) []))]
+                (if (some scope-tag? entry-tags)
+                  (boolean (some scope-tags entry-tags))
+                  (contains? visible-ids (:project-id entry)))))
+            entries)))
 
 (defn scope-filter-entries-strict
   "Strict variant of `scope-filter-entries` — keeps only entries whose

@@ -39,14 +39,14 @@
    [konserve.impl.storage-layout]
    [konserve.impl.defaults]
    [konserve.cache]
-   [hive-mcp.knowledge-graph.store.datahike]
    ;; Regular test deps
    [clojure.test :refer [deftest is testing use-fixtures]]
    [hive-mcp.knowledge-graph.connection :as conn]
    [hive-mcp.knowledge-graph.edges :as edges]
    [hive-mcp.knowledge-graph.queries :as queries]
    [hive-mcp.knowledge-graph.schema :as schema]
-   [hive-mcp.knowledge-graph.store.fixtures :as fixtures]))
+   [hive-mcp.knowledge-graph.store.fixtures :as fixtures]
+   [hive-datahike.kg.store]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

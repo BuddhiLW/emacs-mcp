@@ -40,7 +40,8 @@
             [clojure.data.json :as json]
             [taoensso.timbre :as log]
             [hive-mcp.tools.catchup.relevance :as relevance]
-            [hive-mcp.vectordb.kanban-facade :as kanban-facade]))
+            [hive-mcp.vectordb.kanban-facade :as kanban-facade]
+            [hive-mcp.tools.catchup.outcome :as outcome]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -60,21 +61,21 @@
 ;; =============================================================================
 
 (defn- safe-deref
-  "Deref a future with timeout-ms. Returns default on timeout or exception.
-   Label identifies which query timed out so operators can spot silent drops."
-  ([fut timeout-ms default]
-   (safe-deref fut timeout-ms default "unlabeled"))
-  ([fut timeout-ms default label]
-   (try
-     (let [result (deref fut timeout-ms ::timeout)]
-       (if (= result ::timeout)
-         (do (future-cancel fut)
-             (log/warn "catchup: parallel query timed out after" timeout-ms "ms:" label)
-             default)
-         result))
-     (catch Exception e
-       (log/warn "catchup: parallel deref failed for" label ":" (.getMessage e))
-       default))))
+  [fut timeout-ms label]
+  (try
+    (let [result (deref fut timeout-ms ::timeout)]
+      (if (= result ::timeout)
+        (do
+          (future-cancel fut)
+          (log/warn "catchup: parallel query timed out after" timeout-ms "ms:" label)
+          (outcome/failure :timeout label
+                           (str "query timed out after " timeout-ms "ms")))
+        (if (outcome/outcome? result)
+          result
+          (outcome/ok result))))
+    (catch Exception e
+      (log/warn "catchup: parallel deref failed for" label ":" (.getMessage e))
+      (outcome/failure :error label (or (ex-message e) (str (class e)))))))
 
 (def ^:private ^:const query-timeout-ms
   "Outer safe-deref timeout for the bundle/git/carto futures. The bundle
@@ -215,24 +216,22 @@
               f-kanban (pool/with-io ((tt/timed-query "catchup/kanban-summary-total"
                                                       #(gather-kanban-summary project-id))))
 
-              bundle        (safe-deref f-bundle query-timeout-ms {} "bundle")
-              git-info      (safe-deref f-git query-timeout-ms {} "git-info")
-              addon-status  (safe-deref f-status query-timeout-ms {} "addon-status")
+              bundle        (safe-deref f-bundle query-timeout-ms "bundle")
+              git-info      (outcome/value-or (safe-deref f-git query-timeout-ms "git-info") {})
+              addon-status  (outcome/value-or (safe-deref f-status query-timeout-ms "addon-status") {})
               carto-status  (:carto-status addon-status)
-              kanban-summary (safe-deref f-kanban query-timeout-ms
-                                          {:counts {} :recent-todos []}
-                                          "kanban-summary")
+              kanban-summary (outcome/value-or (safe-deref f-kanban query-timeout-ms "kanban-summary") {:counts {}, :recent-todos []})
 
-              axioms               (:axioms bundle [])
-              principles           (:principles bundle [])
-              priority-principles  (:priority-principles bundle [])
-              priority-conventions (:priority-conventions bundle [])
-              sessions             (:sessions bundle [])
-              recent-wraps-raw     (:recent-wraps bundle [])
-              decisions            (:decisions bundle [])
-              snippets             (:snippets bundle [])
-              expiring             (:expiring bundle [])
-              conventions          (:conventions bundle [])
+              axioms               (:axioms (outcome/value-or bundle {}) [])
+              principles           (:principles (outcome/value-or bundle {}) [])
+              priority-principles  (:priority-principles (outcome/value-or bundle {}) [])
+              priority-conventions (:priority-conventions (outcome/value-or bundle {}) [])
+              sessions             (:sessions (outcome/value-or bundle {}) [])
+              recent-wraps-raw     (:recent-wraps (outcome/value-or bundle {}) [])
+              decisions            (:decisions (outcome/value-or bundle {}) [])
+              snippets             (:snippets (outcome/value-or bundle {}) [])
+              expiring             (:expiring (outcome/value-or bundle {}) [])
+              conventions          (:conventions (outcome/value-or bundle {}) [])
 
               ;; Convert to metadata (pure, fast)
               axioms-meta (mapv fmt/entry->axiom-meta axioms)
@@ -247,8 +246,7 @@
               expiring-meta (mapv #(fmt/entry->catchup-meta % 80) expiring)
 
               ;; Addon extension: fire-and-forget (async, returns nil immediately).
-              _ (when-let [enrich-fn (ext/get-extension :cu/a)]
-                  (enrich-fn {:directory directory
+              _ (when (outcome/available? bundle) (when-let [enrich-fn (ext/get-extension :cu/a)] (enrich-fn {:directory directory
                               :project-id project-id
                               :caller-id (:_caller_id args)
                               :decisions decisions-base
@@ -260,7 +258,7 @@
                               :axioms axioms
                               :principles principles
                               :priority-principles priority-principles
-                              :priority-conventions priority-conventions}))
+                              :priority-conventions priority-conventions})))
 
               ;; Memory piggyback: enqueue axioms + priority conventions for
               ;; incremental delivery via ---MEMORY--- blocks on subsequent calls.
@@ -324,10 +322,7 @@
               (let [in-project? (and project-id (not= project-id "global"))]
                 (if-not in-project?
                   piggyback-raw
-                  (let [scope-tags (sf/compute-full-scope-tags project-id)
-                        visible-ids (set (conj (or (rescue [] (kg-scope/visible-scopes project-id))
-                                                   [project-id])
-                                               "global"))]
+                  (let [scope-tags (sf/compute-full-scope-tags project-id)]
                     (filterv (fn [entry]
                                (let [tags (set (or (:tags entry) []))
                                      entry-type (str (or (:type entry) ""))]
@@ -340,8 +335,7 @@
                                   ;; No scope tag = global, passes through
                                   (not-any? #(.startsWith ^String % "scope:project:") tags)
                                   ;; Scope-matching entries pass through
-                                  (some tags scope-tags)
-                                  (contains? visible-ids (:project-id entry)))))
+                                  (some tags scope-tags))))
                              piggyback-raw))))
 
               ;; Dual-write: Cache entry categories in context-store for pass-by-ref mode.
@@ -392,18 +386,7 @@
                                              context-refs))]
 
           (fmt/build-catchup-response
-           {:project-name project-name :project-id project-id
-            :scopes scopes :git-info git-info
-            :axioms-meta axioms-meta :principles-meta principles-meta
-            :priority-principles-meta priority-principles-meta
-            :priority-meta priority-meta
-            :sessions-meta sessions-meta :decisions-meta decisions-base
-            :conventions-meta conventions-base :snippets-meta snippets-meta
-            :expiring-meta expiring-meta
-            :recent-wraps recent-wraps
-            :carto-status carto-status
-            :kanban-summary kanban-summary
-            :context-refs context-refs}))
+           {:scopes scopes, :project-name project-name, :principles-meta principles-meta, :priority-principles-meta priority-principles-meta, :recent-wraps recent-wraps, :context-refs context-refs, :axioms-meta axioms-meta, :memory-status (outcome/summary bundle), :priority-meta priority-meta, :carto-status carto-status, :expiring-meta expiring-meta, :git-info git-info, :sessions-meta sessions-meta, :snippets-meta snippets-meta, :decisions-meta decisions-base, :conventions-meta conventions-base, :project-id project-id, :kanban-summary kanban-summary}))
         (catch Exception e
           (fmt/catchup-error e))))))
 

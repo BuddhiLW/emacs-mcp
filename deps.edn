@@ -38,18 +38,15 @@
         persistent-sorted-set/persistent-sorted-set-compat
         {:local/root "lib/persistent-sorted-set-0.3.118.jar"}
 
-        ;; Datalevin for durable graph storage (GraphStore backend, optional)
-        ;; LMDB-backed Datalog — requires Java 21+
-        datalevin/datalevin {:local/root "../clones-ref/datalevin"}
+        ;; Datalevin / Datahike / Yggdrasil / Kabel are NOT core deps: the KG
+        ;; store loads them through published siblings (hive-datalevin /
+        ;; hive-datahike) via requiring-resolve, and swarm coordination via
+        ;; late-bound driver shims. Test-only driver coords live in the :test
+        ;; aliases; the live tree pins the datalevin fork in local.deps.edn.
 
         ;; sci pinned to latest ecosystem-wide. Requires overarch consumed as
         ;; source (hive-overarch), not its AOT uberjar which bundles older sci.
         org.babashka/sci {:mvn/version "0.13.53"}
-
-        ;; Datahike for immutable graph storage with branching/time-travel
-        ;; Content-addressable, supports branch/merge for multi-ling exploration
-        ;; Part of replikativ ecosystem (pairs with yggdrasil)
-        org.replikativ/datahike {:mvn/version "0.8.1719"}
 
         ;; Proximum — pure-JVM HNSW vector index backing the vector-store slots.
         ;; SIMD via Java Vector API (needs --add-modules jdk.incubator.vector).
@@ -112,12 +109,6 @@
         ;; java-diff-utils for proper unified diff computation (hunks, context)
         ;; Used by drone diff protocol for token-efficient diff storage
         io.github.java-diff-utils/java-diff-utils {:mvn/version "4.15"}
-        org.replikativ/yggdrasil {:mvn/version "0.2.23"}
-
-        ;; Kabel — WebSocket transport for distributed Datahike writer backend
-        ;; Symmetric peer-to-peer with middleware, transit/fressian serialization
-        ;; Used by :kabel writer backend for real-time reactive KG writes
-        io.replikativ/kabel {:mvn/version "0.3.92"}
 
         ;; Process execution - babashka.process for CLI wrappers
         ;; Used by overarch, scc, and other CLI tool integrations
@@ -152,7 +143,7 @@
         ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
         ;; Overrides default Chroma store when Milvus is reachable.
-        io.github.hive-agi/hive-milvus {:git/tag "v0.4.0" :git/sha "4729bb6"}
+        io.github.hive-agi/hive-milvus {:git/tag "v0.4.5" :git/sha "8ad32bd"}
 
         ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj;
         ;; hive-weave.retry/with-recovery used by knowledge-graph/store/datahike.clj
@@ -330,6 +321,16 @@
                "--port" "7910"
                "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"]}
 
+  ;; Read-only, fixed-corpus embedding retrieval experiment.
+  ;; Usage:
+  ;;   clojure -X:embedding-retrieval
+  ;;   clojure -X:embedding-retrieval :model '"qwen3-embedding:8b"'
+  :embedding-retrieval
+  {:extra-paths ["dev/experiments"]
+   :exec-fn hive-mcp.experiments.embedding-retrieval/run!
+   :exec-args {:host "http://localhost:11434"
+               :model "qwen3-embedding:4b"}}
+
   :test
   {:extra-paths ["test" "test/resources"]
    :extra-deps {io.github.cognitect-labs/test-runner
@@ -346,6 +347,10 @@
                 io.github.hive-agi/hive-schemas {:mvn/version "0.1.1"}}
                 ;; hive-spi now lives in :deps (core nses require it) — no
                 ;; :test-alias override needed.
+   ;; Backend drivers are NOT here — the default cold-CI test path is
+   ;; driver-free. Backend-coupled tests live under test-backends/ (the
+   ;; :test-backends alias) and get datalevin/datahike + the KG-store siblings
+   ;; from the user's local.deps.edn.
    ;; KG test isolation: force ephemeral in-memory DataScript so a cold test
    ;; JVM never opens (and konserve-lock-contends) the prod datahike store.
    :jvm-opts ["-Dhive.kg.backend=datascript"]
@@ -387,6 +392,14 @@
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:includes [:integration]}}
+
+  ;; Backend-coupled tests, classpath-isolated off the default cold-CI path.
+  ;; Compose with :test for shared infra + supply drivers via local.deps.edn:
+  ;;   clj -Sdeps "$(cat local.deps.edn)" -M:test:test-backends
+  ;; Drivers (datalevin/datahike) + the KG-store siblings are NOT declared here
+  ;; — the user's local.deps.edn brings whichever backend they run against.
+  :test-backends
+  {:extra-paths ["test-backends"]}
 
   ;; Uberjar build via tools.build (see build.clj)
   ;; Usage: clj -T:build uber

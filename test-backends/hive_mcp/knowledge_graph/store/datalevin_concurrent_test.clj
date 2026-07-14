@@ -20,9 +20,9 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [datalevin.core :as dtlv]
-            [hive-mcp.knowledge-graph.store.datalevin :as dl]
             [hive-mcp.protocols.kg :as pkg]
-            [hive-test.linearizability :as lin])
+            [hive-test.linearizability :as lin]
+            [hive-datalevin.kg.store :as dl])
   (:import (java.nio.file Files)
            (java.nio.file.attribute FileAttribute)))
 

@@ -75,7 +75,7 @@
        "  multi {\"dsl\": [[\"m+\", {\"c\": \"hello\", \"t\": \"note\"}],\n"
        "                   [\"k>\", {\"from\": \"$0\", \"to\": \"node-2\", \"rel\": \"implements\"}]]}\n"
        "  Ops are numbered from $0. In a node-id param (from/to/node_id/...), a bare\n"
-       "  op id refers to that op's result id: \"$0\" expands to \"$ref:$0.id\".\n"
+       "  op id refers to that op's result id: \"$0\" expands to \"$ref:$0.data.id\".\n"
        "  Verbs: m+ m? m@ m/ (memory), k> k^ k! k# (kg), a+ a? a! ax (agent),\n"
        "         b+ b> b? b# (kanban), s. s~ s? s< (session), g? g+ g! g> (magit),\n"
        "         w! w? wy wn (wave), h! h? (hivemind), p? p@ p/ (preset), c? c! c* (config)\n"
@@ -399,7 +399,7 @@
                                                               "q=query, n=name, id=id, p=prompt, f=files. "
                                                               "Ops are numbered from $0. In a node-id param (from/to/node_id/...), "
                                                               "a bare op id refers to that op's result id: \"$0\" expands to "
-                                                              "\"$ref:$0.id\". Anywhere else, use the explicit \"$ref:$0.<path>\" form. "
+                                                              "\"$ref:$0.data.id\". Anywhere else, use the explicit \"$ref:$0.<path>\" form. "
                                                               "Example: [[\"m+\", {\"c\": \"note text\", \"t\": \"note\"}], "
                                                               "[\"k>\", {\"from\": \"$0\", \"to\": \"node-2\", \"rel\": \"implements\"}]]. "
                                                               "Mutually exclusive with 'operations'.")}

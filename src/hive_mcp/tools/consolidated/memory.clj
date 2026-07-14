@@ -115,7 +115,7 @@
   {:name "memory"
    :consolidated true
    :default-async-commands write-commands
-   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, migrate-scoped, import, decay, xpoll, rename, edit, reembed, batch-add, batch-edit, batch-feedback, batch-get, batch-reembed. Use 'help' command to list all.\n\nEdit: 'edit' mutates an entry in place (id preserved → KG edges preserved). Params: id (required), type, content, tags, duration, abstraction_level, reason. Content change triggers re-embed. 'batch-edit' takes operations:[...] and optional dry-run:true for validation preview.\n\nReembed: 'reembed' re-vectorizes an entry without rewriting content (id required). Use after embedding-model swaps, vector-index rebuilds, or stale-vector recovery. Preserves id, content, tags, edges, duration, abstraction-level, project-id. 'batch-reembed' takes ids:[...] for sequential per-op processing.\n\nWrites default to async: they return {:queued true :task-id ...} immediately and deliver the real result via ---TOOLRESULT--- on the caller's next tool call. Pass async:false to force sync. Reads (query/metadata/get/search/expiring/batch-get) stay synchronous by default; pass async:true to queue them."
+   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, migrate-scoped, import, decay, xpoll, rename, edit, reembed, batch-add, batch-edit, batch-feedback, batch-get, batch-reembed. Use 'query' only for structured filters (type/tags/scope/duration); use 'search' for natural-language semantic retrieval. Use 'help' command to list all.\n\nEdit: 'edit' mutates an entry in place (id preserved → KG edges preserved). Params: id (required), type, content, tags, duration, abstraction_level, reason. Content change triggers re-embed. 'batch-edit' takes operations:[...] and optional dry-run:true for validation preview.\n\nReembed: 'reembed' re-vectorizes an entry without rewriting content (id required). Use after embedding-model swaps, vector-index rebuilds, or stale-vector recovery. Preserves id, content, tags, edges, duration, abstraction-level, project-id. 'batch-reembed' takes ids:[...] for sequential per-op processing.\n\nWrites default to async: they return {:queued true :task-id ...} immediately and deliver the real result via ---TOOLRESULT--- on the caller's next tool call. Pass async:false to force sync. Reads (query/metadata/get/search/expiring/batch-get) stay synchronous by default; pass async:true to queue them."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :description "Command to execute. Memory commands are flat (add, query, etc.). Subdomains: 'kg edge', 'kg traverse', 'migration backup', 'ingest file', 'enrich enrich'. Use command='help' to list all."}
@@ -163,10 +163,14 @@
                                      :items {:type "string"}
                                      :description "[batch-get/batch-reembed] Array of memory entry IDs"}
                               "query" {:type "string"
-                                       :description "[search] Natural language query for semantic search"}
+                                       :description "[search only] Natural-language semantic query. command=query rejects this field; structured query uses type/tags/scope/duration."}
                               "exclude_tags" {:type "array"
                                               :items {:type "string"}
                                               :description "[query/search] Tags to exclude from results"}
+                              "created_after" {:type "string"
+                                               :description "[query] ISO-8601 threshold; only entries with :created strictly after survive. Counts as a filter on its own (since-timestamp browsing)."}
+                              "updated_after" {:type "string"
+                                               :description "[query] ISO-8601 threshold; only entries with :updated strictly after survive."}
                               "feedback" {:type "string"
                                           :enum ["helpful" "unhelpful"]
                                           :description "[feedback] Helpfulness rating"}

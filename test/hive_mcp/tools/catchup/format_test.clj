@@ -210,6 +210,43 @@
         (is (string? (:hint meta-block)))
         (is (.contains (:hint meta-block) "MEMORY"))))))
 
+(deftest unavailable-memory-is-not-empty-memory-test
+  (testing "timeout or error omits counts, sessions, wraps, KG, and context claims"
+    (let [response (fmt/build-catchup-response
+                    {:project-name "test-proj"
+                     :project-id "test-proj"
+                     :scopes ["scope:project:test-proj"]
+                     :git-info {:branch "main" :uncommitted false}
+                     :memory-status {:status :error
+                                     :warnings [{:status :error
+                                                 :label "bundle"
+                                                 :message "failed"}]}
+                     :axioms-meta []
+                     :principles-meta []
+                     :priority-principles-meta []
+                     :priority-meta []
+                     :sessions-meta []
+                     :decisions-meta []
+                     :conventions-meta []
+                     :snippets-meta []
+                     :expiring-meta []
+                     :recent-wraps []
+                     :context-refs {:axioms "ctx-empty"}
+                     :kg-insights nil})
+          blocks (mapv #(json/read-str (:text %) :key-fn keyword) response)
+          by-kind (into {} (map (juxt :_block identity)) blocks)
+          header (get by-kind "header")
+          context (get by-kind "context")
+          meta-block (get by-kind "meta")]
+      (is (= "error" (get-in header [:memory-status :status])))
+      (is (not (contains? header :counts)))
+      (is (nil? (get-in header [:memory-piggyback :enqueued])))
+      (is (nil? (get-in header [:memory-piggyback :context-refs])))
+      (is (= {} (:context context)))
+      (is (not (contains? by-kind "recent-wraps")))
+      (is (not (contains? by-kind "kg-insights")))
+      (is (.contains (:hint meta-block) "unavailable")))))
+
 (deftest store-not-configured-error-test
   (testing "returns error with isError flag"
     (let [resp (fmt/store-not-configured-error)

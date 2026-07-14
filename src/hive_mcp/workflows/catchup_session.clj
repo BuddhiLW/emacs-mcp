@@ -394,13 +394,14 @@
   [resources {:keys [data]}]
   (if-let [build-response-fn (:build-response-fn resources)]
     (build-response-fn data)
-    ;; Default: return summary data
-    (select-keys data [:project-id :project-name :scopes :git-info
-                       :permeation :context-refs :piggyback-enqueued?
-                       :axioms-meta :priority-meta :sessions-meta
-                       :decisions-meta :conventions-meta :snippets-meta
-                       :expiring-meta :addon-data
-                       :project-tree-scan :disc-decay])))
+    (assoc
+     (select-keys data [:project-id :project-name :scopes :git-info
+                        :permeation :context-refs :piggyback-enqueued?
+                        :axioms-meta :priority-meta :sessions-meta
+                        :snippets-meta :expiring-meta :addon-data
+                        :project-tree-scan :disc-decay])
+     :decisions-meta (:decisions-base data)
+     :conventions-meta (:conventions-base data))))
 
 (defn handle-error
   "Error state handler. Captures error context.
