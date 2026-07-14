@@ -4,4 +4,4 @@
  :language :clojure
  :nrepl-port 7910
  :hot-reload false
- :tags ["mcp" "core" "swarm"]}
+ :tags ["mcp" "core" "swarm"] :carto {:source-roots ["dev" "dev/experiments" "resources" "src" "test" "test-backends" "test/resources"]}}
