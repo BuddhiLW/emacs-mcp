@@ -58,15 +58,15 @@
      :entry->meta-fns      {:axiom   (fn [e] (assoc e :T "axiom"))
                             :priority (fn [e] (assoc e :T "priority"))
                             :catchup  (fn [e] (assoc e :T "catchup"))}
-     :addon-fn             (fn [data] {:addon-data {:processed true}})
+     :addon-fn             (fn [_data] {:addon-data {:processed true}})
      :permeate-fn          (fn [_dir] {:permeated 2 :agents ["ling-1" "ling-2"]})
      :tree-scan-fn         (fn [_dir] {:scanned true :projects 3})
      :disc-decay-fn        (fn [_pid] {:updated 5 :skipped 0 :errors 0})
-     :piggyback-fn         (fn [_aid _pid _entries _refs] nil)
+     :piggyback-fn         (fn [_aid _entries _refs] nil)
      :context-store-fn     (fn [_data _tags _ttl] (str "ctx-" (rand-int 99999)))
      :build-scopes-fn      (fn [pn _pid] [(str "scope:project:" pn)])
-     :build-response-fn    nil  ;; use default select-keys
-     :error-response-fn    nil} ;; use default throw
+     :build-response-fn    nil
+     :error-response-fn    nil}
     overrides)))
 
 ;; =============================================================================
@@ -143,11 +143,8 @@
           result (catchup/run-catchup-session
                   resources
                   {:directory "/test/project"})]
-      ;; Parallel futures catch individual exceptions and return empty defaults.
-      ;; The session completes successfully with empty axioms (graceful degradation).
       (is (= "hive-mcp" (:project-id result)))
       (is (empty? (:axioms-meta result)))
-      ;; Other queries still succeed
       (is (seq (:decisions-meta result)))
       (is (seq (:sessions-meta result))))))
 
@@ -284,7 +281,7 @@
   (testing "handle-deliver enqueues piggyback and caches in context-store"
     (let [piggyback-called (atom false)
           store-calls (atom [])
-          resources {:piggyback-fn (fn [_aid _pid _entries _refs]
+          resources {:piggyback-fn (fn [_aid _entries _refs]
                                      (reset! piggyback-called true))
                      :context-store-fn (fn [data tags _ttl]
                                          (swap! store-calls conj {:data-count (count data) :tags tags})

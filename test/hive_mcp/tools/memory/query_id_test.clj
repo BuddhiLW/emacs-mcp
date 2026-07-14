@@ -134,6 +134,20 @@
           (is (not (and (sequential? body) (seq body)))
               "must not return an arbitrary in-scope slice"))))))
 
+(deftest text-on-structured-query-fails-loudly
+  (testing "query text cannot be ignored while scope=all returns an arbitrary corpus slice"
+    (let [store-calls (atom 0)]
+      (with-fake-store (fn [_opts]
+                         (swap! store-calls inc)
+                         (decoy-entries))
+        (let [resp (query/handle-query {:query "Stratified Design"
+                                        :scope "all"
+                                        :limit 500})]
+          (is (true? (:isError resp)))
+          (is (zero? @store-calls) "invalid semantic intent must not touch the scalar store")
+          (is (re-find #"command=search" (:text resp))
+              "error must name the correct semantic command"))))))
+
 ;; =============================================================================
 ;; Regression fence for (B): legitimate narrowing predicates still browse
 ;; =============================================================================
