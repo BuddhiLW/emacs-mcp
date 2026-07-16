@@ -18,7 +18,9 @@
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
+            [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]
+            [hive-mcp.plan.schema :as schema]
+            [hive-spi.schema.derive :as derive]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -385,6 +387,31 @@
                     :directory directory
                     :plan-path plan_path
                     :auto-assign? auto_assign)))
+
+(defn handle-plan-schema
+  "MCP handler: surface the plan-memory contract at the tool boundary.
+
+   Returns the malli `Plan` schema projected to JSON-Schema via the single-source
+   hive-spi `compile-op` seam — the SAME projection every schema-driven MCP tool
+   advertises as its :inputSchema — plus the required keys, the step enums, a
+   valid example, and the authoring recipe. Zero-arg. Removes the need to read
+   hive-mcp.plan.schema source before authoring a `type=plan` memory."
+  [_params]
+  (let [{:keys [input-schema]} (derive/compile-op schema/Plan)]
+    (mcp-json
+     {:success       true
+      :for           "type=plan memory content — embed the plan as an ```edn fenced block matching :json-schema"
+      :json-schema   input-schema
+      :required      ["id" "title" "steps"]
+      :step-required ["id" "title"]
+      :step-enums    {:priority ["high" "medium" "low"]
+                      :estimate ["small" "medium" "large"]}
+      :example       schema/example-plan
+      :how-to        (str "1) Write a memory: type=plan whose content embeds the plan as an "
+                          "```edn fenced block matching :json-schema. "
+                          "2) Run `kanban plan-to-kanban` with plan_id=<memory-id> (or plan_path=<file>). "
+                          "Each :steps entry becomes a kanban task; :depends-on becomes task->task "
+                          "KG edges; :decision-id links the plan to its parent decision memory.")})))
 
 (def tools
   "REMOVED: Flat plan_to_kanban tool no longer exposed. Use consolidated `kanban` tool with `plan-to-kanban` command."

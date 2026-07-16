@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    name: Tag & Release
+    name: Tag, Release & Deploy
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -18,22 +18,46 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Read version
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Clojure
+        uses: DeLaGuardo/setup-clojure@13.2
+        with:
+          cli: 'latest'
+
+      - name: Cache Maven deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          key: clj-${{ runner.os }}-${{ hashFiles('deps.edn') }}
+          restore-keys: |
+            clj-${{ runner.os }}-
+
+      # Version AUTOBUMPS in build.clj: 0.{minor}.{next-unpublished-patch}.
+      # No VERSION file — the patch is derived from what's already on Clojars.
+      - name: Compute version
         id: version
         run: |
-          if [ -f VERSION ]; then
-            VERSION=$(cat VERSION | tr -d '[:space:]')
-          else
-            echo "::error::VERSION file not found"
+          VERSION=$(clojure -T:build print-version | tail -1 | tr -d '[:space:]')
+          if [ -z "${VERSION}" ]; then
+            echo "::error::print-version produced no output"
             exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Computed version: ${VERSION}"
 
       - name: Check if tag exists
         id: check_tag
         run: |
-          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
@@ -62,3 +86,10 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
+
+      # Idempotent: build.clj/deploy no-ops if this version is already on Clojars.
+      - name: Deploy library jar to Clojars
+        env:
+          CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
+          CLOJARS_PASSWORD: ${{ secrets.CLOJARS_PASSWORD }}
+        run: clojure -T:build deploy
