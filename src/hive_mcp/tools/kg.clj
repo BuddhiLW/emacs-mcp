@@ -17,7 +17,9 @@
             [hive-mcp.tools.kg.queries :as kg-queries]
             [hive-mcp.tools.kg.commands :as kg-commands]
             [hive-mcp.knowledge-graph.versioning :as versioning]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-spi.schema.registry :as sreg]
+            [hive-mcp.extensions.deftool :as dt]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -235,6 +237,19 @@
   (result->mcp (try-result :kg/status-failed #(versioning-status* params))))
 
 ;;; =============================================================================
+;;; Versioning arg schemas — single-source: one malli schema drives both the
+;;; MCP :inputSchema projection AND boundary coercion for the tool-def below
+;;; (via dt/schema->tool). Registered before versioning-tools so compile-op
+;;; resolves them at load. See MACRO-SYS.
+;;; =============================================================================
+
+(do
+  (sreg/register! ::kg-checkout-args
+    [:map [:name {:description "Branch name to switch to"} :string]])
+  (sreg/register! ::kg-merge-args
+    [:map [:source {:description "Source branch name or snapshot-id to merge"} :string]]))
+
+;;; =============================================================================
 ;;; Versioning Tool Definitions
 ;;; =============================================================================
 
@@ -249,13 +264,12 @@
                   :required ["name"]}
     :handler handle-kg-branch}
 
-   {:name "kg_checkout"
-    :description "Switch to a different branch in the versioned Knowledge Graph. Changes the active branch for all subsequent KG operations."
-    :inputSchema {:type "object"
-                  :properties {"name" {:type "string"
-                                       :description "Branch name to switch to"}}
-                  :required ["name"]}
-    :handler handle-kg-checkout}
+   ;; Migrated to single-source: :inputSchema + coercion derived from
+   ;; ::kg-checkout-args by dt/schema->tool. See MACRO-SYS.
+   (dt/schema->tool "kg_checkout"
+                    "Switch to a different branch in the versioned Knowledge Graph. Changes the active branch for all subsequent KG operations."
+                    ::kg-checkout-args
+                    handle-kg-checkout)
 
    {:name "kg_branches"
     :description "List all branches in the versioned Knowledge Graph. Shows which branches exist and which is currently active."
@@ -279,13 +293,12 @@
                   :required []}
     :handler handle-kg-history}
 
-   {:name "kg_merge"
-    :description "Merge a source branch or snapshot into the current branch. Combines knowledge from parallel exploration timelines."
-    :inputSchema {:type "object"
-                  :properties {"source" {:type "string"
-                                         :description "Source branch name or snapshot-id to merge"}}
-                  :required ["source"]}
-    :handler handle-kg-merge}
+   ;; Migrated to single-source: :inputSchema + coercion derived from
+   ;; ::kg-merge-args by dt/schema->tool. See MACRO-SYS.
+   (dt/schema->tool "kg_merge"
+                    "Merge a source branch or snapshot into the current branch. Combines knowledge from parallel exploration timelines."
+                    ::kg-merge-args
+                    handle-kg-merge)
 
    {:name "kg_versioning_status"
     :description "Get the current versioning status of the Knowledge Graph. Shows whether versioning is available, current branch, snapshot, and all branches."
