@@ -119,9 +119,12 @@
         {:git/tag "v0.5.2" :git/sha "8d9760c"}
 
         ;; hive-spi — pure SPI contract leaf (protocols + schemas + ADTs).
-        ;; Required at compile time by core namespaces. Sibling :local/root
-        ;; until published; then switch to a {:git/tag :git/sha} coord.
-        io.github.hive-agi/hive-spi {:local/root "../hive-spi"}
+        ;; Required at compile time by core namespaces. Pinned to the published
+        ;; git tag (== master head) so CI and the Clojars jar build resolve it
+        ;; without a sibling checkout; sibling co-dev goes through a gitignored
+        ;; local.deps.edn :local/root override.
+        io.github.hive-agi/hive-spi {:git/tag "v0.1.5"
+                                     :git/sha "1fed565a9600211e582eeac6831c8533ec22d2b2"}
 
         ;; TEMPORARY — the migration adapters still hard-require these backends
         ;; (a DIP violation). Drop once they move to their addon repos.
@@ -401,11 +404,15 @@
   :test-backends
   {:extra-paths ["test-backends"]}
 
-  ;; Uberjar build via tools.build (see build.clj)
-  ;; Usage: clj -T:build uber
+  ;; Build via tools.build (see build.clj): uberjar (server) + source jar /
+  ;; Clojars deploy. deps-deploy pushes the library jar; version autobumps.
+  ;; Usage: clj -T:build uber            ; runnable server uberjar
   ;;        clj -T:build uber :profile k8s-headless
+  ;;        clj -T:build print-version   ; computed 0.{minor}.{patch}
+  ;;        clj -T:build deploy          ; jar -> Clojars (needs CLOJARS_* env)
   :build
-  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.9"}}
+  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.9"}
+          slipset/deps-deploy {:mvn/version "0.2.2"}}
    :ns-default build}
 
   ;; Sibling :local/root overrides go in a gitignored local.deps.edn, merged
