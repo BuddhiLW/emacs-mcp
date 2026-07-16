@@ -100,13 +100,16 @@
                                            drone-id (:result raw-result)))}))))
 
 (defn- emit-completion-event!
-  "Dispatch :drone/completed or :drone/failed event."
-  [ctx raw-result diff-results duration-ms validation-summary files]
+  "Dispatch :drone/completed or :drone/failed event.
+   run-id (the wave run id, may be nil) is threaded into the event data so the
+   downstream :nats-publish effect can emit a wave-scoped completion."
+  [ctx raw-result diff-results duration-ms validation-summary files run-id]
   (let [{:keys [drone-id task-id parent-id]} ctx]
     (if (completed? raw-result)
       (ev/dispatch [:drone/completed {:drone-id drone-id
                                       :task-id task-id
                                       :parent-id parent-id
+                                      :run-id run-id
                                       :files-modified (:applied diff-results)
                                       :files-failed (:failed diff-results)
                                       :proposed-diff-ids (:proposed diff-results)
@@ -115,6 +118,7 @@
       (ev/dispatch [:drone/failed {:drone-id drone-id
                                    :task-id task-id
                                    :parent-id parent-id
+                                   :run-id run-id
                                    :error (str (:result raw-result))
                                    :error-type :execution
                                    :files files}]))))
@@ -173,6 +177,10 @@
   (let [{:keys [drone-id pre-validation file-contents-before]} ctx
         {:keys [task files options]} task-spec
         {:keys [wave-id skip-auto-apply]} options
+        ;; run-id = wave run id, carried at TaskSpec top level (->task-spec puts
+        ;; :wave-id there, not under :options). Threaded to the completion event
+        ;; so :nats-publish can emit a wave-scoped completion for wave-watch.sh.
+        run-id (:wave-id task-spec)
 
         diffs-after (diff-mgmt/capture-diffs-before)
         new-diff-ids (diff-mgmt/get-new-diff-ids diffs-before diffs-after)
@@ -189,7 +197,7 @@
                              pre-validation file-contents-before skip-auto-apply)]
 
     (notify-parent-completion! (:parent-id ctx) drone-id task raw-result diff-results)
-    (emit-completion-event! ctx raw-result diff-results duration-ms validation-summary files)
+    (emit-completion-event! ctx raw-result diff-results duration-ms validation-summary files run-id)
     (record-execution-metrics! ctx task-spec config raw-result duration-ms)
 
     (hivemind/record-ling-result! drone-id
