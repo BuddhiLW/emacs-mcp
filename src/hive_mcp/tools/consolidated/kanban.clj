@@ -83,6 +83,7 @@
    :retag          mem-kanban/handle-mem-kanban-retag
    :sync           (fn [_] {:success true :message "Memory kanban is single-backend, no sync needed"})
    :plan-to-kanban plan-tool/handle-plan-to-kanban
+   :plan-schema    plan-tool/handle-plan-schema
    :batch-update   handle-batch-update
    :batch-delete   handle-batch-delete
    :batch-create   handle-batch-create
@@ -119,10 +120,10 @@
 (def tool-def
   {:name "kanban"
    :consolidated true
-   :description "Kanban task management: list (all/filtered tasks), get (single task/entry by id — unified across the kanban store AND the default memory store, since they are separate backends; surfaces full fields + KG edges; on miss returns semantic-search suggestions), create (new task), update (change status/modify task), delete (hard-remove task by id; no archival, no completion — use for duplicates/cancellations), retag (scope-move via project_id + optional ±tags; preserves entry id + KG edges, no re-embed), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks, supports plan_id or plan_path), batch-update (bulk status changes; per-op :command respected — pass :command \"delete\" inside an op to mix delete in), batch-delete (sweep many task_ids; mirror of batch-update), batch-retag (sweep many scope-moves). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all. HCR: a list shows its own scope + ANCESTORS (parent tasks, always — 'child sees parent'); include_descendants=true (default) also aggregates DESCENDANT (child) project tasks; scope=\"all\" lifts the project filter entirely for a cross-workspace whole-board view. List filters: query (substring), tags (extra required tags), tag_match (any|all), created_after / updated_after (ISO-8601), limit / offset (pagination), fields (projection)."
+   :description "Kanban task management: list (all/filtered tasks), get (single task/entry by id — unified across the kanban store AND the default memory store, since they are separate backends; surfaces full fields + KG edges; on miss returns semantic-search suggestions), create (new task), update (change status/modify task), delete (hard-remove task by id; no archival, no completion — use for duplicates/cancellations), retag (scope-move via project_id + optional ±tags; preserves entry id + KG edges, no re-embed), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks, supports plan_id or plan_path), plan-schema (the plan-memory EDN contract: JSON-schema + example + how-to, so a type=plan memory can be authored without reading source), batch-update (bulk status changes; per-op :command respected — pass :command \"delete\" inside an op to mix delete in), batch-delete (sweep many task_ids; mirror of batch-update), batch-retag (sweep many scope-moves). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all. HCR: a list shows its own scope + ANCESTORS (parent tasks, always — 'child sees parent'); include_descendants=true (default) also aggregates DESCENDANT (child) project tasks; scope=\"all\" lifts the project filter entirely for a cross-workspace whole-board view. List filters: query (substring), tags (extra required tags), tag_match (any|all), created_after / updated_after (ISO-8601), limit / offset (pagination), fields (projection)."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["list" "get" "create" "move" "status" "update" "delete" "retag" "roadmap" "my-tasks" "sync" "plan-to-kanban" "batch-update" "batch-delete" "batch-create" "batch-retag" "help"]
+                                         :enum ["list" "get" "create" "move" "status" "update" "delete" "retag" "roadmap" "my-tasks" "sync" "plan-to-kanban" "plan-schema" "batch-update" "batch-delete" "batch-create" "batch-retag" "help"]
                                          :description "Kanban operation to perform"}
                               "status" {:type "string"
                                         :enum ["todo" "inprogress" "inreview" "done"]
@@ -145,7 +146,7 @@
                               "remove_tags" {:type "array" :items {:type "string"}
                                              :description "[retag] Tags to remove (applied after add)"}
                               "plan_id" {:type "string"
-                                         :description "Memory entry ID containing the plan (for plan-to-kanban)"}
+                                         :description "Memory entry ID containing the plan (for plan-to-kanban). Call command='plan-schema' for the plan EDN contract (schema + example + how-to)."}
                               "plan_path" {:type "string"
                                            :description "File path to a plan file (alternative to plan_id for plan-to-kanban). Slurps file content directly — zero-token plan loading for large plans."}
                               "operations" {:type "array"
