@@ -136,7 +136,14 @@
    :cider (cider-backend {:timeout-ms timeout-ms :session cider-session})})
 
 (defn make-backend
-  "Factory function for creating LLM backends (:ollama, :cider, :openrouter)."
+  "Factory function for creating LLM backends.
+
+   Named types: :ollama :cider :openrouter :openai-compat :auto.
+   Any other keyword that names a provider in
+   openrouter/provider-registry (e.g. :venice :groq :together :fireworks
+   :openai :ollama-compat) is routed through openai-compat-backend with
+   that :provider, so config keys like :models.synthesis-backend can
+   select a provider directly without a bespoke case."
   ([type] (make-backend type {}))
   ([type opts]
    (case type
@@ -147,5 +154,10 @@
      :openrouter (openrouter/openrouter-backend opts)
      :openai-compat (openrouter/openai-compat-backend opts)
      :auto (openrouter/auto-backend opts)
-     (throw (ex-info "Unknown backend type"
-                     {:type type :available [:ollama :cider :openrouter :openai-compat :auto]})))))
+     (if (contains? openrouter/provider-registry type)
+       (openrouter/openai-compat-backend (assoc opts :provider type))
+       (throw (ex-info "Unknown backend type"
+                       {:type type
+                        :available (into [:ollama :cider :openrouter
+                                          :openai-compat :auto]
+                                         (keys openrouter/provider-registry))}))))))
