@@ -192,3 +192,16 @@
                     (fn [_aid _etype _data] nil)]
         (handler {:agent-id "test-ling" :phase :silence :message nil})
         (is true "Nil message handled gracefully")))))
+
+(deftest default-dispatch-fn-test
+  (testing "non-dag-wave modes return :no-dispatch-for-mode without side effects"
+    (let [f (saa-fx/default-dispatch-fn "/test/project")]
+      (is (= {:wave-id nil :result {:status :no-dispatch-for-mode :mode :direct}}
+             (f {:id "p1"} :direct "agent-1" {:run-id "r1"})))
+      (is (= {:wave-id nil :result {:status :no-dispatch-for-mode :mode :ling}}
+             (f {:id "p1"} :ling "agent-1" {})))))
+
+  (testing "contract shape: 4-arity with ctx map"
+    (let [f (saa-fx/default-dispatch-fn "/test/project")]
+      (is (fn? f))
+      (is (map? (f {:id "p1"} :direct "agent-1" nil))))))

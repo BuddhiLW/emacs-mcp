@@ -141,6 +141,32 @@
       (catch Throwable e
         (log/warn "[saa-fx] Shout failed (non-fatal):" (.getMessage e))))))
 
+(defn default-dispatch-fn
+  "Build the default SAA :dispatch-fn for a project directory.
+   Returns (fn [plan mode agent-id ctx]) => {:wave-id :result}.
+   :dag-wave mode starts the DAG scheduler threading (:run-id ctx);
+   other modes return {:status :no-dispatch-for-mode}."
+  [directory]
+  (fn [plan mode _agent-id ctx]
+    (if (= :dag-wave mode)
+      (try
+        (let [start! (requiring-resolve
+                      'hive-mcp.scheduler.dag-waves/start-dag!)
+              rid    (:run-id ctx)
+              res    (start! (:id plan)
+                             (cond-> {:cwd directory}
+                               rid (assoc :run-id rid)))]
+          {:wave-id (or rid (str (:plan-id res)))
+           :result  (assoc res :status :dispatched)})
+        (catch Exception e
+          (log/warn "[saa-fx] dag-wave dispatch failed:" (.getMessage e))
+          {:wave-id nil
+           :result  {:status :dispatch-failed
+                     :error  (.getMessage e)}}))
+      {:wave-id nil
+       :result  {:status :no-dispatch-for-mode
+                 :mode   mode}})))
+
 ;; =============================================================================
 ;; Effect: :saa/run-workflow
 ;; =============================================================================
@@ -153,15 +179,19 @@
    the inline spec if the registry isn't available.
 
    Expected data shape:
-   {:task       \"Fix auth bug in login flow\"  ; required
-    :agent-id   \"swarm-ling-123\"              ; required
-    :directory  \"/path/to/project\"            ; required
+   {:task       \\\"Fix auth bug in login flow\\\"  ; required
+    :agent-id   \\\"swarm-ling-123\\\"              ; required
+    :directory  \\\"/path/to/project\\\"            ; required
     :plan-only? false                           ; optional, default false
+    :run-id     \\\"wf-run-42\\\"                   ; optional, wave run id
     :resources  {...}}                          ; optional, override resources map
+
+   Default :dispatch-fn is (default-dispatch-fn directory); override via
+   :resources.
 
    Note: Runs in a future to avoid blocking the event loop.
    Dispatches :saa/completed or :saa/failed events on completion."
-  [{:keys [task agent-id directory plan-only? resources] :as _data}]
+  [{:keys [task agent-id directory plan-only? run-id resources] :as _data}]
   (when (and task agent-id)
     (future
       (try
@@ -185,11 +215,13 @@
                                                           :phase phase
                                                           :message msg}))
                                                (catch Exception e (log/trace "[saa-fx] shout-fn resolution failed:" (.getMessage e)) nil)))
+                                 :dispatch-fn (default-dispatch-fn directory)
                                  :clock-fn #(java.time.Instant/now)}
               effective-resources (merge default-resources resources)
-              opts {:task task
-                    :agent-id agent-id
-                    :directory directory}
+              opts (cond-> {:task task
+                            :agent-id agent-id
+                            :directory directory}
+                     run-id (assoc :run-id run-id))
               result (run-fn effective-resources opts)]
           ;; Dispatch completion event
           (when-let [dispatch-fn (requiring-resolve 'hive-mcp.events.core/dispatch)]
