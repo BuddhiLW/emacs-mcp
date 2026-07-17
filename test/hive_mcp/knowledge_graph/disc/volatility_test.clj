@@ -370,7 +370,7 @@
                     {:path "/b.clj" :staleness 0.7 :message "File /b.clj is stale"}]
           formatted (vol/format-staleness-warnings warnings)]
       (is (string? formatted))
-      (is (.contains formatted "L1 Disc Staleness Warnings"))
+      (is (.contains formatted "file-level Staleness Warnings"))
       (is (.contains formatted "/a.clj"))
       (is (.contains formatted "/b.clj")))))
 
