@@ -133,11 +133,11 @@
         io.github.hive-agi/hive-qdrant
         {:git/tag "v0.1.1" :git/sha "1c571a5"}
 
-        ;; hive-addon — standalone IAddon contract (leaf lib). hive-mcp.addons.protocol
-        ;; re-exports it via def-aliases so the ~30 monorepo addon implementors can
-        ;; depend on hive-addon instead of compile-depending on hive-mcp.
-        io.github.hive-agi/hive-addon
-        {:git/tag "v0.1.0" :git/sha "89e299f"}
+        ;; hive-addon — standalone IAddon contract (leaf lib) + plug/mount/compose.
+        ;; hive-mcp.addons.protocol re-exports it via def-aliases so the ~30
+        ;; monorepo addon implementors can depend on hive-addon instead of
+        ;; compile-depending on hive-mcp.
+        io.github.hive-agi/hive-addon {:mvn/version "0.3.1"}
 
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
