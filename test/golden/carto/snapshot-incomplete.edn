@@ -1,0 +1,7 @@
+{:budget-recent true,
+ :empty false,
+ :enrich-trunc true,
+ :mixed-fail-wins true,
+ :no-carto false,
+ :query-failed true,
+ :too-old false}

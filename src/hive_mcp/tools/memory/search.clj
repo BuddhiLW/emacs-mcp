@@ -272,9 +272,8 @@
        (mapv format-search-result merged)))))
 
 (def ^:private default-exclude-tags
-  "Tags excluded from semantic search by default.
-   Carto (L1/L2 codebase-mapping snippets) drowns out high-level knowledge."
-  ["carto"])
+  "Tags excluded from semantic search when the caller passes no exclude_tags."
+  [])
 
 ;; =============================================================================
 ;; Composite search-store* (fork-join across store + ingest)
@@ -302,7 +301,7 @@
                                     descendants (when include_descendants
                                                   (kg-scope/descendant-scopes project-id))]
                                 (vec (distinct (concat visible descendants)))))
-        effective-excludes (into (vec default-exclude-tags) exclude-tags)
+        effective-excludes (vec exclude-tags)
         fj (parallel/fork-join
             {:budget-ms memory-search-timeout-ms}
             [:store
@@ -354,7 +353,7 @@
 (defn- search-semantic*
   "Pure search logic returning Result. Validates inputs and dispatches to the
    default IMemoryStore via search-store*.
-   exclude_tags defaults to [\"carto\"] — pass [] to include carto snippets explicitly.
+   exclude_tags defaults to none — pass a tag vector to exclude those tags.
    include_descendants defaults to true — pass false to restrict to current project."
   [{:keys [query limit type directory include_descendants scope exclude_tags]}]
   (let [directory (or directory (ctx/current-directory))

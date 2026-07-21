@@ -172,6 +172,17 @@
                             (str (:addon/init-ns m))
                             (str (:addon/description m "")))))))))
 
+(defn mount-event-logger
+  "Write one structured hive-addon mount lifecycle event through Timbre."
+  [event]
+  (let [level (:level event)
+        payload (dissoc event :level)]
+    (case level
+      :debug (log/debug "Addon mount lifecycle" payload)
+      :warn  (log/warn "Addon mount lifecycle" payload)
+      :error (log/error "Addon mount lifecycle" payload)
+      (log/info "Addon mount lifecycle" payload))))
+
 (defn load-extensions-via-mount!
   "Mount manifest-discovered addons through hive-addon.mount.compose (MQ-ADOPT).
 
@@ -198,7 +209,8 @@
     (when enabled?
       (if-let [compose (try-resolve 'hive-addon.mount.compose/compose-classpath!)]
         (if-let [host-ctor (try-resolve 'hive-mcp.extensions.mount-host/addon-registry-host)]
-          (let [opts   (cond-> {:resolve-config manifest/prepare-config}
+          (let [opts   (cond-> {:resolve-config manifest/prepare-config
+                                :on-event mount-event-logger}
                          (seq (:layer-paths svc-cfg))
                          (assoc :layer-paths (mapv str (:layer-paths svc-cfg))))
                 result (rescue nil (compose (host-ctor) opts))]

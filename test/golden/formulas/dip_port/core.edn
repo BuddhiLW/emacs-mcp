@@ -1,0 +1,1 @@
+"(ns acme.time.core\n  (:require [acme.time.port :as port]\n            [acme.time.schema :as schema]\n            [malli.core :as m]))\n\n(defn now-millis\n  \"Pipeline: pure delegation to the port.\"\n  [clock]\n  (port/now-millis clock))\n\n(m/=> now-millis\n  (schema/schema [:=> [:cat :acme.time/clock] :acme.time/millis]))\n"

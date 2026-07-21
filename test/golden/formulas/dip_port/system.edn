@@ -1,0 +1,1 @@
+"(ns acme.time.adapters.system\n  (:require [acme.time.port :as port]))\n\n(defrecord System []\n  port/Clock\n  (now-millis [_]\n    (throw (ex-info \"not-implemented\"\n                    {:formula :dip-port\n                     :adapter :system\n                     :method 'now-millis}))))\n\n(defn make-system\n  \"Factory: System adapter.\"\n  []\n  (->System))\n"

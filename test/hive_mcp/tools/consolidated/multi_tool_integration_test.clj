@@ -21,6 +21,7 @@
             [hive-mcp.tools.cli :as cli]
             ;; All consolidated tools
             [hive-mcp.tools.consolidated.memory :as memory]
+            [hive-mcp.tools.consolidated.addon :as addon]
             [hive-mcp.tools.consolidated.kg :as kg]
             [hive-mcp.tools.consolidated.hivemind :as hivemind]
             [hive-mcp.tools.consolidated.kanban :as kanban]
@@ -281,6 +282,7 @@
 (def all-tool-defs
   "All consolidated tool definitions for cross-cutting tests."
   {:memory    memory/tool-def
+   :addon     addon/tool-def
    :kg        kg/tool-def
    :hivemind  hivemind/tool-def
    :kanban    kanban/tool-def
@@ -338,6 +340,7 @@
   (testing "every consolidated module exposes a tools vector"
     (doseq [[tool-key {:keys [tools-var]}]
             {:memory    {:tools-var #'memory/tools}
+             :addon     {:tools-var #'addon/tools}
              :kg        {:tools-var #'kg/tools}
              :hivemind  {:tools-var #'hivemind/tools}
              :kanban    {:tools-var #'kanban/tools}
@@ -369,6 +372,7 @@
   (testing "every handler in every consolidated tool's handlers map is a fn or map"
     (doseq [[tool-key handlers-map]
             {:memory    memory/canonical-handlers
+             :addon     addon/handlers
              :kg        kg/handlers
              :hivemind  hivemind/handlers
              :kanban    kanban/handlers
@@ -394,6 +398,7 @@
   (testing "handler map keys match tool-def command enum (minus 'help')"
     (doseq [[tool-key {:keys [handlers-map tool-def-val]}]
             {:memory    {:handlers-map memory/canonical-handlers :tool-def-val memory/tool-def}
+             :addon     {:handlers-map addon/handlers :tool-def-val addon/tool-def}
              :kg        {:handlers-map kg/handlers :tool-def-val kg/tool-def}
              :hivemind  {:handlers-map hivemind/handlers :tool-def-val hivemind/tool-def}
              :wave      {:handlers-map wave/handlers :tool-def-val wave/tool-def}
@@ -419,6 +424,7 @@
   (testing "every consolidated tool responds to 'help' command"
     (doseq [[tool-key handler]
             {:memory    memory/handle-memory
+             :addon     addon/handle-addon
              :kg        kg/handle-kg
              :hivemind  hivemind/handle-hivemind
              :kanban    kanban/handle-kanban
@@ -450,6 +456,7 @@
   (testing "every consolidated tool returns error for unknown command"
     (doseq [[tool-key handler]
             {:memory    memory/handle-memory
+             :addon     addon/handle-addon
              :kg        kg/handle-kg
              :hivemind  hivemind/handle-hivemind
              :kanban    kanban/handle-kanban
@@ -1378,6 +1385,14 @@
     (let [props (get-in multi/tool-def [:inputSchema :properties])]
       (is (contains? props "dry_run"))
       (is (= "boolean" (get-in props ["dry_run" :type]))))))
+
+(deftest test-multi-tool-def-exposes-addon-doctor
+  (testing "multi advertises addon routing and its doctor parameters"
+    (let [props (get-in multi/tool-def [:inputSchema :properties])]
+      (is (some #{"addon"} (get-in props ["tool" :enum])))
+      (is (contains? props "addon_id"))
+      (is (contains? props "emacs_features"))
+      (is (contains? props "timeout_ms")))))
 
 ;; =============================================================================
 ;; Part 27: Multi Router Cross-Tool Integration

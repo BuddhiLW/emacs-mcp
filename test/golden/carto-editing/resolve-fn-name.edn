@@ -1,0 +1,6 @@
+{:has-carto-resolved true,
+ :resolved-keys [:col :entry-id :file :form-text :line],
+ :has-old-content true,
+ :has-old-hash true,
+ :has-old-outline true,
+ :has-project-id true}

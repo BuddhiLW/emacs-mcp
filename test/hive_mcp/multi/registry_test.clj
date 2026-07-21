@@ -222,8 +222,8 @@
         (is (nil? (registry/resolve-tool-handler "nonexistent-tool-xyz-zzz")))))))
 
 (deftest core-seed-resolves-existing-tools
-  (testing "After core-seed runs, the 20 consolidated tools resolve through registry"
-    (doseq [name ["memory" "kg" "kanban" "agent" "magit" "wave" "session"
+  (testing "After core-seed runs, the 21 consolidated tools resolve through registry"
+    (doseq [name ["addon" "memory" "kg" "kanban" "agent" "magit" "wave" "session"
                   "preset" "config" "hivemind"]]
       (is (some? (registry/resolve-tool-handler name))
           (str "core-seed registered " name)))))

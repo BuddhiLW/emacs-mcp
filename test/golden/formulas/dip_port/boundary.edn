@@ -1,0 +1,1 @@
+"(ns acme.time.boundary\n  (:require [acme.time.core :as core]))\n\n(defn now-millis!\n  \"Boundary: effectful entry point. Inject a concrete adapter.\"\n  [clock]\n  (core/now-millis clock))\n"

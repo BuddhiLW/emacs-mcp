@@ -1,0 +1,4 @@
+{:has-carto-fresh? false,
+ :has-carto-stale? false,
+ :has-carto-context true,
+ :keys-unchanged false}

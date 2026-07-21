@@ -7,12 +7,10 @@
    - DSL dispatch: {dsl: [[verb, params], ...]} compiled to batch operations
 
    Plus async execution for long-running batches."
-  (:require [hive-mcp.tools.composite :as composite]
-            [hive-mcp.tools.result-bridge :as rb]
+  (:require [hive-mcp.tools.result-bridge :as rb]
             [hive-mcp.tools.core :refer [mcp-error]]
             [hive-mcp.dns.result :refer [rescue]]
             [clojure.string :as str]
-            [taoensso.timbre :as log]
             [hive-mcp.multi.registry :as multi-registry]
             [hive-mcp.multi.registry.tools :as r-tools]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -37,8 +35,8 @@
 
 (defn- resolve-or-err
   "Lazily resolve a fully-qualified symbol. Returns the fn or nil.
-   Logs the error category on failure."
-  [sym category]
+   The category argument documents the caller's failure taxonomy."
+  [sym _category]
   (rescue nil
           (requiring-resolve sym)))
 
@@ -338,6 +336,7 @@
                      "Use {\"tool\": \"<name>\", \"command\": \"help\"} to list commands for a tool. "
                      "All additional params beyond these common ones are forwarded to the target tool. "
                      "Key tool-specific params: "
+                     "addon: addon_id, directory, emacs_features, timeout_ms; "
                      "kanban: status, new_status, task_id, title, include_descendants, plan_id, plan_path; "
                      "agent: type, cwd, spawn_mode, presets, task, model, provider, max_budget_usd, parent, kanban_task_id; "
                      "memory: duration, abstraction_level, scope, exclude_tags, limit, verbosity, feedback; "
@@ -355,6 +354,15 @@
                                                            "Also accepts async commands without tool: 'collect', 'list-async', 'cancel-async'")}
                               "directory"  {:type "string"
                                             :description "Working directory for project-scoped operations"}
+                              "addon_id"   {:type "string"
+                                            :description "Addon ID for addon doctor (e.g. hive.emacs)"}
+                              "emacs_features" {:type "array"
+                                                :items {:type "string"}
+                                                :description "Expected Emacs features for addon doctor; overrides manifest hints"}
+                              "timeout_ms" {:type "integer"
+                                            :minimum 1
+                                            :maximum 30000
+                                            :description "Per-feature timeout for addon doctor"}
                               "agent_id"   {:type "string"
                                             :description "Agent identifier for attribution/routing"}
                               "id"         {:type "string"

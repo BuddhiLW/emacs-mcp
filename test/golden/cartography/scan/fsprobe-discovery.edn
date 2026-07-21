@@ -1,0 +1,7 @@
+{:both
+ ["src/a.clj" "src/pkg/b.cljel" "src/pkg/deep/c.cljel" "test/e.cljel"],
+ :clj ["src/a.clj"],
+ :cljel ["src/pkg/b.cljel" "src/pkg/deep/c.cljel" "test/e.cljel"],
+ :cljs ["src/d.cljs"],
+ :md ["src/notes.md"],
+ :none []}

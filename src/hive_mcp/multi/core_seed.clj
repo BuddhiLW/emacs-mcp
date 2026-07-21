@@ -1,5 +1,5 @@
 (ns hive-mcp.multi.core-seed
-  "Project the existing 20 consolidated tools + 36 DSL verbs + 9 param aliases
+  "Project the existing 21 consolidated tools + 36 DSL verbs + 9 param aliases
    into multi.registry as the synthetic `:multi/core` owner.
 
    Runs at namespace load via a `defonce` guard so the seed is idempotent and
