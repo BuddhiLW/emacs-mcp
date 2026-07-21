@@ -1,94 +1,49 @@
-name: Release
+name: release
 
+# Patch-bump and publish only when the push actually changes the library.
+# README / CI / test-only commits do not mint a version, because a published
+# pom is immutable on both Clojars and the private registry.
 on:
   push:
     branches: [main]
-  workflow_dispatch:
+    paths:
+      - 'src/**'
+      - 'resources/**'
+      - 'deps.edn'
 
-permissions:
-  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
-    name: Tag, Release & Deploy
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - uses: DeLaGuardo/setup-clojure@13.0
         with:
-          distribution: 'temurin'
-          java-version: '21'
+          cli: latest
 
-      - name: Setup Clojure
-        uses: DeLaGuardo/setup-clojure@13.2
-        with:
-          cli: 'latest'
+      - name: Bump patch version
+        run: clojure -T:build bump :level :patch
 
-      - name: Cache Maven deps
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.m2/repository
-            ~/.gitlibs
-            ~/.deps.clj
-          key: clj-${{ runner.os }}-${{ hashFiles('deps.edn') }}
-          restore-keys: |
-            clj-${{ runner.os }}-
-
-      # Version AUTOBUMPS in build.clj: 0.{minor}.{next-unpublished-patch}.
-      # No VERSION file — the patch is derived from what's already on Clojars.
-      - name: Compute version
-        id: version
+      - name: Commit and tag
         run: |
-          VERSION=$(clojure -T:build print-version | tail -1 | tr -d '[:space:]')
-          if [ -z "${VERSION}" ]; then
-            echo "::error::print-version produced no output"
-            exit 1
-          fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Computed version: ${VERSION}"
+          VER=$(cat VERSION)
+          git config user.name  "hive-ci"
+          git config user.email "ci@hive-agi.local"
+          git add VERSION
+          # [skip ci] stops this push from retriggering the workflow.
+          git commit -m "chore(release): $VER [skip ci]"
+          git tag "v$VER"
+          git push --follow-tags
 
-      - name: Check if tag exists
-        id: check_tag
-        run: |
-          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create tag
-        if: steps.check_tag.outputs.exists == 'false'
-        run: |
-          git tag "${{ steps.version.outputs.tag }}"
-          git push origin "${{ steps.version.outputs.tag }}"
-
-      - name: Check if release exists
-        id: check_release
-        run: |
-          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Create GitHub release
-        if: steps.check_release.outputs.exists == 'false'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          generate_release_notes: true
-
-      # Idempotent: build.clj/deploy no-ops if this version is already on Clojars.
-      - name: Deploy library jar to Clojars
+      - name: Deploy
         env:
           CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
           CLOJARS_PASSWORD: ${{ secrets.CLOJARS_PASSWORD }}

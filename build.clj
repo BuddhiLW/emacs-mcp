@@ -1,139 +1,289 @@
 (ns build
-  "hive-mcp build: runnable uberjar (server) + source jar / Clojars deploy.
+  "Canonical hive library build — normalized across every hive package.
 
-   VERSION AUTOBUMP (in build.clj, no manual VERSION file): the version is
-   0.{minor}.{next-free-patch}, where {minor} comes from ./version.edn and
-   {next-free-patch} is the lowest patch NOT yet published on Clojars — so the
-   very first publish of the 0.{minor} line is 0.{minor}.0 and each release
-   thereafter increments the patch (0.18.0 -> 0.18.1 -> ...) with zero manual
-   edits. This keeps hive-mcp's semantic line (unlike raw git-commit-count) while
-   still autobumping. release.yml reads it via `clojure -T:build print-version`
-   and tags v{version}, so the git-tag and Clojars coords match 1:1.
+   Coordinates come from ./version.edn, the version from ./VERSION:
 
-   Tasks (clojure -T:build <task>):
-     clean          remove target/
-     uber           runnable uberjar (server) — clj -T:build uber [:profile k8s-headless]
-     print-version  echo the computed version (CI captures this to tag the release)
-     jar            source/library jar under target/
-     install        jar + install to the local ~/.m2 (offline verification)
-     deploy         jar + push to Clojars (needs CLOJARS_USERNAME / CLOJARS_PASSWORD)"
+     {:lib      io.github.hive-agi/hive-thing
+      :minor    1
+      :license  {:name \"MIT\" :url \"https://opensource.org/licenses/MIT\"}
+      :scm-url  \"https://github.com/hive-agi/hive-thing\"
+      :src-dirs [\"src\"]
+      :publish  :clojars}            ; :clojars | :gitea | :none
+
+   `:publish` is the ONLY thing that differs between packages — the task names
+   are identical everywhere, so one CI workflow drives the whole fleet:
+
+     :clojars  public source jar   -> repo.clojars.org
+     :gitea    AOT no-source jar   -> private Gitea Maven registry
+     :none     builds, never ships (missing LICENSE, no remote, or not a library)
+
+   Tasks (invoke with `clojure -T:build <task>`):
+     clean           delete target/
+     jar             source jar + pom
+     jar-aot         AOT no-source jar (own .class + resources only)
+     install         build + install to ~/.m2 (offline)
+     bump            rewrite ./VERSION (:level :patch|:minor|:major)
+     verify-license  report LICENSE / version.edn / SPDX agreement (warns)
+     deploy          build + publish per :publish (no-op when :none)
+
+   Release flow (what CI runs on a push to main that touches src/deps):
+     clojure -T:build bump :level :patch
+     clojure -T:build deploy"
   (:require [clojure.tools.build.api :as b]
             [clojure.edn :as edn]
-            [clojure.string :as str]
-            [deps-deploy.deps-deploy :as dd]))
-
-;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
-;; SPDX-License-Identifier: AGPL-3.0-or-later
+            [clojure.java.io :as io]
+            [clojure.string :as str]))
 
 (def ^:private cfg (edn/read-string (slurp "version.edn")))
 (def lib (:lib cfg))
-(def ^:private minor (:minor cfg 0))
+(def publish-target (:publish cfg :none))
+(def version
+  (let [f (io/file "VERSION")]
+    (if (.exists f)
+      (str/trim (slurp f))
+      (format "0.%s.%s" (:minor cfg 0) (b/git-count-revs nil)))))
 (def ^:private class-dir "target/classes")
 (def ^:private src-dirs (:src-dirs cfg ["src"]))
-(def ^:private main-ns 'hive-mcp.server.core)
-(def ^:private uber-file "target/hive-mcp.jar")
+(def ^:private jar-file (format "target/%s-%s.jar" (name lib) version))
 
-(defn- published?
-  "True iff this exact lib+version jar is already on Clojars (immutable repo)."
-  [v]
-  (let [[grp art] (str/split (str lib) #"/")
-        url (format "https://repo.clojars.org/%s/%s/%s/%s-%s.jar"
-                    (str/replace grp "." "/") art v art v)]
-    (try
-      (let [conn (doto ^java.net.HttpURLConnection (.openConnection (java.net.URL. url))
-                   (.setRequestMethod "HEAD")
-                   (.setConnectTimeout 8000)
-                   (.setReadTimeout 8000))]
-        (= 200 (.getResponseCode conn)))
-      (catch Throwable _ false))))
-
-;; Deferred so `clean`/`uber` never touch the network. First deref probes
-;; Clojars for the lowest unpublished 0.{minor}.{patch}.
-(def ^:private version*
-  (delay (loop [p 0]
-           (let [v (format "0.%s.%s" minor p)]
-             (if (published? v) (recur (inc p)) v)))))
-
-(defn- version [] @version*)
-(defn- jar-file [] (format "target/%s-%s.jar" (name lib) (version)))
+;; The pom's declared license is IMMUTABLE once published, on Clojars and on the
+;; private registry alike. The fallback is deliberately absent: a package with no
+;; :license in version.edn must not silently inherit someone else's terms.
+(def ^:private pom-data
+  [[:licenses
+    [:license
+     [:name (get-in cfg [:license :name] "UNDECLARED")]
+     [:url  (get-in cfg [:license :url] "")]]]])
 
 (defn clean [_] (b/delete {:path "target"}))
 
-(defn print-version
-  "Echo the computed version — release.yml captures this to tag v{version}."
-  [_]
-  (println (version)))
-
-(defn uber
-  "Build a runnable uberjar.
-
-   Options:
-     :profile - deps.edn alias to merge (e.g. 'k8s-headless').
-                Resolved as keyword alias for extra-deps/paths."
-  [{:keys [profile] :as opts}]
-  (clean opts)
-  (let [aliases (cond-> [:mcp]
-                  profile (conj (keyword profile)))
-        basis   (b/create-basis {:project "deps.edn"
-                                 :aliases aliases})]
-    (println "Building uberjar with aliases:" aliases)
-    (b/copy-dir {:src-dirs   ["src" "resources"]
-                 :target-dir class-dir})
-    (b/compile-clj {:basis      basis
-                    :src-dirs   ["src"]
-                    :class-dir  class-dir
-                    :ns-compile [main-ns]})
-    (b/uber {:class-dir class-dir
-             :uber-file uber-file
-             :basis     basis
-             :main      main-ns})
-    (println "Uberjar built:" uber-file)))
+(defn- basis [] (b/create-basis {:project "deps.edn" :user :standard}))
 
 (defn- write-pom []
-  (b/write-pom
-   {:class-dir class-dir
-    :lib       lib
-    :version   (version)
-    :basis     (b/create-basis {:project "deps.edn"})
-    ;; pom :src references source roots only (not resource dirs)
-    :src-dirs  (vec (remove #{"resources"} src-dirs))
-    :scm       {:url (:scm-url cfg)
-                :tag (b/git-process {:git-args "rev-parse HEAD"})}
-    :pom-data  [[:licenses
-                 [:license
-                  [:name (get-in cfg [:license :name] "AGPL-3.0-or-later")]
-                  [:url  (get-in cfg [:license :url]
-                                 "https://www.gnu.org/licenses/agpl-3.0.txt")]]]]}))
+  (b/write-pom {:class-dir class-dir
+                :lib       lib
+                :version   version
+                :basis     (basis)
+                :src-dirs  (vec (remove #{"resources"} src-dirs))
+                :scm       {:url (:scm-url cfg)
+                            :tag (b/git-process {:git-args "rev-parse HEAD"})}
+                :pom-data  pom-data}))
+
+;; ── License agreement (advisory) ────────────────────────────────────────────
+
+(defn- spdx-headers
+  "Distinct SPDX-License-Identifier values declared across the source tree."
+  []
+  (into #{}
+        (comp (filter (fn [^java.io.File f]
+                        (and (.isFile f)
+                             (re-find #"\.cljc?$|\.cljs$" (.getName f)))))
+              ;; Identifier charset only — \S+ would swallow a trailing quote
+              ;; from an SPDX line inside a string literal and report a phantom
+              ;; conflict against the identical bare identifier.
+              (keep (fn [^java.io.File f]
+                      (second (re-find #"SPDX-License-Identifier:\s*([A-Za-z0-9.+-]+)"
+                                       (slurp f))))))
+        (mapcat #(file-seq (io/file %)) src-dirs)))
+
+(defn verify-license
+  "Report whether ./LICENSE, version.edn :license and the src SPDX headers agree.
+   Advisory: prints and returns findings, never fails the build."
+  [_]
+  (let [declared (get-in cfg [:license :name])
+        has-file (.exists (io/file "LICENSE"))
+        headers  (spdx-headers)
+        problems (cond-> []
+                   (not has-file)     (conj "no ./LICENSE file")
+                   (nil? declared)    (conj "version.edn has no :license")
+                   (> (count headers) 1)
+                   (conj (str "conflicting SPDX headers in src: " headers)))]
+    (if (seq problems)
+      (do (println "WARNING: license inconsistency in" (str lib))
+          (doseq [p problems] (println "  -" p))
+          (println "  A published pom can never be retracted.")
+          {:ok? false :problems problems})
+      (do (println "License OK:" declared) {:ok? true :problems []}))))
+
+;; ── Source jar ─────────────────────────────────────────────────────────────
 
 (defn jar
-  "Build the source/library jar (pom + copied sources) under target/."
+  "Build the source jar (pom + copied sources) under target/."
   [_]
   (clean nil)
   (write-pom)
   (b/copy-dir {:src-dirs src-dirs :target-dir class-dir})
-  (b/jar {:class-dir class-dir :jar-file (jar-file)})
-  (println "Built" (str lib) (version) "->" (jar-file)))
+  (b/jar {:class-dir class-dir :jar-file jar-file})
+  (println "Built" (str lib) version "->" jar-file))
+
+;; ── AOT no-source jar ──────────────────────────────────────────────────────
+;; Ships compiled .class for THIS lib only — no sources, no dependency bytecode.
+;; Selection is by munged-namespace-path prefix, which also captures classes
+;; emitted by defrecord/deftype/defprotocol under each namespace's package.
+
+(defn- source-roots []
+  (filterv (fn [d]
+             (some (fn [^java.io.File f]
+                     (and (.isFile f) (re-find #"\.cljc?$|\.cljs$" (.getName f))))
+                   (file-seq (io/file d))))
+           src-dirs))
+
+(defn- resource-roots [] (vec (remove (set (source-roots)) src-dirs)))
+
+(defn- file-ns [f]
+  (with-open [r (java.io.PushbackReader. (io/reader f))]
+    (loop []
+      (let [form (try (read {:read-cond :allow :eof ::eof} r)
+                      (catch Exception _ ::eof))]
+        (cond
+          (= form ::eof)                         nil
+          (and (seq? form) (= 'ns (first form))) (second form)
+          :else                                  (recur))))))
+
+(defn- source-namespaces []
+  (into []
+        (comp (filter (fn [^java.io.File f]
+                        (and (.isFile f) (re-find #"\.cljc?$" (.getName f)))))
+              (keep file-ns))
+        (mapcat #(file-seq (io/file %)) (source-roots))))
+
+(defn- ns->path [ns-sym]
+  (-> (str ns-sym) (str/replace "-" "_") (str/replace "." "/")))
+
+(defn- copy-own-classes! [scratch nses]
+  (let [prefixes  (mapv ns->path nses)
+        root      (io/file scratch)
+        root-path (.toPath root)]
+    (doseq [^java.io.File f (file-seq root)
+            :when (and (.isFile f) (str/ends-with? (.getName f) ".class"))
+            :let  [rel (-> (.relativize root-path (.toPath f)) str
+                           (str/replace java.io.File/separator "/"))]
+            :when (some #(str/starts-with? rel %) prefixes)]
+      (let [dest (io/file class-dir rel)]
+        (io/make-parents dest)
+        (io/copy f dest)))))
+
+(defn jar-aot
+  "Build the AOT no-source jar: this lib's own .class files + resources only."
+  [_]
+  (clean nil)
+  (let [scratch "target/aot-classes"
+        nses    (source-namespaces)]
+    (b/compile-clj {:basis (basis) :src-dirs (source-roots)
+                    :ns-compile nses :class-dir scratch})
+    (copy-own-classes! scratch nses)
+    (when-let [res (seq (resource-roots))]
+      (b/copy-dir {:src-dirs (vec res) :target-dir class-dir}))
+    (write-pom)
+    (b/jar {:class-dir class-dir :jar-file jar-file})
+    (println "Built AOT" (str lib) version "->" jar-file
+             (str "(" (count nses) " ns, own .class only)"))))
 
 (defn install
-  "Build + install to the local ~/.m2 repository (offline; for verification)."
+  "Build + install to the local ~/.m2 repository (offline)."
   [_]
-  (jar nil)
-  (dd/deploy {:installer :local
-              :artifact  (jar-file)
-              :pom-file  (b/pom-path {:lib lib :class-dir class-dir})})
-  (println "Installed" (str lib) (version) "to ~/.m2"))
+  (if (= :gitea publish-target) (jar-aot nil) (jar nil))
+  ((requiring-resolve 'deps-deploy.deps-deploy/deploy)
+   {:installer :local
+    :artifact  jar-file
+    :pom-file  (b/pom-path {:lib lib :class-dir class-dir})})
+  (println "Installed" (str lib) version "to ~/.m2"))
+
+;; ── Version ────────────────────────────────────────────────────────────────
+
+(defn bump
+  "Rewrite ./VERSION to the next semantic version and print it.
+
+   :level :patch (default) | :minor | :major
+   VERSION is the single source of truth for both the git tag (v{VERSION}) and
+   the Maven coordinate. Does not commit, tag, or deploy."
+  [{:keys [level] :or {level :patch}}]
+  (let [f     (io/file "VERSION")
+        _     (when-not (.exists f)
+                (throw (ex-info "No ./VERSION file to bump"
+                                {:cwd (System/getProperty "user.dir")})))
+        cur   (str/trim (slurp f))
+        parts (str/split cur #"\.")
+        _     (when-not (= 3 (count parts))
+                (throw (ex-info "VERSION is not MAJOR.MINOR.PATCH" {:version cur})))
+        [maj min' pat] (map #(Long/parseLong %) parts)
+        nxt   (case level
+                :major (format "%d.0.0" (inc maj))
+                :minor (format "%d.%d.0" maj (inc min'))
+                :patch (format "%d.%d.%d" maj min' (inc pat))
+                (throw (ex-info "level must be :major, :minor or :patch"
+                                {:level level})))]
+    (spit f (str nxt "\n"))
+    (println (format "VERSION %s -> %s (%s)" cur nxt (name level)))
+    nxt))
+
+;; ── Publish ────────────────────────────────────────────────────────────────
+
+(defn- required-env [k]
+  (let [v (System/getenv k)]
+    (if (str/blank? v)
+      (throw (ex-info (str k " not set or blank") {:env k}))
+      v)))
+
+(defn- published?
+  "True when this exact lib+version pom already exists at `url`. Both registries
+   are immutable, so deploy no-ops instead of erroring on a re-run."
+  [url auth]
+  (let [[grp art] (str/split (str lib) #"/")
+        pom-url (format "%s/%s/%s/%s/%s-%s.pom"
+                        url (str/replace grp "." "/") art version art version)]
+    (try
+      (let [conn (doto ^java.net.HttpURLConnection
+                       (.openConnection (java.net.URL. pom-url))
+                   (.setRequestMethod "HEAD")
+                   (.setConnectTimeout 10000)
+                   (.setReadTimeout 10000))]
+        (when auth (.setRequestProperty conn "Authorization" auth))
+        (= 200 (.getResponseCode conn)))
+      (catch Throwable _ false))))
+
+(defn- deploy-clojars []
+  (required-env "CLOJARS_USERNAME")
+  (required-env "CLOJARS_PASSWORD")
+  (if (published? "https://repo.clojars.org" nil)
+    (println "Skip:" (str lib) version "already on Clojars — bump VERSION to release.")
+    (do (jar nil)
+        ((requiring-resolve 'deps-deploy.deps-deploy/deploy)
+         {:installer :remote
+          :artifact  jar-file
+          :pom-file  (b/pom-path {:lib lib :class-dir class-dir})})
+        (println "Deployed" (str lib) version "to Clojars"))))
+
+(defn- deploy-gitea []
+  (let [env      (fn [k d] (let [v (System/getenv k)] (if (str/blank? v) d v)))
+        url      (env "GITEA_MAVEN_URL"
+                      "https://gitea.hive-mcp.com/api/packages/hive-agi/maven")
+        username (env "GITEA_MAVEN_USERNAME" "buddhilw")
+        token    (required-env "GITEA_MAVEN_TOKEN")
+        auth     (str "Basic " (.encodeToString (java.util.Base64/getEncoder)
+                                                (.getBytes (str username ":" token))))]
+    (if (published? url auth)
+      (println "Skip:" (str lib) version "already in private registry — bump VERSION to release.")
+      (do (jar-aot nil)
+          ((requiring-resolve 'deps-deploy.deps-deploy/deploy)
+           {:installer  :remote
+            :artifact   jar-file
+            :pom-file   (b/pom-path {:lib lib :class-dir class-dir})
+            :repository {"gitea" {:url url :username username :password token}}})
+          (println "Deployed" (str lib) version "to" url)))))
 
 (defn deploy
-  "Build + deploy to Clojars. Requires CLOJARS_USERNAME and CLOJARS_PASSWORD
-   (a deploy token, not the account password) in the environment. The computed
-   version is by construction the next unpublished patch, so this deploys a fresh
-   release on every main push; a defensive re-check no-ops on the rare race."
+  "Build + publish according to version.edn :publish.
+
+   :clojars -> public source jar to repo.clojars.org
+   :gitea   -> AOT no-source jar to the private Gitea Maven registry
+   :none    -> no-op; the package is not shippable and CI stays green"
   [_]
-  (if (published? (version))
-    (println "Skip:" (str lib) (version) "already on Clojars.")
-    (do
-      (jar nil)
-      (dd/deploy {:installer :remote
-                  :artifact  (jar-file)
-                  :pom-file  (b/pom-path {:lib lib :class-dir class-dir})})
-      (println "Deployed" (str lib) (version) "to Clojars"))))
+  (verify-license nil)
+  (case publish-target
+    :clojars (deploy-clojars)
+    :gitea   (deploy-gitea)
+    :none    (println "Not shippable:" (str lib)
+                      "has :publish :none — nothing published.")
+    (throw (ex-info "version.edn :publish must be :clojars, :gitea or :none"
+                    {:publish publish-target}))))
