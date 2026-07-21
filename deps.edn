@@ -92,7 +92,7 @@
         ;; hive-events - re-frame inspired event system for JVM
         ;; v0.4.0 adds sub-FSM composition + multi-dispatch
         io.github.hive-agi/hive-events
-        {:git/tag "v0.5.2" :git/sha "24a58a1"}
+        {:mvn/version "0.5.2"}
 
         ;; hive-hot - unified hot-reload with events integration
         io.github.hive-agi/hive-hot
@@ -116,22 +116,21 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL, error taxonomy
         io.github.hive-agi/hive-dsl
-        {:git/tag "v0.5.2" :git/sha "8d9760c"}
+        {:mvn/version "0.5.2"}
 
         ;; hive-spi — pure SPI contract leaf (protocols + schemas + ADTs).
         ;; Required at compile time by core namespaces. Pinned to the published
         ;; git tag (== master head) so CI and the Clojars jar build resolve it
         ;; without a sibling checkout; sibling co-dev goes through a gitignored
         ;; local.deps.edn :local/root override.
-        io.github.hive-agi/hive-spi {:git/tag "v0.1.6"
-                                     :git/sha "f825be40bee4b3a45b67fc2e57d2f779406d9f54"}
+        io.github.hive-agi/hive-spi {:mvn/version "0.1.6"}
 
         ;; TEMPORARY — the migration adapters still hard-require these backends
         ;; (a DIP violation). Drop once they move to their addon repos.
         io.github.hive-agi/clj-qdrant
-        {:git/tag "v0.1.1" :git/sha "ad9d4bb"}
+        {:mvn/version "0.1.1"}
         io.github.hive-agi/hive-qdrant
-        {:git/tag "v0.1.2" :git/sha "aa0ebfc"}
+        {:mvn/version "0.1.2"}
 
         ;; hive-addon — standalone IAddon contract (leaf lib) + plug/mount/compose.
         ;; hive-mcp.addons.protocol re-exports it via def-aliases so the ~30
@@ -141,7 +140,7 @@
 
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
-        io.github.hive-agi/hive-di {:git/tag "v0.3.1" :git/sha "ab63fd0"}
+        io.github.hive-agi/hive-di {:mvn/version "0.3.1"}
 
         ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
@@ -163,11 +162,11 @@
 
         ;; hive-ttracking — telemetry/timing (timed-query, track*, bench*).
         ;; Consumed by catchup.clj and siblings (bundle/hydration/hierarchy).
-        io.github.hive-agi/hive-ttracking {:git/tag "v0.1.4" :git/sha "51fd09d"}
+        io.github.hive-agi/hive-ttracking {:mvn/version "0.1.4"}
 
         ;; hive-system — system-level abstractions (IProcess, INetwork,
         ;; process liveness, secrets, shell, redaction).
-        io.github.hive-agi/hive-system {:git/tag "v0.2.7" :git/sha "dbbfeff"}
+        io.github.hive-agi/hive-system {:mvn/version "0.2.7"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
