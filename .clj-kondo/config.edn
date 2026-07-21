@@ -95,4 +95,5 @@
              :syntax {:level :off}}}
   ;; websocket uses manifold.deferred/let-flow which kondo has trouble with aliases
   hive-mcp.channel.websocket
-  {:linters {:unresolved-symbol {:exclude [socket]}}}}}
+  {:linters {:unresolved-symbol {:exclude [socket]}}}
+  hive-mcp.diag.boot {:linters {:unresolved-symbol {:exclude [some-app-atom]}}}}}

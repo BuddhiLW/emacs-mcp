@@ -59,6 +59,12 @@ services:
       # trips the sidecar timeout (hit 2026-05-13 on PP/general/examples).
       - ${HOME}/.gitlibs:/root/.gitlibs:rw
       - ${HOME}/.m2:/root/.m2:rw
+      # :mvn/repos for the private hive-agi registry. Credentials live in the
+      # ~/.m2 mount above, but tools.deps also needs the repo DECLARED, and a
+      # user deps.edn REPLACES the default repo map. Without this, any project
+      # depending on a gitea-only artifact fails `clojure -Spath`, and carto
+      # degrades that scope to source-only with zero call edges.
+      - ${HOME}/.clojure/deps.edn:/root/.clojure/deps.edn:ro
     environment:
       - ANALYSIS_INTERVAL_SECONDS=300
       - JAVA_OPTS=-Xmx1g -Xms256m
