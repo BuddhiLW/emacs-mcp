@@ -92,7 +92,7 @@
         ;; hive-events - re-frame inspired event system for JVM
         ;; v0.4.0 adds sub-FSM composition + multi-dispatch
         io.github.hive-agi/hive-events
-        {:mvn/version "0.5.2"}
+        {:mvn/version "0.5.4"}
 
         ;; hive-hot - unified hot-reload with events integration
         io.github.hive-agi/hive-hot
