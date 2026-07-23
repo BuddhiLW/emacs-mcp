@@ -120,6 +120,34 @@
   ([_] nil)
   ([_ _opts] nil))
 
+(defmulti backend-health
+  "Report health for a constructed backend without introducing a concrete
+   backend dependency into the host."
+  (fn [backend _store] backend))
+
+(defmethod backend-health :datahike
+  [_ store]
+  (if-let [health-fn (resolve-fn 'hive-datahike.kg.store/health)]
+    (try
+      (health-fn store)
+      (catch Exception e
+        {:status :unhealthy
+         :backend :datahike
+         :compatible? false
+         :error {:class (str (class e))
+                 :message (.getMessage e)}}))
+    {:status :unhealthy
+     :backend :datahike
+     :compatible? false
+     :error {:type :backend-health/unavailable
+             :message "Datahike health adapter is not resolvable"}}))
+
+(defmethod backend-health :default
+  [backend store]
+  {:status :healthy
+   :backend backend
+   :store-class (str (class store))})
+
 (def ^:const supported-backends-set
   "Backends this factory can construct. Keep in lockstep with the
    `defmethod backend->store` declarations above."

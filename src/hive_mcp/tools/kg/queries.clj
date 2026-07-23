@@ -1,6 +1,7 @@
 (ns hive-mcp.tools.kg.queries
   "KG read-only query handlers for traversal, impact analysis, and graph stats."
   (:require [hive-mcp.tools.core :refer [mcp-json mcp-error]]
+            [hive-mcp.knowledge-graph.connection :as connection]
             [hive-mcp.knowledge-graph.edges :as edges]
             [hive-mcp.knowledge-graph.queries :as queries]
             [hive-mcp.knowledge-graph.scope :as scope]
@@ -207,7 +208,8 @@
       (mcp-json {:success true
                  :total-edges (:total-edges stats)
                  :by-relation (:by-relation stats)
-                 :by-scope (:by-scope stats)}))
+                 :by-scope (:by-scope stats)
+                 :backend-health (connection/backend-health)}))
     (catch Exception e
       (log/error e "kg_stats failed")
       (mcp-error (str "Stats retrieval failed: " (.getMessage e))))))

@@ -19,7 +19,8 @@
 
 (declare ensure-writer! stop-writer! writer-stats flush-pending! drain-writer! in-flight)
 
-(declare store-live? ensure-store! get-conn ensure-conn! ensure-conn reset-conn! delete-database! close! set-backend!)
+(declare store-live? ensure-store! get-conn ensure-conn! ensure-conn reset-conn!
+         delete-database! close! set-backend! backend-health)
 
 ;; =============================================================================
 ;; Config-based Backend Auto-detection
@@ -227,6 +228,8 @@
 (def ensure-conn! hive-mcp.knowledge-graph.connection.store/ensure-conn!)
 
 (def ensure-conn hive-mcp.knowledge-graph.connection.store/ensure-conn)
+
+(def backend-health hive-mcp.knowledge-graph.connection.store/backend-health)
 
 (def reset-conn! hive-mcp.knowledge-graph.connection.store/reset-conn!)
 
