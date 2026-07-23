@@ -249,6 +249,26 @@
                                  :out :capture :err :capture})))
        (catch Throwable _ false)))
 
+(defn- bb-available? []
+  (try (zero? (:exit (b/process {:command-args ["bb" "--version"]
+                                 :out :capture :err :capture})))
+       (catch Throwable _ false)))
+
+(defn- bb-classpath
+  "Resolve bb.edn deps so Babashka macro exporters also reach clj-kondo."
+  []
+  (when (.isFile (io/file "bb.edn"))
+    (if-not (bb-available?)
+      (do (println "Skip bb.edn dependency configs: bb not on PATH.")
+          nil)
+      (let [{:keys [exit out]}
+            (b/process {:command-args ["bb" "print-deps" "--format" "classpath"]
+                        :out :capture :err :capture})]
+        (when (pos? exit)
+          (throw (ex-info "Could not resolve bb.edn dependency classpath"
+                          {:exit exit})))
+        (not-empty (str/trim out))))))
+
 (defn- lint-paths
   "Default lint targets: this lib's src-dirs (minus export roots) plus test/."
   []
@@ -258,10 +278,11 @@
 (defn kondo
   "Sync clj-kondo configs exported by dependencies, then lint.
 
-   Any dependency shipping resources/clj-kondo.exports/<group>/<artifact>/ has
-   its config + hooks copied into ./.clj-kondo/imports/, which clj-kondo loads
-   automatically. Macro awareness therefore arrives with the dependency instead
-   of being re-authored per repo.
+   Any deps.edn or bb.edn dependency shipping
+   resources/clj-kondo.exports/<group>/<artifact>/ has its config + hooks copied
+   into ./.clj-kondo/imports/, which clj-kondo loads automatically. Macro
+   awareness therefore arrives with the dependency instead of being re-authored
+   per repo.
 
    :aliases    deps aliases whose classpath is scanned  (default [:test])
    :paths      lint targets                             (default src + test)
@@ -270,10 +291,13 @@
     :or   {aliases [:test] fail-level :error}}]
   (if-not (kondo-available?)
     (println "Skip: clj-kondo not on PATH — install it to sync lint configs.")
-    (let [cp      (str/join java.io.File/pathSeparator
+    (let [deps-cp (str/join java.io.File/pathSeparator
                             (:classpath-roots (b/create-basis {:project "deps.edn"
                                                                :user :standard
                                                                :aliases aliases})))
+          bb-cp   (bb-classpath)
+          cp      (str/join java.io.File/pathSeparator
+                            (cond-> [deps-cp] bb-cp (conj bb-cp)))
           targets (or (seq paths) (lint-paths))]
       (b/process {:command-args ["clj-kondo" "--lint" cp
                                  "--dependencies" "--parallel" "--copy-configs"]})
