@@ -29,6 +29,7 @@
      jar             source jar + pom
      jar-aot         AOT no-source jar (own .class + resources only)
      install         build + install to ~/.m2 (offline)
+     kondo           sync dependency-exported lint configs, then lint
      bump            rewrite ./VERSION (:level :patch|:minor|:major)
      verify-license  report LICENSE / version.edn / SPDX agreement (warns)
      deploy          build + publish per :publish (no-op when :none)
@@ -161,10 +162,14 @@
 ;; Selection is by munged-namespace-path prefix, which also captures classes
 ;; emitted by defrecord/deftype/defprotocol under each namespace's package.
 
+;; Files under a clj-kondo.exports/ path are lint configuration shipped for
+;; consumers, never this lib's own sources: they must not feed compile.
 (defn- source-roots []
   (filterv (fn [d]
              (some (fn [^java.io.File f]
-                     (and (.isFile f) (re-find #"\.cljc?$|\.cljs$" (.getName f))))
+                     (and (.isFile f)
+                          (re-find #"\.cljc?$|\.cljs$" (.getName f))
+                          (not (str/includes? (.getPath f) "clj-kondo.exports"))))
                    (file-seq (io/file d))))
            src-dirs))
 
@@ -236,6 +241,49 @@
     :artifact  jar-file
     :pom-file  (b/pom-path {:lib lib :class-dir class-dir})})
   (println "Installed" (str lib) version "to ~/.m2"))
+
+;; ── Lint config sync ───────────────────────────────────────────────────────
+
+(defn- kondo-available? []
+  (try (zero? (:exit (b/process {:command-args ["clj-kondo" "--version"]
+                                 :out :capture :err :capture})))
+       (catch Throwable _ false)))
+
+(defn- lint-paths
+  "Default lint targets: this lib's src-dirs (minus export roots) plus test/."
+  []
+  (filterv #(.exists (io/file %))
+           (conj (vec (remove #{"resources"} src-dirs)) "test")))
+
+(defn kondo
+  "Sync clj-kondo configs exported by dependencies, then lint.
+
+   Any dependency shipping resources/clj-kondo.exports/<group>/<artifact>/ has
+   its config + hooks copied into ./.clj-kondo/imports/, which clj-kondo loads
+   automatically. Macro awareness therefore arrives with the dependency instead
+   of being re-authored per repo.
+
+   :aliases    deps aliases whose classpath is scanned  (default [:test])
+   :paths      lint targets                             (default src + test)
+   :fail-level :error (default) | :warning | nil to report only"
+  [{:keys [aliases paths fail-level]
+    :or   {aliases [:test] fail-level :error}}]
+  (if-not (kondo-available?)
+    (println "Skip: clj-kondo not on PATH — install it to sync lint configs.")
+    (let [cp      (str/join java.io.File/pathSeparator
+                            (:classpath-roots (b/create-basis {:project "deps.edn"
+                                                               :user :standard
+                                                               :aliases aliases})))
+          targets (or (seq paths) (lint-paths))]
+      (b/process {:command-args ["clj-kondo" "--lint" cp
+                                 "--dependencies" "--parallel" "--copy-configs"]})
+      (let [args (cond-> (into ["clj-kondo" "--lint"] targets)
+                   fail-level (into ["--fail-level" (name fail-level)]))
+            {:keys [exit]} (b/process {:command-args args})]
+        (when (and fail-level (pos? exit))
+          (throw (ex-info "clj-kondo reported findings at or above :fail-level"
+                          {:fail-level fail-level :exit exit})))
+        {:exit exit}))))
 
 ;; ── Version ────────────────────────────────────────────────────────────────
 
