@@ -77,9 +77,22 @@ services:
       # process is capped by JAVA_OPTS, so tune this with available RAM/CPU.
       - LSP_WORKER_COUNT=${LSP_WORKER_COUNT:-2}
       - LSP_PROJECT_TIMEOUT_SECONDS=${LSP_PROJECT_TIMEOUT_SECONDS:-300}
+      - LSP_HEARTBEAT_INTERVAL_SECONDS=${LSP_HEARTBEAT_INTERVAL_SECONDS:-5}
       # LSP_PROJECTS applies only when LSP_AUTO_DISCOVER=true. Set it to a
       # comma-separated list to avoid discovering the entire workspace.
       - LSP_PROJECTS=${LSP_PROJECTS:-}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          bb -e '(require (quote [clojure.edn :as edn]))
+          (let [h (edn/read-string (slurp "/cache/_health.edn"))
+          age (- (System/currentTimeMillis) (:heartbeat-at-ms h 0))]
+          (System/exit (if (and (= :ok (:status h)) (<= age 30000)) 0 1)))'
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
     # Docker's embedded resolver currently forwards to a broken host resolver
     # on this workstation. This default is known-good and remains overridable.
     dns:
