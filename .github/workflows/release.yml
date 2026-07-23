@@ -1,8 +1,8 @@
 name: release
 
-# Patch-bump and publish only when the push actually changes the library.
-# README / CI / test-only commits do not mint a version, because a published
-# pom is immutable on both Clojars and the private registry.
+# Publish the exact VERSION reviewed in the merged PR.  The default branch
+# requires PRs and verified signatures, so release CI must never create and
+# push an unsigned version-bump commit of its own.
 on:
   push:
     branches: [main]
@@ -10,6 +10,8 @@ on:
       - 'src/**'
       - 'resources/**'
       - 'deps.edn'
+      - 'VERSION'
+      - '.github/workflows/release.yml'
 
 concurrency:
   group: release-${{ github.ref }}
@@ -29,22 +31,19 @@ jobs:
         with:
           cli: latest
 
-      - name: Bump patch version
-        run: clojure -T:build bump :level :patch
-
-      - name: Commit and tag
-        run: |
-          VER=$(cat VERSION)
-          git config user.name  "hive-ci"
-          git config user.email "ci@hive-agi.local"
-          git add VERSION
-          # [skip ci] stops this push from retriggering the workflow.
-          git commit -m "chore(release): $VER [skip ci]"
-          git tag "v$VER"
-          git push --follow-tags
-
       - name: Deploy
         env:
           CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
           CLOJARS_PASSWORD: ${{ secrets.CLOJARS_PASSWORD }}
         run: clojure -T:build deploy
+
+      - name: Tag published version
+        run: |
+          VER=$(tr -d '[:space:]' < VERSION)
+          git fetch --tags
+          if git rev-parse --verify "refs/tags/v$VER" >/dev/null 2>&1; then
+            test "$(git rev-list -n 1 "v$VER")" = "$GITHUB_SHA"
+          else
+            git tag "v$VER" "$GITHUB_SHA"
+            git push origin "refs/tags/v$VER"
+          fi
