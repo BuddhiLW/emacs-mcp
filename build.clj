@@ -8,7 +8,14 @@
       :license  {:name \"MIT\" :url \"https://opensource.org/licenses/MIT\"}
       :scm-url  \"https://github.com/hive-agi/hive-thing\"
       :src-dirs [\"src\"]
-      :publish  :clojars}            ; :clojars | :gitea | :none
+      :publish  :clojars             ; :clojars | :gitea | :none
+      :aot/java-opts []              ; optional, AOT compile only
+      :pom-exclude-deps []}          ; optional, dropped from the published pom
+
+   An untracked ./local.deps.edn may supply a `:provided` alias (host sources
+   that must be on the AOT compile classpath but must NOT enter the pom) and an
+   `:aot/preload` namespace vector compiled ahead of this lib's own namespaces.
+   Absent that file, the AOT basis is the committed deps.edn alone.
 
    `:publish` is the ONLY thing that differs between packages — the task names
    are identical everywhere, so one CI workflow drives the whole fleet:
@@ -60,11 +67,44 @@
 
 (defn- basis [] (b/create-basis {:project "deps.edn" :user :standard}))
 
+(def ^:private pom-exclude-deps (set (:pom-exclude-deps cfg [])))
+
+(defn- pom-basis
+  "Project basis for the POM, minus :pom-exclude-deps — host-integration libs
+   that are on the compile classpath but must not be declared as requirements
+   of the published artifact. Equals (basis) when the key is absent."
+  []
+  (if (empty? pom-exclude-deps)
+    (basis)
+    (let [proj (edn/read-string (slurp "deps.edn"))
+          core (apply dissoc (:deps proj) pom-exclude-deps)]
+      (b/create-basis {:project (assoc proj :deps core) :user :standard}))))
+
+;; ── Provided (compile-only) overlay ────────────────────────────────────────
+
+(defn- local-overrides
+  "Parsed ./local.deps.edn, or nil when absent."
+  []
+  (let [f (io/file "local.deps.edn")]
+    (when (.exists f) (edn/read-string (slurp f)))))
+
+(defn- aot-basis
+  "Compile-time basis. Injects ONLY the overlay's :provided alias, so the
+   overlay's top-level :deps (its :local/root siblings) never reach the release
+   compile classpath. Equals (basis) when no overlay is present."
+  [overlay]
+  (b/create-basis
+   (cond-> {:project "deps.edn" :user :standard}
+     (get-in overlay [:aliases :provided])
+     (assoc :extra   (update (select-keys overlay [:aliases])
+                             :aliases select-keys [:provided])
+            :aliases [:provided]))))
+
 (defn- write-pom []
   (b/write-pom {:class-dir class-dir
                 :lib       lib
                 :version   version
-                :basis     (basis)
+                :basis     (pom-basis)
                 :src-dirs  (vec (remove #{"resources"} src-dirs))
                 :scm       {:url (:scm-url cfg)
                             :tag (b/git-process {:git-args "rev-parse HEAD"})}
@@ -172,10 +212,18 @@
   "Build the AOT no-source jar: this lib's own .class files + resources only."
   [_]
   (clean nil)
-  (let [scratch "target/aot-classes"
+  (let [overlay (local-overrides)
+        preload (vec (:aot/preload overlay))
+        scratch "target/aot-classes"
         nses    (source-namespaces)]
-    (b/compile-clj {:basis (basis) :src-dirs (source-roots)
-                    :ns-compile nses :class-dir scratch})
+    ;; Preload host nses FIRST (same JVM) so reify/require against runtime-only
+    ;; host protocols resolves; own nses compile after.
+    (b/compile-clj (cond-> {:basis      (aot-basis overlay)
+                            :src-dirs   (source-roots)
+                            :ns-compile (into preload nses)
+                            :class-dir  scratch}
+                     (seq (:aot/java-opts cfg))
+                     (assoc :java-opts (vec (:aot/java-opts cfg)))))
     (copy-own-classes! scratch nses)
     (when-let [res (seq (resource-roots))]
       (b/copy-dir {:src-dirs (vec res) :target-dir class-dir}))
@@ -201,6 +249,26 @@
                                  :out :capture :err :capture})))
        (catch Throwable _ false)))
 
+(defn- bb-available? []
+  (try (zero? (:exit (b/process {:command-args ["bb" "--version"]
+                                 :out :capture :err :capture})))
+       (catch Throwable _ false)))
+
+(defn- bb-classpath
+  "Resolve bb.edn deps so Babashka macro exporters also reach clj-kondo."
+  []
+  (when (.isFile (io/file "bb.edn"))
+    (if-not (bb-available?)
+      (do (println "Skip bb.edn dependency configs: bb not on PATH.")
+          nil)
+      (let [{:keys [exit out]}
+            (b/process {:command-args ["bb" "print-deps" "--format" "classpath"]
+                        :out :capture :err :capture})]
+        (when (pos? exit)
+          (throw (ex-info "Could not resolve bb.edn dependency classpath"
+                          {:exit exit})))
+        (not-empty (str/trim out))))))
+
 (defn- lint-paths
   "Default lint targets: this lib's src-dirs (minus export roots) plus test/."
   []
@@ -210,10 +278,11 @@
 (defn kondo
   "Sync clj-kondo configs exported by dependencies, then lint.
 
-   Any dependency shipping resources/clj-kondo.exports/<group>/<artifact>/ has
-   its config + hooks copied into ./.clj-kondo/imports/, which clj-kondo loads
-   automatically. Macro awareness therefore arrives with the dependency instead
-   of being re-authored per repo.
+   Any deps.edn or bb.edn dependency shipping
+   resources/clj-kondo.exports/<group>/<artifact>/ has its config + hooks copied
+   into ./.clj-kondo/imports/, which clj-kondo loads automatically. Macro
+   awareness therefore arrives with the dependency instead of being re-authored
+   per repo.
 
    :aliases    deps aliases whose classpath is scanned  (default [:test])
    :paths      lint targets                             (default src + test)
@@ -222,10 +291,13 @@
     :or   {aliases [:test] fail-level :error}}]
   (if-not (kondo-available?)
     (println "Skip: clj-kondo not on PATH — install it to sync lint configs.")
-    (let [cp      (str/join java.io.File/pathSeparator
+    (let [deps-cp (str/join java.io.File/pathSeparator
                             (:classpath-roots (b/create-basis {:project "deps.edn"
                                                                :user :standard
                                                                :aliases aliases})))
+          bb-cp   (bb-classpath)
+          cp      (str/join java.io.File/pathSeparator
+                            (cond-> [deps-cp] bb-cp (conj bb-cp)))
           targets (or (seq paths) (lint-paths))]
       (b/process {:command-args ["clj-kondo" "--lint" cp
                                  "--dependencies" "--parallel" "--copy-configs"]})
@@ -302,12 +374,13 @@
           :pom-file  (b/pom-path {:lib lib :class-dir class-dir})})
         (println "Deployed" (str lib) version "to Clojars"))))
 
-(defn- deploy-gitea []
-  (let [env      (fn [k d] (let [v (System/getenv k)] (if (str/blank? v) d v)))
-        url      (env "GITEA_MAVEN_URL"
-                      "https://gitea.hive-mcp.com/api/packages/hive-agi/maven")
-        username (env "GITEA_MAVEN_USERNAME" "buddhilw")
-        token    (required-env "GITEA_MAVEN_TOKEN")
+(defn- deploy-gitea
+  "Publish the AOT jar to the private registry.
+   Env: MAVEN_URL, MAVEN_USERNAME, MAVEN_TOKEN — all required, no defaults."
+  []
+  (let [url      (required-env "MAVEN_URL")
+        username (required-env "MAVEN_USERNAME")
+        token    (required-env "MAVEN_TOKEN")
         auth     (str "Basic " (.encodeToString (java.util.Base64/getEncoder)
                                                 (.getBytes (str username ":" token))))]
     (if (published? url auth)
