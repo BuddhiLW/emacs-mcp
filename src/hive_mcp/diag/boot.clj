@@ -132,6 +132,8 @@
   (relieve!)
 
   ;; 6. Still heavy? Hunt named roots by deep retained size (needs the sizer).
+  ;; Replace this example atom with the live root under investigation.
+  (def some-app-atom (atom {:example "cache"}))
   (p/hunt-retainers (clinic)
                     [{:diag/label "app-cache" :diag/object @some-app-atom}])
 

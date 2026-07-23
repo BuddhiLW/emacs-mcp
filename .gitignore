@@ -11,6 +11,7 @@ target/
 .vscode/
 # clj-kondo: track config.edn, ignore generated files
 .clj-kondo/.cache/
+**/.clj-kondo/.cache/
 .clj-kondo/.lock
 .clj-kondo/imports/
 .clj-kondo/inline-configs/
