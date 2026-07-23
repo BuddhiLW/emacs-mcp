@@ -92,11 +92,11 @@
         ;; hive-events - re-frame inspired event system for JVM
         ;; v0.4.0 adds sub-FSM composition + multi-dispatch
         io.github.hive-agi/hive-events
-        {:git/tag "v0.5.2" :git/sha "24a58a1"}
+        {:mvn/version "0.5.6"}
 
         ;; hive-hot - unified hot-reload with events integration
         io.github.hive-agi/hive-hot
-        {:git/tag "v0.1.2" :git/sha "9b16c87"}
+        {:git/tag "v0.1.5" :git/sha "d82976b"}
 
         ;; Prometheus metrics - iapetos wrapper; hotspot collector adds
         ;; JVM metrics (memory, GC, threads).
@@ -123,51 +123,50 @@
         ;; git tag (== master head) so CI and the Clojars jar build resolve it
         ;; without a sibling checkout; sibling co-dev goes through a gitignored
         ;; local.deps.edn :local/root override.
-        io.github.hive-agi/hive-spi {:git/tag "v0.1.5"
-                                     :git/sha "1fed565a9600211e582eeac6831c8533ec22d2b2"}
+        io.github.hive-agi/hive-spi {:mvn/version "0.1.9"}
 
         ;; TEMPORARY — the migration adapters still hard-require these backends
         ;; (a DIP violation). Drop once they move to their addon repos.
         io.github.hive-agi/clj-qdrant
-        {:git/tag "v0.1.1" :git/sha "ad9d4bb"}
+        {:mvn/version "0.1.2"}
         io.github.hive-agi/hive-qdrant
-        {:git/tag "v0.1.1" :git/sha "1c571a5"}
+        {:mvn/version "0.1.6"}
 
-        ;; hive-addon — standalone IAddon contract (leaf lib). hive-mcp.addons.protocol
-        ;; re-exports it via def-aliases so the ~30 monorepo addon implementors can
-        ;; depend on hive-addon instead of compile-depending on hive-mcp.
-        io.github.hive-agi/hive-addon
-        {:git/tag "v0.1.0" :git/sha "89e299f"}
+        ;; hive-addon — standalone IAddon contract (leaf lib) + plug/mount/compose.
+        ;; hive-mcp.addons.protocol re-exports it via def-aliases so the ~30
+        ;; monorepo addon implementors can depend on hive-addon instead of
+        ;; compile-depending on hive-mcp.
+        io.github.hive-agi/hive-addon {:mvn/version "0.3.3"}
 
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
-        io.github.hive-agi/hive-di {:git/tag "v0.3.1" :git/sha "ab63fd0"}
+        io.github.hive-agi/hive-di {:mvn/version "0.3.2"}
 
         ;; hive-milvus — Milvus vector database addon (IMemoryStore via IAddon)
         ;; Auto-discovered via META-INF/hive-addons/milvus.edn manifest.
         ;; Overrides default Chroma store when Milvus is reachable.
-        io.github.hive-agi/hive-milvus {:git/tag "v0.4.5" :git/sha "8ad32bd"}
+        io.github.hive-agi/hive-milvus {:git/tag "v0.4.6" :git/sha "82eb9b5"}
 
         ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj;
         ;; hive-weave.retry/with-recovery used by knowledge-graph/store/datahike.clj
         ;; (first released in 0.2.6 — 0.2.5 does not contain the retry ns).
-        io.github.hive-agi/hive-weave {:mvn/version "0.2.6"}
+        io.github.hive-agi/hive-weave {:mvn/version "0.2.9"}
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
-        io.github.hive-agi/hive-emacs {:git/tag "v0.4.4" :git/sha "ec98ce8"}
+        io.github.hive-agi/hive-emacs {:git/tag "v0.4.6" :git/sha "bb042ee"}
 
         ;; hive-proximum — temporal/bitemporal memory backend (IMemoryStore via IAddon).
         ;; Auto-discovered via its hive-addons manifest. Stub store until the
         ;; backend impl lands.
-        io.github.hive-agi/hive-proximum {:git/tag "v0.1.3" :git/sha "835a36c"}
+        io.github.hive-agi/hive-proximum {:git/tag "v0.1.8" :git/sha "3836d43"}
 
         ;; hive-ttracking — telemetry/timing (timed-query, track*, bench*).
         ;; Consumed by catchup.clj and siblings (bundle/hydration/hierarchy).
-        io.github.hive-agi/hive-ttracking {:git/tag "v0.1.4" :git/sha "51fd09d"}
+        io.github.hive-agi/hive-ttracking {:mvn/version "0.1.8"}
 
         ;; hive-system — system-level abstractions (IProcess, INetwork,
         ;; process liveness, secrets, shell, redaction).
-        io.github.hive-agi/hive-system {:git/tag "v0.2.7" :git/sha "dbbfeff"}
+        io.github.hive-agi/hive-system {:mvn/version "0.2.11"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
@@ -347,7 +346,7 @@
                 ;; mutant. Must come from the JAR, not :local/root — the macros
                 ;; live in src/synth, which ships but is not on the project's
                 ;; :paths.
-                io.github.hive-agi/hive-schemas {:mvn/version "0.1.1"}}
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.10"}}
                 ;; hive-spi now lives in :deps (core nses require it) — no
                 ;; :test-alias override needed.
    ;; Backend drivers are NOT here — the default cold-CI test path is
@@ -375,7 +374,7 @@
                 ;; aborts this whole alias — all 405 namespaces — if the dep is
                 ;; only declared on :test. This is the CI alias; it is the one that
                 ;; must not be able to fail at load.
-                io.github.hive-agi/hive-schemas {:mvn/version "0.1.1"}}
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.10"}}
    :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
    :exec-fn cognitect.test-runner.api/test
@@ -390,7 +389,7 @@
                 io.github.hive-agi/hive-test {:mvn/version "0.3.10"}
                 ;; Same reason as :test-unit — this alias also puts test/ on the
                 ;; path, so it loads every test ns before selecting :integration.
-                io.github.hive-agi/hive-schemas {:mvn/version "0.1.1"}}
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.10"}}
    :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
