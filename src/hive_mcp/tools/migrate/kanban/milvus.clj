@@ -12,10 +12,8 @@
             [hive-mcp.protocols.memory :as proto]
             [hive-mcp.tools.migrate.kanban.pure :as pure]
             [hive-mcp.tools.migrate.kanban.ports :as ports]
-            [hive-milvus.store.lookup :as lookup]
-            [hive-milvus.store.schema :as schema]
-            [milvus-clj.api :as milvus]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.tools.migrate.optional :as opt]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -46,7 +44,7 @@
    `page-cap`. Returns vector of id strings."
   [coll tag-filter page-cap]
   (try
-    (let [rows @(milvus/query-scalar coll
+    (let [rows @((opt/backend-var "milvus-clj.api" (quote query-scalar)) coll
                   {:filter            tag-filter
                    :limit             page-cap
                    :output-fields     ["id"]
@@ -58,16 +56,16 @@
 
 (defn- query-coll-entries-by-ids
   "Single-collection batched read: `id in [...]` constrained to `ids`.
-   Returns vector of entries (decoded via schema/record->entry)."
+   Returns vector of entries (decoded via hive-milvus.store.schema/record->entry)."
   [coll ids]
   (when (seq ids)
     (try
-      (let [rows @(milvus/query-scalar coll
+      (let [rows @((opt/backend-var "milvus-clj.api" (quote query-scalar)) coll
                     {:filter            (ids-in-filter ids)
                      :limit             (count ids)
-                     :output-fields     schema/default-read-fields
+                     :output-fields     @(opt/backend-var "hive-milvus.store.schema" (quote default-read-fields))
                      :consistency-level :bounded})]
-        (mapv schema/record->entry rows))
+        (mapv (opt/backend-var "hive-milvus.store.schema" (quote record->entry)) rows))
       (catch Throwable t
         (log/warn t "milvus EntryReader coll error" {:coll coll :n (count ids)})
         []))))
@@ -89,7 +87,7 @@
   (list-ids [_]
     (try
       (if-let [cfg (config-atom-of milvus-store)]
-        (let [colls (lookup/known-collections cfg)
+        (let [colls ((opt/backend-var "hive-milvus.store.lookup" (quote known-collections)) cfg)
               per-coll (mapv (fn [c] (query-coll-ids c tag-filter page-cap)) colls)]
           (r/ok {:ids       (pure/dedup-sorted-ids per-coll)
                  :per-collection (zipmap colls (mapv count per-coll))}))
@@ -118,7 +116,7 @@
       (if (empty? ids)
         (r/ok {})
         (if-let [cfg (config-atom-of milvus-store)]
-          (let [colls (lookup/known-collections cfg)
+          (let [colls ((opt/backend-var "hive-milvus.store.lookup" (quote known-collections)) cfg)
                 ;; Fan-out: one batched query per coll, group by id.
                 by-id (->> colls
                            (mapcat (fn [c] (query-coll-entries-by-ids c ids)))

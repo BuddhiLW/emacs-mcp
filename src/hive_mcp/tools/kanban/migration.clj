@@ -30,8 +30,8 @@
    driven (see `hive-mcp.config.core/get-kanban-store-mode`)."
   (:require [hive-mcp.protocols.memory :as proto]
             [hive-mcp.tools.kanban.predicates :as kp]
-            [hive-qdrant.migrate :as qmig]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.tools.migrate.optional :as opt]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -87,7 +87,7 @@
    (let [target (proto/get-store :kanban)
          _      (log/info "kanban migration starting"
                           {:batch-size batch-size :dry-run? (boolean dry-run?)})
-         result (qmig/sync!
+         result ((opt/backend-var "hive-qdrant.migrate" (quote sync!))
                   {:source-fn  extract-kanban-from-default-store
                    :target     target
                    :batch-size batch-size
@@ -112,7 +112,7 @@
    (let [src-ids (mapv :id (extract-kanban-from-default-store))
          sample  (->> src-ids shuffle (take sample-size) vec)
          target  (proto/get-store :kanban)]
-     (qmig/verify {:target target :ids sample}))))
+     ((opt/backend-var "hive-qdrant.migrate" (quote verify)) {:target target :ids sample}))))
 
 ;; =============================================================================
 ;; Status — quick sanity check before running
