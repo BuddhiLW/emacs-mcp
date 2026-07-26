@@ -73,6 +73,7 @@
 ;; =============================================================================
 
 (deftest stub-expiration-cleanup (contract/test-expiration-cleanup))
+(deftest stub-cleanup-expired-shape (contract/test-cleanup-expired-shape))
 (deftest stub-cleanup-expired-idempotent (contract/test-cleanup-expired-idempotent))
 (deftest stub-entries-expiring-soon (contract/test-entries-expiring-soon))
 

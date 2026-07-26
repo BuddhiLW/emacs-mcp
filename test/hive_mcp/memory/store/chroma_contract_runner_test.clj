@@ -98,6 +98,9 @@
 (deftest ^:integration chroma-expiration-cleanup
   (contract/test-expiration-cleanup))
 
+(deftest ^:integration chroma-cleanup-expired-shape
+  (contract/test-cleanup-expired-shape))
+
 (deftest ^:integration chroma-cleanup-expired-idempotent
   (contract/test-cleanup-expired-idempotent))
 

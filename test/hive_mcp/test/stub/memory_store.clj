@@ -13,8 +13,9 @@
      (entries store)           current {id -> entry} snapshot
 
    Contract mirrored from hive-mcp.memory.store.chroma:
-     add-entry!     => entry id (string)
-     delete-entry!  => true
+     add-entry!       => entry id (string)
+     delete-entry!    => true
+     cleanup-expired! => {:count n :deleted-ids [id ...] :repaired 0}
      query-entries  => vector of entries, filtered then ordered
      search-similar => entries ranked by token overlap, each carrying :score
      health-check   => {:healthy? :latency-ms :backend :entry-count :errors :checked-at}
@@ -158,7 +159,7 @@
     (let [now  (System/currentTimeMillis)
           gone (->> (vals (:entries @state)) (filter #(expired? % now)) (mapv :id))]
       (swap! state update :entries #(apply dissoc % gone))
-      {:deleted (count gone) :ids gone}))
+      {:count (count gone) :deleted-ids gone :repaired 0}))
 
   (entries-expiring-soon [_this days opts]
     (let [now     (System/currentTimeMillis)
@@ -243,6 +244,68 @@
          vec))
 
   (propagate-staleness! [_this _source-id _depth] 0))
+
+;; =============================================================================
+;; Observing decorator — records calls, injects faults
+;; =============================================================================
+
+(defn- observe!
+  "Record [op args] on CALLS, then throw when FAULTS names OP, else delegate."
+  [calls faults op args f]
+  (swap! calls conj (into [op] args))
+  (if-let [msg (get faults op)]
+    (throw (ex-info msg {:op op :stub/fault true}))
+    (f)))
+
+(defrecord ObservingMemoryStore [inner calls faults]
+  ports/IMemoryStore
+  (connect! [_ config] (observe! calls faults :connect! [config] #(ports/connect! inner config)))
+  (disconnect! [_] (observe! calls faults :disconnect! [] #(ports/disconnect! inner)))
+  (connected? [_] (observe! calls faults :connected? [] #(ports/connected? inner)))
+  (health-check [_] (observe! calls faults :health-check [] #(ports/health-check inner)))
+  (add-entry! [_ entry] (observe! calls faults :add-entry! [entry] #(ports/add-entry! inner entry)))
+  (get-entry [_ id] (observe! calls faults :get-entry [id] #(ports/get-entry inner id)))
+  (update-entry! [_ id u] (observe! calls faults :update-entry! [id u] #(ports/update-entry! inner id u)))
+  (delete-entry! [_ id] (observe! calls faults :delete-entry! [id] #(ports/delete-entry! inner id)))
+  (query-entries [_ opts] (observe! calls faults :query-entries [opts] #(ports/query-entries inner opts)))
+  (search-similar [_ q opts] (observe! calls faults :search-similar [q opts] #(ports/search-similar inner q opts)))
+  (supports-semantic-search? [_] (ports/supports-semantic-search? inner))
+  (cleanup-expired! [_] (observe! calls faults :cleanup-expired! [] #(ports/cleanup-expired! inner)))
+  (entries-expiring-soon [_ d opts] (observe! calls faults :entries-expiring-soon [d opts] #(ports/entries-expiring-soon inner d opts)))
+  (find-duplicate [_ t h opts] (observe! calls faults :find-duplicate [t h opts] #(ports/find-duplicate inner t h opts)))
+  (store-status [_] (observe! calls faults :store-status [] #(ports/store-status inner)))
+  (reset-store! [_] (observe! calls faults :reset-store! [] #(ports/reset-store! inner)))
+
+  ports/IMemoryStoreBatch
+  (get-entries [_ ids] (observe! calls faults :get-entries [ids] #(ports/get-entries inner ids)))
+
+  ports/IMemoryStoreWithAnalytics
+  (log-access! [_ id] (observe! calls faults :log-access! [id] #(ports/log-access! inner id)))
+  (record-feedback! [_ id fb] (observe! calls faults :record-feedback! [id fb] #(ports/record-feedback! inner id fb)))
+  (get-helpfulness-ratio [_ id] (observe! calls faults :get-helpfulness-ratio [id] #(ports/get-helpfulness-ratio inner id)))
+
+  ports/IMemoryStoreWithStaleness
+  (update-staleness! [_ id o] (observe! calls faults :update-staleness! [id o] #(ports/update-staleness! inner id o)))
+  (get-stale-entries [_ t opts] (observe! calls faults :get-stale-entries [t opts] #(ports/get-stale-entries inner t opts)))
+  (propagate-staleness! [_ id d] (observe! calls faults :propagate-staleness! [id d] #(ports/propagate-staleness! inner id d))))
+
+(defn ->observing
+  "Wrap INNER so every port call is recorded and selected ops can fail.
+
+   FAULTS is {op-keyword message}; a call to a faulted op throws ex-info with
+   that message instead of delegating. Read the log with `calls`."
+  ([inner] (->observing inner {}))
+  ([inner faults] (->ObservingMemoryStore inner (atom []) faults)))
+
+(defn calls
+  "Recorded [op & args] vectors for an observing store, oldest first."
+  [store]
+  @(:calls store))
+
+(defn calls-of
+  "Recorded arg vectors for OP only."
+  [store op]
+  (into [] (comp (filter #(= op (first %))) (map #(vec (rest %)))) (calls store)))
 
 ;; =============================================================================
 ;; Construction + registration
