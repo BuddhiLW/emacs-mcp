@@ -119,7 +119,7 @@
      :checked-at  (ids/iso-timestamp)})
 
   (add-entry! [_this entry]
-    (let [id (or (:id entry) (ids/generate-id))
+    (let [id (or (:id entry) ((:id-fn @state)))
           e  (assoc entry :id id :created (or (:created entry) (ids/iso-timestamp)))]
       (swap! state assoc-in [:entries id] e)
       id))
@@ -249,10 +249,18 @@
 ;; =============================================================================
 
 (defn ->stub
-  "A fresh, connected StubMemoryStore. Optional ENTRIES seed it."
-  ([] (->stub nil))
-  ([entries]
-   (let [store (->StubMemoryStore (atom {:entries {} :connected? true}))]
+  "A fresh, connected StubMemoryStore. Optional ENTRIES seed it.
+
+   OPTS:
+     :id-fn — zero-arg id generator for entries added without an :id.
+              Defaults to hive-mcp.memory.ids/generate-id; inject a constant
+              (or a counter) when a test needs deterministic ids."
+  ([] (->stub nil nil))
+  ([entries] (->stub entries nil))
+  ([entries {:keys [id-fn]}]
+   (let [store (->StubMemoryStore (atom {:entries    {}
+                                         :connected? true
+                                         :id-fn      (or id-fn ids/generate-id)}))]
      (doseq [e entries] (ports/add-entry! store e))
      store)))
 

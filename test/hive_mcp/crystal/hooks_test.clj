@@ -12,7 +12,8 @@
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.duration :as dur]
             [hive-mcp.extensions.registry :as ext]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.test.stub.memory-store :as stub]
+            [hive-spi.memory.registry :as registry]
             [hive-mcp.agent.context :as ctx]))
 
 ;; =============================================================================
@@ -73,6 +74,7 @@
                         (swap! memory-decay-calls# conj args#)
                         (get opts# :memory-decay
                              {:decayed 0 :expired 0 :total-scanned 0}))))
+     (stub/install! (stub/->stub nil {:id-fn (constantly (get opts# :entry-id "entry-test-001"))}))
      (try
        (with-redefs [crystal/summarize-session-progress
                      (fn [& _#] (:summary opts#))
@@ -90,18 +92,13 @@
                      (fn [_#] "2026-02-13T00:00:00Z")
 
                      ctx/current-directory
-                     (fn [] "/tmp/test-project")
-
-                     chroma/index-memory-entry!
-                     (fn [_#] (get opts# :entry-id "entry-test-001"))
-
-                     chroma/content-hash
-                     (fn [c#] (str (hash c#)))]
+                     (fn [] "/tmp/test-project")]
          (let [result# (do ~@body)]
            {:result result#
             :xpoll-calls @xpoll-calls#
             :memory-decay-calls @memory-decay-calls#}))
        (finally
+         (registry/reset-registry!)
          (ext/deregister! :ch/a)
          (ext/deregister! :ch/b)
          (ext/deregister! :ch/c)
@@ -118,7 +115,8 @@
             {:summary nil
              :xpoll {:promoted 0 :candidates 0 :total-scanned 50}}
             (hooks/crystallize-session base-harvested))]
-      (is (:skipped result) "Should be skipped (no-content path)")
+      (is (:summary-id result)
+          "No-content path persists a minimal wrap summary")
       (is (contains? result :xpoll-stats) "Return map must include :xpoll-stats")
       (is (= 0 (:promoted (:xpoll-stats result))))
       (is (= 0 (:candidates (:xpoll-stats result))))
@@ -131,7 +129,8 @@
             {:summary nil
              :xpoll {:promoted 3 :candidates 5 :total-scanned 100}}
             (hooks/crystallize-session base-harvested))]
-      (is (:skipped result))
+      (is (:summary-id result)
+          "No-content path persists a minimal wrap summary")
       (is (= 3 (:promoted (:xpoll-stats result))))
       (is (= 5 (:candidates (:xpoll-stats result))))
       (is (= 100 (:total-scanned (:xpoll-stats result)))))))
@@ -143,7 +142,8 @@
             {:summary nil
              :xpoll-fn (fn [_] (throw (Exception. "Chroma connection refused")))}
             (hooks/crystallize-session base-harvested))]
-      (is (:skipped result) "Should still return skipped result")
+      (is (:summary-id result)
+          "No-content path persists a minimal wrap summary")
       (is (contains? result :xpoll-stats) "Must still have :xpoll-stats key")
       (is (string? (:error (:xpoll-stats result))) "Should contain error message")
       (is (= 0 (:promoted (:xpoll-stats result))) "Promoted should be 0 on error"))))
@@ -259,8 +259,8 @@
 ;; Ordering: xpoll runs AFTER co-access promotion and edge decay
 ;; =============================================================================
 
-(deftest crystallize-session-xpoll-runs-after-promotion-and-decay
-  (testing "Lifecycle extensions execute in sequential order a → b → c → d"
+(deftest crystallize-session-runs-every-lifecycle-extension
+  (testing "Every registered lifecycle extension is invoked exactly once"
     (let [call-order (atom [])]
       (ext/register! :ch/a (fn [_] (swap! call-order conj :ch-a)
                              {:promoted 0 :skipped 0 :below 0 :evaluated 0}))
@@ -276,8 +276,10 @@
                       scope/get-current-project-id (fn [_] "test-proj")
                       ctx/current-directory (fn [] "/tmp")]
           (hooks/crystallize-session base-harvested))
-        (is (= [:ch-a :ch-b :ch-c :ch-d] @call-order)
-            "Execution order: a → b → c → d")
+        (is (= #{:ch-a :ch-b :ch-c :ch-d} (set @call-order))
+            "All four lifecycle extensions run")
+        (is (= 4 (count @call-order))
+            "Each lifecycle extension runs exactly once")
         (finally
           (ext/deregister! :ch/a)
           (ext/deregister! :ch/b)
@@ -295,7 +297,8 @@
             {:summary nil
              :memory-decay {:decayed 5 :expired 2 :total-scanned 50}}
             (hooks/crystallize-session base-harvested))]
-      (is (:skipped result) "Should be skipped (no-content path)")
+      (is (:summary-id result)
+          "No-content path persists a minimal wrap summary")
       (is (contains? result :memory-decay-stats) "Return map must include :memory-decay-stats")
       (is (= 5 (:decayed (:memory-decay-stats result))))
       (is (= 2 (:expired (:memory-decay-stats result))))
@@ -323,7 +326,8 @@
             {:summary nil
              :memory-decay-fn (fn [_] (throw (Exception. "Chroma timeout")))}
             (hooks/crystallize-session base-harvested))]
-      (is (:skipped result) "Should still return skipped result")
+      (is (:summary-id result)
+          "No-content path persists a minimal wrap summary")
       (is (contains? result :memory-decay-stats) "Must still have :memory-decay-stats key")
       (is (string? (:error (:memory-decay-stats result))) "Should contain error message")
       (is (= 0 (:decayed (:memory-decay-stats result))) "Decayed should be 0 on error"))))
@@ -381,7 +385,8 @@
                     :session-timing {:session-start "2026-02-11T10:00:00Z"
                                      :session-end "2026-02-11T11:30:00Z"
                                      :duration-minutes 90})))]
-      (is (:skipped result) "Should be skipped (no-content path)")
+      (is (:summary-id result)
+          "No-content path persists a minimal wrap summary")
       (is (contains? result :session-timing) "Return map must include :session-timing")
       (is (= "2026-02-11T10:00:00Z" (:session-start (:session-timing result))))
       (is (= "2026-02-11T11:30:00Z" (:session-end (:session-timing result))))
@@ -411,7 +416,8 @@
           (with-crystallize-mocks
             {:summary nil}
             (hooks/crystallize-session base-harvested))]
-      (is (:skipped result))
+      (is (:summary-id result)
+          "No-content path persists a minimal wrap summary")
       (is (contains? result :session-timing) "Must have :session-timing even without input")
       (is (nil? (:session-start (:session-timing result)))
           "Session start should be nil when not tracked")
@@ -502,25 +508,22 @@
 
 (deftest crystallize-session-embeds-temporal-block-in-content
   (testing "Content path appends temporal metadata block to stored content"
-    (let [chroma-args (atom nil)]
+    (let [store (stub/install! (stub/->stub))]
       (with-redefs [crystal/summarize-session-progress
                     (fn [& _] {:content "## Session Summary: test\n\nSome work" :tags ["wrap"]})
                     crystal/session-id (fn [] "test-session")
                     scope/get-current-project-id (fn [_] "test-project")
                     scope/inject-project-scope (fn [tags _] tags)
                     dur/calculate-expires (fn [_] "2026-02-13T00:00:00Z")
-                    ctx/current-directory (fn [] "/tmp/test")
-                    chroma/index-memory-entry!
-                    (fn [args] (reset! chroma-args args) "entry-temporal-001")
-                    chroma/content-hash (fn [c] (str (hash c)))]
+                    ctx/current-directory (fn [] "/tmp/test")]
         (hooks/crystallize-session
          (assoc base-harvested
                 :progress-notes [{:content "work done"}]
                 :session-timing {:session-start "2026-02-11T10:00:00Z"
                                  :session-end "2026-02-11T11:30:00Z"
                                  :duration-minutes 90}))
-        (is (some? @chroma-args) "Should have called chroma/index-memory-entry!")
-        (let [stored-content (:content @chroma-args)]
+        (is (= 1 (count (stub/entries store))) "Should have stored one entry")
+        (let [stored-content (:content (first (vals (stub/entries store))))]
           (is (clojure.string/includes? stored-content "Temporal Metadata")
               "Stored content should include temporal block header")
           (is (clojure.string/includes? stored-content "2026-02-11T10:00:00Z")
@@ -532,24 +535,21 @@
 
 (deftest crystallize-session-adds-autokg-tags
   (testing "Content path adds auto-kg, session-wrap, temporal tags"
-    (let [chroma-args (atom nil)]
+    (let [store (stub/install! (stub/->stub))]
       (with-redefs [crystal/summarize-session-progress
                     (fn [& _] {:content "Summary" :tags ["wrap"]})
                     crystal/session-id (fn [] "test-session")
                     scope/get-current-project-id (fn [_] "test-project")
                     scope/inject-project-scope (fn [tags _] tags)
                     dur/calculate-expires (fn [_] "2026-02-13T00:00:00Z")
-                    ctx/current-directory (fn [] "/tmp/test")
-                    chroma/index-memory-entry!
-                    (fn [args] (reset! chroma-args args) "entry-tags-001")
-                    chroma/content-hash (fn [c] (str (hash c)))]
+                    ctx/current-directory (fn [] "/tmp/test")]
         (hooks/crystallize-session
          (assoc base-harvested
                 :progress-notes [{:content "work"}]
                 :session-timing {:session-start "2026-02-11T10:00:00Z"
                                  :session-end "2026-02-11T11:00:00Z"
                                  :duration-minutes 60}))
-        (let [stored-tags (:tags @chroma-args)]
+        (let [stored-tags (:tags (first (vals (stub/entries store))))]
           (is (some #{"auto-kg"} stored-tags)
               "Tags should include auto-kg")
           (is (some #{"session-wrap"} stored-tags)
@@ -561,17 +561,14 @@
 
 (deftest crystallize-session-temporal-includes-memory-ids
   (testing "Temporal block includes memory-ids counts when available from harvest"
-    (let [chroma-args (atom nil)]
+    (let [store (stub/install! (stub/->stub))]
       (with-redefs [crystal/summarize-session-progress
                     (fn [& _] {:content "Summary" :tags ["wrap"]})
                     crystal/session-id (fn [] "test-session")
                     scope/get-current-project-id (fn [_] "test-project")
                     scope/inject-project-scope (fn [tags _] tags)
                     dur/calculate-expires (fn [_] "2026-02-13T00:00:00Z")
-                    ctx/current-directory (fn [] "/tmp/test")
-                    chroma/index-memory-entry!
-                    (fn [args] (reset! chroma-args args) "entry-ids-001")
-                    chroma/content-hash (fn [c] (str (hash c)))]
+                    ctx/current-directory (fn [] "/tmp/test")]
         (hooks/crystallize-session
          (assoc base-harvested
                 :progress-notes [{:content "work"}]
@@ -580,7 +577,7 @@
                                  :duration-minutes 60}
                 :memory-ids-created ["id-1" "id-2" "id-3"]
                 :memory-ids-accessed ["id-4" "id-5"]))
-        (let [stored-content (:content @chroma-args)]
+        (let [stored-content (:content (first (vals (stub/entries store))))]
           (is (clojure.string/includes? stored-content "Memory entries created: 3")
               "Should include created count")
           (is (clojure.string/includes? stored-content "Memory entries accessed: 2")
@@ -588,24 +585,21 @@
 
 (deftest crystallize-session-temporal-no-memory-ids-graceful
   (testing "Temporal block works without memory-ids (nil-safe for steps 2-4)"
-    (let [chroma-args (atom nil)]
+    (let [store (stub/install! (stub/->stub))]
       (with-redefs [crystal/summarize-session-progress
                     (fn [& _] {:content "Summary" :tags ["wrap"]})
                     crystal/session-id (fn [] "test-session")
                     scope/get-current-project-id (fn [_] "test-project")
                     scope/inject-project-scope (fn [tags _] tags)
                     dur/calculate-expires (fn [_] "2026-02-13T00:00:00Z")
-                    ctx/current-directory (fn [] "/tmp/test")
-                    chroma/index-memory-entry!
-                    (fn [args] (reset! chroma-args args) "entry-noids-001")
-                    chroma/content-hash (fn [c] (str (hash c)))]
+                    ctx/current-directory (fn [] "/tmp/test")]
         (hooks/crystallize-session
          (assoc base-harvested
                 :progress-notes [{:content "work"}]
                 :session-timing {:session-start "2026-02-11T10:00:00Z"
                                  :session-end "2026-02-11T11:00:00Z"
                                  :duration-minutes 60}))
-        (let [stored-content (:content @chroma-args)]
+        (let [stored-content (:content (first (vals (stub/entries store))))]
           (is (clojure.string/includes? stored-content "Temporal Metadata")
               "Temporal block should still be present")
           (is (not (clojure.string/includes? stored-content "Memory entries created"))

@@ -20,7 +20,8 @@
       :file-provenance-stats map?};; from lifecycle :ch/e
 
    SessionSummary shape (no-content path):
-     {:skipped true :reason \"no-content\" ...lifecycle-stats...}
+     same keys as the content path — a minimal wrap summary is synthesized
+     and persisted, tagged \"wrap-minimal\". Nothing is skipped.
 
    Part of CPPB Promote layer (Wave 2, T2).
 
