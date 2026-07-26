@@ -399,6 +399,7 @@
         (let [result (kg-mig/sync-to-backend! :datalevin
                                               {:target-opts {:db-path *datalevin-dir*}})]
           (is (= expected-counts (:exported result)))
+          #_{:clj-kondo/ignore [:type-mismatch]}
           (is (:valid? (:validation result))))
 
         ;; Primary backend should be unchanged

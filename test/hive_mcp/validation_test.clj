@@ -19,6 +19,7 @@
                           (v/validate-code "   "))))
 
   (testing "Invalid code - wrong type"
+    #_{:clj-kondo/ignore [:type-mismatch]}
     (is (thrown-with-msg? clojure.lang.ExceptionInfo
                           #"Code must be a string"
                           (v/validate-code 123)))))
