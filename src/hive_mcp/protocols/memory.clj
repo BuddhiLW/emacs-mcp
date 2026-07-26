@@ -11,10 +11,10 @@
 
    Registry (register-store!/get-store/set-store!) + id utils stay here."
   (:require [clojure.string]
-            [hive-mcp.protocols.registry :as reg]
             [hive-mcp.memory.ids :as ids]
             [hive-spi.memory.ports :as ports]
-            [malli.core :as m]))
+            [malli.core :as m]
+            [hive-spi.memory.registry :as sreg]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -52,83 +52,62 @@
 ;;; independent stores (e.g. cartography-scoped backends) without disturbing
 ;;; existing code.
 
-(defonce ^:private slot
-  (reg/multi-slot {:validate #(satisfies? ports/IMemoryStore %)}))
-
-(defn register-store!
+(def register-store!
   "Register `store` under `key` in the multi-store registry.
    Returns the registered store."
-  [key store]
-  (reg/reg-put! slot key store))
+  sreg/register-store!)
 
-(defn unregister-store!
+(def unregister-store!
   "Remove the store at `key`. No-op if absent. Does NOT disconnect
    the underlying store; callers are responsible for lifecycle."
-  [key]
-  (reg/reg-remove! slot key))
+  sreg/unregister-store!)
 
-(defn registered-stores
+(def registered-stores
   "Return the current registry map {key -> store}. Read-only snapshot."
-  []
-  (reg/reg-snapshot slot))
+  sreg/registered-stores)
 
-(defn reset-registry!
+(def reset-registry!
   "Clear all entries from the registry. Intended for tests.
    Does NOT disconnect underlying stores."
-  []
-  (reg/reg-clear! slot))
+  sreg/reset-registry!)
 
-(defn get-store
+(def get-store
   "Get a memory store from the registry.
-   0-arity: return the :default store, throw if none registered
-            (backward-compatible with legacy callers).
+   0-arity: return the :default store, throw if none registered.
    1-arity: return the store registered under `key`, throw if absent."
-  ([]
-   (or (:default (reg/reg-snapshot slot))
-       (throw (ex-info "No default memory store registered. Call set-store! or register-store! :default first."
-                       {:registry-keys (vec (keys (reg/reg-snapshot slot)))
-                        :hint "Initialize with chroma-store, milvus addon, or datascript-store"}))))
-  ([key]
-   (or (get (reg/reg-snapshot slot) key)
-       (throw (ex-info (str "Unknown memory store key: " key)
-                       {:store-key key
-                        :available (vec (keys (reg/reg-snapshot slot)))})))))
+  sreg/get-store)
 
-(defn set-store!
+(def set-store!
   "Legacy single-store setter. Routes to the :default slot of the
-   multi-store registry for backward compatibility with existing callers."
-  [store]
-  {:pre [(satisfies? ports/IMemoryStore store)]}
-  (register-store! :default store)
-  store)
+   multi-store registry."
+  sreg/set-store!)
 
-(defn store-set?
+(def store-set?
   "Check if a default memory store has been configured."
-  []
-  (some? (:default (reg/reg-snapshot slot))))
+  sreg/store-set?)
 
 (defn reset-active-store!
-  "Disconnect and clear the :default store. Leaves other registry
-   entries untouched."
+  "Disconnect the :default store and drop it from the registry. Leaves other
+   registry entries untouched. Never deletes store data."
   []
-  (when-let [store (:default (reg/reg-snapshot slot))]
+  (when-let [store (:default (registered-stores))]
     (try
       (disconnect! store)
       (catch Exception _)))
-  (reg/reg-remove! slot :default)
+  (unregister-store! :default)
   nil)
 
 ;;; ============================================================================
 ;;; Lifecycle Convenience Functions
 ;;; ============================================================================
 
-(defn connect-active-store!
+(def connect-active-store!
   "Connect the active store with the given config."
-  [config]
-  (connect! (get-store) config))
+  sreg/connect-active-store!)
 
 (defn active-store-healthy?
-  "Check if the active store is connected and healthy."
+  "Check if the active store is connected and healthy. Returns nil when no
+   store is registered, false when the health check throws."
   []
   (when (store-set?)
     (try
@@ -136,7 +115,8 @@
       (catch Exception _ false))))
 
 (defn active-store-status
-  "Get comprehensive status of the active store."
+  "Get comprehensive status of the active store: `store-status` merged with
+   `health-check`. Returns nil when no store is registered."
   []
   (when (store-set?)
     (let [store (get-store)]
