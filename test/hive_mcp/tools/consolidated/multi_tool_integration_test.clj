@@ -1311,6 +1311,13 @@
       (is (str/includes? desc "agent"))
       (is (str/includes? desc "kg")))))
 
+(deftest test-multi-description-advertises-dsl-aliases
+  (testing "multi top-level description exposes DSL aliases"
+    (let [desc (:description multi/tool-def)]
+      (is (str/includes? desc "c=content"))
+      (is (str/includes? desc "#=tags"))
+      (is (str/includes? desc "d=directory")))))
+
 ;; =============================================================================
 ;; Part 26b: Multi Meta-Facade — Batch Dispatch Tests
 ;; =============================================================================
@@ -1340,6 +1347,21 @@
       (is (= 2 (get-in parsed [:summary :total])))
       ;; noop assign-waves: all ops land in wave 1
       (is (= 1 (get-in parsed [:summary :waves]))))))
+
+(deftest test-multi-batch-dry-run-resolves-directory
+  (testing "batch dry run shows effective caller directory and preserves per-op override"
+    (let [caller-dir "/tmp/caller-project"
+          explicit-dir "/tmp/explicit-project"
+          result (multi/handle-multi
+                  {"operations" [{"id" "op1" "tool" "memory" "command" "help"}
+                                 {"id" "op2" "tool" "kg" "command" "help"
+                                  "directory" explicit-dir}]
+                   "directory" caller-dir
+                   "dry_run" true})
+          parsed (json/read-str (:text result) :key-fn keyword)
+          ops (get-in parsed [:plan :wave_1])]
+      (is (= caller-dir (:directory (first ops))))
+      (is (= explicit-dir (:directory (second ops)))))))
 
 (deftest test-multi-batch-execution
   (testing "batch mode executes operations and returns wave results"

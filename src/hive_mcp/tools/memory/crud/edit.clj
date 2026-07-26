@@ -14,6 +14,7 @@
    tracks the single-Chroma-upsert + single-Datalevin-tx optimization as
    follow-up work; correctness ships first."
   (:require [hive-mcp.tools.memory.core :refer [with-store]]
+            [hive-mcp.tools.memory.duration :as duration]
             [hive-mcp.tools.memory.format :as fmt]
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.protocols.memory :as mem-proto]
@@ -49,14 +50,19 @@
    existing entry. Returns [updates content-changed?]."
   [existing {:keys [type content tags duration abstraction_level]}]
   (let [new-type         (normalize-type type)
-        content-changed? (and content (not= content (:content existing)))
-        updates
+        content-changed? (and (some? content) (not= content (:content existing)))
+        requested-updates
         (cond-> {}
           new-type          (assoc :type new-type)
-          content-changed?  (assoc :content content)
+          content-changed?  (assoc :content content
+                                   :content-hash (mem-proto/content-hash content))
           (some? tags)      (assoc :tags tags)
-          duration          (assoc :duration duration)
-          abstraction_level (assoc :abstraction-level abstraction_level))]
+          duration          (assoc :duration duration
+                                   :expires (or (duration/calculate-expires duration) ""))
+          abstraction_level (assoc :abstraction-level abstraction_level))
+        updates (cond-> requested-updates
+                  (seq requested-updates)
+                  (assoc :updated (mem-proto/iso-timestamp)))]
     [updates content-changed?]))
 
 (defn- apply-edit!
@@ -69,6 +75,11 @@
       (if (empty? updates)
         {:id id :noop true :existing existing}
         (let [updated (mem-proto/update-entry! store id updates)]
+          (when-not (and (map? updated) (not (:error updated)))
+            (throw (ex-info (str "Memory store update failed for " id)
+                            {:type :memory-update-failed
+                             :id id
+                             :result-type (some-> updated class str)})))
           (log/info "Memory edit:" id
                     "fields:" (vec (keys updates))
                     (when content-changed? "[re-embed]")

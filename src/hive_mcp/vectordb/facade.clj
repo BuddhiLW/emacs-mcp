@@ -58,6 +58,33 @@
   (with-resilience
     (proto/get-entry (proto/get-store) id)))
 
+(defn- registered-stores-in-read-order
+  []
+  (let [stores    (proto/registered-stores)
+        preferred [:default :kanban]
+        preferred? (set preferred)]
+    (concat
+      (keep (fn [slot]
+              (when-let [store (get stores slot)]
+                [slot store]))
+            preferred)
+      (->> stores
+           (remove (comp preferred? key))
+           (sort-by (comp str key))))))
+
+(defn get-entry-any-store
+  "Get a memory entry by ID, probing every registered store."
+  [id]
+  (some (fn [[slot store]]
+          (try
+            (with-resilience
+              (proto/get-entry store id))
+            (catch Exception e
+              (log/warn "get-entry-any-store: store read failed:"
+                        slot (ex-message e))
+              nil)))
+        (registered-stores-in-read-order)))
+
 (defn get-entries-by-ids
   "Batch-fetch memory entries by IDs from the active backend.
 

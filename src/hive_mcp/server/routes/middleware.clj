@@ -97,16 +97,14 @@
 ;; =============================================================================
 
 (defn wrap-handler-context
-  "Bind request context: keywordize args, extract identity, bind ctx vars."
+  "Bind request context: keywordize args, resolve identity, bind ctx vars."
   [handler]
   (fn [args]
     (let [args (walk/keywordize-keys args)]
       (binding [ctx/*request-cache* (atom {})]
         (let [agent-id (id/extract-agent-id args nil)
               project-id (id/extract-project-id args)
-              directory (or (:directory args)
-                            (:_caller_cwd args)
-                            (System/getProperty "user.dir"))]
+              directory (id/extract-directory args)]
           (crystal/record-session-start! agent-id)
           (ctx/with-request-context {:agent-id agent-id
                                      :project-id project-id

@@ -49,38 +49,53 @@
                      (log/info "Session-end hooks completed:" (count results) "handlers executed")
                      results))))
 
+(defn- hook-budget-ms
+  "Wall-clock budget for `impl`: the milliseconds it declares via
+   IShutdownBudget when that is a positive number, else `default-ms`."
+  [impl default-ms]
+  (or (when (satisfies? lifecycle/IShutdownBudget impl)
+        (let [ms (lifecycle/shutdown-timeout-ms impl)]
+          (when (and (number? ms) (pos? ms)) (long ms))))
+      default-ms))
+
 (defn run-shutdown-sequence!
   "Run all registered IShutdownHook impls in priority order.
-   Each impl gets a budget (default 5000ms). Exceptions rescued per-impl
-   so one failure does not block subsequent hooks.
+
+   Each impl runs under its own budget: the value it declares via
+   IShutdownBudget, else `(:timeout-ms ctx)` (default 5000ms). The
+   effective budget is passed back to the impl as :timeout-ms so it can
+   bound its own work. Exceptions are rescued per-impl so one failure does
+   not block subsequent hooks; a hook that overruns its budget is abandoned
+   and recorded as {:name n :error :timeout}.
 
    Params:
      ctx — {:reason :jvm-shutdown | :repl | ...
-            :timeout-ms int (default 5000, per-impl)
+            :timeout-ms int (default 5000, per-impl fallback)
             :coordinator-id string (optional)
             :hooks-registry-atom atom (optional)}
    Returns: {:ran N :errors [{:name :error ex}]}"
   [ctx]
   (let [hooks      (reg/registered-shutdown-hooks)
-        timeout-ms (or (:timeout-ms ctx) 5000)
+        default-ms (or (:timeout-ms ctx) 5000)
         results    (atom {:ran 0 :errors []})]
     (log/info "Shutdown sequence starting"
               {:hook-count (count hooks) :reason (:reason ctx)})
     (doseq [impl hooks]
       (let [hname    (lifecycle/shutdown-name impl)
             priority (lifecycle/shutdown-priority impl)
+            budget   (hook-budget-ms impl default-ms)
             fut      (future
                        (try
-                         (lifecycle/shutdown! impl ctx)
+                         (lifecycle/shutdown! impl (assoc ctx :timeout-ms budget))
                          :ok
                          (catch Throwable t
                            (swap! results update :errors conj
                                   {:name hname :error t})
                            :err)))]
-        (log/info "shutdown:" hname {:priority priority})
-        (let [outcome (deref fut timeout-ms :timeout)]
+        (log/info "shutdown:" hname {:priority priority :timeout-ms budget})
+        (let [outcome (deref fut budget :timeout)]
           (when (= outcome :timeout)
-            (log/warn "shutdown timeout" {:name hname :timeout-ms timeout-ms})
+            (log/warn "shutdown timeout" {:name hname :timeout-ms budget})
             (swap! results update :errors conj
                    {:name hname :error :timeout})))
         (swap! results update :ran inc)))

@@ -465,7 +465,7 @@
    :dry-run true
    :waves   (into (sorted-map)
                   (map (fn [[w ops]]
-                         [w {:ops (mapv #(select-keys % [:id :tool :command :depends_on]) ops)}])
+                         [w {:ops (mapv #(dissoc % :wave) ops)}])
                        wave-groups))
    :summary {:total total-count :success 0 :failed 0 :waves (count wave-groups)}})
 

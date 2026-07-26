@@ -54,6 +54,21 @@
                        (mark-terminated! coord-id)
                        (log/info "Coordinator marked terminated:" coord-id))))))
 
+(def ^:private default-session-end-budget-ms
+  "Fallback wall-clock budget for the session-end wrap, in milliseconds."
+  60000)
+
+(defn- session-end-budget-ms
+  "Wall-clock budget for the session-end wrap: config
+   [:shutdown :session-end-timeout-ms] when that is a positive number,
+   else `default-session-end-budget-ms`."
+  []
+  (or (result/rescue nil
+        (when-let [get-in-config (requiring-resolve 'hive-mcp.config.core/get-in-config)]
+          (let [ms (get-in-config [:shutdown :session-end-timeout-ms])]
+            (when (and (number? ms) (pos? ms)) (long ms)))))
+      default-session-end-budget-ms))
+
 ;; =============================================================================
 ;; SessionEndHooks — priority 490 (final bookkeeping band)
 ;; =============================================================================
@@ -63,7 +78,10 @@
   (shutdown-priority [_] 490)
   (shutdown-name     [_] "session-end/hooks")
   (shutdown!         [_ ctx]
-    (server-lifecycle/trigger-session-end! hooks-registry-atom (:reason ctx))))
+    (server-lifecycle/trigger-session-end! hooks-registry-atom (:reason ctx)))
+
+  lifecycle/IShutdownBudget
+  (shutdown-timeout-ms [_] (session-end-budget-ms)))
 
 ;; =============================================================================
 ;; Factory — register all three at init

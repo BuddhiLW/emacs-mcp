@@ -12,7 +12,8 @@
             [hive-mcp.dns.result :refer [rescue]]
             [clojure.string :as str]
             [hive-mcp.multi.registry :as multi-registry]
-            [hive-mcp.multi.registry.tools :as r-tools]))
+            [hive-mcp.multi.registry.tools :as r-tools]
+            [hive-mcp.agent.context :as ctx]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -105,6 +106,19 @@
     (mcp-error (pr-str {:error "Async module not loaded"
                         :hint "hive-mcp.tools.multi-async is not available"}))))
 
+(defn- thread-caller-directory
+  "Add the request directory to operations that do not carry their own scope."
+  [operations params]
+  (let [directory (ctx/resolve-caller-directory params)]
+    (mapv (fn [operation]
+            (let [operation (rb/keywordize-map operation)]
+              (cond-> operation
+                (and directory
+                     (nil? (:directory operation))
+                     (nil? (:_caller_cwd operation)))
+                (assoc :directory directory))))
+          operations)))
+
 (defn- dispatch-sync
   "Execute operations synchronously via batch engine."
   [normalized-ops {:keys [dry_run] :as params}]
@@ -138,7 +152,7 @@
     (mcp-error "operations array is empty. Provide at least one operation.")
 
     :else
-    (let [normalized-ops (mapv rb/keywordize-map operations)]
+    (let [normalized-ops (thread-caller-directory operations params)]
       (if async
         (dispatch-async normalized-ops params)
         (dispatch-sync normalized-ops params)))))
@@ -344,7 +358,7 @@
                      "wave: tasks, validate, lint_level, wave_id, mode, model, seeds, ctx_refs, kg_node_ids; "
                      "session: commit_msg, task_ids, ctx_id, data, ttl_ms, scope; "
                      "magit: target, count, all, set_upstream, remote; "
-                     "emacs: code, buffer, file, line, text, level, function_name, variable_name, pattern.")
+                     "emacs: code, buffer, file, line, text, level, function_name, variable_name, pattern. DSL aliases: c=content, t=type, #=tags, d=directory, q=query, n=name, id=id, p=prompt, f=files.")
    :inputSchema {:type "object"
                  :properties {"tool"    {:type "string"
                                          :enum (vec (tool-names))
