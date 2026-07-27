@@ -11,7 +11,13 @@
                         hive-dsl.result/try-effect       hooks.hive-dsl.result/try-effect
                         hive-dsl.result/try-effect*      hooks.hive-dsl.result/try-effect*
                         hive-dsl.result/let-ok           hooks.hive-dsl.result/let-ok
-                        hive-mcp.dns.result/let-ok       hooks.hive-dsl.result/let-ok}}
+                        hive-mcp.dns.result/let-ok       hooks.hive-dsl.result/let-ok
+                        ;; test stub macros that bind a symbol outside a
+                        ;; binding vector, so :lint-as cannot model them
+                        hive-mcp.test.stub.log-capture/with-captured-logs
+                        hooks.hive-mcp.test-stub/with-captured-logs
+                        hive-mcp.tools.memory.lifecycle-test/with-decay-store
+                        hooks.hive-mcp.test-stub/with-decay-store}}
 
  :lint-as {;; multi_dsl_e2e_test when-resolved macro binds a single symbol like if-let
            hive-mcp.tools.multi-dsl-e2e-test/when-resolved clojure.core/if-let
@@ -19,6 +25,8 @@
            clojure.core.logic.pldb/db-rel clojure.core/declare
            ;; with-entry binds entry symbol like let
            hive-mcp.tools.memory.core/with-entry clojure.core/let
+           ;; stub emacs binds [sym opts] — one pair, exactly let-shaped
+           hive-mcp.test.stub.emacs-ext/with-stub-emacs clojure.core/let
            ;; manifold.deferred macros - let-flow binds like let
            manifold.deferred/let-flow clojure.core/let
            manifold.deferred/let-flow' clojure.core/let

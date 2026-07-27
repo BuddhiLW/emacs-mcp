@@ -80,7 +80,7 @@
                        :duration duration-str
                        :expires (dur/calculate-expires duration-str))
                 (update :tags #(vec (or % []))))
-      (not (clojure.string/blank? project-id)) (assoc :project-id project-id))))
+      (not (str/blank? project-id)) (assoc :project-id project-id))))
 
 (defn- persist-one!
   "Write a single normalised entry through `mem-proto/add-entry!`.
@@ -89,7 +89,7 @@
   (try
     (let [normalized (normalize-entry pid entry)
           raw-id     (mem-proto/add-entry! store normalized)
-          id?        (and (string? raw-id) (not (clojure.string/blank? raw-id)))]
+          id?        (and (string? raw-id) (not (str/blank? raw-id)))]
       (log/info "wrap-persist:" {:pid pid :project-id (:project-id normalized)
                                   :id raw-id :ok? id?})
       {:pid pid
