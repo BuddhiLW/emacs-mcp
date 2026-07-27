@@ -25,12 +25,13 @@
   (r-tools/all-names))
 
 (defn get-tool-handler
-  "Resolve a consolidated tool handler by name.
+  "Resolve a consolidated tool handler by name; nil for a nil or unknown tool.
    Routes through `multi.registry/resolve-tool-handler` (DIP) — covers the
    :multi/core seed AND any addon-contributed tools, with a legacy
    flat-tool fallback for non-consolidated tools."
   [tool-name]
-  (multi-registry/resolve-tool-handler (name tool-name)))
+  (when tool-name
+    (multi-registry/resolve-tool-handler (name tool-name))))
 
 ;; ── Lazy Resolution Helpers ───────────────────────────────────────────────────
 
