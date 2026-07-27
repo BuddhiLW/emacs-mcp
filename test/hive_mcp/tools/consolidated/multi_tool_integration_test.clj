@@ -301,6 +301,21 @@
    :migration migration/tool-def
    :agent     agent/tool-def})
 
+(def enum-less-tools
+  "Tool keys whose tool-def deliberately omits :enum on \"command\".
+
+   Their command set is contributed by addons at runtime, so a static enum
+   would advertise a surface that does not match the live one. Discovery for
+   these two is via command=\"help\"."
+  #{:memory :project})
+
+(def advertised-spawn-modes
+  "The spawn modes a tool-def may advertise.
+
+   'headless' is ABSTRACT: the concrete backend (:agent-sdk, :hive-agent, ...)
+   is resolved at spawn time by the headless registry and is never advertised."
+  #{"claude" "vterm" "headless"})
+
 (deftest test-all-tool-defs-have-required-fields
   (testing "every consolidated tool-def has :name, :description, :inputSchema, :handler"
     (doseq [[tool-key tool-def] all-tool-defs]
@@ -320,15 +335,19 @@
           (str tool-key " should have :consolidated true")))))
 
 (deftest test-all-tool-defs-have-command-enum
-  (testing "every consolidated tool-def has command property with enum"
+  (testing "every consolidated tool-def declares 'command'; enum-bearing ones advertise 'help'"
     (doseq [[tool-key tool-def] all-tool-defs]
       (let [cmd-prop (get-in tool-def [:inputSchema :properties "command"])]
         (is (some? cmd-prop)
             (str tool-key " missing 'command' property"))
-        (is (vector? (:enum cmd-prop))
-            (str tool-key " missing command enum"))
-        (is (some #(= "help" %) (:enum cmd-prop))
-            (str tool-key " missing 'help' in command enum"))))))
+        (if (contains? enum-less-tools tool-key)
+          (is (nil? (:enum cmd-prop))
+              (str tool-key " now declares a command enum — drop it from enum-less-tools"))
+          (do
+            (is (vector? (:enum cmd-prop))
+                (str tool-key " missing command enum"))
+            (is (some #(= "help" %) (:enum cmd-prop))
+                (str tool-key " missing 'help' in command enum"))))))))
 
 (deftest test-all-tool-defs-require-command
   (testing "every consolidated tool-def requires 'command'"
@@ -407,13 +426,19 @@
              ;; :analysis — composite tool, tested separately
              :session   {:handlers-map session/handlers :tool-def-val session/tool-def}
              :config    {:handlers-map config/handlers :tool-def-val config/tool-def}
-             :migration {:handlers-map migration/handlers :tool-def-val migration/tool-def}}]
-      (let [enum-cmds (set (get-in tool-def-val [:inputSchema :properties "command" :enum]))
-            handler-keys (set (map name (keys handlers-map)))]
+             :migration {:handlers-map migration/handlers :tool-def-val migration/tool-def}}
+            :when (not (contains? enum-less-tools tool-key))]
+      (let [enum-cmds    (set (get-in tool-def-val [:inputSchema :properties "command" :enum]))
+            handler-keys (set (map name (keys handlers-map)))
+            ;; A subdomain handler dispatches a family the enum lists leaf-wise:
+            ;; handler :docs is advertised as "docs apropos", "docs list-packages", ...
+            advertised?  (fn [hk]
+                           (or (contains? enum-cmds hk)
+                               (some #(str/starts-with? % (str hk " ")) enum-cmds)))]
         ;; Every handler should be in the enum (except internal keys like _handler)
         (doseq [hk handler-keys
                 :when (not (str/starts-with? hk "_"))]
-          (is (contains? enum-cmds hk)
+          (is (advertised? hk)
               (str tool-key ": handler '" hk "' not in command enum")))))))
 
 ;; =============================================================================
@@ -1100,9 +1125,9 @@
       (is (contains? props "restart")))))
 
 (deftest test-workflow-spawn-mode-enum
-  (testing "workflow spawn_mode enum is correct"
+  (testing "workflow advertises the same spawn modes as agent"
     (let [enum (get-in workflow/tool-def [:inputSchema :properties "spawn_mode" :enum])]
-      (is (= #{"vterm" "headless"} (set enum))))))
+      (is (= advertised-spawn-modes (set enum))))))
 
 ;; =============================================================================
 ;; Part 24: Migration Consolidated Tool Integration Tests
@@ -1208,9 +1233,9 @@
       (is (= #{"ling" "drone"} (set enum))))))
 
 (deftest test-agent-spawn-mode-enum
-  (testing "agent spawn_mode enum is correct"
+  (testing "agent advertises exactly the abstract spawn modes"
     (let [enum (get-in agent/tool-def [:inputSchema :properties "spawn_mode" :enum])]
-      (is (= #{"vterm" "headless"} (set enum))))))
+      (is (= advertised-spawn-modes (set enum))))))
 
 ;; =============================================================================
 ;; Part 26: Multi Meta-Facade (consolidated/multi.clj) Integration Tests

@@ -264,7 +264,19 @@
                                       :items {:type "string"}
                                       :description "Tag filter for ir list"}
                               "limit" {:type "integer"
-                                       :description "Row cap for ir list"}}
+                                       :description "Row cap for ir list"}
+                              "spawn_mode" {:type "string"
+                                            :enum ["claude" "vterm" "headless"]
+                                            :description "[forge strike] Spawn mode for every forged ling; default claude. 'headless' is ABSTRACT — the concrete backend is resolved at spawn time by the headless registry. Falls back to config [:forge :spawn-mode] when omitted."}
+                              "max_slots" {:type "integer"
+                                           :description "[forge strike] Cap on concurrently forged lings (default 10)."}
+                              "presets" {:type "array"
+                                         :items {:type "string"}
+                                         :description "[forge strike] Presets applied to every forged ling; default ling, mcp-first, saa."}
+                              "model" {:type "string"
+                                       :description "[forge strike] Model passed to every forged ling."}
+                              "restart" {:type "boolean"
+                                         :description "[forge quench] Restart the belt instead of stopping it, making forge strike available again."}}
                  :required ["command"]}
    :handler handle-workflow})
 

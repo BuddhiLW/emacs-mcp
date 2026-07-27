@@ -165,6 +165,7 @@
   "Route transcript MCP commands. Returns an MCP-envelope result.
 
    Commands:
+     help                     — This command list
      list                     — Available transcripts (JSONL + Datalevin)
      query  {:agent-id}       — Full conversation entries
      tail   {:agent-id :n?}   — Last N entries (default 10)
@@ -174,6 +175,16 @@
   [{:keys [command agent-id agent_id id n turn] :as _params}]
   (let [agent-id (or agent-id agent_id id)]
     (case command
+      "help"
+      (tcore/mcp-json
+       {:tool     "transcript"
+        :commands [{:command "list"   :params []                  :description "Available transcripts (JSONL + Datalevin)"}
+                   {:command "query"  :params ["agent_id"]        :description "Full conversation entries"}
+                   {:command "tail"   :params ["agent_id" "n"]    :description "Last N entries (default 10)"}
+                   {:command "since"  :params ["agent_id" "turn"] :description "Entries after turn"}
+                   {:command "stats"  :params ["agent_id"]        :description "Turn count, cost, role breakdown"}
+                   {:command "replay" :params ["agent_id"]        :description "Formatted markdown conversation"}]})
+
       "list"
       (let [jsonl (list-jsonl-transcripts)
             dl    (list-datalevin-transcripts)
