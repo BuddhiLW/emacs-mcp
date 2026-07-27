@@ -17,7 +17,8 @@
   (:require [clojure.test :refer [deftest testing is are use-fixtures]]
             [clojure.string :as str]
             [clojure.data.json :as json]
-            [hive-mcp.tools.multi :as multi]))
+            [hive-mcp.tools.multi :as multi]
+            [hive-mcp.test.stub.batch-extensions :as bx]))
 
 ;; =============================================================================
 ;; Test Infrastructure
@@ -41,6 +42,8 @@
   "Create a mock MCP JSON text response from a data map."
   [data]
   {:type "text" :text (json/write-str data)})
+
+(use-fixtures :each bx/with-batch-extensions)
 
 (defn- mock-handlers
   "Build a resolve-tool-handler replacement from a map of tool-name → handler-fn."
@@ -109,7 +112,7 @@
                          (is (= 1 (get-in result [:summary :waves])))))))))
 
 (deftest dsl-paragraph-auto-deps-test
-  (testing "Multi-sentence paragraph → execute with auto-deps → verify ordered results"
+  (testing "Multi-sentence paragraph -> execute with auto-deps -> verify ordered results"
     (when-resolved compile-paragraph hive-mcp.dsl.verbs/compile-paragraph
                    (let [;; Paragraph: create memory, then create KG edge referencing it
                          paragraph [["m+" {"c" "my note" "t" "note"}]
@@ -130,8 +133,8 @@
                        (let [result (multi/run-multi ops)]
                          (is (:success result))
                          (is (= 2 (get-in result [:summary :success])))
-                         ;; noop assign-waves: all ops in wave 1
-                         (is (= 1 (get-in result [:summary :waves])))))))))
+                         (is (= 2 (get-in result [:summary :waves]))
+                             "the auto-dependency puts the ops in separate waves")))))))
 
 (deftest dsl-param-alias-expansion-test
   (testing "Verb with param aliases → verify correct expansion"
@@ -156,7 +159,7 @@
                      (is (= ["a.clj" "b.clj"] (:files (parse-sentence ["w!" {"f" ["a.clj" "b.clj"]}]))))))))
 
 (deftest dsl-ref-threading-prev-test
-  (testing "$ref:$0 threading: m+ creates → k> uses $ref:$0.data.id"
+  (testing "$ref:$0 threading: m+ creates -> k> uses $ref:$0.data.id"
     (when-resolved compile-paragraph hive-mcp.dsl.verbs/compile-paragraph
                    (let [captured-kg-params (atom nil)
                          paragraph [["m+" {"c" "test content" "t" "note"}]
@@ -176,13 +179,11 @@
                        (let [result (multi/run-multi ops)]
                          (is (:success result) "Pipeline should succeed")
                          (is (= 2 (get-in result [:summary :success])))
-            ;; noop resolve-op-refs: $ref strings pass through unresolved
-                         (is (string? (:from @captured-kg-params)))
-                         (is (str/starts-with? (str (:from @captured-kg-params)) "$ref:"))))))))
+                         (is (= "mem-abc-123" (:from @captured-kg-params))
+                             "$0 resolves to the previous op's created id")))))))
 
 (deftest dsl-ref-threading-named-ops-test
   (testing "$ref:op-id.path threading between explicitly named ops"
-    ;; This tests the existing batch engine ref threading directly
     (let [captured (atom nil)]
       (with-redefs [multi/resolve-tool-handler
                     (fn [tool-name]
@@ -198,11 +199,10 @@
                         :to "target"
                         :depends_on ["create-mem"]}])]
           (is (:success result))
-          ;; noop resolve-op-refs: $ref strings pass through unresolved
-          (is (= "$ref:create-mem.data.id" (:from @captured))))))))
+          (is (= "mem-xyz" (:from @captured))))))))
 
 (deftest dsl-multi-ref-chain-test
-  (testing "Three-op chain with $refs — noop passes $ref strings through"
+  (testing "Three-op chain threads refs, and a $ref inside prose stays quoted"
     (let [c-captured (atom nil)]
       (with-redefs [multi/resolve-tool-handler
                     (fn [tool-name]
@@ -224,11 +224,16 @@
                         :depends_on ["a"]}
                        {:id "c" :tool "kanban" :command "create"
                         :title "$ref:b.data.edge-id"
-                        :depends_on ["b"]}])]
+                        :node_id "$ref:b.data.edge-id"
+                        :depends_on ["b"]}])
+              mem-id (str "mem-" (Math/abs (hash "my note")))]
           (is (:success result))
           (is (= 3 (get-in result [:summary :success])))
-          ;; noop: c receives raw $ref string
-          (is (= "$ref:b.data.edge-id" (:title @c-captured))))))))
+          (is (= 3 (get-in result [:summary :waves])))
+          (is (= (str "e-" mem-id "-node-2") (:node_id @c-captured))
+              "an ordinary param resolves through the whole chain")
+          (is (= "$ref:b.data.edge-id" (:title @c-captured))
+              ":title is prose — a $ref inside it is quotation, never resolved"))))))
 
 ;; =============================================================================
 ;; Part 2: Macro → DSL → Batch
@@ -496,14 +501,15 @@
                          "Empty DSL should produce empty result or error")))))
 
 (deftest error-circular-ref-in-batch-test
-  (testing "Circular deps — noop detect-cycles returns [], validation passes"
+  (testing "Circular deps are rejected before any op runs"
     (let [result (multi/run-multi
                   [{:id "a" :tool "memory" :command "add"
                     :content "$ref:b.data.id" :depends_on ["b"]}
                    {:id "b" :tool "kg" :command "edge"
                     :from "$ref:a.data.id" :depends_on ["a"]}])]
-      ;; noop detect-cycles returns [] — no cycle errors, ops proceed
-      (is (nil? (:errors result))))))
+      (is (false? (:success result)))
+      (is (some #(str/includes? (str %) "Circular dependency") (:errors result)))
+      (is (= 0 (get-in result [:summary :waves]))))))
 
 ;; =============================================================================
 ;; Part 5: Verb Table Coverage (Contract Tests)
@@ -679,8 +685,7 @@
           (let [parsed (json/read-str (:text formatted) :key-fn keyword)]
             (is (:success parsed))
             (is (= 2 (get-in parsed [:summary :success])))
-            ;; noop resolve-op-refs: $ref strings pass through unresolved
-            (is (= "$ref:a.data.val" (:val @captured)))))))))
+            (is (= 42 (:val @captured)))))))))
 
 ;; =============================================================================
 ;; Part 7: Edge Cases
@@ -696,7 +701,7 @@
         (is (= 1 (get-in result [:summary :success])))))))
 
 (deftest edge-case-ref-resolves-to-non-string-types-test
-  (testing "$ref noop — handler receives raw $ref strings"
+  (testing "$ref resolves to the source value's own type, not a string"
     (let [captured (atom nil)]
       (with-redefs [multi/resolve-tool-handler
                     (fn [tool-name]
@@ -717,14 +722,13 @@
                         :tags "$ref:src.data.tags"
                         :depends_on ["src"]}])]
           (is (:success result))
-          ;; noop: handler receives raw $ref strings
-          (is (= "$ref:src.data.count" (:count @captured)))
-          (is (= "$ref:src.data.active" (:active @captured)))
-          (is (= "$ref:src.data.meta" (:meta @captured)))
-          (is (= "$ref:src.data.tags" (:tags @captured))))))))
+          (is (= 42 (:count @captured)))
+          (is (true? (:active @captured)))
+          (is (= {:nested "value"} (:meta @captured)))
+          (is (= ["a" "b"] (:tags @captured))))))))
 
 (deftest edge-case-diamond-dependency-ref-test
-  (testing "Diamond dependency with $refs — noop passes $ref strings through"
+  (testing "Diamond dependency threads both branch results into the merge op"
     (let [d-captured (atom nil)]
       (with-redefs [multi/resolve-tool-handler
                     (fn [tool-name]
@@ -744,26 +748,29 @@
                         :depends_on ["b" "c"]}])]
           (is (:success result))
           (is (= 4 (get-in result [:summary :success])))
-          ;; noop: handler receives raw $ref strings
-          (is (= "$ref:b.data.id" (:from @d-captured)))
-          (is (= "$ref:c.data.id" (:to @d-captured))))))))
+          (is (= 3 (get-in result [:summary :waves])))
+          (is (= "id-b" (:from @d-captured)))
+          (is (= "id-c" (:to @d-captured))))))))
 
 (deftest edge-case-failed-dep-skips-downstream-test
-  (testing "Dep failure — noop assign-waves puts all in wave 1, no cross-wave skip"
+  (testing "A failed dependency skips its downstream op instead of running it"
     (with-redefs [multi/resolve-tool-handler
                   (fn [tool-name]
                     (case tool-name
                       "mock-fail" (fn [_] (throw (Exception. "intentional failure")))
                       "mock-ok"   (fn [_] (json-ok {:id "should-not-reach"}))
                       nil))]
-      (let [result (multi/run-multi
-                    [{:id "a" :tool "mock-fail" :command "create"}
-                     {:id "b" :tool "mock-ok" :command "use"
-                      :from "$ref:a.data.id" :depends_on ["a"]}])]
+      (let [result  (multi/run-multi
+                     [{:id "a" :tool "mock-fail" :command "create"}
+                      {:id "b" :tool "mock-ok" :command "use"
+                       :from "$ref:a.data.id" :depends_on ["a"]}])
+            results (mapcat :results (vals (:waves result)))
+            b       (first (filter #(= "b" (:id %)) results))]
         (is (false? (:success result)))
-        ;; noop: all in wave 1, b executes independently (a failure not cascaded)
-        (is (= 1 (get-in result [:summary :success])))
-        (is (= 1 (get-in result [:summary :failed])))))))
+        (is (= 0 (get-in result [:summary :success])))
+        (is (= 2 (get-in result [:summary :failed])))
+        (is (false? (:success b)))
+        (is (str/includes? (str (:error b)) "dependencies failed"))))))
 
 (deftest edge-case-large-batch-test
   (testing "Large batch (20 independent ops) executes in single wave"
@@ -781,7 +788,7 @@
             "20 independent ops should all be in wave 1")))))
 
 (deftest edge-case-deep-ref-path-test
-  (testing "$ref noop — handler receives raw $ref string"
+  (testing "$ref walks a deep path into the source op's data"
     (let [captured (atom nil)]
       (with-redefs [multi/resolve-tool-handler
                     (fn [tool-name]
@@ -796,11 +803,10 @@
                         :value "$ref:src.data.result.content.nested.deep"
                         :depends_on ["src"]}])]
           (is (:success result))
-          ;; noop: handler receives raw $ref string
-          (is (= "$ref:src.data.result.content.nested.deep" (:value @captured))))))))
+          (is (= "treasure" (:value @captured))))))))
 
 (deftest edge-case-ref-in-vector-params-test
-  (testing "$ref in vector — noop passes through unresolved"
+  (testing "$ref inside a vector param resolves in place"
     (let [captured (atom nil)]
       (with-redefs [multi/resolve-tool-handler
                     (fn [tool-name]
@@ -814,11 +820,10 @@
                         :tags ["static-tag" "$ref:src.data.tag"]
                         :depends_on ["src"]}])]
           (is (:success result))
-          ;; noop: $ref string stays unresolved in vector
-          (is (= ["static-tag" "$ref:src.data.tag"] (:tags @captured))))))))
+          (is (= ["static-tag" "important"] (:tags @captured))))))))
 
 (deftest edge-case-ref-in-nested-map-params-test
-  (testing "$ref in nested map — noop passes through unresolved"
+  (testing "$ref inside a nested map param resolves in place"
     (let [captured (atom nil)]
       (with-redefs [multi/resolve-tool-handler
                     (fn [tool-name]
@@ -833,8 +838,7 @@
                                  :label "static"}
                         :depends_on ["src"]}])]
           (is (:success result))
-          ;; noop: $ref string stays unresolved in nested map
-          (is (= "$ref:src.data.id" (get-in @captured [:config :target_id])))
+          (is (= "src-id" (get-in @captured [:config :target_id])))
           (is (= "static" (get-in @captured [:config :label]))))))))
 
 (comment
