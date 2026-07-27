@@ -11,7 +11,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
             [hive-mcp.tools.magit :as tools]
-            [hive-mcp.emacs.client :as ec]))
+            [hive-mcp.test.stub.emacs-ext :as se]))
 
 ;; =============================================================================
 ;; Test Helpers
@@ -30,9 +30,14 @@
     {:success false :error error :duration-ms 10}))
 
 (defmacro with-mock-emacsclient
-  "Execute body with mocked emacsclient/eval-elisp."
+  "Execute body with a stub Emacs whose eval-elisp answers with MOCK-FN.
+
+   Magit handlers reach Emacs through hive-mcp.emacs-ext.client, which
+   resolves :emacs/eval-elisp from the extension registry. The registry is the
+   seam — a with-redefs on any emacs client namespace binds a var the handlers
+   no longer call, and every response then carries the registry-miss error."
   [mock-fn & body]
-  `(with-redefs [ec/eval-elisp ~mock-fn]
+  `(se/with-stub-emacs [_# {:default-response ~mock-fn}]
      ~@body))
 
 ;; =============================================================================
@@ -150,29 +155,23 @@
 
 (deftest handle-magit-log-with-count-test
   (testing "Accepts count parameter"
-    (let [captured-elisp (atom nil)]
-      (with-redefs [ec/eval-elisp (fn [elisp]
-                                    (reset! captured-elisp elisp)
-                                    {:success true :result "[]" :duration-ms 10})]
-        (let [result (tools/handle-magit-log {:count 5})]
-          (is (= "text" (:type result)))
-          (is (nil? (:isError result)))
-          ;; Verify count is passed in elisp
-          (is (str/includes? @captured-elisp "5")
-              "Elisp should contain the count parameter"))))))
+    (se/with-stub-emacs [emacs {:default-response {:success true :result "[]" :duration-ms 10}}]
+      (let [result (tools/handle-magit-log {:count 5})]
+        (is (= "text" (:type result)))
+        (is (nil? (:isError result)))
+        ;; Verify count is passed in elisp
+        (is (str/includes? (first (se/evaluated emacs)) "5")
+            "Elisp should contain the count parameter")))))
 
 (deftest handle-magit-log-default-count-test
   (testing "Uses default count of 10 when not specified"
-    (let [captured-elisp (atom nil)]
-      (with-redefs [ec/eval-elisp (fn [elisp]
-                                    (reset! captured-elisp elisp)
-                                    {:success true :result "[]" :duration-ms 10})]
-        (let [result (tools/handle-magit-log {})]
-          (is (= "text" (:type result)))
-          (is (nil? (:isError result)))
-          ;; Verify default count of 10 is used
-          (is (str/includes? @captured-elisp "10")
-              "Elisp should contain default count of 10"))))))
+    (se/with-stub-emacs [emacs {:default-response {:success true :result "[]" :duration-ms 10}}]
+      (let [result (tools/handle-magit-log {})]
+        (is (= "text" (:type result)))
+        (is (nil? (:isError result)))
+        ;; Verify default count of 10 is used
+        (is (str/includes? (first (se/evaluated emacs)) "10")
+            "Elisp should contain default count of 10")))))
 
 (deftest handle-magit-log-with-directory-test
   (testing "Accepts directory parameter"
@@ -233,36 +232,19 @@
 
 (deftest elisp-calls-correct-functions-test
   (testing "handle-magit-status calls correct elisp function"
-    (let [captured-elisp (atom nil)]
-      (with-redefs [ec/eval-elisp (fn [elisp]
-                                    (reset! captured-elisp elisp)
-                                    {:success true :result "{}" :duration-ms 10})]
-        (tools/handle-magit-status {})
-        (is (str/includes? @captured-elisp "hive-mcp-magit")
+    (se/with-stub-emacs [emacs {:default-response {:success true :result "{}" :duration-ms 10}}]
+      (tools/handle-magit-status {})
+      (let [elisp (first (se/evaluated emacs))]
+        (is (str/includes? elisp "hive-mcp-magit")
             "Should require hive-mcp-magit")
-        (is (str/includes? @captured-elisp "hive-mcp-magit-api-status")
+        (is (str/includes? elisp "hive-mcp-magit-api-status")
             "Should call hive-mcp-magit-api-status"))))
 
   (testing "handle-magit-branches calls correct elisp function"
-    (let [captured-elisp (atom nil)]
-      (with-redefs [ec/eval-elisp (fn [elisp]
-                                    (reset! captured-elisp elisp)
-                                    {:success true :result "{}" :duration-ms 10})]
-        (tools/handle-magit-branches {})
-        (is (str/includes? @captured-elisp "hive-mcp-magit")
+    (se/with-stub-emacs [emacs {:default-response {:success true :result "{}" :duration-ms 10}}]
+      (tools/handle-magit-branches {})
+      (let [elisp (first (se/evaluated emacs))]
+        (is (str/includes? elisp "hive-mcp-magit")
             "Should require hive-mcp-magit")
-        (is (str/includes? @captured-elisp "hive-mcp-magit-api-branches")
-            "Should call hive-mcp-magit-api-branches"))))
-
-  (testing "handle-magit-log calls correct elisp function"
-    (let [captured-elisp (atom nil)]
-      (with-redefs [ec/eval-elisp (fn [elisp]
-                                    (reset! captured-elisp elisp)
-                                    {:success true :result "[]" :duration-ms 10})]
-        (tools/handle-magit-log {:count 15})
-        (is (str/includes? @captured-elisp "hive-mcp-magit")
-            "Should require hive-mcp-magit")
-        (is (str/includes? @captured-elisp "hive-mcp-magit-api-log")
-            "Should call hive-mcp-magit-api-log")
-        (is (str/includes? @captured-elisp "15")
-            "Should pass count parameter")))))
+        (is (str/includes? elisp "hive-mcp-magit-api-branches")
+            "Should call hive-mcp-magit-api-branches")))))

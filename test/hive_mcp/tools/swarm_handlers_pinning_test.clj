@@ -22,7 +22,6 @@
             [hive-mcp.tools.swarm.channel :as swarm-channel]
             [hive-mcp.tools.swarm.core :as core]
             [hive-mcp.tools.swarm.registry :as registry]
-            [hive-mcp.emacs.client :as ec]
             [hive-mcp.swarm.coordinator :as coord]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.swarm.datascript.queries :as queries]
@@ -32,66 +31,73 @@
             [hive-mcp.agent.ling.terminal-registry :as terminal-reg]
             [hive-mcp.agent.ling.strategy :as strategy]
             [hive-mcp.knowledge-graph.disc :as kg-disc]
-            [hive-mcp.telemetry.prometheus :as prom]))
+            [hive-mcp.telemetry.prometheus :as prom]
+            [hive-mcp.test.stub.emacs-ext :as se]))
 
 ;; =============================================================================
 ;; Test Helpers
 ;; =============================================================================
 
 (defn mock-elisp-timeout-success
-  "Creates a mock eval-elisp-with-timeout that returns success."
+  "An eval-elisp answer that succeeds with RESULT."
   [result]
-  (fn [_elisp _timeout]
+  (fn [_elisp]
     {:success true :result result :duration-ms 10 :timed-out false}))
 
 (defn mock-elisp-timeout-failure
-  "Creates a mock eval-elisp-with-timeout that returns failure."
+  "An eval-elisp answer that fails with ERROR."
   [error]
-  (fn [_elisp _timeout]
+  (fn [_elisp]
     {:success false :error error :duration-ms 10 :timed-out false}))
 
 (defn mock-elisp-timeout-timed-out
-  "Creates a mock eval-elisp-with-timeout that returns timeout."
+  "An eval-elisp answer that times out."
   []
-  (fn [_elisp _timeout]
+  (fn [_elisp]
     {:success false :timed-out true :duration-ms 10000}))
 
 (defn mock-addon-available
-  "Mock that makes swarm-addon-available? return true."
+  "An eval-elisp answer that makes an addon probe read as available."
   []
-  (fn [_elisp _timeout]
+  (fn [_elisp]
     {:success true :result "t" :duration-ms 5 :timed-out false}))
 
 (defn mock-addon-unavailable
-  "Mock that makes swarm-addon-available? return false."
+  "An eval-elisp answer that makes an addon probe read as unavailable."
   []
-  (fn [_elisp _timeout]
+  (fn [_elisp]
     {:success true :result "nil" :duration-ms 5 :timed-out false}))
 
 (defmacro with-addon-available
   "Execute body with the swarm addon reported available, and every elisp eval
-   answered by `response-mock`.
+   answered by `response-mock` (a fn of the elisp source).
 
-   Stubs the availability predicate directly instead of letting it consume an
-   elisp call. It previously counted calls and answered the FIRST one with \"t\"
-   on the assumption that the first eval is always core/swarm-addon-available?'s
-   `(featurep 'hive-mcp-swarm)` probe. That bound the mock to the exact number
-   and order of elisp calls each handler happens to make: as soon as the count
-   slipped, the availability probe consumed a *response* instead of \"t\",
-   swarm-addon-available? returned false, and collect fell back to
-   :strategy/jvm — polling to the 300000ms default and stalling the suite for
-   five minutes per test. Bind the seam, not the call ordinal."
+   Elisp is injected at the extension registry — the swarm handlers reach
+   Emacs through hive-mcp.emacs-ext.client, which resolves :emacs/eval-elisp*
+   there. A with-redefs on an emacs client namespace binds a var they no
+   longer call, so every response comes back as the registry-miss error.
+
+   The availability predicate is stubbed directly instead of letting it consume
+   an elisp call. It previously counted calls and answered the FIRST one with
+   \"t\" on the assumption that the first eval is always
+   core/swarm-addon-available?'s `(featurep 'hive-mcp-swarm)` probe. That bound
+   the mock to the exact number and order of elisp calls each handler happens
+   to make: as soon as the count slipped, the availability probe consumed a
+   *response* instead of \"t\", swarm-addon-available? returned false, and
+   collect fell back to :strategy/jvm — polling to the 300000ms default and
+   stalling the suite for five minutes per test. Bind the seam, not the call
+   ordinal."
   [response-mock & body]
-  `(with-redefs [core/swarm-addon-available? (constantly true)
-                 ec/eval-elisp-with-timeout ~response-mock]
-     ~@body))
+  `(with-redefs [core/swarm-addon-available? (constantly true)]
+     (se/with-stub-emacs [_# {:default-response ~response-mock}]
+       ~@body)))
 
 (defmacro with-addon-unavailable
   "Execute body with swarm addon unavailable."
   [& body]
-  `(with-redefs [core/swarm-addon-available? (constantly false)
-                 ec/eval-elisp-with-timeout (mock-addon-unavailable)]
-     ~@body))
+  `(with-redefs [core/swarm-addon-available? (constantly false)]
+     (se/with-stub-emacs [_# {:default-response (mock-addon-unavailable)}]
+       ~@body)))
 
 ;; -- Spawn/Kill lifecycle mocks (ling.clj delegation) --
 
@@ -506,25 +512,23 @@
 
 (deftest elisp-status-generation-test
   (testing "Verifies correct elisp is generated for status"
-    (let [captured-elisp (atom nil)]
-      ;; Test without slave_id
-      (with-redefs [swarm/swarm-addon-available? (constantly true)
-                    ec/eval-elisp-with-timeout
-                    (fn [elisp _timeout]
-                      (reset! captured-elisp elisp)
-                      {:success true :result "{}" :duration-ms 10 :timed-out false})]
-        (swarm/handle-swarm-status {})
-        (is (str/includes? @captured-elisp "hive-mcp-swarm-api-status")))
+    ;; core/swarm-addon-available?, not the swarm facade's re-export: the
+    ;; facade binds it with `def`, so status.clj's with-swarm guard reads the
+    ;; value captured at load and never sees a redef of the alias.
+    (with-redefs [core/swarm-addon-available? (constantly true)]
 
-      ;; Test with slave_id
-      (with-redefs [swarm/swarm-addon-available? (constantly true)
-                    ec/eval-elisp-with-timeout
-                    (fn [elisp _timeout]
-                      (reset! captured-elisp elisp)
-                      {:success true :result "{}" :duration-ms 10 :timed-out false})]
+      ;; Without slave_id
+      (se/with-stub-emacs [emacs {:default-response (mock-elisp-timeout-success "{}")}]
+        (swarm/handle-swarm-status {})
+        (is (str/includes? (ffirst (se/calls-of emacs :emacs/eval-elisp-with-timeout))
+                           "hive-mcp-swarm-api-status")))
+
+      ;; With slave_id
+      (se/with-stub-emacs [emacs {:default-response (mock-elisp-timeout-success "{}")}]
         (swarm/handle-swarm-status {:slave_id "slave-1"})
-        (is (str/includes? @captured-elisp "hive-mcp-swarm-status"))
-        (is (str/includes? @captured-elisp "slave-1"))))))
+        (let [elisp (ffirst (se/calls-of emacs :emacs/eval-elisp-with-timeout))]
+          (is (str/includes? elisp "hive-mcp-swarm-status"))
+          (is (str/includes? elisp "slave-1")))))))
 
 ;; =============================================================================
 ;; Response Format Consistency Tests
@@ -546,24 +550,24 @@
                   ds/get-slave (constantly nil)
                   ling/get-ling (constantly (mock-killable-ling "s"))
                   hivemind/clear-agent! (constantly nil)
-                  ;; Status/collect still use elisp
-                  ec/eval-elisp-with-timeout (mock-elisp-timeout-success "{}")
                   ;; Dispatch-path mocks (terminal-registry strategy pattern)
                   queries/get-slave (constantly {:ling/spawn-mode :vterm})
                   terminal-reg/resolve-terminal-strategy (constantly (mock-ling-strategy))
                   queries/get-recent-claim-history (constantly [])
                   kg-disc/kg-first-context (constantly {})]
-      ;; Test each handler returns :type "text"
-      (doseq [handler-fn [#(swarm/handle-swarm-spawn {:name "s"})
-                          #(swarm/handle-swarm-dispatch {:slave_id "s" :prompt "p"})
-                          #(swarm/handle-swarm-status {})
-                          #(swarm/handle-swarm-collect {:task_id "t"})
-                          #(swarm/handle-swarm-kill {:slave_id "s"})]]
-        (let [result (handler-fn)]
-          (is (= "text" (:type result))
-              "All handlers must return :type \"text\"")
-          (is (string? (:text result))
-              "All handlers must return :text as string"))))))
+      ;; Status/collect still use elisp — injected at the extension registry
+      (se/with-stub-emacs [_ {:default-response (mock-elisp-timeout-success "{}")}]
+        ;; Test each handler returns :type "text"
+        (doseq [handler-fn [#(swarm/handle-swarm-spawn {:name "s"})
+                            #(swarm/handle-swarm-dispatch {:slave_id "s" :prompt "p"})
+                            #(swarm/handle-swarm-status {})
+                            #(swarm/handle-swarm-collect {:task_id "t"})
+                            #(swarm/handle-swarm-kill {:slave_id "s"})]]
+          (let [result (handler-fn)]
+            (is (= "text" (:type result))
+                "All handlers must return :type \"text\"")
+            (is (string? (:text result))
+                "All handlers must return :text as string")))))))
 
 (deftest error-format-consistency-test
   (testing "All swarm handlers return consistent error format"
