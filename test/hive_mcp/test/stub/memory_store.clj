@@ -125,7 +125,10 @@
       (swap! state assoc-in [:entries id] e)
       id))
 
-  (get-entry [_this id] (get-in @state [:entries id]))
+  (get-entry [_this id]
+    (if-let [f (:get-entry-fn @state)]
+      (f id)
+      (get-in @state [:entries id])))
 
   (update-entry! [_this id updates]
     (when (get-in @state [:entries id])
@@ -315,15 +318,20 @@
   "A fresh, connected StubMemoryStore. Optional ENTRIES seed it.
 
    OPTS:
-     :id-fn — zero-arg id generator for entries added without an :id.
-              Defaults to hive-mcp.memory.ids/generate-id; inject a constant
-              (or a counter) when a test needs deterministic ids."
+     :id-fn       — zero-arg id generator for entries added without an :id.
+                    Defaults to hive-mcp.memory.ids/generate-id; inject a
+                    constant (or a counter) when a test needs deterministic ids.
+     :get-entry-fn — when supplied, `get-entry` answers from this fn and the
+                    store's own entry map is not consulted for reads. For a
+                    test that already owns its entry table and needs only the
+                    port to read from it."
   ([] (->stub nil nil))
   ([entries] (->stub entries nil))
-  ([entries {:keys [id-fn]}]
-   (let [store (->StubMemoryStore (atom {:entries    {}
-                                         :connected? true
-                                         :id-fn      (or id-fn ids/generate-id)}))]
+  ([entries {:keys [id-fn get-entry-fn]}]
+   (let [store (->StubMemoryStore (atom (cond-> {:entries    {}
+                                                 :connected? true
+                                                 :id-fn      (or id-fn ids/generate-id)}
+                                          get-entry-fn (assoc :get-entry-fn get-entry-fn))))]
      (doseq [e entries] (ports/add-entry! store e))
      store)))
 

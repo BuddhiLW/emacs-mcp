@@ -18,14 +18,15 @@
             [hive-mcp.scheduler.dag-waves :as dag]
             [hive-mcp.tools.memory-kanban :as mem-kanban]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
-            [hive-mcp.chroma.core :as chroma]
             [hive-mcp.agent.ling :as ling]
             [hive-mcp.hivemind.core :as hivemind]
             [hive-mcp.channel.core :as channel]
             [hive-mcp.swarm.datascript.queries :as ds-queries]
             [hive-mcp.tools.memory.scope :as scope]
             [clojure.data.json :as json]
-            [clojure.core.async :as async]))
+            [clojure.core.async :as async]
+            [hive-mcp.test.stub.memory-store :as stub]
+            [hive-spi.memory.registry :as sreg]))
 
 ;; =============================================================================
 ;; Test Fixtures
@@ -54,8 +55,6 @@
            :completed  #{}
            :failed     #{}
            :opts       {}}))
-
-(use-fixtures :each reset-dag-state-fixture)
 
 ;; =============================================================================
 ;; Test Data
@@ -112,7 +111,10 @@
   ([task-id _scope] (get mock-edges task-id [])))
 
 (defn mock-get-entry-by-id
-  "Mock Chroma get-entry-by-id. Returns nil for 'done' (deleted) tasks."
+  "The entry table the injected stub store answers `get-entry` from.
+   Returns nil for a 'done' (deleted) task — that absence is how the scheduler
+   decides a dependency is satisfied. A test needing a different table rebinds
+   this var."
   [task-id]
   (get @*chroma-entries task-id))
 
@@ -165,7 +167,10 @@
 ;; =============================================================================
 
 (defmacro with-dag-mocks
-  "Run body with all DAG dependencies mocked."
+  "Run body with all DAG dependencies mocked.
+
+   Entry existence is NOT mocked here — it arrives through the stub memory
+   store the `with-task-store` fixture installs at the port."
   [& body]
   `(do
      ;; Reset mutable test state
@@ -177,7 +182,6 @@
      (with-redefs [mem-kanban/handle-mem-kanban-list-slim mock-kanban-list-slim
                    mem-kanban/handle-mem-kanban-move mock-kanban-move
                    kg-edges/get-edges-from mock-get-edges-from
-                   chroma/get-entry-by-id mock-get-entry-by-id
                    ling/create-ling! mock-create-ling!
                    hivemind/shout! mock-shout!
                    channel/subscribe! mock-subscribe!
@@ -185,6 +189,26 @@
                    scope/get-current-project-id mock-get-scope
                    ds-queries/get-slave mock-get-slave]
        ~@body)))
+
+(defn with-task-store
+  "clojure.test fixture: install a stub IMemoryStore whose `get-entry` answers
+   from `mock-get-entry-by-id`.
+
+   The scheduler asks whether a dependency still exists through
+   hive-mcp.vectordb.facade, which resolves the active IMemoryStore from the
+   hive-spi registry. The table therefore has to be injected at the port; a
+   `with-redefs` on any vectordb namespace binds a var the scheduler no longer
+   calls, and every dependency then reads as already-satisfied."
+  [f]
+  (let [prior (sreg/registered-stores)]
+    (try
+      (stub/install! (stub/->stub nil {:get-entry-fn (fn [id] (mock-get-entry-by-id id))}))
+      (f)
+      (finally
+        (sreg/reset-registry!)
+        (doseq [[k s] prior] (sreg/register-store! k s))))))
+
+(use-fixtures :each reset-dag-state-fixture with-task-store)
 
 ;; =============================================================================
 ;; Tests: find-ready-tasks
@@ -236,7 +260,7 @@
     (with-redefs [mem-kanban/handle-mem-kanban-list-slim
                   (fn [_] {:type "text" :text "[]"})
                   kg-edges/get-edges-from (fn [& _] [])
-                  chroma/get-entry-by-id (fn [_] nil)]
+                  mock-get-entry-by-id (fn [_] nil)]
       (let [ready (dag/find-ready-tasks test-directory #{} {} #{})]
         (is (= 0 (count ready)))))))
 
@@ -625,14 +649,13 @@
                     mem-kanban/handle-mem-kanban-move mock-kanban-move
                     kg-edges/get-edges-from (fn ([tid] (get extended-edges tid []))
                                               ([tid _] (get extended-edges tid [])))
-                    chroma/get-entry-by-id mock-get-entry-by-id
                     ling/create-ling! mock-create-ling!
                     hivemind/shout! mock-shout!
                     channel/subscribe! mock-subscribe!
                     channel/unsubscribe! mock-unsubscribe!
                     scope/get-current-project-id mock-get-scope
                     ds-queries/get-slave mock-get-slave]
-        ;; Add task-e to chroma entries
+        ;; Add task-e to the entry table
         (reset! *chroma-entries {"task-a" task-a "task-b" task-b
                                  "task-c" task-c "task-d" task-d
                                  "task-e" task-e})
@@ -804,8 +827,8 @@
                         {:type "text" :text (json/write-str filtered)}))
                     kg-edges/get-edges-from (fn ([tid] (get cycle-edges tid []))
                                               ([tid _] (get cycle-edges tid [])))
-                    chroma/get-entry-by-id (fn [tid]
-                                             ({"task-x" task-x "task-y" task-y "task-z" task-z} tid))]
+                    mock-get-entry-by-id (fn [tid]
+                                           ({"task-x" task-x "task-y" task-y "task-z" task-z} tid))]
         (let [ready (dag/find-ready-tasks test-directory #{} {} #{})]
           (is (= 0 (count ready)) "Circular deps: no tasks should be ready"))))))
 
@@ -825,9 +848,6 @@
                     mem-kanban/handle-mem-kanban-move mock-kanban-move
                     kg-edges/get-edges-from (fn ([tid] (get mixed-edges tid []))
                                               ([tid _] (get mixed-edges tid [])))
-                    chroma/get-entry-by-id (fn [tid]
-                                             (or (get @*chroma-entries tid)
-                                                 ({"task-x" task-x "task-y" task-y} tid)))
                     ling/create-ling! mock-create-ling!
                     hivemind/shout! mock-shout!
                     channel/subscribe! mock-subscribe!
@@ -907,8 +927,8 @@
                     mem-kanban/handle-mem-kanban-move mock-kanban-move
                     kg-edges/get-edges-from (fn ([tid] (get no-edges tid []))
                                               ([tid _] (get no-edges tid [])))
-                    chroma/get-entry-by-id (fn [tid]
-                                             (first (filter #(= tid (:id %)) flat-tasks)))
+                    mock-get-entry-by-id (fn [tid]
+                                           (first (filter #(= tid (:id %)) flat-tasks)))
                     ling/create-ling! mock-create-ling!
                     hivemind/shout! mock-shout!
                     channel/subscribe! mock-subscribe!
@@ -940,8 +960,8 @@
                     mem-kanban/handle-mem-kanban-move mock-kanban-move
                     kg-edges/get-edges-from (fn ([tid] (get no-edges tid []))
                                               ([tid _] (get no-edges tid [])))
-                    chroma/get-entry-by-id (fn [tid]
-                                             (first (filter #(= tid (:id %)) flat-tasks)))
+                    mock-get-entry-by-id (fn [tid]
+                                           (first (filter #(= tid (:id %)) flat-tasks)))
                     ling/create-ling! mock-create-ling!
                     hivemind/shout! mock-shout!
                     channel/subscribe! mock-subscribe!
@@ -1058,7 +1078,6 @@
                     mem-kanban/handle-mem-kanban-move mock-kanban-move
                     kg-edges/get-edges-from (fn ([tid] (get linear-edges tid []))
                                               ([tid _] (get linear-edges tid [])))
-                    chroma/get-entry-by-id mock-get-entry-by-id
                     ling/create-ling! mock-create-ling!
                     hivemind/shout! mock-shout!
                     channel/subscribe! mock-subscribe!
