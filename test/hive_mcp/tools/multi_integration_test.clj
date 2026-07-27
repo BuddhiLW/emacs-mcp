@@ -37,7 +37,8 @@
             [clojure.data.json :as json]
             [hive-mcp.tools.multi :as multi]
             [hive-mcp.tools.consolidated.multi :as c-multi]
-            [hive-mcp.test.stub.memory-store :as stub]))
+            [hive-mcp.test.stub.memory-store :as stub]
+            [hive-mcp.test.stub.batch-extensions :as bx]))
 
 ;; =============================================================================
 ;; Helpers
@@ -64,7 +65,7 @@
   (when-let [waves (:waves parsed)]
     (mapcat val waves)))
 
-(use-fixtures :each stub/with-stub-store)
+(use-fixtures :each stub/with-stub-store bx/with-batch-extensions)
 
 ;; =============================================================================
 ;; Part 1: normalize-op Tests
