@@ -42,10 +42,11 @@
   (try
     (when-let [archive-fn (ext/get-extension :da/archive!)]
       (let [content (:content entry)
-            scope (some-> entry :tags
-                          (->> (filter #(str/starts-with? % "scope:project:"))
-                               first
-                               (str/replace "scope:project:" "")))
+            scope (some (fn [tag]
+                          (when (and (string? tag)
+                                     (str/starts-with? tag "scope:project:"))
+                            (subs tag (count "scope:project:"))))
+                        (:tags entry))
             task-data {:id task-id
                        :title (or (get content :title)
                                   (get content :description)
