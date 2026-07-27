@@ -31,7 +31,8 @@
   (:require [hive-mcp.crystal.harvest.by-scope :as bs]
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.tools.memory.duration :as dur]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -63,7 +64,8 @@
 (defn- normalize-entry
   "Project the synth entry into an IMemoryStore-add-entry! ready map.
 
-   - Resolves :project-id from `pid` (no pwd-derivation).
+   - Resolves :project-id from `pid` (no pwd-derivation). A blank pid is
+     left unstamped so the store's own resolution applies.
    - Stamps :duration (default :short for wraps).
    - Stamps :expires from the duration (legacy contract).
    - Coerces :type to string (mem-proto contract).
@@ -71,13 +73,14 @@
      step 6 by `fanout/with-scope-tag`."
   [pid entry]
   (let [duration-str (name (or (:duration entry) :short))
-        type-str     (name (or (:type entry) :note))]
-    (-> entry
-        (assoc :type type-str
-               :duration duration-str
-               :expires (dur/calculate-expires duration-str)
-               :project-id (pid->project-id pid))
-        (update :tags #(vec (or % []))))))
+        type-str     (name (or (:type entry) :note))
+        project-id   (pid->project-id pid)]
+    (cond-> (-> entry
+                (assoc :type type-str
+                       :duration duration-str
+                       :expires (dur/calculate-expires duration-str))
+                (update :tags #(vec (or % []))))
+      (not (clojure.string/blank? project-id)) (assoc :project-id project-id))))
 
 (defn- persist-one!
   "Write a single normalised entry through `mem-proto/add-entry!`.
