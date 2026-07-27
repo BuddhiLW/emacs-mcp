@@ -8,13 +8,18 @@
   (:require [clj-kondo.hooks-api :as api]))
 
 (defn- let-node
-  "Build (let [binding-sym nil] body...), preserving `loc` on the binding."
+  "Build (let [binding-sym (atom [])] body...), preserving `loc` on the
+   binding. The bound value must not be nil: clj-kondo narrows the
+   binding's type from it, and a nil binding makes every `@sink` in the
+   body a `deref, received: nil` error. An atom matches what
+   with-captured-logs really binds and stays deref-safe for the rest."
   [binding-sym loc body]
   (let [token (fn [s] (with-meta (api/token-node s) loc))]
     (api/list-node
      (list* (token 'let)
-            (api/vector-node [(with-meta (api/token-node binding-sym) loc)
-                              (token nil)])
+            (api/vector-node
+             [(with-meta (api/token-node binding-sym) loc)
+              (api/list-node [(token 'atom) (api/vector-node [])])])
             body))))
 
 (defn with-captured-logs
