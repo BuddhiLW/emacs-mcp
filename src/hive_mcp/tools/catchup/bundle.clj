@@ -208,7 +208,11 @@
    Metadata-only projection — `content` hydrated lazily by hydrate-buckets.
    Fork-joined with `scoped-branch-budget-ms`. Falls back to partial results
    when a branch exceeds budget; `timed-query` surfaces empties (which in
-   practice are almost always fork-join fallbacks) as :warn log lines."
+   practice are almost always fork-join fallbacks) as :warn log lines.
+
+   The `sessions-fresh` and `recent-wraps-global` branches carry
+   `:created-after` = now minus `fresh-window-days`; every other branch is
+   unbounded in time."
   [project-id]
   (when (mem-proto/store-set?)
     (let [store (mem-proto/get-store)
@@ -216,6 +220,9 @@
           hierarchy-ids (hier/compute-hierarchy-project-ids project-id)
           per-chunk-limit (max 50 (int (/ hier/bundle-hierarchy-limit
                                           (hier/chunk-count hierarchy-ids))))
+          fresh-window-days 45
+          fresh-window-cutoff (str (.minusDays (java.time.ZonedDateTime/now)
+                                               fresh-window-days))
           tasks (cond-> [[:hierarchy
                           (timed-query "hierarchy"
                                        #(hier/chunked-hierarchy-fetch store hierarchy-ids per-chunk-limit))
@@ -246,6 +253,7 @@
                                             {:type "note"
                                              :tags ["session-summary"]
                                              :limit bundle-sessions-fresh-limit
+                                             :created-after fresh-window-cutoff
                                              :order-by [:created :desc]
                                              :output-fields hier/metadata-projection})))
                           []]
@@ -257,6 +265,7 @@
                                             {:type "note"
                                              :tags ["wrap-generated"]
                                              :limit bundle-recent-wraps-limit
+                                             :created-after fresh-window-cutoff
                                              :order-by [:created :desc]
                                              :output-fields hier/metadata-projection})))
                           []]]
