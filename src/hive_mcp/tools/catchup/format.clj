@@ -73,9 +73,12 @@
                   " [TRUNCATED - use mcp_memory_get_full " (:id axiom-entry) "]")))))
 
 (defn cap-piggyback-entry
-  "Cap non-axiom entry content for the ---MEMORY--- stream; axioms pass through uncapped."
+  "Cap non-axiom entry content for the ---MEMORY--- stream; axioms pass through uncapped.
+
+   Entry :type may be a keyword (:axiom) or a string (\"axiom\") depending on the
+   store path; `name` normalises both."
   [entry]
-  (if (= "axiom" (str (or (:type entry) "")))
+  (if (= "axiom" (name (or (:type entry) "")))
     entry
     (cap-axiom-content entry)))
 
