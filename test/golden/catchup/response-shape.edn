@@ -7,6 +7,7 @@
      :memory-piggyback
      :counts
      :git
+     :memory-status
      :_block
      :permeation
      :success
@@ -22,14 +23,17 @@
      :sessions
      :expiring
      :conventions},
-   :piggyback-keys #{:enqueued :note}}
+   :piggyback-keys #{:enqueued :note :status}}
   {:type "text",
    :_block "context",
-   :key-set #{:via-context-refs :via-piggyback :_block :context},
+   :key-set
+   #{:via-context-refs :memory-status :via-piggyback :_block :context},
    :context-keys #{:sessions}}
   {:type "text",
    :_block "kg-insights",
-   :key-set #{:kg-insights :_block}}
+   :key-set #{:kg-insights :_block},
+   :kg-insights-keys
+   #{:stale-files :superseded :contradictions :grounding-warnings}}
   {:type "text",
    :_block "meta",
    :key-set #{:_block :hint :project-tree :disc-decay}}]}

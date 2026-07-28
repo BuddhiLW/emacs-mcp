@@ -334,21 +334,19 @@
                                   {:directory test-directory
                                    :_caller_id "coordinator"})
 
-                  ;; Catchup returns a vector of content blocks.
-                  ;; Assert on block identity rather than a bare count: since this
-                  ;; test was written, catchup/format gained a conditional
-                  ;; "recent-wraps" block — (when (seq recent-wraps) ...) — which
-                  ;; IS emitted here because Phase 1 just crystallized a wrap.
-                  ;; Order in fmt/build-catchup-response:
-                  ;;   header, context, [recent-wraps], kg-insights, meta,
-                  ;;   [kanban], [carto-status]
                   _ (is (vector? catchup-result)
                         "catchup should return a vector of content blocks")
                   block-names (mapv #(:_block (json/read-str (:text %) :key-fn keyword))
                                     catchup-result)
-                  _ (is (= ["header" "context" "recent-wraps" "kg-insights" "meta"]
-                           block-names)
-                        "catchup should return header/context/recent-wraps/kg-insights/meta blocks")
+                  core-blocks     #{"header" "context" "recent-wraps" "meta"}
+                  optional-blocks #{"kanban" "carto-status"}
+                  _ (is (= ["header" "context" "recent-wraps" "meta"]
+                           (filterv core-blocks block-names))
+                        "catchup should emit header/context/recent-wraps/meta, in that order")
+                  _ (is (not-any? #{"kg-insights"} block-names)
+                        "no kg-insights block: handle-native-catchup supplies no :kg-insights")
+                  _ (is (every? (into core-blocks optional-blocks) block-names)
+                        "catchup should emit no block outside core + addon-optional (kanban, carto-status)")
 
                   ;; Parse the blocks
                   header-block (json/read-str (:text (nth catchup-result 0)) :key-fn keyword)
