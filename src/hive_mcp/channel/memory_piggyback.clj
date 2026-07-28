@@ -34,34 +34,58 @@
 
 (defn enqueue!
   "Enqueue entries into the memory piggyback buffer.
-   Replaces any existing buffer for the same key (fresh catchup supersedes stale).
+
+   MERGES with any existing buffer for the same key: entries already buffered or
+   already delivered this session (matched by :id) are skipped, genuinely new
+   entries are appended, and the drain cursor is preserved so nothing is re-sent
+   and nothing queued is discarded.
+
+   Supplying context-refs marks them undelivered so the next drain carries them.
+
    Session-scoped: keyed by caller-id only (no project dimension)."
   ([caller-id entries]
    (enqueue! caller-id entries nil))
   ([caller-id entries context-refs]
    (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))
-         existing (bget buffers buffer-key)
-         formatted (mapv format-entry entries)]
-     (when existing
-       (log/info "memory-piggyback: replacing existing buffer for" buffer-key
-                 "(had" (- (count (:entries existing)) (:cursor existing 0)) "undrained entries)"))
+         existing   (bget buffers buffer-key)
+         formatted  (mapv format-entry entries)
+         prior      (vec (:entries existing))
+         known      (into (set (:sent existing)) (keep :id) prior)
+         fresh      (filterv #(not (and (:id %) (contains? known (:id %)))) formatted)
+         merged     (into prior fresh)
+         cursor     (min (:cursor existing 0) (count merged))
+         refs       (or context-refs (:context-refs existing))]
      (bput! buffers buffer-key
-            (cond-> {:entries formatted
-                     :cursor 0
-                     :done false
-                     :seq-num 0}
-              (some? context-refs)
-              (assoc :context-refs context-refs)))
-     (log/info "memory-piggyback: enqueued" (count formatted) "entries for" buffer-key
-               (when context-refs (str " with " (count context-refs) " context-refs"))))))
+            (cond-> {:entries merged
+                     :cursor  cursor
+                     :done    (empty? (drop cursor merged))
+                     :seq-num (:seq-num existing 0)
+                     :sent    (set (:sent existing))}
+              (some? refs)
+              (assoc :context-refs refs
+                     :refs-delivered? (if (some? context-refs)
+                                        false
+                                        (boolean (:refs-delivered? existing))))))
+     (log/info "memory-piggyback: enqueued" (count fresh) "new of" (count formatted)
+               "offered for" buffer-key
+               "- buffer now" (count merged) "entries, cursor" cursor
+               (when (seq (:sent existing)) (str ", " (count (:sent existing)) " already delivered"))
+               (when context-refs (str ", " (count context-refs) " context-refs"))))))
 
 (defn drain!
-  "Drain next batch of entries within char budget for a caller session."
+  "Drain next batch of entries within char budget for a caller session.
+
+   Carries :context-refs forward across batches and attaches them to the first
+   response after they are enqueued, marking them delivered.
+
+   On exhaustion the buffer collapses to a content-free tombstone retaining the
+   delivered ids under :sent, so a later enqueue! for the same caller can skip
+   what this session already received."
   [caller-id]
   (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))
         buf (bget buffers buffer-key)]
     (when (and buf (not (:done buf)))
-      (let [{:keys [entries cursor seq-num]} buf
+      (let [{:keys [entries cursor seq-num context-refs refs-delivered? sent]} buf
             total (count entries)
             [batch new-cursor]
             (loop [batch []
@@ -81,22 +105,30 @@
             is-done (>= new-cursor total)
             new-seq (inc seq-num)
             delivered new-cursor
-            remaining (- total new-cursor)]
-        (if is-done
-          (bounded-swap! buffers dissoc buffer-key)
-          (bput! buffers buffer-key
-                 {:entries entries
-                  :cursor new-cursor
-                  :done false
-                  :seq-num new-seq}))
+            remaining (- total new-cursor)
+            send-refs? (and (some? context-refs) (not refs-delivered?))]
+        (bput! buffers buffer-key
+               (cond-> (if is-done
+                         {:entries []
+                          :cursor  0
+                          :done    true
+                          :seq-num new-seq
+                          :sent    (into (set sent) (keep :id) entries)}
+                         {:entries entries
+                          :cursor  new-cursor
+                          :done    false
+                          :seq-num new-seq
+                          :sent    (set sent)})
+                 (some? context-refs)
+                 (assoc :context-refs context-refs
+                        :refs-delivered? (or (boolean refs-delivered?) send-refs?))))
         (cond-> {:batch batch
                  :remaining remaining
                  :total total
                  :delivered delivered
                  :seq new-seq}
           is-done (assoc :done true)
-          (and (= new-seq 1) (some? (:context-refs buf)))
-          (assoc :context-refs (:context-refs buf)))))))
+          send-refs? (assoc :context-refs context-refs))))))
 
 (defn has-pending?
   "Check if a caller session has undrained memory entries."

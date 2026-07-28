@@ -119,19 +119,30 @@
 ;; Idempotent Enqueue
 ;; =============================================================================
 
-(deftest idempotent-enqueue-test
-  (testing "second enqueue for same caller replaces buffer"
+(deftest merge-enqueue-test
+  (testing "a re-catchup merges: already-delivered entries are not re-sent"
     (let [entries-1 [{:id "a1" :type "axiom" :content "First" :tags []}]
-          entries-2 [{:id "a2" :type "axiom" :content "Second" :tags []}
+          entries-2 [{:id "a1" :type "axiom" :content "First" :tags []}
+                     {:id "a2" :type "axiom" :content "Second" :tags []}
                      {:id "a3" :type "axiom" :content "Third" :tags []}]]
       (mp/enqueue! "agent-i" entries-1)
-      ;; Second enqueue should be ignored
+      (let [d1 (mp/drain! "agent-i")]
+        (is (= ["a1"] (mapv :id (:batch d1))))
+        (is (true? (:done d1))))
       (mp/enqueue! "agent-i" entries-2)
+      (let [d2 (mp/drain! "agent-i")]
+        (is (= ["a2" "a3"] (mapv :id (:batch d2)))
+            "a1 was already delivered this session and must not be re-sent")
+        (is (true? (:done d2))))
+      (is (nil? (mp/drain! "agent-i")))))
 
-      (let [result (mp/drain! "agent-i")]
-        ;; Should only have entries from first enqueue
-        (is (= 1 (count (:batch result))))
-        (is (= "a1" (:id (first (:batch result)))))))))
+  (testing "a re-catchup while entries are still queued discards nothing"
+    (let [mk (fn [id] {:id id :type "note" :content id :tags []})]
+      (mp/enqueue! "agent-m" [(mk "m1") (mk "m2")])
+      (mp/enqueue! "agent-m" [(mk "m2") (mk "m3")])
+      (let [d (mp/drain! "agent-m")]
+        (is (= ["m1" "m2" "m3"] (mapv :id (:batch d)))
+            "duplicate m2 deduped, m3 appended, original order preserved")))))
 
 ;; =============================================================================
 ;; Caller Isolation
