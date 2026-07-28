@@ -501,13 +501,16 @@
 ;; =============================================================================
 
 (defn start-housekeeping-scheduler!
-  "Start the periodic housekeeping scheduler (gc-fix-5).
+  "Start the periodic housekeeping scheduler (gc-fix-5) and the context-store
+   TTL reaper.
+
    Runs bounded atom GC sweep + stale resource cleanup every 5 minutes.
+   Starts the context-store reaper unconditionally; both calls are idempotent.
 
    Configure via config.edn :services :housekeeping:
      {:enabled true :interval-minutes 5}
 
-   Non-fatal: if scheduler fails to start, system continues without it.
+   Non-fatal: if either fails to start, system continues without it.
    GC sweep still runs on session wrap/complete as before."
   []
   (result/rescue nil
@@ -517,15 +520,24 @@
                      (let [result (start-fn)]
                        (if (:started result)
                          (log/info "Housekeeping scheduler started:" result)
-                         (log/info "Housekeeping scheduler not started:" (:reason result))))))))
+                         (log/info "Housekeeping scheduler not started:" (:reason result)))))))
+  (result/rescue nil
+                 (require 'hive-mcp.channel.context-store)
+                 (when-let [reaper-start! (resolve 'hive-mcp.channel.context-store/start-reaper!)]
+                   (reaper-start!))))
 
 (defn stop-housekeeping-scheduler!
-  "Stop the periodic housekeeping scheduler. Called during shutdown."
+  "Stop the periodic housekeeping scheduler and the context-store TTL reaper.
+   Called during shutdown."
   []
   (result/rescue nil
                  (require 'hive-mcp.scheduler.housekeeping)
                  (when-let [stop-fn (resolve 'hive-mcp.scheduler.housekeeping/stop!)]
-                   (stop-fn))))
+                   (stop-fn)))
+  (result/rescue nil
+                 (require 'hive-mcp.channel.context-store)
+                 (when-let [reaper-stop! (resolve 'hive-mcp.channel.context-store/stop-reaper!)]
+                   (reaper-stop!))))
 
 ;; =============================================================================
 ;; NATS Initialization

@@ -28,9 +28,10 @@
   {:branch "main" :uncommitted false :last-commit "abc123"})
 
 (defmacro with-base-mocks
-  "Wrap body with standard chroma/scope/git mocks."
+  "Wrap body with standard store/scope/git mocks."
   [project-id & body]
-  `(with-redefs [hive-mcp.chroma.core/embedding-configured? (fn [] true)
+  `(with-redefs [hive-mcp.protocols.memory/store-set? (fn [] true)
+                 hive-mcp.chroma.core/embedding-configured? (fn [] true)
                  hive-mcp.tools.memory.scope/get-current-project-id (fn [~'_] ~project-id)
                  hive-mcp.tools.catchup.scope/get-current-project-name (fn [~'_] ~project-id)
                  hive-mcp.tools.catchup.git/gather-git-info (fn [~'_] mock-git-info)]
