@@ -4,7 +4,8 @@
             [hive-dsl.bounded-atom :refer [bounded-atom bput! bget bounded-swap!
                                            bclear! register-sweepable!]]
             [hive-dsl.context.identity :as ctx-id]
-            [hive-mcp.server.guards :as guards]))
+            [hive-mcp.server.guards :as guards]
+            [hive-mcp.channel.drain-rank :as rank]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -80,55 +81,88 @@
 
    On exhaustion the buffer collapses to a content-free tombstone retaining the
    delivered ids under :sent, so a later enqueue! for the same caller can skip
-   what this session already received."
-  [caller-id]
-  (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))
-        buf (bget buffers buffer-key)]
-    (when (and buf (not (:done buf)))
-      (let [{:keys [entries cursor seq-num context-refs refs-delivered? sent]} buf
-            total (count entries)
-            [batch new-cursor]
-            (loop [batch []
-                   chars 0
-                   idx cursor]
-              (if (>= idx total)
-                [batch idx]
-                (let [entry (nth entries idx)
-                      entry-str (pr-str entry)
-                      entry-chars (count entry-str)
-                      new-chars (+ chars entry-chars)]
-                  (if (and (seq batch) (> new-chars drain-char-budget))
-                    [batch idx]
-                    (recur (conj batch entry)
-                           new-chars
-                           (inc idx))))))
-            is-done (>= new-cursor total)
-            new-seq (inc seq-num)
-            delivered new-cursor
-            remaining (- total new-cursor)
-            send-refs? (and (some? context-refs) (not refs-delivered?))]
-        (bput! buffers buffer-key
-               (cond-> (if is-done
-                         {:entries []
-                          :cursor  0
-                          :done    true
-                          :seq-num new-seq
-                          :sent    (into (set sent) (keep :id) entries)}
-                         {:entries entries
-                          :cursor  new-cursor
-                          :done    false
-                          :seq-num new-seq
-                          :sent    (set sent)})
-                 (some? context-refs)
-                 (assoc :context-refs context-refs
-                        :refs-delivered? (or (boolean refs-delivered?) send-refs?))))
-        (cond-> {:batch batch
-                 :remaining remaining
-                 :total total
-                 :delivered delivered
-                 :seq new-seq}
-          is-done (assoc :done true)
-          send-refs? (assoc :context-refs context-refs))))))
+   what this session already received.
+
+   The 2-arity takes a drain ctx. A non-empty (:tokens ctx) selects the batch
+   two-lane via drain-rank/select-batch, rewrites the undrained tail of the
+   buffer into that order, and ages every offered-but-not-taken entry under
+   :offers. ctx nil, or ctx without :tokens, is FIFO — identical to the
+   1-arity in both the returned batch and the buffer written back."
+  ([caller-id] (drain! caller-id nil))
+  ([caller-id ctx]
+   (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))
+         buf (bget buffers buffer-key)]
+     (when (and buf (not (:done buf)))
+       (let [{:keys [entries cursor seq-num context-refs refs-delivered? sent offers]} buf
+             total (count entries)
+             tokens (:tokens ctx)
+             pending (when (seq tokens)
+                       (subvec (vec entries) (min cursor total)))
+             ranked (when (seq pending)
+                      (rank/select-batch pending {:tokens tokens
+                                                  :offers offers
+                                                  :char-budget drain-char-budget}))
+             entries* (if ranked
+                        (into (subvec (vec entries) 0 (min cursor total))
+                              (:ordered ranked))
+                        entries)
+             [batch new-cursor]
+             (if ranked
+               [(:batch ranked) (+ cursor (:taken ranked))]
+               (loop [batch []
+                      chars 0
+                      idx cursor]
+                 (if (>= idx total)
+                   [batch idx]
+                   (let [entry (nth entries idx)
+                         entry-str (pr-str entry)
+                         entry-chars (count entry-str)
+                         new-chars (+ chars entry-chars)]
+                     (if (and (seq batch) (> new-chars drain-char-budget))
+                       [batch idx]
+                       (recur (conj batch entry)
+                              new-chars
+                              (inc idx)))))))
+             is-done (>= new-cursor total)
+             new-seq (inc seq-num)
+             delivered new-cursor
+             remaining (- total new-cursor)
+             send-refs? (and (some? context-refs) (not refs-delivered?))
+             taken-ids (when ranked (into #{} (keep :id) (:batch ranked)))
+             next-offers (if ranked
+                           (reduce (fn [m e]
+                                     (let [eid (:id e)]
+                                       (if (and eid (not (contains? taken-ids eid)))
+                                         (update m eid (fnil inc 0))
+                                         m)))
+                                   (or offers {})
+                                   pending)
+                           offers)]
+         (bput! buffers buffer-key
+                (cond-> (if is-done
+                          {:entries []
+                           :cursor  0
+                           :done    true
+                           :seq-num new-seq
+                           :sent    (into (set sent) (keep :id) entries*)}
+                          {:entries entries*
+                           :cursor  new-cursor
+                           :done    false
+                           :seq-num new-seq
+                           :sent    (set sent)})
+                  (some? context-refs)
+                  (assoc :context-refs context-refs
+                         :refs-delivered? (or (boolean refs-delivered?) send-refs?))
+
+                  (some? next-offers)
+                  (assoc :offers next-offers)))
+         (cond-> {:batch batch
+                  :remaining remaining
+                  :total total
+                  :delivered delivered
+                  :seq new-seq}
+           is-done (assoc :done true)
+           send-refs? (assoc :context-refs context-refs)))))))
 
 (defn has-pending?
   "Check if a caller session has undrained memory entries."

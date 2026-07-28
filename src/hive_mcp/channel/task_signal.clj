@@ -170,3 +170,32 @@
                         (mapcat (fn [[k mode]] (value-tokens k mode (arg-value m k)))))
                   spec))
       #{})))
+
+(def ^:dynamic *enabled?*
+  "Overrides the env check when bound to true or false. nil defers to the env."
+  nil)
+
+(def ^:private truthy-env
+  #{"1" "true" "yes" "on"})
+
+(defn enabled?
+  "True when task-cue harvesting is on.
+
+   Defaults to FALSE: with no override and no HIVE_TWO_LANE_DRAIN env var set to
+   one of 1/true/yes/on, `cues` yields the empty set and the memory drain stays
+   FIFO. Binding `*enabled?*` takes precedence over the env."
+  []
+  (if (some? *enabled?*)
+    (boolean *enabled?*)
+    (contains? truthy-env
+               (some-> (System/getenv "HIVE_TWO_LANE_DRAIN")
+                       str/trim str/lower-case))))
+
+(defn cues
+  "`task-tokens` for one tool call, or the empty set when `enabled?` is false.
+
+   Call sites use this; `task-tokens` stays pure and unconditional."
+  [tool-name args]
+  (if (enabled?)
+    (task-tokens tool-name args)
+    #{}))

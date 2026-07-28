@@ -8,7 +8,8 @@
             [hive-mcp.server.permissions :as permissions]
             [hive-dsl.result :as r]
             [clojure.data.json :as json]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.channel.task-signal :as task-signal]))
 
 #_{:clj-kondo/ignore [:deprecated-var]}
 (def ^:dynamic ^:deprecated *current-agent-id* ctx/*current-agent-id*)
@@ -77,7 +78,9 @@
   "Execute a batch of tool calls, respecting allowlist and permissions.
    After execution, drains all piggyback channels (hivemind, memory, async,
    catchup) and appends to the last tool result — ensures headless/OpenRouter
-   lings receive hivemind shouts that would otherwise be lost."
+   lings receive hivemind shouts that would otherwise be lost.
+   Task cues harvested from this batch steer the MEMORY drain; they are empty
+   unless task-signal/enabled?."
   ([agent-id tool-calls permissions]
    (execute-tool-calls agent-id tool-calls permissions nil))
   ([agent-id tool-calls permissions {:keys [tool-allowlist task-type project-id] :as opts}]
@@ -98,6 +101,11 @@
                                                     {:success false :error "Rejected by human"}))))
                           allowed)
            all-results (into (vec rejected) executed)
+           drain-ctx {:tokens (into #{}
+                                    (comp (mapcat (fn [{:keys [name arguments]}]
+                                                    (task-signal/cues name arguments)))
+                                          (take task-signal/max-tokens))
+                                    allowed)}
            ;; Drain piggyback channels — bridges hivemind shouts to agentic loop
-           piggyback-text (tap/drain-all! agent-id project-id)]
+           piggyback-text (tap/drain-all! agent-id project-id drain-ctx)]
        (append-piggyback-to-results all-results piggyback-text)))))
