@@ -426,6 +426,98 @@
                                                               "Example: [[\"m+\", {\"c\": \"note text\", \"t\": \"note\"}], "
                                                               "[\"k>\", {\"from\": \"$0\", \"to\": \"node-2\", \"rel\": \"implements\"}]]. "
                                                               "Mutually exclusive with 'operations'.")}
+                              ;; Non-scalar params forwarded to target tools
+                              "fields" {:type "array"
+                                        :items {:type "string"}
+                                        :description "[kanban/project list] Project each result to a subset of fields (e.g. ['id' 'title'])"}
+                              "ids" {:type "array"
+                                     :items {:type "string"}
+                                     :description "[memory batch-get/batch-reembed, kg summarize] Entry or node IDs"}
+                              "entry-ids" {:type "array"
+                                           :items {:type "string"}
+                                           :description "[memory migrate-scoped] Entry IDs"}
+                              "task_ids" {:type "array"
+                                          :items {:type "string"}
+                                          :description "[session/workflow] Kanban task IDs"}
+                              "add_tags" {:type "array"
+                                          :items {:type "string"}
+                                          :description "[kanban retag] Extra tags to add"}
+                              "remove_tags" {:type "array"
+                                             :items {:type "string"}
+                                             :description "[kanban retag] Tags to remove"}
+                              "exclude_tags" {:type "array"
+                                              :items {:type "string"}
+                                              :description "[memory query/search] Tags to exclude from results"}
+                              "agent_ids" {:type "array"
+                                           :items {:type "string"}
+                                           :description "[agent kill-batch] Agent IDs"}
+                              "agent-ids" {:type "array"
+                                           :items {:type "string"}
+                                           :description "[events enable/disable] Agent IDs to filter on"}
+                              "kg_node_ids" {:type "array"
+                                             :items {:type "string"}
+                                             :description "[agent/session/wave] KG node IDs for context resolution seeds"}
+                              "kg_depends_on" {:type "array"
+                                               :items {:type "string"}
+                                               :description "[memory add] Entry IDs this depends on (KG edge)"}
+                              "kg_implements" {:type "array"
+                                               :items {:type "string"}
+                                               :description "[memory add] Entry IDs this implements (KG edge)"}
+                              "kg_refines" {:type "array"
+                                            :items {:type "string"}
+                                            :description "[memory add] Entry IDs this refines (KG edge)"}
+                              "kg_supersedes" {:type "array"
+                                               :items {:type "string"}
+                                               :description "[memory add] Entry IDs this supersedes (KG edge)"}
+                              "presets" {:type "array"
+                                         :items {:type "string"}
+                                         :description "[agent/preset/workflow] Preset names"}
+                              "predicates" {:type "array"
+                                            :items {:type "string"}
+                                            :description "[workflow] Named predicates available at run time"}
+                              "participants" {:type "array"
+                                              :items {:type "string"}
+                                              :description "[agora] Ling slave-ids (min 2)"}
+                              "options" {:type "array"
+                                         :items {:type "string"}
+                                         :description "[hivemind ask] Available options"}
+                              "relations" {:type "array"
+                                           :items {:type "string"}
+                                           :description "[kg] Relation types to follow"}
+                              "exclude_relations" {:type "array"
+                                                   :items {:type "string"}
+                                                   :description "[kg] Relation types to exclude"}
+                              "seen" {:type "array"
+                                      :items {:type "string"}
+                                      :description "[kg] Already-visited node IDs for frontier"}
+                              "seeds" {:type "array"
+                                       :items {:type "string"}
+                                       :description "[kg connect] Node IDs (>=2) / [wave] domain topic seeds"}
+                              "diff_ids" {:type "array"
+                                          :items {:type "string"}
+                                          :description "[wave approve] Specific diff IDs to approve"}
+                              "tasks" {:type "array"
+                                       :items {:type "object"}
+                                       :description "[wave dispatch] Array of {file, task} objects"}
+                              "roles" {:type "array"
+                                       :items {:type "object"}
+                                       :description "[agora] Debate roles"}
+                              "debate_roles" {:type "array"
+                                              :items {:type "object"}
+                                              :description "[agora] Debate roles for stage 2"}
+                              "research_roles" {:type "array"
+                                                :items {:type "object"}
+                                                :description "[agora] Research roles for stage 1"}
+                              "inputs" {:type "array"
+                                        :description "[kg datalog] Additional Datalog inputs bound by the query's :in clause"}
+                              "ctx_refs" {:type "object"
+                                          :description "[agent/session/wave] Map of category->ctx-id for compressed context"}
+                              "agents" {:type "object"
+                                        :description "[agent spawn] Map of agent-name to Claude Agent SDK subagent definition"}
+                              "config" {:type "object"
+                                        :description "[agora] Optional {threshold, timeout-ms}"}
+                              "data" {:type "object"
+                                      :description "[hivemind] Additional event data / [session context-put] structured data to store"}
                               "async"      {:type "boolean"
                                             :description (str "When true, execute batch/DSL asynchronously. "
                                                               "Returns {batch_id: \"...\"} immediately. "
