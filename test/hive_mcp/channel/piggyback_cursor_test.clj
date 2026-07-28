@@ -11,12 +11,9 @@
             [hive-mcp.delivery.channels :as channels]
             [hive-mcp.protocols.delivery-channel :as dc]))
 
-;; Reset cursor and message source state between tests
-(use-fixtures :each
-  (fn [f]
-    (pb/reset-all-cursors!)
-    (f)
-    (pb/reset-all-cursors!)))
+;; The :each fixture is registered after `with-clean-pb-state` is defined,
+;; below. `use-fixtures :each` REPLACES the fixture list rather than appending,
+;; so this namespace must register exactly once.
 
 ;; =============================================================================
 ;; Cursor Key Stability — The Core Bug
@@ -257,6 +254,8 @@
            (pb/reset-all-cursors!)
            (pb/clear-backbone-buffer!)
            (pb/register-message-source! original-source)))))
+
+(use-fixtures :each with-clean-pb-state)
 
 (deftest piggyback-channel-preserves-shout-id-test
   (with-clean-pb-state

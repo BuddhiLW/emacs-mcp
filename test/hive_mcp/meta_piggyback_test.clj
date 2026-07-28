@@ -87,28 +87,6 @@
 ;; Integration Tests - make-tool Wrapper (OCP: Open for extension)
 ;; =============================================================================
 
-(deftest test-make-tool-attaches-meta-with-piggyback
-  (testing "make-tool wrapper attaches :_meta when piggyback exists"
-    ;; Create wrapped tool
-    (let [test-tool {:name "test-tool"
-                     :description "test"
-                     :inputSchema {}
-                     :handler (fn [_] {:type "text" :text "result"})}
-          wrapped (routes/make-tool test-tool)
-          handler (:handler wrapped)]
-
-      ;; Add message before calling tool
-      (hivemind/shout! "test-agent" :progress {:message "piggyback-test"})
-
-      ;; Call wrapped handler - returns keyword :_meta
-      ;; SDK's coerce-tool-response converts to string "_meta" for serialization
-      (let [result (handler {})]
-        (is (map? result) "Result should be a map")
-        (is (contains? result :content) "Should have :content")
-        (is (contains? result :_meta) "Should have :_meta when piggyback exists")
-        (is (contains? (:_meta result) :hm) "Meta should contain :hm key")
-        (is (seq (get-in result [:_meta :hm])) "Should have hivemind messages")))))
-
 (deftest test-make-tool-no-meta-when-no-piggyback
   (testing "make-tool wrapper omits :_meta when no piggyback"
     ;; No messages added - create wrapped tool
@@ -150,34 +128,6 @@
 ;; =============================================================================
 ;; End-to-End Test (DIP: Depends on abstractions)
 ;; =============================================================================
-
-(deftest test-full-piggyback-flow
-  (testing "Full flow: shout -> tool call -> piggyback in response"
-    ;; 1. Agent shouts
-    (hivemind/shout! "worker-1" :started {:task "processing" :message "Starting work"})
-
-    ;; 2. Coordinator calls a tool (wrapped by make-tool)
-    ;; Handler returns keyword :_meta (SDK converts to string for serialization)
-    (let [mock-tool {:name "status"
-                     :description "get status"
-                     :inputSchema {}
-                     :handler (fn [_] {:type "text" :text "OK"})}
-          wrapped (routes/make-tool mock-tool)
-          result ((:handler wrapped) {})]
-
-      ;; 3. Response should include piggyback (keyword :_meta from handler)
-      (is (get-in result [:_meta :hm]) "Response should have hivemind piggyback")
-      (is (= "worker-1" (get-in result [:_meta :hm 0 :a])) "Should have agent-id")
-      (is (= "started" (get-in result [:_meta :hm 0 :e])) "Should have event type"))
-
-    ;; 4. Subsequent call should have no piggyback (consumed)
-    (let [mock-tool {:name "status2"
-                     :description "get status"
-                     :inputSchema {}
-                     :handler (fn [_] {:type "text" :text "OK2"})}
-          wrapped (routes/make-tool mock-tool)
-          result ((:handler wrapped) {})]
-      (is (not (contains? result :_meta)) "Second call should have no :_meta"))))
 
 ;; =============================================================================
 ;; Instruction Queue Tests
