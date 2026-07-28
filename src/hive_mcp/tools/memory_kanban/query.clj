@@ -119,7 +119,7 @@
         project-id (scope/get-current-project-id eff-dir)
         {:keys [entries multi-project?]} (query-kanban-entries
                                           project-id include_descendants
-                                          500 ["kanban"] {:scope scope})
+                                          20000 ["kanban"] {:scope scope})
         kanban-entries (filter-kanban-by-tags entries ["kanban"])
         ;; Drop entries with missing/invalid status from the bucket counts —
         ;; defaulting to :todo silently resurrected entries whose tag-based

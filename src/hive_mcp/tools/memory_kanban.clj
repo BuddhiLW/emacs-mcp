@@ -176,7 +176,7 @@
             crud-result (mem-crud/handle-add {:type "note"
                                               :content (json/write-str content)
                                               :tags tags :directory eff-dir
-                                              :agent_id eff-agent :duration "short"
+                                              :agent_id eff-agent :duration "permanent"
                                               :knowledge_gaps []
                                               :store-key (kanban-facade/active-key)})]
         (log/info "kanban-create result:" crud-result)
