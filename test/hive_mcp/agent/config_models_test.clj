@@ -4,8 +4,9 @@
    Verifies that agent/config.clj, agent/routing.clj, hive_agent_bridge.clj,
    and drone/backend/hive_agent.clj correctly read model defaults from
    hive-mcp.config.core's :models key."
-  (:require [clojure.test :refer [deftest is testing]]
-            [hive-mcp.config.core :as config]))
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [hive-mcp.config.core :as config]
+            [hive-mcp.config.source :as src]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -14,17 +15,29 @@
 ;; Helpers
 ;; =============================================================================
 
+;; These tests assert what `default-config` DECLARES. Reading through the
+;; process-wide atom made them assert whatever the developer last wrote to
+;; ~/.config/hive-mcp/config.edn — on this machine that is a single :testing
+;; routing entry and a local drone model, so every structural assertion failed
+;; for reasons that had nothing to do with the code.
+(use-fixtures :each
+  (fn [f]
+    (binding [config/*config-source*
+              (src/atom-source (atom config/default-config) config/default-config)]
+      (f))))
+
 (defn- with-config-override
   "Execute f with a temporary config override at the given dotted key path.
    Restores original value after f completes."
   [key-path override-value f]
-  (let [original (config/get-config-value key-path)]
+  (let [config-atom (src/-config-atom config/*config-source*)
+        original    (config/get-config-value key-path)]
     (try
-      (swap! @#'config/global-config assoc-in
+      (swap! config-atom assoc-in
              (config/parse-key-path key-path) override-value)
       (f)
       (finally
-        (swap! @#'config/global-config assoc-in
+        (swap! config-atom assoc-in
                (config/parse-key-path key-path) original)))))
 
 ;; =============================================================================
@@ -133,14 +146,20 @@
     (let [default-model-fn @(ns-resolve 'hive-mcp.agent.hive-agent-bridge 'default-model)]
       (is (some? default-model-fn) "default-model fn should exist")
       (when default-model-fn
-        ;; Default should be kimi
-        (is (= "moonshotai/kimi-k2.5" (default-model-fn)))
-        ;; Override
-        (with-config-override "models.default-model" "test/bridge-model"
-          (fn []
-            (is (= "test/bridge-model" (default-model-fn)))))
-        ;; Restored
-        (is (= "moonshotai/kimi-k2.5" (default-model-fn)))))))
+        ;; The bridge delegates to `config/default-drone-model`, which resolves
+        ;; services.drone.default-model (env DRONE_DEFAULT_MODEL, fallback
+        ;; "devstral-small:24b") — NOT models.default-model. This suite asserted
+        ;; the latter, so it could only pass on a machine whose drone service
+        ;; happened to be unset AND whose models key happened to say kimi.
+        (let [baseline (default-model-fn)]
+          (is (= (config/default-drone-model) baseline)
+              "bridge resolves through default-drone-model")
+          (with-config-override "services.drone.default-model" "test/bridge-model"
+            (fn []
+              (is (= "test/bridge-model" (default-model-fn))
+                  "override of the drone service key takes effect")))
+          (is (= baseline (default-model-fn))
+              "override is restored"))))))
 
 ;; =============================================================================
 ;; drone/backend/hive_agent.clj — config-driven default model

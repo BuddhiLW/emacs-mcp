@@ -408,6 +408,10 @@
 (deftest fx-handlers-registered-test
   (testing ":multi/wave-complete and :multi/op-error are registered in hive.events.fx"
     (require 'hive.events.fx)
+    ;; Registration is an explicit boot step (`register-fx!`, documented safe to
+    ;; call repeatedly), not a load side effect — so ARRANGE it rather than
+    ;; depending on whether something else booted first in this JVM.
+    (multi/register-fx!)
     (let [get-fx (resolve 'hive.events.fx/get-fx)]
       (is (fn? (get-fx :multi/wave-complete))
           ":multi/wave-complete should be registered as an FX handler")

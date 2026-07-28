@@ -3,7 +3,8 @@
    heal-and-open! policy dispatch."
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
-            [hive-mcp.storage.recovery :as rec]))
+            [hive-mcp.storage.recovery :as rec]
+            [hive-mcp.test.stub.txlog-ops :as txlog-stub]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -39,6 +40,8 @@
     (is (= :wal-corrupt (rec/classify-open-failure (ex "Invalid txn-log record magic"))))
     (is (= :wal-corrupt (rec/classify-open-failure (ex "Txn-log segment corruption"))))
     (is (= :wal-corrupt (rec/classify-open-failure (ex "txn-log corruption at offset 42348"))))))
+
+(clojure.test/use-fixtures :each txlog-stub/with-stub-ops)
 
 (deftest test-classifies-lock-contention
   (testing "lock-related EAGAIN signatures classify as :lock-contention"

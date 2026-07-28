@@ -80,7 +80,24 @@
       (finally
         (reset! forge-state saved-state)))))
 
-(use-fixtures :each isolated-ds-fixture reset-forge-state-fixture)
+(defn ready-lings-fixture
+  "Report every spawned ling ready immediately.
+
+   The seam must be `wait-for-ling-ready`, not `ling-cli-ready?`: readiness is
+   two-phase and blocks on the DataScript phase FIRST, which a stubbed
+   `spawn/handle-spawn` never satisfies. Mocking only the CLI phase leaves each
+   spark burning the full 60s + 2s + 60s timeout."
+  [f]
+  (with-redefs [readiness/wait-for-ling-ready
+                (fn [agent-id _spawn-mode]
+                  {:ready?     true
+                   :slave      {:slave/id agent-id}
+                   :attempts   1
+                   :elapsed-ms 0
+                   :phase      :cli-ready})]
+    (f)))
+
+(use-fixtures :each isolated-ds-fixture reset-forge-state-fixture ready-lings-fixture)
 
 ;; =============================================================================
 ;; Test Helpers
@@ -754,3 +771,4 @@
 (comment
   ;; Run all forge-strike headless tests
   (clojure.test/run-tests 'hive-mcp.workflows.forge-strike-headless-test))
+

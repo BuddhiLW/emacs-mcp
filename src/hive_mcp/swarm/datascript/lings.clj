@@ -41,6 +41,9 @@
                  :project-id     - Project ID for scoping (derived from cwd)
                  :kanban-task-id - Optional kanban task ID this ling is working on
 
+   Stamps `:slave/alive? true` and `:slave/last-active-at` (epoch millis), so
+   the new row is visible to the default (non-`:include-stale?`) queries.
+
    Returns:
      Transaction report with :tempids"
   [slave-id {:keys [name status depth parent presets cwd project-id kanban-task-id]
@@ -53,7 +56,9 @@
                          :slave/status status
                          :slave/depth depth
                          :slave/tasks-completed 0
-                         :slave/created-at (conn/now)}
+                         :slave/created-at (conn/now)
+                         :slave/alive? true
+                         :slave/last-active-at (System/currentTimeMillis)}
                   cwd (assoc :slave/cwd cwd)
                   project-id (assoc :slave/project-id project-id)
                   (seq presets) (assoc :slave/presets (vec presets))

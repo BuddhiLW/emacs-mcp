@@ -5,8 +5,11 @@
    - hash-scope? detection heuristic
    - extract-scope-id from tags
    - update-scope-tag replacement"
-  (:require [clojure.test :refer [deftest is testing]]
-            [hive-mcp.tools.memory.migration :as migration]))
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+            [hive-mcp.tools.memory.migration :as migration]
+            [hive-mcp.tools.memory.migration.import :as import]
+            [hive-mcp.test.stub.memory-store :as mem-stub]
+            [hive-spi.memory.registry :as mem-registry]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -14,6 +17,10 @@
 ;; =============================================================================
 ;; hash-scope? Detection
 ;; =============================================================================
+
+;; The import path resolves its store from hive-spi.memory.registry, which is
+;; EMPTY in a cold JVM. Install the atom-backed stub for every test here.
+(use-fixtures :each mem-stub/with-stub-store)
 
 (deftest test-hash-scope-true-for-hex-strings
   (testing "Returns true for long hex-only strings"
@@ -79,48 +86,40 @@
 ;; =============================================================================
 
 (deftest test-import-entry-returns-keywords
-  (testing "import-entry! returns keyword status values"
-    ;; Test that the function returns the expected keyword statuses
-    ;; :imported, :skipped-hash, or :skipped-id
-    (with-redefs [hive-mcp.chroma.core/find-duplicate (constantly nil)
-                  hive-mcp.chroma.core/get-entry-by-id (constantly nil)
-                  hive-mcp.chroma.core/content-hash (constantly "abc123")
-                  hive-mcp.chroma.core/index-memory-entry! (constantly "test-id")]
-      (let [import-entry! (var-get #'hive-mcp.tools.memory.migration/import-entry!)
-            result (import-entry! {:id "new-id" :content "test"} "project")]
-        (is (= :imported result))))))
+  (testing "import-entry! returns :imported for a genuinely new entry"
+    (is (= :imported
+           (import/import-entry! {:id "new-id" :content "test"} "project")))
+    (is (contains? (mem-stub/entries (mem-registry/get-store)) "new-id")
+        "the entry reaches the store through the port")))
 
 (deftest test-import-entry-skips-duplicate-hash
-  (testing "import-entry! returns :skipped-hash for duplicate content"
-    (with-redefs [hive-mcp.chroma.core/find-duplicate (constantly {:id "existing"})
-                  hive-mcp.chroma.core/content-hash (constantly "abc123")]
-      (let [import-entry! (var-get #'hive-mcp.tools.memory.migration/import-entry!)
-            result (import-entry! {:id "new-id" :content "duplicate"} "project")]
-        (is (= :skipped-hash result))))))
+  (testing "import-entry! returns :skipped-hash when the content-hash already exists"
+    (import/import-entry! {:id "first" :content "same content"
+                           :content-hash "shared-hash" :type "note"}
+                          "project")
+    ;; A DIFFERENT id carrying the same hash is deduplicated by content.
+    (is (= :skipped-hash
+           (import/import-entry! {:id "second" :content "same content"
+                                  :content-hash "shared-hash" :type "note"}
+                                 "project")))))
 
 (deftest test-import-entry-skips-duplicate-id
-  (testing "import-entry! returns :skipped-id for duplicate ID"
-    (with-redefs [hive-mcp.chroma.core/find-duplicate (constantly nil)
-                  hive-mcp.chroma.core/get-entry-by-id (constantly {:id "existing"})
-                  hive-mcp.chroma.core/content-hash (constantly "abc123")]
-      (let [import-entry! (var-get #'hive-mcp.tools.memory.migration/import-entry!)
-            result (import-entry! {:id "existing" :content "test"} "project")]
-        (is (= :skipped-id result))))))
+  (testing "import-entry! returns :skipped-id when the id already exists"
+    ;; Drive the real port with the stub store rather than redefining a vendor
+    ;; namespace: import-entry! resolves its store from hive-spi.memory.registry.
+    (import/import-entry! {:id "existing" :content "first"} "project")
+    (is (= :skipped-id
+           (import/import-entry! {:id "existing" :content "different content"}
+                                 "project")))))
 
 (deftest test-import-entry-uses-provided-hash
-  (testing "import-entry! uses provided content-hash instead of computing"
-    (let [computed-hash (atom nil)]
-      (with-redefs [hive-mcp.chroma.core/find-duplicate
-                    (fn [_type hash & _]
-                      (reset! computed-hash hash)
-                      nil)
-                    hive-mcp.chroma.core/get-entry-by-id (constantly nil)
-                    hive-mcp.chroma.core/content-hash (constantly "computed-hash")
-                    hive-mcp.chroma.core/index-memory-entry! (constantly "test-id")]
-        (let [import-entry! (var-get #'hive-mcp.tools.memory.migration/import-entry!)]
-          ;; Entry with provided hash
-          (import-entry! {:id "e1" :content "x" :content-hash "provided-hash"} "p")
-          (is (= "provided-hash" @computed-hash))
-          ;; Entry without hash - should compute
-          (import-entry! {:id "e2" :content "y"} "p")
-          (is (= "computed-hash" @computed-hash)))))))
+  (testing "import-entry! stores the provided :content-hash instead of recomputing"
+    (import/import-entry! {:id "e1" :content "x" :content-hash "provided-hash"} "p")
+    (let [store (mem-registry/get-store)]
+      (is (= "provided-hash" (:content-hash (get (mem-stub/entries store) "e1")))
+          "a supplied hash is written through untouched")
+
+      (import/import-entry! {:id "e2" :content "y"} "p")
+      (let [computed (:content-hash (get (mem-stub/entries store) "e2"))]
+        (is (string? computed) "an absent hash is computed")
+        (is (not= "provided-hash" computed))))))

@@ -16,6 +16,7 @@
             [hive-mcp.events.core :as ev]
             [hive-mcp.events.handlers :as handlers]
             [hive-test.isolation :as iso]
+            [hive-mcp.tools.swarm.wave.execution :as execution]
             hive-mcp.isolation-methods))
 
 ;; =============================================================================
@@ -211,23 +212,27 @@
 
 (deftest handle-dispatch-drone-wave-creates-plan-test
   (testing "creates plan and returns wave-id"
-    ;; Mock execute-wave! to avoid async execution in tests
-    (with-redefs [wave/execute-wave! (fn [plan-id _opts]
-                                       (ds/create-wave! plan-id))]
+    ;; Stub the fn the HANDLER calls. `wave/execute-wave!` is a by-value
+    ;; re-export and is not on this path at all — redefining it lets a real
+    ;; wave reach a live drone backend.
+    (with-redefs [execution/execute-wave-async!
+                  (fn [plan-id & _]
+                    {:wave-id (ds/create-wave! plan-id) :item-count 2})]
       (let [result (wave/handle-dispatch-drone-wave
                     {:tasks [{"file" "a.clj" "task" "fix bug"}
                              {"file" "b.clj" "task" "add test"}]})]
         (is (= "text" (:type result)))
         (let [parsed (json/read-str (:text result) :key-fn keyword)]
-          (is (= "wave_started" (:status parsed)))
+          (is (= "dispatched" (:status parsed)))
           (is (string? (:plan_id parsed)))
           (is (string? (:wave_id parsed)))
           (is (= 2 (:item_count parsed))))))))
 
 (deftest handle-dispatch-drone-wave-custom-preset-test
   (testing "passes custom preset"
-    (with-redefs [wave/execute-wave! (fn [plan-id _opts]
-                                       (ds/create-wave! plan-id))]
+    (with-redefs [execution/execute-wave-async!
+                  (fn [plan-id & _]
+                    {:wave-id (ds/create-wave! plan-id) :item-count 1})]
       (let [result (wave/handle-dispatch-drone-wave
                     {:tasks [{"file" "a.clj" "task" "task"}]
                      :preset "tdd"})
@@ -296,14 +301,14 @@
     (let [tasks [{:file nil :task "task 1"}
                  {:file "valid/path.clj" :task "task 2"}]]
       ;; Should not throw
-      (is (nil? (wave/ensure-parent-dirs! tasks))))))
+      (is (zero? (wave/ensure-parent-dirs! tasks))))))
 
 (deftest ensure-parent-dirs-existing-dirs-test
   (testing "works idempotently with existing directories"
     (let [existing-dir (System/getProperty "java.io.tmpdir")
           tasks [{:file (str existing-dir "/file.clj") :task "task 1"}]]
       ;; Should not throw on existing directory
-      (is (nil? (wave/ensure-parent-dirs! tasks))))))
+      (is (zero? (wave/ensure-parent-dirs! tasks))))))
 
 ;; =============================================================================
 ;; P2: validate-task-paths Tests
@@ -324,7 +329,7 @@
     (let [existing-dir (System/getProperty "java.io.tmpdir")
           tasks [{:file (str existing-dir "/file.clj") :task "task 1"}]]
       ;; Should not throw
-      (is (nil? (wave/validate-task-paths tasks))))))
+      (is (true? (wave/validate-task-paths tasks))))))
 
 (deftest validate-task-paths-mixed-test
   (testing "reports all invalid paths in exception data"

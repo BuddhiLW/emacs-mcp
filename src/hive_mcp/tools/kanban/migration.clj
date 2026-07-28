@@ -31,7 +31,7 @@
   (:require [hive-mcp.protocols.memory :as proto]
             [hive-mcp.tools.kanban.predicates :as kp]
             [taoensso.timbre :as log]
-            [hive-mcp.tools.migrate.optional :as opt]))
+            [hive-mcp.tools.migrate.batch :as batch]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -76,7 +76,7 @@
 (defn migrate-to-kanban!
   "Run the full :default → :kanban migration. Both slots must be
    registered before the call. Forwards optional :batch-size and
-   :dry-run? to `hive-qdrant.migrate/sync!`.
+   :dry-run? to the registered `IBatchMigrator`.
 
    Returns the sync! report — pass result to `verify` for round-trip
    spot-check."
@@ -87,11 +87,11 @@
    (let [target (proto/get-store :kanban)
          _      (log/info "kanban migration starting"
                           {:batch-size batch-size :dry-run? (boolean dry-run?)})
-         result ((opt/backend-var "hive-qdrant.migrate" (quote sync!))
-                  {:source-fn  extract-kanban-from-default-store
-                   :target     target
-                   :batch-size batch-size
-                   :dry-run?   (boolean dry-run?)})]
+         result (batch/sync! (batch/current-migrator)
+                             {:source-fn  extract-kanban-from-default-store
+                              :target     target
+                              :batch-size batch-size
+                              :dry-run?   (boolean dry-run?)})]
      (log/info "kanban migration done" result)
      result)))
 
@@ -101,8 +101,8 @@
 
 (defn verify
   "Spot-check that migrated kanban entries land cleanly in the :kanban
-   slot. Pulls all source ids, samples `:sample-size`, and asks
-   `hive-qdrant.migrate/verify` to round-trip-check each.
+   slot. Pulls all source ids, samples `:sample-size`, and asks the
+   registered `IBatchMigrator` to round-trip-check each.
 
    Returns {:checked N :ok N :missing [id...]}. `:missing` empty == clean
    migration."
@@ -112,7 +112,7 @@
    (let [src-ids (mapv :id (extract-kanban-from-default-store))
          sample  (->> src-ids shuffle (take sample-size) vec)
          target  (proto/get-store :kanban)]
-     ((opt/backend-var "hive-qdrant.migrate" (quote verify)) {:target target :ids sample}))))
+     (batch/verify (batch/current-migrator) {:target target :ids sample}))))
 
 ;; =============================================================================
 ;; Status — quick sanity check before running

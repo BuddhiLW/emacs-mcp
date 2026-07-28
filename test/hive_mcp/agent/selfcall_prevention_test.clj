@@ -9,13 +9,14 @@
    (d) registry/get-child-ling-tools excludes dangerous tools
    (e) registry/child-ling-excluded? identifies dangerous tools"
   (:require [clojure.test :refer [deftest testing is]]
+            [clojure.set]
             [clojure.string :as str]
+            [clojure.test.check.generators :as gen]
+            [hive-test.trifecta :refer [deftrifecta]]
             [hive-mcp.server.guards :as guards]
             [hive-mcp.tools.registry :as registry]))
 
-;; Access private var for testing
-(def ^:private child-ling-excluded?
-  @#'registry/child-ling-excluded?)
+(def ^:private child-ling-excluded? registry/child-ling-excluded?)
 
 ;;; =============================================================================
 ;;; (a) guards/child-ling? — env-based detection
@@ -129,36 +130,26 @@
 ;;; =============================================================================
 
 (deftest test-get-child-ling-tools-excludes-dangerous
-  (testing "get-child-ling-tools excludes agent/wave/workflow/multi/delegate/olympus/emacs"
-    (let [tools      (registry/get-child-ling-tools)
-          tool-names (set (map :name tools))]
-      (is (not (contains? tool-names "agent"))
-          "agent tool must be excluded (recursive spawning)")
-      (is (not (contains? tool-names "wave"))
-          "wave tool must be excluded (resource amplification)")
-      (is (not (contains? tool-names "workflow"))
-          "workflow tool must be excluded (forge-strike spawns lings)")
-      (is (not (contains? tool-names "multi"))
-          "multi tool must be excluded (meta-facade bypass)")
-      (is (not (contains? tool-names "delegate"))
-          "delegate tool must be excluded (drone delegation)")
-      (is (not (contains? tool-names "olympus"))
-          "olympus tool must be excluded (coordinator-only)")
-      (is (not (contains? tool-names "emacs"))
-          "emacs tool must be excluded (coordinator-only)"))))
+  (testing "get-child-ling-tools drops every name in the exclusion set"
+    ;; Assert the RULE against the set the production code owns, not a
+    ;; hand-copied roster: the tool surface was consolidated (agent / wave /
+    ;; workflow / delegate / olympus are now `swarm` SUBCOMMANDS), so pinning
+    ;; those names here asserted a taxonomy that no longer exists.
+    (let [tool-names (set (map :name (registry/get-child-ling-tools)))]
+      (doseq [excluded registry/child-excluded-tool-names]
+        (is (not (contains? tool-names excluded))
+            (str excluded " must be excluded from child lings"))))))
 
-(deftest test-get-child-ling-tools-keeps-safe-tools
-  (testing "get-child-ling-tools keeps safe tools like memory, hivemind, kanban"
-    (let [tools      (registry/get-child-ling-tools)
-          tool-names (set (map :name tools))]
-      (is (contains? tool-names "memory")
-          "memory tool must be available to child lings")
-      (is (contains? tool-names "hivemind")
-          "hivemind tool must be available to child lings")
-      (is (contains? tool-names "kanban")
-          "kanban tool must be available to child lings")
-      (is (contains? tool-names "session")
-          "session tool must be available to child lings"))))
+(deftest test-get-child-ling-tools-keeps-everything-else
+  (testing "get-child-ling-tools removes the exclusion set and NOTHING else"
+    ;; Registry-independent: which tools are registered differs between a cold
+    ;; JVM and a live image, so the invariant is the set DIFFERENCE, not the
+    ;; presence of any particular tool.
+    (let [all-names   (set (map :name (registry/get-all-tools :include-deprecated? true)))
+          child-names (set (map :name (registry/get-child-ling-tools)))]
+      (is (= (clojure.set/difference all-names registry/child-excluded-tool-names)
+             child-names)
+          "child tools = all tools minus exactly the exclusion set"))))
 
 (deftest test-get-child-ling-tools-excludes-dangerous-deprecated-shims
   (testing "deprecated swarm_*/delegate_*/lings_* shims are excluded"
@@ -211,46 +202,58 @@
 ;;; =============================================================================
 
 (deftest test-child-ling-excluded?-all-dangerous-names
-  (testing "child-ling-excluded? returns truthy for all excluded tool names"
-    (doseq [name ["agent" "wave" "workflow" "multi" "delegate" "olympus" "emacs"]]
+  (testing "child-ling-excluded? returns truthy for every name in the exclusion set"
+    (doseq [name registry/child-excluded-tool-names]
       (is (child-ling-excluded? {:name name})
           (str name " should be identified as excluded")))))
 
 (deftest test-child-ling-excluded?-safe-names
-  (testing "child-ling-excluded? returns falsy for safe consolidated tools"
+  (testing "child-ling-excluded? returns falsy for names outside the set"
     (doseq [name ["memory" "hivemind" "kanban" "session" "kg" "magit"
                   "preset" "analysis" "lsp" "cider" "project" "config"]]
       (is (not (child-ling-excluded? {:name name}))
           (str name " should NOT be identified as excluded")))))
 
-(deftest test-child-ling-excluded?-deprecated-swarm-shims
-  (testing "deprecated swarm_* shims are excluded"
-    (is (child-ling-excluded? {:name "swarm_spawn" :deprecated true}))
-    (is (child-ling-excluded? {:name "swarm_kill" :deprecated true}))
-    (is (child-ling-excluded? {:name "swarm_dispatch" :deprecated true}))
-    (is (child-ling-excluded? {:name "swarm_status" :deprecated true}))))
+(deftest test-child-ling-excluded?-is-exact-name-match-not-prefix
+  (testing "exclusion is exact-name membership — a prefix is not enough"
+    ;; The deprecated swarm_*/delegate_*/lings_* shims this suite used to pin
+    ;; no longer exist; the guard is a set-membership test on the CONSOLIDATED
+    ;; root name, so prefixed names must NOT be swept in.
+    (doseq [name ["swarm_spawn" "swarm_status" "delegate_drone"
+                  "lings_available" "multi_thing" "emacs_ext"]]
+      (is (not (child-ling-excluded? {:name name}))
+          (str name " is a prefix, not a member — must not be excluded")))
+    (is (not (child-ling-excluded? {:name "swarm_something_new"})))
+    ;; …and :deprecated is not consulted at all.
+    (is (child-ling-excluded? {:name "swarm" :deprecated true}))
+    (is (child-ling-excluded? {:name "swarm" :deprecated false}))))
 
-(deftest test-child-ling-excluded?-deprecated-delegate-shims
-  (testing "deprecated delegate_* shims are excluded"
-    (is (child-ling-excluded? {:name "delegate_drone" :deprecated true}))
-    (is (child-ling-excluded? {:name "delegate_validated_wave" :deprecated true}))))
+;;; =============================================================================
+;;; (f) trifecta — the exclusion predicate IS set membership, for any name
+;;; =============================================================================
 
-(deftest test-child-ling-excluded?-deprecated-lings-shims
-  (testing "deprecated lings_* shims are excluded"
-    (is (child-ling-excluded? {:name "lings_available" :deprecated true}))))
+(def ^:private gen-tool-map
+  (gen/fmap (fn [n] {:name n})
+            (gen/one-of [(gen/elements (vec registry/child-excluded-tool-names))
+                         gen/string-alphanumeric])))
 
-(deftest test-child-ling-excluded?-safe-deprecated-shims-kept
-  (testing "safe deprecated shims (hivemind_*, mcp_memory_*, magit_*, kg_*) are kept"
-    (is (not (child-ling-excluded? {:name "hivemind_shout" :deprecated true})))
-    (is (not (child-ling-excluded? {:name "hivemind_ask" :deprecated true})))
-    (is (not (child-ling-excluded? {:name "mcp_memory_add" :deprecated true})))
-    (is (not (child-ling-excluded? {:name "mcp_memory_query" :deprecated true})))
-    (is (not (child-ling-excluded? {:name "magit_status" :deprecated true})))
-    (is (not (child-ling-excluded? {:name "magit_commit" :deprecated true})))
-    (is (not (child-ling-excluded? {:name "kg_traverse" :deprecated true})))
-    (is (not (child-ling-excluded? {:name "kg_edge" :deprecated true})))))
-
-(deftest test-child-ling-excluded?-non-deprecated-swarm-prefix-not-excluded
-  (testing "non-deprecated tool with swarm_ prefix is NOT excluded (prefix check requires :deprecated)"
-    (is (not (child-ling-excluded? {:name "swarm_something_new"}))
-        "swarm_ prefix only excluded when :deprecated is truthy")))
+(deftrifecta child-ling-excluded-membership
+  #'hive-mcp.tools.registry/child-ling-excluded?
+  {:golden-path "test/golden/child_ling_excluded.edn"
+   :cases       {:swarm    {:name "swarm"}
+                 :multi    {:name "multi"}
+                 :emacs    {:name "emacs"}
+                 :memory   {:name "memory"}
+                 :prefixed {:name "swarm_spawn"}
+                 :nil-name {:name nil}}
+   :xf          boolean
+   :gen         gen-tool-map
+   :pred        #(contains? #{true false nil} %)
+   :num-tests   200
+   :mutations   [["always-true" (fn [_] true)]
+                 ["always-false" (fn [_] false)]
+                 ["prefix-match" (fn [{:keys [name]}]
+                                   (boolean
+                                    (and name
+                                         (some #(str/starts-with? name %)
+                                               registry/child-excluded-tool-names))))]]})

@@ -21,6 +21,44 @@
             (swap! created inc)))))
     @created))
 
+;; =============================================================================
+;; Contract — the value objects this namespace is defined over
+;; =============================================================================
+
+(def Task
+  "A wave task as pre-flight validation sees it: a file the drone will touch."
+  [:map [:file {:optional true} [:maybe :string]]])
+
+(def Tasks
+  "The task sequence every pre-flight entry point accepts."
+  [:sequential Task])
+
+(def PathValidationSummary
+  "What `path-validation-summary` answers.
+
+   :invalid-count is the size of :invalid-paths, and :valid? is that count
+   being zero — there is no third source of truth."
+  [:map
+   [:valid? :boolean]
+   [:invalid-count [:int {:min 0}]]
+   [:invalid-paths [:vector :string]]])
+
+(def DirsCreated
+  "`ensure-parent-dirs!` answers how many parent directories it created."
+  [:int {:min 0}])
+
+(def PathsValid
+  "`validate-task-paths` answers `true`, or throws with every invalid path."
+  [:= true])
+
+(def schemas
+  "Module-local {registry-key -> malli form} contribution."
+  {::task                    Task
+   ::tasks                   Tasks
+   ::path-validation-summary PathValidationSummary
+   ::dirs-created            DirsCreated
+   ::paths-valid             PathsValid})
+
 (defn valid-parent-path?
   "Check if parent directory exists for a file path."
   [file-path]

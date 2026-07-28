@@ -13,7 +13,8 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [taoensso.timbre :as log]
-            [hive-mcp.knowledge-graph.slots.factory :as factory]))
+            [hive-mcp.knowledge-graph.slots.factory :as factory]
+            [hive-mcp.knowledge-graph.connection.store :as store]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -255,7 +256,7 @@
         (let [target-store (create-target-store target-backend target-opts)]
 
           ;; Switch to target store
-          (proto/set-store! target-store)
+          (store/install-store! target-store)
           (proto/ensure-conn! target-store)
 
           ;; Phase 3: Import data
@@ -286,11 +287,14 @@
 
 (defn detect-current-backend
   "Detect the currently active backend type.
-   Returns :datascript, :datalevin, :datahike, or :unknown."
+   Returns :datascript, :datalevin, :datahike, or :unknown.
+
+   Resolves the same store the rest of this namespace reads and writes:
+   the test-store override when bound, else the process store."
   []
-  (if (proto/store-set?)
-    (let [store (proto/get-store)
-          store-type-name (-> store type .getName)]
+  (if-let [store (or store/*test-store*
+                     (when (proto/store-set?) (proto/get-store)))]
+    (let [store-type-name (-> store type .getName)]
       (cond
         (str/includes? store-type-name "DataScriptStore") :datascript
         (str/includes? store-type-name "DatalevinStore")  :datalevin

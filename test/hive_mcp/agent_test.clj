@@ -6,62 +6,58 @@
   (:require [clojure.test :refer :all]
             [clojure.set :as set]
             [hive-mcp.agent.core]
-            [hive-mcp.agent.drone :as drone]
+            [hive-mcp.agent.drone.tools :as drone-tools]
             [hive-mcp.server.permissions :as permissions]))
 
 ;; =============================================================================
 ;; Test Data
 ;; =============================================================================
 
-(def expected-drone-tools
-  "Tools that drones MUST have access to for their workflow.
-
-   Note: Uses actual tool names from registry:
-   - cider_eval_silent (not clojure_eval) for nREPL evaluation
-   - cider_doc, cider_info for symbol lookup
-   - kondo_lint, kondo_analyze for static analysis (no nREPL required)"
-  #{"read_file" "grep" "glob_files"
-    ;; Clojure tools (nREPL-based)
-    "cider_eval_silent" "cider_doc" "cider_info"
-    ;; Static analysis
-    "kondo_lint" "kondo_analyze"
-    ;; Git read-only
-    "magit_status" "magit_diff" "magit_log" "magit_branches"
-    ;; Drone-specific
-    "propose_diff" "hivemind_shout"})
-
-(def expected-file-mutation-tools
-  "File mutation tools that drones MUST NOT have direct access to."
-  #{"file_write" "file_edit" "clojure_edit"})
-
 (def expected-tier-3-tools
   "Tier-3 tools that require human approval (from permissions module)."
   #{"bash" "magit_commit" "magit_push" "eval_elisp" "cider_eval_explicit"
     "preset_delete" "swarm_kill" "mcp_memory_cleanup_expired"})
 
-(def expected-dangerous-tools
-  "Combined set of tools that drones MUST NOT have access to.
-   Includes file mutation tools + tier-3 tools that drones specifically lack.
-   DRY: Derived from expected-file-mutation-tools + additional dangerous tools."
-  (set/union expected-file-mutation-tools
-             #{"bash" "magit_commit" "magit_push"}))
+(def coordinator-only-tools
+  "Consolidated tool names a drone must never reach.
+   Mirrors the blacklist in hive-mcp.agent.drone.tools; kept here so the two
+   are cross-checked rather than derived from one another."
+  #{"agent" "wave" "workflow" "multi" "delegate"
+    "olympus" "emacs" "migration" "config"})
 
 ;; =============================================================================
 ;; Pinning Tests - Tool Definitions
 ;; =============================================================================
 
-(deftest drone-allowed-tools-exists
-  (testing "drone-allowed-tools var is defined"
-    (is (some? drone/allowed-tools)
-        "drone/allowed-tools must be defined")))
+(deftest drone-toolset-is-blacklist-filtered
+  (testing "the drone toolset is the discovered set minus the blacklist"
+    (let [toolset (set (drone-tools/full-toolset))]
+      (is (seq toolset) "drones must have some tools")
+      (is (empty? (set/intersection toolset coordinator-only-tools))
+          (str "SECURITY VIOLATION: drone toolset must exclude coordinator-only "
+               "consolidated tools. Found: "
+               (set/intersection toolset coordinator-only-tools))))))
 
-(deftest drone-allowed-tools-contains-expected
-  (testing "drone-allowed-tools contains all expected safe tools"
-    (let [actual (set drone/allowed-tools)]
-      (is (= expected-drone-tools actual)
-          (str "Mismatch in drone tools. "
-               "Missing: " (set/difference expected-drone-tools actual) ", "
-               "Extra: " (set/difference actual expected-drone-tools))))))
+(deftest drone-cannot-spawn-or-amplify
+  (testing "recursive-spawn and amplification tools are excluded"
+    (let [toolset (set (drone-tools/full-toolset))]
+      (doseq [t ["agent" "wave" "workflow" "multi" "delegate"]]
+        (is (not (contains? toolset t))
+            (str t " must not be reachable by a drone"))))))
+
+(deftest drone-shell-access-is-pattern-gated
+  (testing "bash is available but every command passes validate-bash-command"
+    (is (contains? (set (drone-tools/full-toolset)) "bash")
+        "bash is provided by the drone tool proxy")
+    (testing "benign commands are allowed"
+      (doseq [cmd ["ls -la" "git status" "grep -rn foo src/"]]
+        (is (:allowed? (drone-tools/validate-bash-command cmd))
+            (str "should allow: " cmd))))
+    (testing "destructive commands are blocked with a reason"
+      (doseq [cmd ["rm -rf /" "sudo rm -rf /var" ":(){ :|:& };:"]]
+        (let [{:keys [allowed? reason]} (drone-tools/validate-bash-command cmd)]
+          (is (false? allowed?) (str "should block: " cmd))
+          (is (string? reason) "a block must carry a reason"))))))
 
 (deftest dangerous-tool-predicate-exists
   (testing "permissions/dangerous-tool? is defined"
@@ -78,66 +74,14 @@
       (is (not (permissions/dangerous-tool? tool))
           (str tool " should not be marked as dangerous")))))
 
-;; =============================================================================
-;; Critical Safety Test - Tool Exclusion
-;; =============================================================================
-
-(deftest drone-allowed-tools-excludes-dangerous
-  (testing "drone-allowed-tools has no intersection with dangerous tools"
-    (let [allowed (set drone/allowed-tools)
-          overlap (set/intersection allowed expected-dangerous-tools)]
-      (is (empty? overlap)
-          (str "SECURITY VIOLATION: Drone tools must not include dangerous tools. "
-               "Found overlap: " overlap)))))
-
-(deftest drone-cannot-write-files-directly
-  (testing "file mutation tools are excluded from drone-allowed-tools"
-    (let [allowed (set drone/allowed-tools)]
-      ;; DRY: Use expected-file-mutation-tools instead of inline literal
-      (is (empty? (set/intersection allowed expected-file-mutation-tools))
-          "Drones must use propose_diff instead of direct file writes"))))
-
-(deftest drone-cannot-execute-shell
-  (testing "bash is excluded from drone-allowed-tools"
-    (let [allowed (set drone/allowed-tools)]
-      (is (not (contains? allowed "bash"))
-          "Drones must not have shell access"))))
-
-(deftest drone-cannot-push-to-git
-  (testing "git write operations are excluded from drone-allowed-tools"
-    (let [allowed (set drone/allowed-tools)
-          git-write-tools #{"magit_commit" "magit_push"}]
-      (is (empty? (set/intersection allowed git-write-tools))
-          "Drones must not be able to commit or push to git"))))
-
-;; =============================================================================
-;; Workflow Tests - Drone Has Required Capabilities
-;; =============================================================================
-
-(deftest drone-can-read-files
-  (testing "drone can read files for analysis"
-    (let [allowed (set drone/allowed-tools)]
-      (is (contains? allowed "read_file")
-          "Drones need read_file for code analysis"))))
-
-(deftest drone-can-propose-changes
-  (testing "drone can propose diffs for review"
-    (let [allowed (set drone/allowed-tools)]
-      (is (contains? allowed "propose_diff")
-          "Drones must use propose_diff to suggest file changes"))))
-
-(deftest drone-can-communicate
-  (testing "drone can communicate via hivemind_shout"
-    (let [allowed (set drone/allowed-tools)]
-      (is (contains? allowed "hivemind_shout")
-          "Drones need hivemind_shout to report progress"))))
-
-(deftest drone-can-inspect-git
-  (testing "drone can read git status/history (but not write)"
-    (let [allowed (set drone/allowed-tools)
-          git-read-tools #{"magit_status" "magit_diff" "magit_log" "magit_branches"}]
-      (is (set/subset? git-read-tools allowed)
-          "Drones need git read access for context"))))
+(deftest drone-toolset-is-cached-and-invalidatable
+  (testing "full-toolset caches, invalidate-tool-cache! forces re-discovery"
+    (let [a (drone-tools/full-toolset)
+          b (drone-tools/full-toolset)]
+      (is (= a b) "repeated calls return the cached set")
+      (drone-tools/invalidate-tool-cache!)
+      (is (= (set a) (set (drone-tools/full-toolset)))
+          "re-discovery yields the same set for an unchanged registry"))))
 
 ;; =============================================================================
 ;; Integration Test - delegate-drone! Uses Agentic Path
@@ -175,4 +119,4 @@
   (run-tests 'hive-mcp.agent-test)
 
   ;; Run specific test
-  (drone-allowed-tools-excludes-dangerous))
+  (drone-toolset-is-blacklist-filtered))

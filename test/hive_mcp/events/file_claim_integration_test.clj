@@ -26,7 +26,6 @@
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.swarm.datascript.connection :as conn]
             [hive-mcp.hivemind.core :as hivemind]
-            [hive-mcp.hivemind.state :as hm-state]
             [hive-dsl.bounded-atom :refer [bounded-atom bget bcount bclear!]]))
 
 ;; =============================================================================
@@ -34,32 +33,29 @@
 ;; =============================================================================
 
 (defn integration-fixture
-  "Reset all state and register full handler/effect stack.
-   Uses with-redefs for DataScript and hivemind isolation since
-   reset-conn!/clear-agent-registry! are guarded by when-not-coordinator."
+  "Fresh DataScript conn, empty agent-registry, full handler/effect stack.
+
+   Both globals are reached through the seam their owning namespace exposes —
+   `*test-conn*` for the swarm conn, `bclear!` for the registry — never by
+   redefining a var: `hive-mcp.swarm.datascript` and `hive-mcp.hivemind.core`
+   both re-export by VALUE, so a redef of the source var splits readers from
+   writers."
   [f]
-  (let [test-conn (conn/create-conn)
-        ;; gc-fix-3: use bounded-atom for test registry to match production API
-        test-registry (bounded-atom {:max-entries 100
-                                     :ttl-ms 7200000
-                                     :eviction-policy :lru})]
-    (with-redefs [conn/get-conn (fn [] test-conn)
-                  conn/ensure-conn (fn [] test-conn)
-                  hm-state/agent-registry test-registry]
-      ;; Reset event system
-      (ev/reset-all!)
-      (effects/reset-registration!)
-      (handlers/reset-registration!)
+  (binding [conn/*test-conn* (conn/create-conn)]
+    (bclear! hivemind/agent-registry)
+    (ev/reset-all!)
+    (effects/reset-registration!)
+    (handlers/reset-registration!)
 
-      ;; Initialize full stack
-      (ev/init!)
-      (effects/register-effects!)
-      (handlers/register-handlers!)
+    (ev/init!)
+    (effects/register-effects!)
+    (handlers/register-handlers!)
 
+    (try
       (f)
-
-      ;; Cleanup event system
-      (ev/reset-all!))))
+      (finally
+        (bclear! hivemind/agent-registry)
+        (ev/reset-all!)))))
 
 (use-fixtures :each integration-fixture)
 
@@ -105,7 +101,7 @@
                   {:status :dispatched
                    :prompt "Working on file"
                    :files ["src/foo.clj"]})
-    (ds/claim-file! "src/foo.clj" "ling-1" "task-1")
+    (ds/claim-file! "src/foo.clj" "ling-1" {:task-id "task-1"})
 
     ;; ling-2 has a queued task waiting for the file
     (ds/add-task! "task-2" "ling-2"
@@ -310,12 +306,13 @@
     ;; Register ling-2 in hivemind
     (hivemind/register-agent! "ling-2" {:name "worker-2"})
 
-    ;; ling-1 task and claim
+    ;; ling-1 task and claim. The claim carries :task-id in the OPTS MAP —
+    ;; release-claims-for-task! finds claims through the :claim/task ref.
     (ds/add-task! "task-1" "ling-1"
                   {:status :dispatched
                    :prompt "Working"
                    :files ["src/cascade.clj"]})
-    (ds/claim-file! "src/cascade.clj" "ling-1" "task-1")
+    (ds/claim-file! "src/cascade.clj" "ling-1" {:task-id "task-1"})
 
     ;; ling-2 waiting
     (ds/add-task! "task-2" "ling-2"

@@ -15,15 +15,21 @@
             [hive-mcp.swarm.datascript.connection :as conn]
             [datascript.core :as d]
             [hive-test.isolation :as iso]
-            [hive-mcp.isolation-methods]))
+            [hive-mcp.isolation-methods]
+            [hive-mcp.test.stub.daemon-store :as daemon-stub]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
 ;;; =============================================================================
 
-(def ^:private store (daemon-ds/create-store))
+(def ^:private ^:dynamic store
+  "Daemon store for the test, bound per test by daemon-store-fixture so it
+   shares the isolated swarm conn."
+  nil)
 
-(use-fixtures :each (iso/with-isolations :swarm-ds))
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  (daemon-stub/daemon-store-fixture #'store))
 
 ;;; =============================================================================
 ;;; Registration Tests

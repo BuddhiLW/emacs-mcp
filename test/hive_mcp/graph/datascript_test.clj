@@ -85,10 +85,12 @@
 
 (deftest test-query-basic
   (testing "query returns matching entities"
-    ;; Insert test data
+    ;; Insert test data. `:coordinator` is the third registered agent type;
+    ;; `:hivemind` was retired from hive-mcp.agent.type-registry, and
+    ;; make-agent asserts against that registry.
     (proto/transact! *test-store* [(schema/make-agent {:id "agent-a" :type :ling})])
     (proto/transact! *test-store* [(schema/make-agent {:id "agent-b" :type :ling})])
-    (proto/transact! *test-store* [(schema/make-agent {:id "agent-c" :type :hivemind})])
+    (proto/transact! *test-store* [(schema/make-agent {:id "agent-c" :type :coordinator})])
 
     ;; Query all lings
     (let [results (proto/query *test-store*
@@ -117,7 +119,7 @@
 
 (deftest test-entity-retrieval
   (testing "entity returns full entity map"
-    (let [agent-data (schema/make-agent {:id "entity-test-agent" :type :hivemind})
+    (let [agent-data (schema/make-agent {:id "entity-test-agent" :type :coordinator})
           result (proto/transact! *test-store* [agent-data])
           ;; Get entity by lookup ref
           eid (ffirst (proto/query *test-store*
@@ -126,7 +128,7 @@
       (let [entity (proto/entity *test-store* eid)]
         (is (map? entity))
         (is (= "entity-test-agent" (:agent/id entity)))
-        (is (= :hivemind (:agent/type entity)))))))
+        (is (= :coordinator (:agent/type entity)))))))
 
 (deftest test-entity-not-found
   (testing "entity returns nil for non-existent ID"
@@ -260,7 +262,7 @@
 (deftest test-persist-restore-roundtrip
   (testing "persist! and restore! preserve data correctly"
     ;; Create and persist data
-    (proto/transact! *test-store* [(schema/make-agent {:id "roundtrip-agent" :type :hivemind})])
+    (proto/transact! *test-store* [(schema/make-agent {:id "roundtrip-agent" :type :coordinator})])
     (proto/transact! *test-store* [(schema/make-agent {:id "roundtrip-ling" :type :ling})])
     (proto/persist! *test-store*)
 
@@ -447,7 +449,7 @@
 
 (deftest test-store-stats
   (testing "store-stats returns correct counts"
-    (proto/transact! *test-store* [(schema/make-agent {:id "stats-agent" :type :hivemind})])
+    (proto/transact! *test-store* [(schema/make-agent {:id "stats-agent" :type :coordinator})])
     (let [agent-eid (ffirst (proto/query *test-store*
                                          '[:find ?e :where [?e :agent/id "stats-agent"]]))]
       (proto/transact! *test-store*

@@ -138,7 +138,15 @@
   ;; pwd project instead of the server's own (hive-mcp).
   (let [eff-dir   (ctx/resolve-caller-directory params)
         eff-agent (or agent_id (ctx/current-agent-id) (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
-        priority  (or priority "medium")
+        ;; Priority precedence: explicit :priority param > a priority-{high,medium,low}
+        ;; tag in :tags (the priority-* tag convention audit cards already use) > medium.
+        priority  (or priority
+                      (some (fn [t]
+                              (when (and (string? t) (str/starts-with? t "priority-"))
+                                (let [p (subs t 9)]
+                                  (when (#{"high" "medium" "low"} p) p))))
+                            tags)
+                      "medium")
         status    (or (kp/normalize-status status) "todo")
         project-id (scope/get-current-project-id eff-dir)
         idem-key   (normalize-idempotency-key params)
@@ -159,8 +167,12 @@
             ;; Merge caller-supplied tags (e.g. wave:N from plan-to-kanban,
             ;; epic:foo from grouping) with the standard kanban tag set.
             ;; Audit kanban 20260429203429: previously :tags was silently dropped.
+            ;; priority-* is stripped here — it is canonicalized via :priority above
+            ;; and re-emitted by build-kanban-tags, so keeping it would duplicate.
             extra-tags (when (sequential? tags)
-                         (filterv string? tags))
+                         (into [] (comp (filter string?)
+                                        (remove #(str/starts-with? % "priority-")))
+                               tags))
             ;; Thread the idempotency tag through if a key was supplied
             ;; — future creates with the same key will hit
             ;; `find-by-idempotency-key` above and short-circuit.

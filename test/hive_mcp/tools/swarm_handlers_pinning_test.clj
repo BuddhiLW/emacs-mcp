@@ -399,7 +399,9 @@
         (is (nil? (:isError result)))
         (let [parsed (json/read-str (:text result) :key-fn keyword)]
           (is (= "completed" (:status parsed)))
-          (is (= "channel-push" (:via parsed))))))))
+          ;; Phase 1 of collect is an immediate journal hit; the poll strategies
+          ;; never run, and the response says so.
+          (is (= "journal-immediate" (:via parsed))))))))
 
 (deftest handle-swarm-collect-error-task-test
   (testing "Returns error status when task failed"
@@ -447,12 +449,18 @@
             (is (= "error" (:status parsed)))))))))
 
 (deftest handle-swarm-collect-addon-not-loaded-test
-  (testing "Returns error when hive-mcp-swarm addon not loaded"
+  (testing "collect is JVM-first: it works with no swarm addon, and times out cleanly"
+    ;; collect deliberately has NO addon gate — an absent addon routes to the
+    ;; JVM poll rather than short-circuiting. `:timeout_ms` is mandatory here:
+    ;; the default is 300000, i.e. five minutes of polling per suite run.
     (with-addon-unavailable
-      (let [result (swarm/handle-swarm-collect {:task_id "task-001"})]
+      (let [result (swarm/handle-swarm-collect {:task_id "task-001" :timeout_ms 1})]
         (is (= "text" (:type result)))
-        (is (true? (:isError result)))
-        (is (str/includes? (:text result) "not loaded"))))))
+        (let [parsed (json/read-str (:text result) :key-fn keyword)]
+          (is (= "timeout" (:status parsed)))
+          (is (= "task-001" (:task_id parsed)))
+          (is (str/includes? (:error parsed) "jvm-poll")
+              "an absent addon routes to the JVM poll strategy"))))))
 
 ;; =============================================================================
 ;; handle-swarm-kill Tests
@@ -475,12 +483,14 @@
 (deftest handle-swarm-kill-all-test
   (testing "Returns proper format when killing all slaves"
     (with-lifecycle-mocks
+      ;; `hivemind/agent-registry` is a by-value re-export of a BOUNDED atom;
+      ;; substituting a plain `(atom {})` neither reaches the writers nor
+      ;; satisfies the bounded-atom API they call.
       (with-redefs [registry/get-available-lings (constantly {"s1" {} "s2" {} "s3" {}})
                     ds/can-kill? (constantly {:can-kill? true})
                     ds/get-slave (constantly nil)
                     ling/get-ling (constantly (mock-killable-ling "s"))
-                    hivemind/clear-agent! (constantly nil)
-                    hivemind/agent-registry (atom {})]
+                    hivemind/clear-agent! (constantly nil)]
         (let [result (swarm/handle-swarm-kill {:slave_id "all"})]
           (is (= "text" (:type result)))
           (is (nil? (:isError result)))
@@ -561,7 +571,8 @@
         (doseq [handler-fn [#(swarm/handle-swarm-spawn {:name "s"})
                             #(swarm/handle-swarm-dispatch {:slave_id "s" :prompt "p"})
                             #(swarm/handle-swarm-status {})
-                            #(swarm/handle-swarm-collect {:task_id "t"})
+                            ;; Bound the poll — collect defaults to 300000ms.
+                            #(swarm/handle-swarm-collect {:task_id "t" :timeout_ms 1})
                             #(swarm/handle-swarm-kill {:slave_id "s"})]]
           (let [result (handler-fn)]
             (is (= "text" (:type result))
@@ -570,27 +581,29 @@
                 "All handlers must return :text as string")))))))
 
 (deftest error-format-consistency-test
-  (testing "All swarm handlers return consistent error format"
+  (testing "Addon-gated swarm handlers return a consistent error format"
     (with-addon-unavailable
-      ;; Test each handler returns proper error format when addon not loaded
-      (doseq [[name handler-fn] [["swarm-spawn" #(swarm/handle-swarm-spawn {:name "s"})]
+      (doseq [[name handler-fn] [["swarm-spawn"  #(swarm/handle-swarm-spawn {:name "s"})]
                                  ["swarm-status" #(swarm/handle-swarm-status {})]
-                                 ;; Bound the poll. handle-swarm-collect is
-                                 ;; deliberately JVM-first — it has no Emacs gate —
-                                 ;; so an unavailable addon does not short-circuit
-                                 ;; it; it polls to :timeout_ms, defaulting to
-                                 ;; 300000. Left unpinned this spends five minutes
-                                 ;; reaching a verdict it reaches instantly.
-                                 ["swarm-collect" #(swarm/handle-swarm-collect {:task_id "t"
-                                                                                :timeout_ms 1})]
-                                 ["swarm-kill" #(swarm/handle-swarm-kill {:slave_id "s"})]]]
+                                 ["swarm-kill"   #(swarm/handle-swarm-kill {:slave_id "s"})]]]
         (let [result (handler-fn)]
           (is (= "text" (:type result))
               (str name " must return :type \"text\" on error"))
           (is (true? (:isError result))
               (str name " must return :isError true on error"))
           (is (str/includes? (:text result) "not loaded")
-              (str name " must indicate addon not loaded")))))))
+              (str name " must indicate addon not loaded"))))))
+
+  (testing "swarm-collect is NOT addon-gated — it reports a poll timeout instead"
+    ;; collect is JVM-first by design. `:timeout_ms` is mandatory: the default
+    ;; is 300000, so an unbounded call burns five minutes per suite run.
+    (with-addon-unavailable
+      (let [result (swarm/handle-swarm-collect {:task_id "t" :timeout_ms 1})
+            parsed (json/read-str (:text result) :key-fn keyword)]
+        (is (= "text" (:type result)))
+        (is (= "timeout" (:status parsed)))
+        (is (not (str/includes? (:text result) "not loaded"))
+            "collect must not claim a missing addon it does not need")))))
 
 ;; =============================================================================
 ;; Layer 3: Dispatch Shout Reminder Injection Tests

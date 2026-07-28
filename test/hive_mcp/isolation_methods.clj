@@ -18,7 +18,10 @@
      :agent-registry    — clear hivemind agent-registry before+after
      :terminal-registry — clear ling terminal strategy registry
      :headless-registry — clear ling headless strategy registry
-     :events            — reset event registration + handlers"
+     :events            — reset event registration + handlers
+     :kg-conn           — fresh ephemeral KG store via the factory port, with
+                          `*sync-writes*` true so a write is visible to the
+                          next read on the same thread"
   (:require [hive-test.isolation :as iso]
             [hive-mcp.swarm.datascript.connection :as ds-conn]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -98,8 +101,14 @@
 
 (defmethod iso/emit-isolation :kg-conn [_]
   (fn [f]
-    (let [kg-conn  (requiring-resolve 'hive-mcp.knowledge-graph.connection/get-conn)
-          ds-store (requiring-resolve 'hive-mcp.knowledge-graph.store.datascript/create-store)
-          test-store-var (requiring-resolve 'hive-mcp.knowledge-graph.connection.store/*test-store*)]
-      (with-bindings* {test-store-var (ds-store)}
-        (fn [] (f))))))
+    (let [new-store      (requiring-resolve 'hive-mcp.knowledge-graph.slots.factory/backend->store)
+          ensure-conn!   (requiring-resolve 'hive-spi.kg.protocol/ensure-conn!)
+          test-store-var (requiring-resolve 'hive-mcp.knowledge-graph.connection.store/*test-store*)
+          sync-var       (requiring-resolve 'hive-mcp.knowledge-graph.connection/*sync-writes*)
+          reset-stats!   (requiring-resolve 'hive-mcp.knowledge-graph.edges.stats/reset-cache!)
+          store          (new-store :datascript {:fresh? true})]
+      (ensure-conn! store)
+      (reset-stats!)
+      (with-bindings* {test-store-var store
+                       sync-var       true}
+        (fn [] (try (f) (finally (reset-stats!))))))))

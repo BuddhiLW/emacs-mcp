@@ -17,10 +17,13 @@
    {:id "dialogue-1"
     :participants ["writer" "critic"]
     :config consensus/default-config
+    ;; An ACTIVE dialogue: the critic's last signal is a reset signal, so not
+    ;; every participant sits in equilibrium. (`:no-change` here would make
+    ;; this a consensus, since no-change + approve are both equilibrium.)
     :turns [{:sender "writer" :receiver "critic" :signal :propose :turn-number 1}
             {:sender "critic" :receiver "writer" :signal :counter :turn-number 2}
-            {:sender "writer" :receiver "critic" :signal :propose :turn-number 3}
-            {:sender "critic" :receiver "writer" :signal :no-change :turn-number 4}
+            {:sender "writer" :receiver "critic" :signal :approve :turn-number 3}
+            {:sender "critic" :receiver "writer" :signal :counter :turn-number 4}
             {:sender "writer" :receiver "critic" :signal :approve :turn-number 5}]}
 
    :dialogue-equilibrium

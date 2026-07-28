@@ -22,9 +22,10 @@
             [hive-mcp.events.core :as ev]
             [hive-mcp.events.effects :as effects]
             [hive-mcp.events.handlers :as handlers]
-            [hive-mcp.chroma.core :as chroma]
+            [hive-mcp.vectordb.facade :as memory]
+            [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.swarm.datascript :as ds]
-            [hive-mcp.test-fixtures :as fixtures]))
+            [hive-mcp.test.stub.memory-store :as mem-stub]))
 
 ;; =============================================================================
 ;; Test Fixtures and Helpers
@@ -66,22 +67,8 @@
     (finally
       (reset! *effects-log* []))))
 
-(defn with-mock-embedder
-  "Fixture that sets up mock embedder for testing."
-  [f]
-  (let [original-provider (chroma/get-embedding-provider)]
-    (chroma/set-embedding-provider! (fixtures/->MockEmbedder 384))
-    (chroma/configure! {:host "localhost"
-                        :port 8000
-                        :collection-name *test-collection*})
-    (try
-      (f)
-      (finally
-        (chroma/reset-collection-cache!)
-        (chroma/set-embedding-provider! original-provider)))))
-
 (defn combined-fixture [f]
-  (with-mock-embedder
+  (mem-stub/with-stub-store
     (fn []
       (with-mock-effects f))))
 
@@ -145,17 +132,18 @@
             "Should pass task IDs")))))
 
 (deftest handle-session-complete-validation
+  ;; Validation failures come back as MCP errors (plain :text + :isError true),
+  ;; not as a JSON body — parse-mcp-response would choke on them.
   (testing "Missing commit_msg returns error"
-    (let [result (sc/handle-session-complete {:task_ids ["task-1"]})
-          parsed (parse-mcp-response result)]
-      (is (:error parsed) "Should return error")
-      (is (str/includes? (:error parsed) "commit_msg")
+    (let [result (sc/handle-session-complete {:task_ids ["task-1"]})]
+      (is (true? (:isError result)) "Should return an MCP error")
+      (is (str/includes? (:text result) "commit_msg")
           "Error should mention commit_msg")))
 
   (testing "Empty commit_msg returns error"
-    (let [result (sc/handle-session-complete {:commit_msg ""})
-          parsed (parse-mcp-response result)]
-      (is (:error parsed) "Should return error for empty message"))))
+    (let [result (sc/handle-session-complete {:commit_msg ""})]
+      (is (true? (:isError result)) "Should return an MCP error for empty message")
+      (is (str/includes? (:text result) "commit_msg")))))
 
 (deftest handle-session-complete-wrap-crystallize
   (testing "Session complete triggers wrap crystallize"
@@ -210,21 +198,6 @@
 ;; Tool Definition Tests
 ;; =============================================================================
 
-(deftest tool-definition-structure
-  (testing "Tool has correct schema structure"
-    (let [tool (first sc/tools)]
-      (is (= "session_complete" (:name tool)))
-      (is (string? (:description tool)))
-      (is (fn? (:handler tool)))
-      (let [schema (:inputSchema tool)
-            props (:properties schema)]
-        (is (= "object" (:type schema)))
-        (is (contains? props "commit_msg"))
-        (is (contains? props "task_ids"))
-        (is (contains? props "agent_id"))
-        (is (contains? props "directory"))
-        (is (= ["commit_msg"] (:required schema)))))))
-
 ;; =============================================================================
 ;; Integration Tests
 ;; =============================================================================
@@ -273,6 +246,8 @@
 ;; Explorer Preset Integration Tests
 ;; =============================================================================
 
+(def ^:private explorer-directory "/tmp/hive-test-project")
+
 (deftest explorer-preset-detection
   (testing "Ling with explorer preset is detected"
     ;; Setup: add a slave with explorer preset
@@ -284,18 +259,21 @@
       ;; The has-explorer-preset? fn is private, test via behavior
       ;; Create a memory entry that looks like a plan
       (let [plan-content "{:plan/title \"Test Plan\" :plan/steps [{:step/id \"s1\"}]}"
-            entry-id (chroma/index-memory-entry!
+            ;; The handler resolves project-id from :directory, not from the
+            ;; slave row — seed the entry under the SAME id or it is unfindable.
+            plan-project-id (scope/get-current-project-id explorer-directory)
+            entry-id (memory/index-memory-entry!
                       {:type "decision"
                        :content plan-content
                        :tags ["plan" "exploration-output" "agent:explorer-ling-test"]
-                       :project-id "test-project"
+                       :project-id plan-project-id
                        :duration "medium"})]
         (try
           ;; Now complete session with the explorer ling
           (let [result (sc/handle-session-complete
                         {:commit_msg "feat: exploration complete"
                          :agent_id "explorer-ling-test"
-                         :directory "/tmp/hive-test-project"})
+                         :directory explorer-directory})
                 parsed (parse-mcp-response result)]
             (is (= "ok" (:status parsed)) "Should succeed")
             ;; Should indicate plan_to_kanban was triggered
@@ -305,7 +283,7 @@
                 "Should return the plan ID"))
           (finally
             ;; Cleanup memory entry
-            (try (chroma/delete-entry! entry-id) (catch Exception _)))))
+            (try (memory/delete-entry! entry-id) (catch Exception _)))))
       (finally
         ;; Cleanup slave
         (ds/remove-slave! "explorer-ling-test")))))

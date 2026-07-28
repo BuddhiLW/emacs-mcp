@@ -9,7 +9,8 @@
   (:require [clojure.test :refer [deftest testing is are use-fixtures]]
             [hive-mcp.plan.tool :as sut]
             [hive-mcp.plan.schema :as schema]
-            [hive-mcp.plan.parser :as parser]))
+            [hive-mcp.plan.parser :as parser]
+            [hive-mcp.tools.consolidated.kanban :as c-kanban]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -143,27 +144,34 @@ Some details about the second task."
 ;;; Tool Definition Tests
 ;;; =============================================================================
 
-(deftest tool-definition-test
-  (testing "Tool is defined"
-    (is (= 1 (count sut/tools))))
+(deftest plan-to-kanban-is-exposed-on-the-consolidated-kanban-tool
+  ;; The flat `plan_to_kanban` tool was removed; the capability now lives as a
+  ;; command on the consolidated `kanban` tool. Pin the surface that exists.
+  (let [tool (first (filter #(= "kanban" (:name %)) c-kanban/tools))
+        schema (:inputSchema tool)
+        props (:properties schema)]
 
-  (testing "Tool has required fields"
-    (let [tool (first sut/tools)]
-      (is (= "plan_to_kanban" (:name tool)))
+    (testing "the consolidated kanban tool is defined"
+      (is (some? tool))
       (is (string? (:description tool)))
-      (is (map? (:inputSchema tool)))
-      (is (fn? (:handler tool)))))
+      (is (map? schema))
+      (is (fn? (:handler tool))))
 
-  (testing "Tool schema requires plan_id"
-    (let [tool (first sut/tools)
-          required (get-in tool [:inputSchema :required])]
-      (is (some #{"plan_id"} required))))
+    (testing "plan-to-kanban is an accepted command"
+      (is (some #{"plan-to-kanban"} (get-in props ["command" :enum]))
+          "kanban must still expose plan-to-kanban"))
 
-  (testing "Tool schema has optional parameters"
-    (let [tool (first sut/tools)
-          properties (get-in tool [:inputSchema :properties])]
-      (is (contains? properties "directory"))
-      (is (contains? properties "auto_assign")))))
+    (testing "command is required"
+      (is (some #{"command"} (:required schema))))
+
+    (testing "the plan parameters are carried on the consolidated schema"
+      (is (contains? props "plan_id"))
+      (is (contains? props "plan_path"))
+      (is (contains? props "directory")))
+
+    (testing "the flat tool is gone"
+      (is (empty? sut/tools)
+          "hive-mcp.plan.tool/tools is intentionally empty"))))
 
 ;;; =============================================================================
 ;;; Topological Sort / Wave Computation Tests

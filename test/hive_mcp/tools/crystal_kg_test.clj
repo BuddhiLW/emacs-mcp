@@ -110,6 +110,10 @@
 
 (deftest create-derived-from-edges-test
   (testing "creates edges from summary to sources"
+    ;; Reset FIRST: this block asserts a GLOBAL edge count, so it cannot start
+    ;; from whatever the isolated conn happens to hold. The other blocks below
+    ;; already did this; omitting it here made the assertion read ambient state.
+    (kg-conn/reset-conn!)
     (let [summary-id "chroma-summary-123"
           source-ids ["emacs-note-1" "emacs-note-2"]
           project-id "test-project"
@@ -117,7 +121,6 @@
           result (create-derived-from-edges! summary-id source-ids project-id agent-id)]
       (is (= 2 (:created-count result)))
       (is (= 2 (count (:edge-ids result))))
-      ;; Verify edges exist in KG
       (let [stats (kg-edges/edge-stats)]
         (is (= 2 (:total-edges stats)))
         (is (= {:derived-from 2} (:by-relation stats))))))

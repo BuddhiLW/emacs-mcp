@@ -148,6 +148,43 @@
          target-path)))))
 
 ;; -----------------------------------------------------------------------------
+;; Txn-log operations — DIP port
+;; -----------------------------------------------------------------------------
+
+(defprotocol ITxlogOps
+  "Txn-log segment operations a recovery strategy needs from the store engine."
+  (scan-segment [this path opts]
+    "Scan the segment at PATH. Returns a map carrying :partial-tail?; throws
+     when the segment cannot be read under OPTS.")
+  (segment-files [this dir]
+    "Seq of {:file java.io.File} for the segments under DIR.")
+  (truncate-partial-tail! [this path opts]
+    "Trim PATH's unflushed tail. Returns {:old-size :new-size :dropped-bytes}."))
+
+(defrecord DatalevinTxlogOps []
+  ITxlogOps
+  (scan-segment [_ path opts]
+    ((requiring-resolve (quote datalevin.txlog/scan-segment)) path opts))
+  (segment-files [_ dir]
+    ((requiring-resolve (quote datalevin.txlog/segment-files)) dir))
+  (truncate-partial-tail! [_ path opts]
+    ((requiring-resolve (quote datalevin.txlog/truncate-partial-tail!)) path opts)))
+
+(defonce ^:private txlog-ops
+  (atom (->DatalevinTxlogOps)))
+
+(defn current-txlog-ops
+  "The registered ITxlogOps implementation."
+  []
+  @txlog-ops)
+
+(defn set-txlog-ops!
+  "Register OPS as the ITxlogOps implementation. Returns OPS."
+  [ops]
+  (reset! txlog-ops ops)
+  ops)
+
+;; -----------------------------------------------------------------------------
 ;; Truncate — IO (datalevin txn-log tail-zero recovery)
 ;;
 ;; Datalevin pre-allocates each WAL segment to 256MB and writes records
@@ -176,18 +213,17 @@
   "Return :tail-zeroed if the segment can be loaded only with
    `:allow-preallocated-tail? true`; :ok if strict scan succeeds;
    :unhealable if even lenient scan refuses the file."
-  [^java.io.File seg-file]
-  (let [path        (.getAbsolutePath seg-file)
-        scan        (requiring-resolve 'datalevin.txlog/scan-segment)
-        strict      (try (scan path {:collect-records? false
-                                     :allow-preallocated-tail? false})
-                         :ok
-                         (catch Throwable _ :strict-failed))]
+  [ops ^java.io.File seg-file]
+  (let [path   (.getAbsolutePath seg-file)
+        strict (try (scan-segment ops path {:collect-records? false
+                                            :allow-preallocated-tail? false})
+                    :ok
+                    (catch Throwable _ :strict-failed))]
     (if (= :ok strict)
       :ok
       (try
-        (let [lenient (scan path {:collect-records? false
-                                  :allow-preallocated-tail? true})]
+        (let [lenient (scan-segment ops path {:collect-records? false
+                                              :allow-preallocated-tail? true})]
           (if (:partial-tail? lenient)
             :tail-zeroed
             :unhealable))
@@ -207,26 +243,29 @@
 (defn truncate-tail!
   "Walk the txn-log segment directory under `db-path`. For each
    segment whose strict scan fails but lenient scan reports
-   `:partial-tail? true`, copy it aside and invoke datalevin's
-   `truncate-partial-tail!` with `:allow-preallocated-tail? true`.
+   `:partial-tail? true`, copy it aside and trim it via the registered
+   `ITxlogOps`.
 
    Returns a vec of per-segment heal records. An empty result means
    no segment needed truncation (in which case the caller should
-   treat as a no-op heal — likely the corruption was elsewhere)."
-  ([db-path] (truncate-tail! db-path (System/currentTimeMillis)))
-  ([db-path ts]
-   (let [seg-dir   (txlog-segment-dir db-path)
-         seg-files (requiring-resolve 'datalevin.txlog/segment-files)
-         truncate  (requiring-resolve 'datalevin.txlog/truncate-partial-tail!)
-         segs      (when (.isDirectory seg-dir)
-                     (seg-files (.getAbsolutePath seg-dir)))]
+   treat as a no-op heal — likely the corruption was elsewhere).
+
+   `ops` defaults to `(current-txlog-ops)`; pass an explicit
+   implementation to drive the walk without a store engine present."
+  ([db-path] (truncate-tail! db-path (System/currentTimeMillis) (current-txlog-ops)))
+  ([db-path ts] (truncate-tail! db-path ts (current-txlog-ops)))
+  ([db-path ts ops]
+   (let [seg-dir (txlog-segment-dir db-path)
+         segs    (when (.isDirectory seg-dir)
+                   (segment-files ops (.getAbsolutePath seg-dir)))]
      (reduce
       (fn [acc {:keys [^java.io.File file]}]
         (try
-          (case (segment-needs-heal? file)
+          (case (segment-needs-heal? ops file)
             :ok          acc
             :tail-zeroed (let [backup (forensic-copy! file db-path ts)
-                               result (truncate
+                               result (truncate-partial-tail!
+                                       ops
                                        (.getAbsolutePath file)
                                        {:allow-preallocated-tail? true
                                         :collect-records? false})]

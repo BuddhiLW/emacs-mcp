@@ -362,3 +362,16 @@
       (finally
         (registry/reset-registry!)
         (doseq [[k s] prior] (registry/register-store! k s))))))
+
+(defn with-no-store
+  "Run F with an EMPTY store registry, then restore the prior one.
+
+   For asserting the not-configured branch without naming a backend."
+  [f]
+  (let [prior (registry/registered-stores)]
+    (try
+      (registry/reset-registry!)
+      (f)
+      (finally
+        (registry/reset-registry!)
+        (doseq [[k s] prior] (registry/register-store! k s))))))

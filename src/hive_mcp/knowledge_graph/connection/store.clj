@@ -206,3 +206,15 @@
     ;; Unknown backend
     (throw (ex-info "Unknown KG backend" {:backend backend
                                           :valid #{:datascript :datalevin :datahike}}))))
+
+(defn install-store!
+  "Make STORE the active store for subsequent reads and writes.
+
+   Writes the thread-local `*test-store*` when it is bound, else the process
+   store — so a caller that switches backends stays inside whatever store
+   `ensure-store!` resolves. Returns STORE."
+  [store]
+  (if (thread-bound? #'*test-store*)
+    (set! *test-store* store)
+    (proto/set-store! store))
+  store)

@@ -10,45 +10,23 @@
    exercises the real Chroma and KG components end-to-end."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.data.json :as json]
-            [hive-mcp.chroma.core :as chroma]
             [hive-mcp.knowledge-graph.connection :as kg-conn]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.crystal.hooks :as crystal-hooks]
             [hive-mcp.tools.crystal]
-            [hive-mcp.test-fixtures :as fixtures]
-            [hive-mcp.emacs.client :as ec]
             [hive-test.isolation :as iso]
             [hive-mcp.isolation-methods]
-            [hive-mcp.chroma.connection :as chroma-conn]))
+            [hive-mcp.vectordb.facade :as memory]
+            [hive-mcp.test.stub.memory-store :as mem-stub]
+            [hive-mcp.test.stub.extensions :as ext-stub]))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(def ^:dynamic *test-collection* "hive-mcp-e2e-test")
-
-(defn with-test-environment
-  "Setup mock embedder for each test. KG isolation handled by :kg-conn fixture."
-  [f]
-  ;; Save original Chroma state
-  (let [original-provider (chroma/get-embedding-provider)
-        original-config   (chroma-conn/get-config)]
-    ;; Configure Chroma with mock embedder
-    (chroma/set-embedding-provider! (fixtures/->MockEmbedder 384))
-    (chroma-conn/configure! {:host "localhost"
-                        :port 8000
-                        :collection-name *test-collection*})
-    (try
-      (f)
-      (finally
-        ;; Cleanup — restore original collection name + provider
-        (chroma-conn/reset-collection-cache!)
-        (chroma-conn/configure! (select-keys original-config [:host :port :collection-name]))
-        (chroma/set-embedding-provider! original-provider)))))
-
 (use-fixtures :each
-  (iso/with-isolations :kg-conn)
-  with-test-environment)
+  mem-stub/with-stub-store
+  (iso/with-isolations :kg-conn))
 
 ;; =============================================================================
 ;; Helper Functions
@@ -60,12 +38,12 @@
   (str "e2e-test-" (java.util.UUID/randomUUID)))
 
 (defn create-source-entry!
-  "Create a source memory entry in Chroma.
+  "Create a source memory entry through the memory port.
    Returns the entry ID."
   [content & {:keys [type tags]
               :or {type "note" tags []}}]
   (let [id (gen-test-id)]
-    (chroma/index-memory-entry!
+    (memory/index-memory-entry!
      {:id id
       :type type
       :content content
@@ -127,7 +105,6 @@
 
 (deftest crystallize-creates-derived-from-edges-e2e
   (testing "crystallize-session links summary to source entries via KG edges"
-    ;; Step 1: Create source entries in Chroma
     (let [source-id-1 (create-source-entry! "Session progress note: implemented feature X"
                                             :type "note"
                                             :tags ["session-progress"])
@@ -138,52 +115,36 @@
                                             :type "note"
                                             :tags ["session-progress"])]
 
-      ;; Verify sources exist in Chroma
-      (is (some? (chroma/search-by-id source-id-1)) "Source 1 should exist in Chroma")
-      (is (some? (chroma/search-by-id source-id-2)) "Source 2 should exist in Chroma")
-      (is (some? (chroma/search-by-id source-id-3)) "Source 3 should exist in Chroma")
+      (is (some? (memory/get-entry-by-id source-id-1)) "Source 1 should be in the store")
+      (is (some? (memory/get-entry-by-id source-id-2)) "Source 2 should be in the store")
+      (is (some? (memory/get-entry-by-id source-id-3)) "Source 3 should be in the store")
 
-      ;; Step 2: Create harvested data with source IDs
       (let [harvested (mock-harvest-result
-                       ;; progress-notes with IDs
                        [{:id source-id-1 :content "Session progress note: implemented feature X"}
                         {:id source-id-3 :content "Another progress note"}]
-                       ;; completed-tasks with IDs
                        [{:id source-id-2 :title "Completed task: write tests"}])]
 
-        ;; Step 3: Call crystallize-session (bypasses Emacs, stores to Chroma directly)
         (let [result (crystal-hooks/crystallize-session harvested)]
           (is (some? (:summary-id result)) "crystallize-session should return summary-id")
           (is (not (:error result)) "crystallize-session should not error")
 
           (let [summary-id (:summary-id result)]
-            ;; Verify summary was created in Chroma
-            (is (some? (chroma/search-by-id summary-id)) "Summary should exist in Chroma")
+            (is (some? (memory/get-entry-by-id summary-id)) "Summary should be in the store")
 
-            ;; Step 4: Verify KG edges were NOT created yet
-            ;; (crystallize-session creates summary but doesn't create edges -
-            ;;  that's done by wrap_crystallize which calls create-derived-from-edges!)
-
-            ;; We need to call the edge creation function directly since
-            ;; crystallize-session doesn't create edges (that's in handle-wrap-crystallize)
             (let [source-ids [source-id-1 source-id-2 source-id-3]
                   project-id "test-project"
                   agent-id "e2e-test-agent"
-                  ;; Call the edge creation function (this is what wrap_crystallize does)
                   edge-result (create-derived-from-edges!
                                summary-id source-ids project-id agent-id)]
 
-              ;; Step 5: Verify edges were created
               (is (= 3 (:created-count edge-result)) "Should create 3 edges")
               (is (= 3 (count (:edge-ids edge-result))) "Should have 3 edge IDs")
 
-              ;; Verify via kg_stats
               (let [stats (kg-edges/edge-stats)]
                 (is (= 3 (:total-edges stats)) "KG should have 3 total edges")
                 (is (= {:derived-from 3} (:by-relation stats)) "All edges should be :derived-from")
                 (is (= {"test-project" 3} (:by-scope stats)) "All edges should be in test-project scope"))
 
-              ;; Verify edges point correctly
               (let [outgoing (kg-edges/get-edges-from summary-id)]
                 (is (= 3 (count outgoing)) "Summary should have 3 outgoing edges")
                 (is (every? #(= summary-id (:kg-edge/from %)) outgoing)
@@ -196,44 +157,6 @@
 ;; =============================================================================
 ;; E2E Test: Full wrap_crystallize Handler Flow
 ;; =============================================================================
-
-(deftest wrap-crystallize-handler-creates-edges-e2e
-  (testing "handle-wrap-crystallize creates KG edges via FOSS default (build-crystal-edges-default)"
-    ;; Without the :ck/a extension, edge creation falls back to build-crystal-edges-default
-    ;; which creates :derived-from edges from summary to all source entries.
-    (let [source-id-1 (create-source-entry! "Work note 1" :tags ["session-progress"])
-          source-id-2 (create-source-entry! "Work note 2" :tags ["session-progress"])]
-
-      ;; Mock the harvest function to return our source IDs
-      (with-redefs [crystal-hooks/harvest-all
-                    (fn [_]
-                      (mock-harvest-result
-                       [{:id source-id-1 :content "Work note 1"}
-                        {:id source-id-2 :content "Work note 2"}]
-                       []))
-                    ;; Mock Emacs check for hive-mcp.el
-                    ec/eval-elisp (fn [_] {:success true :result "nil" :duration-ms 5})]
-
-        ;; Call the actual handler
-        (let [result-json (-> (hive-mcp.tools.crystal/handle-wrap-crystallize
-                               {:agent_id "test-agent"
-                                :directory "/tmp/test-project"})
-                              :text
-                              (json/read-str :key-fn keyword))]
-
-          (is (not (:error result-json)) "Handler should not return error")
-          (is (some? (:summary-id result-json)) "Handler should return summary-id")
-
-          ;; FOSS default creates :derived-from edges from summary to source entries
-          (let [kg-edges-result (:kg-edges result-json)]
-            (is (some? kg-edges-result) "Handler should return :kg-edges")
-            (is (= 2 (:total-edges kg-edges-result))
-                "Should create 2 edges (one per source entry)")
-            (is (some? (:derived-from kg-edges-result))
-                "Should have :derived-from edge stats")
-            (is (= 2 (get-in kg-edges-result [:derived-from :created-count]))
-                "Should report 2 derived-from edges created")
-            (is (false? (:capped? kg-edges-result)) "Should not be capped")))))))
 
 ;; =============================================================================
 ;; E2E Test: Edge Creation with Mixed Source Types
@@ -324,3 +247,47 @@
       ;; KG should have 2 edges (no deduplication at edge creation level)
       (let [stats (kg-edges/edge-stats)]
         (is (= 2 (:total-edges stats)) "KG should have 2 edges (duplicates allowed)")))))
+
+(deftest wrap-crystallize-delegates-edge-creation-e2e
+  (testing "handle-wrap-crystallize hands summary + harvest to the :ck/a extension"
+    (let [source-id-1 (create-source-entry! "Work note 1" :tags ["session-progress"])
+          source-id-2 (create-source-entry! "Work note 2" :tags ["session-progress"])
+          seen (promise)]
+      (with-redefs [crystal-hooks/harvest-all
+                    (fn [_]
+                      (mock-harvest-result
+                       [{:id source-id-1 :content "Work note 1"}
+                        {:id source-id-2 :content "Work note 2"}]
+                       []))]
+        (ext-stub/with-extensions
+          {:ck/a (fn [params]
+                   (deliver seen params)
+                   (create-derived-from-edges! (:summary-id params)
+                                               [source-id-1 source-id-2]
+                                               (:project-id params)
+                                               (:agent-id params))
+                   {:derived-from {:created-count 2}
+                    :co-accessed  nil
+                    :total-edges  2
+                    :capped?      false})}
+          (fn []
+            (let [result-json (-> (hive-mcp.tools.crystal/handle-wrap-crystallize
+                                   {:agent_id "test-agent"
+                                    :directory "/tmp/test-project"})
+                                  :text
+                                  (json/read-str :key-fn keyword))
+                  params (deref seen 10000 ::timeout)]
+
+              (is (not (:error result-json)) "Handler should not return error")
+              (is (some? (:summary-id result-json)) "Handler should return summary-id")
+
+              (is (not= ::timeout params) ":ck/a should be invoked")
+              (when (map? params)
+                (is (= (:summary-id result-json) (:summary-id params))
+                    "extension receives the summary it should link from")
+                (is (= "test-agent" (:agent-id params)))
+                (is (some? (:harvested params)) "extension receives the harvest"))
+
+              (let [stats (kg-edges/edge-stats)]
+                (is (= 2 (:total-edges stats))
+                    "edges the extension created are visible in the KG")))))))))

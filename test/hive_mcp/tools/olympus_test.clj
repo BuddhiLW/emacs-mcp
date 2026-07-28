@@ -12,7 +12,8 @@
             [hive-mcp.swarm.datascript.lings :as ds-lings]
             [hive-mcp.swarm.datascript.connection :as ds-conn]
             [hive-test.isolation :as iso]
-            [hive-mcp.isolation-methods]))
+            [hive-mcp.isolation-methods]
+            [hive-mcp.test.stub.olympus :as olympus-stub]))
 
 ;;; =============================================================================
 ;;; Test Helpers
@@ -31,7 +32,9 @@
 ;;; Test Fixtures
 ;;; =============================================================================
 
-(use-fixtures :each (iso/with-isolations :swarm-ds))
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  olympus-stub/with-olympus-layout)
 
 ;;; =============================================================================
 ;;; olympus_status Tests

@@ -12,11 +12,13 @@
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.string :as str]
             [hive-mcp.tools.cider :as cider]
-            [hive-mcp.emacs-ext.client :as ec]))
+            [hive-mcp.emacs-ext.client :as ec]
+            [hive-mcp.test.stub.elisp :as elisp-stub]))
 
 ;; The eval path calls eval-elisp-with-timeout; route it through whatever
 ;; eval-elisp each test mocks (var resolved at call time).
 (use-fixtures :each
+  elisp-stub/with-elisp-builders
   (fn [t]
     (with-redefs [ec/eval-elisp-with-timeout (fn [elisp & _] (ec/eval-elisp elisp))]
       (t))))

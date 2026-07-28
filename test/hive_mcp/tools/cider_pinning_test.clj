@@ -13,11 +13,13 @@
             [clojure.string :as str]
             [clojure.data.json :as json]
             [hive-mcp.tools.cider :as tools]
-            [hive-mcp.emacs-ext.client :as ec]))
+            [hive-mcp.emacs-ext.client :as ec]
+            [hive-mcp.test.stub.elisp :as elisp-stub]))
 
 ;; eval-path tests call eval-elisp-with-timeout; route it through the
 ;; per-test eval-elisp mock (var resolved at call time).
 (use-fixtures :each
+  elisp-stub/with-elisp-builders
   (fn [t]
     (with-redefs [ec/eval-elisp-with-timeout (fn [elisp & _] (ec/eval-elisp elisp))]
       (t))))

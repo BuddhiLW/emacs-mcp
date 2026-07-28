@@ -201,21 +201,31 @@
   "Parse a DSL sentence [verb params-map] into a standard operation map.
    Resolves verb code to {:tool :command}, expands parameter aliases.
 
+   For kanban task-keyed verbs (b> update, b- delete) the advertised `id`
+   alias is remapped to :task_id — the key those handlers require — and the
+   op-local :id is freed so the batch compiler can assign its \"$N\" ref id.
+
    Returns expanded operation map, or {:error \"...\" :verb verb} for unknowns.
 
    Examples:
      (parse-sentence [\"m+\" {\"c\" \"hello\" \"t\" \"note\"}])
      ;=> {:tool \"memory\" :command \"add\" :content \"hello\" :type \"note\"}
 
-     (parse-sentence [\"g?\" {}])
-     ;=> {:tool \"magit\" :command \"status\"}
+     (parse-sentence [\"b>\" {\"id\" \"20260101-abcd\" \"new_status\" \"done\"}])
+     ;=> {:tool \"kanban\" :command \"update\" :task_id \"20260101-abcd\" :new_status \"done\"}
 
      (parse-sentence [\"zz\" {}])
      ;=> {:error \"Unknown verb: zz\" :verb \"zz\"}"
   [[verb params]]
   (if-let [{:keys [tool command]} (get verb-table verb)]
-    (merge {:tool tool :command command}
-           (expand-params params))
+    (let [op (merge {:tool tool :command command}
+                    (expand-params params))]
+      (if (and (= tool "kanban")
+               (contains? #{"update" "delete"} command)
+               (contains? op :id)
+               (not (contains? op :task_id)))
+        (-> op (assoc :task_id (:id op)) (dissoc :id))
+        op))
     {:error (str "Unknown verb: " verb)
      :verb  verb}))
 

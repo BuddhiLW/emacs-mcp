@@ -1,6 +1,7 @@
 (ns hive-mcp.agent.context-envelope
   "Context preparation for agent spawn and dispatch. Delegates to extension layer when available."
   (:require [hive-mcp.dns.result :refer [rescue]]
+            [hive-mcp.extensions.registry :as ext]
             [hive-mcp.protocols.dispatch :as dispatch-ctx]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -11,10 +12,12 @@
   10000)
 
 (defn- try-ext
-  "Resolve and call an extension function. Returns nil on failure."
-  [sym & args]
+  "Call the implementation registered for EXT-KEY, else the one named by SYM.
+   Returns nil when neither is available or the call throws."
+  [ext-key sym & args]
   (rescue nil
-          (when-let [f (requiring-resolve sym)]
+          (when-let [f (or (ext/get-extension ext-key)
+                           (requiring-resolve sym))]
             (apply f args))))
 
 (defn- cap-output
@@ -31,7 +34,8 @@
    (enrich-context ctx-refs kg-node-ids scope {}))
   ([ctx-refs kg-node-ids scope opts]
    (cap-output
-    (try-ext 'hive-mcp.extensions.context/enrich
+    (try-ext :ctx/enrich
+             'hive-mcp.extensions.context/enrich
              ctx-refs kg-node-ids scope opts))))
 
 (defn prepare-spawn-context
@@ -40,7 +44,8 @@
    (prepare-spawn-context directory {}))
   ([directory opts]
    (cap-output
-    (try-ext 'hive-mcp.extensions.context/prepare-spawn
+    (try-ext :ctx/prepare-spawn
+             'hive-mcp.extensions.context/prepare-spawn
              directory opts))))
 
 (defn from-dispatch-context

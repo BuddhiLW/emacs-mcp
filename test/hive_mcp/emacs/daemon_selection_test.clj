@@ -19,15 +19,23 @@
             [datascript.core :as d]
             [hive-test.isolation :as iso]
             [hive-mcp.isolation-methods]
-            [hive-mcp.emacs.daemon-scoring :as scoring]))
+            [hive-mcp.emacs.daemon-scoring :as scoring]
+            [hive-mcp.test.stub.daemon-store :as daemon-stub]
+            [hive-mcp.test.stub.emacs-runtime-ports :as ports-stub]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
 ;;; =============================================================================
 
-(def ^:private store (daemon-ds/create-store))
+(def ^:private ^:dynamic store
+  "Daemon store for the test, bound per test by daemon-store-fixture so it
+   shares the isolated swarm conn."
+  nil)
 
-(use-fixtures :each (iso/with-isolations :swarm-ds))
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  ports-stub/with-swarm-ports
+  (daemon-stub/daemon-store-fixture #'store))
 
 ;;; =============================================================================
 ;;; Health Classification Tests
@@ -272,7 +280,7 @@
 (deftest update-health-score-test
   (testing "update-health-score! sets score on daemon"
     (proto/register! store "health-upd" {})
-    (selection/update-health-score! "health-upd" 75)
+    (selection/update-health-score! store "health-upd" 75)
 
     (let [d (proto/get-daemon store "health-upd")]
       (is (= 75 (:emacs-daemon/health-score d))))))
@@ -281,15 +289,15 @@
   (testing "update-health-score! clamps to 0-100 range"
     (proto/register! store "clamp-test" {})
 
-    (selection/update-health-score! "clamp-test" 150)
+    (selection/update-health-score! store "clamp-test" 150)
     (is (= 100 (:emacs-daemon/health-score (proto/get-daemon store "clamp-test"))))
 
-    (selection/update-health-score! "clamp-test" -50)
+    (selection/update-health-score! store "clamp-test" -50)
     (is (= 0 (:emacs-daemon/health-score (proto/get-daemon store "clamp-test"))))))
 
 (deftest update-health-score-nonexistent-test
   (testing "update-health-score! returns nil for non-existent daemon"
-    (is (nil? (selection/update-health-score! "non-existent" 50)))))
+    (is (nil? (selection/update-health-score! store "non-existent" 50)))))
 
 ;;; =============================================================================
 ;;; Integration Tests
@@ -303,9 +311,9 @@
     (proto/register! store "d-sick" {})       ;; unhealthy, empty
 
     ;; Set health scores
-    (selection/update-health-score! "d-healthy" 90)
-    (selection/update-health-score! "d-busy" 85)
-    (selection/update-health-score! "d-sick" 20)
+    (selection/update-health-score! store "d-healthy" 90)
+    (selection/update-health-score! store "d-busy" 85)
+    (selection/update-health-score! store "d-sick" 20)
 
     ;; Fill d-busy with 4 lings
     (doseq [i (range 4)]
@@ -448,7 +456,7 @@
   (testing "heartbeat! with successful ping updates health score"
     (proto/register! store "hb-ok" {})
     (let [mock-ping (fn [_] {:success true :duration-ms 150})
-          result (selection/heartbeat! "hb-ok" mock-ping)]
+          result (selection/heartbeat! store "hb-ok" mock-ping)]
       (is (some? result))
       (is (true? (:success? result)))
       (is (= 150 (:latency-ms result)))
@@ -465,7 +473,7 @@
     (proto/register! store "hb-fail" {})
     ;; First failure
     (let [mock-ping (fn [_] {:success false :error "Connection refused"})
-          result (selection/heartbeat! "hb-fail" mock-ping)]
+          result (selection/heartbeat! store "hb-fail" mock-ping)]
       (is (some? result))
       (is (false? (:success? result)))
       (is (nil? (:latency-ms result)))
@@ -474,7 +482,7 @@
       (is (< (:health-score result) 100)))
     ;; Second failure - should degrade more
     (let [mock-ping (fn [_] {:success false :error "Connection refused"})
-          result (selection/heartbeat! "hb-fail" mock-ping)]
+          result (selection/heartbeat! store "hb-fail" mock-ping)]
       (is (= 2 (:consecutive-errors result)))
       (is (< (:health-score result) 80) "Two failures should degrade significantly"))))
 
@@ -482,7 +490,7 @@
   (testing "heartbeat! with slow response degrades health proportionally"
     (proto/register! store "hb-slow" {})
     (let [mock-ping (fn [_] {:success true :duration-ms 1500})
-          result (selection/heartbeat! "hb-slow" mock-ping)]
+          result (selection/heartbeat! store "hb-slow" mock-ping)]
       (is (true? (:success? result)))
       (is (= 1500 (:latency-ms result)))
       ;; Health should be degraded but not critically
@@ -494,14 +502,14 @@
     (proto/register! store "hb-recover" {})
     ;; First: induce errors
     (let [fail-ping (fn [_] {:success false :error "timeout"})]
-      (selection/heartbeat! "hb-recover" fail-ping)
-      (selection/heartbeat! "hb-recover" fail-ping))
+      (selection/heartbeat! store "hb-recover" fail-ping)
+      (selection/heartbeat! store "hb-recover" fail-ping))
     ;; Get health after errors
     (let [d-after-errors (proto/get-daemon store "hb-recover")
           score-after-errors (:emacs-daemon/health-score d-after-errors)]
       ;; Now recover with good heartbeat
       (let [ok-ping (fn [_] {:success true :duration-ms 100})
-            result (selection/heartbeat! "hb-recover" ok-ping)]
+            result (selection/heartbeat! store "hb-recover" ok-ping)]
         (is (true? (:success? result)))
         (is (= 0 (:consecutive-errors result)))
         ;; Health should have improved
@@ -513,9 +521,9 @@
     (proto/register! store "hb-err-thresh" {})
     (let [fail-ping (fn [_] {:success false :error "dead"})]
       ;; 3 consecutive failures
-      (selection/heartbeat! "hb-err-thresh" fail-ping)
-      (selection/heartbeat! "hb-err-thresh" fail-ping)
-      (selection/heartbeat! "hb-err-thresh" fail-ping)
+      (selection/heartbeat! store "hb-err-thresh" fail-ping)
+      (selection/heartbeat! store "hb-err-thresh" fail-ping)
+      (selection/heartbeat! store "hb-err-thresh" fail-ping)
       ;; Should now be in :error status
       (let [d (proto/get-daemon store "hb-err-thresh")]
         (is (= :error (:emacs-daemon/status d)))
@@ -523,7 +531,7 @@
 
 (deftest heartbeat!-nonexistent-daemon-test
   (testing "heartbeat! returns nil for non-existent daemon"
-    (is (nil? (selection/heartbeat! "no-such-daemon" (fn [_] {:success true :duration-ms 100}))))))
+    (is (nil? (selection/heartbeat! store "no-such-daemon" (fn [_] {:success true :duration-ms 100}))))))
 
 (deftest heartbeat!-with-ling-load-test
   (testing "heartbeat! accounts for ling count in health score"
@@ -532,7 +540,7 @@
     (doseq [i (range 4)]
       (proto/bind-ling! store "hb-loaded" (str "load-ling-" i)))
     (let [mock-ping (fn [_] {:success true :duration-ms 200})
-          result (selection/heartbeat! "hb-loaded" mock-ping)]
+          result (selection/heartbeat! store "hb-loaded" mock-ping)]
       (is (= 4 (:ling-count result)))
       ;; Health should be slightly lower than a daemon with 0 lings
       ;; due to ling load penalty

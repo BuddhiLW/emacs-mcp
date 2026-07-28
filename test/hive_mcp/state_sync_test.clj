@@ -13,7 +13,8 @@
             [hive-mcp.tools.swarm :as swarm]
             [hive-dsl.bounded-atom :refer [bget bclear!]]
             [hive-test.isolation :as iso]
-            [hive-mcp.isolation-methods]))
+            [hive-mcp.isolation-methods]
+            [hive-mcp.hivemind.event-registry :as event-registry]))
 
 ;; =============================================================================
 ;; Test Fixtures - Reset state between tests
@@ -49,10 +50,13 @@
     ;; When: The ling shouts :started
     (hivemind/shout! "slave-worker-1" :started {:task "Processing data" :message "Beginning work"})
 
-    ;; Then: DataScript should show status as :started (ADR-002: DataScript is source of truth)
+    ;; Then: DataScript carries the status the event registry maps :started to,
+    ;; NOT the event keyword itself (ADR-002: DataScript is source of truth).
+    ;; Asking the registry rather than restating :working keeps this assertion
+    ;; correct for free when the registry gains or remaps an event type.
     (let [slave-status (:slave/status (ds/get-slave "slave-worker-1"))]
-      (is (= :started slave-status)
-          "Slave status in DataScript should be :started after started event"))
+      (is (= (event-registry/slave-status :started) slave-status)
+          "Slave status in DataScript should be the registry status for :started"))
 
     ;; AND: get-slave-working-status should return "working"
     (is (= "working" (swarm/get-slave-working-status "slave-worker-1"))
@@ -84,10 +88,11 @@
     ;; When: The ling shouts :completed
     (hivemind/shout! "slave-finisher-1" :completed {:task "Quick task" :message "Done!" :result "success"})
 
-    ;; Then: DataScript should show status as :completed (ADR-002: DataScript is source of truth)
+    ;; Then: DataScript carries the registry status for :completed, not the
+    ;; event keyword (ADR-002: DataScript is source of truth).
     (let [slave-status (:slave/status (ds/get-slave "slave-finisher-1"))]
-      (is (= :completed slave-status)
-          "Slave status in DataScript should be :completed after completed event"))
+      (is (= (event-registry/slave-status :completed) slave-status)
+          "Slave status in DataScript should be the registry status for :completed"))
 
     ;; AND: The slave should now be "idle" (ready for new work)
     (is (= "idle" (swarm/get-slave-working-status "slave-finisher-1"))

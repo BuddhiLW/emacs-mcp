@@ -9,8 +9,8 @@
    Reload-safety: this ns assumes the protocol surface is loaded; it
    never re-`defprotocol`s anything itself."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [hive-mcp.protocols.memory :as mem-proto]
-            [hive-mcp.protocols.memory-liveness :as liveness]
+            [hive-spi.memory.ports :as ports]
+            [hive-spi.memory.registry :as registry]
             [hive-mcp.vectordb.resilience :as resilience]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -27,7 +27,7 @@
    reify the rest with constant returns just so `register-store!`'s
    `satisfies?` precondition is satisfied."
   []
-  (reify mem-proto/IMemoryStore
+  (reify ports/IMemoryStore
     (connect! [_ _] {:success? true})
     (disconnect! [_] {:success? true})
     (connected? [_] true)
@@ -56,8 +56,29 @@
 
 (defrecord LiveStub [calls-atom probe-result kick-effect await-result])
 
+;; The registry's `register-store!` requires an IMemoryStore. The resilience
+;; seam only calls the liveness methods, so the rest are constant returns.
 (extend LiveStub
-  liveness/IMemoryStoreLiveness
+  ports/IMemoryStore
+  {:connect!                  (fn [_ _] {:success? true})
+   :disconnect!               (fn [_] {:success? true})
+   :connected?                (fn [_] true)
+   :health-check              (fn [_] {:healthy? true :backend "stub"})
+   :add-entry!                (fn [_ _])
+   :get-entry                 (fn [_ _])
+   :update-entry!             (fn [_ _ _])
+   :delete-entry!             (fn [_ _])
+   :query-entries             (fn [_ _])
+   :search-similar            (fn [_ _ _])
+   :supports-semantic-search? (fn [_] false)
+   :cleanup-expired!          (fn [_])
+   :entries-expiring-soon     (fn [_ _ _])
+   :find-duplicate            (fn [_ _ _ _])
+   :store-status              (fn [_] {:backend "stub"})
+   :reset-store!              (fn [_] true)})
+
+(extend LiveStub
+  ports/IMemoryStoreLiveness
   {:-probe!
    (fn [this]
      (swap! (:calls-atom this) conj :probe!)
@@ -84,50 +105,23 @@
 ;; Fixtures — isolate registry mutation
 ;; =============================================================================
 
-;; Direct registry poke that bypasses `register-store!`'s
-;; `(satisfies? IMemoryStore store)` precondition.
-;;
-;; Why bypass: in long-running REPL/CI sessions the JAR's AOT-compiled
-;; IMemoryStore interface can drift from the source-loaded one after a
-;; protocol reload (defonce guards mitigate but cannot eliminate this
-;; fully — once two generations of the host interface coexist, satisfies?
-;; can return false for a reify that DOES implement the post-reload
-;; interface, because the precondition resolved the protocol var from a
-;; different classloader than the reify did).
-;;
-;; The resilience seam doesn't actually need the IMemoryStore method
-;; surface for any of these tests — only the IMemoryStoreLiveness
-;; methods. Bypassing the precondition lets us test the real
-;; orchestration contract without a JVM restart between iterations.
-
-(def ^:private registry-atom
-  ;; `store-registry` is `^:private` in hive-mcp.protocols.memory; use
-  ;; ns-resolve + var-get to bypass the private lookup at compile time
-  ;; (regular `@#'ns/sym` would trip the private-var compile error).
-  (some-> (ns-resolve 'hive-mcp.protocols.memory 'store-registry)
-          var-get))
-
 (defn- put-store! [k store]
-  (if registry-atom
-    (swap! registry-atom assoc k store)
-    (throw (ex-info "could not locate store-registry private var" {}))))
+  (registry/register-store! k store))
 
 (defn- clear-registry! []
-  (when registry-atom (reset! registry-atom {})))
+  (registry/reset-registry!))
 
 (defn- registry-fixture
-  "Ensure each test runs against a clean store registry, bypassing the
-   IMemoryStore precondition (see comment above on why)."
+  "Run each test against an empty store registry, restoring the prior one."
   [t]
-  (let [snapshot (when registry-atom @registry-atom)]
+  (let [snapshot (registry/registered-stores)]
     (try
       (clear-registry!)
       (t)
       (finally
         (clear-registry!)
-        (when snapshot
-          (doseq [[k s] snapshot]
-            (put-store! k s)))))))
+        (doseq [[k s] snapshot]
+          (put-store! k s))))))
 
 (use-fixtures :each registry-fixture)
 

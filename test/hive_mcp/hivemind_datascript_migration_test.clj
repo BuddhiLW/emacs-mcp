@@ -21,7 +21,8 @@
             [hive-mcp.hivemind.state :as hm-state]
             [hive-mcp.swarm.datascript :as ds]
             [hive-test.isolation :as iso]
-            [hive-mcp.isolation-methods]))
+            [hive-mcp.isolation-methods]
+            [hive-mcp.hivemind.event-registry :as event-registry]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
@@ -128,17 +129,23 @@
       (is (= :progress (:event-type (second messages)))))))
 
 (deftest shout-updates-datascript-status-test
-  (testing "shout! updates slave status in DataScript"
-    ;; Add slave with initial status
+  (testing "shout! updates slave status in DataScript per the event registry"
     (ds/add-slave! "status-slave" {:name "ling" :status :idle})
 
-    ;; Shout with :working event type
-    (hivemind/shout! "status-slave" :working {:task "task-1" :message "working on it"})
+    (is (= :working (event-registry/slave-status :progress))
+        "registry maps :progress to a working slave")
 
-    ;; Verify DataScript was updated
+    (hivemind/shout! "status-slave" :progress {:task "task-1" :message "working on it"})
+
     (let [slave (ds/get-slave "status-slave")]
       (is (= :working (:slave/status slave))
-          "DataScript status should be updated by shout!"))))
+          "DataScript status should be updated by shout!"))
+
+    (hivemind/shout! "status-slave" :completed {:task "task-1" :message "done"})
+
+    (let [slave (ds/get-slave "status-slave")]
+      (is (= :idle (:slave/status slave))
+          "a terminal event returns the slave to idle"))))
 
 (deftest message-ring-buffer-limit-test
   (testing "Message history respects 10-message ring buffer limit"
