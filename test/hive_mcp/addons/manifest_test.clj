@@ -10,6 +10,7 @@
   (:require [clojure.test :refer [deftest testing is]]
             [clojure.java.io :as io]
             [hive-mcp.addons.manifest :as manifest]
+            [hive-mcp.addons.runtime-ports :as runtime-ports]
             [hive-mcp.addons.protocol :as proto]))
 
 ;; =============================================================================
@@ -105,7 +106,7 @@
           register!  (fn [addon]
                        (reset! registered (proto/addon-id addon))
                        {:success? true})
-          init!      (fn [addon-id]
+          init!      (fn [addon-id _config]
                        (reset! inited addon-id)
                        {:success? true})
           result     (manifest/init-from-manifest!
@@ -124,6 +125,14 @@
           result (manifest/init-from-manifest!
                   m (fn [_]) (fn [_]))]
       (is (nil? result)))))
+
+(deftest prepare-config-injects-runtime-ports
+  (with-redefs [runtime-ports/runtime-ports
+                (constantly {:test/ping identity})]
+    (let [config (manifest/prepare-config valid-test-manifest)]
+      (is (= "test.scanner" (:addon/id config)))
+      (is (= #{:test/ping} (set (keys (:runtime/ports config)))))
+      (is (fn? (:test/ping (:runtime/ports config)))))))
 
 ;; =============================================================================
 ;; Topological Sort Integration

@@ -38,11 +38,19 @@
 
 (deftest db-path-default-when-nothing-set
   (testing "Hardcoded default applies only when env + config.edn both empty"
-    (let [result (resolve/resolve-config dhc/DatahikeKGConfig-fields {}
-                   {:env-fn (constantly nil)
-                    :file-fn (constantly nil)})]
+    (let [declared (get-in dhc/DatahikeKGConfig-fields [:db-path :default])
+          result   (resolve/resolve-config dhc/DatahikeKGConfig-fields {}
+                     {:env-fn (constantly nil)
+                      :file-fn (constantly nil)})]
       (is (r/ok? result))
-      (is (= "data/kg/datahike" (:db-path (:ok result)))))))
+      (is (= declared (:db-path (:ok result))))
+      ;; fall-through is real, not an accident of the host: the two
+      ;; higher-priority sources were both arranged empty above, and the
+      ;; same field with a populated env source resolves elsewhere.
+      (is (not= declared
+                (:db-path (:ok (resolve/resolve-config dhc/DatahikeKGConfig-fields {}
+                                 {:env-fn (fn [v] (when (= v "HIVE_KG_DB_PATH") "/from/env"))
+                                  :file-fn (constantly nil)}))))))))
 
 (deftest store-id-optional
   (testing "store-id is :required false; resolves nil when unset everywhere"

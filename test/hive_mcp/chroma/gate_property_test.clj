@@ -16,7 +16,7 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [clojure.test.check.clojure-test :refer [defspec]]
-            [hive-dsl.gate :as g]
+            [hive-weave.gate :as g]
             [hive-dsl.result :as r]
             [hive-mcp.chroma.gate :as cg]))
 
@@ -137,18 +137,16 @@
 ;; =============================================================================
 
 (deftest g1-chroma-gate-stats-shape
-  (testing "gate-stats returns expected structure for all three gates"
+  (testing "gate-stats returns the diagnostic shape for all three gates"
     (let [stats (cg/gate-stats)]
       (is (= #{:read :write :embed} (set (keys stats))))
       (doseq [[gate-key gate-stat] stats]
         (testing (str gate-key " shape")
-          (is (contains? gate-stat :name))
-          (is (contains? gate-stat :permits))
-          (is (contains? gate-stat :available))
-          (is (contains? gate-stat :queue-length))
-          (is (contains? gate-stat :state))
-          (is (= :started (:state gate-stat)))
+          (is (= #{:name :permits :available :queue-length}
+                 (set (keys gate-stat)))
+              "gate-stats is a fixed four-key diagnostic map")
           (is (pos-int? (:permits gate-stat)))
+          (is (nat-int? (:queue-length gate-stat)))
           (is (<= 0 (:available gate-stat) (:permits gate-stat))))))))
 
 (deftest g1-chroma-gate-permits-config

@@ -217,8 +217,10 @@
     ;; Setup: Mixed valid and nil files
     (let [tasks [{:file nil :task "nil-file-task"}
                  {:file (abs-path "valid/path.clj") :task "valid-task"}]]
-      ;; Exercise & Verify: Should not throw
-      (is (nil? (wave/ensure-parent-dirs! tasks))))))
+      ;; Exercise & Verify: nil files are skipped, the real one is counted
+      (is (= 1 (wave/ensure-parent-dirs! tasks))
+          "returns the number of parent dirs created, skipping nil files")
+      (is (.exists (io/file *project-root* "valid"))))))
 
 (deftest WavePreflight-ScalesTo50Directories
   (testing "ensure-parent-dirs! handles 50 directories efficiently (CLARITY-A)"
@@ -242,7 +244,7 @@
                   {:file (abs-path (str "valid-" i ".clj"))
                    :task (str "task-" i)})]
       ;; Exercise & Verify: Should not throw
-      (is (nil? (wave/validate-task-paths tasks))))))
+      (is (true? (wave/validate-task-paths tasks))))))
 
 (deftest WavePreflight-ReportsAllInvalidPaths
   (testing "validate-task-paths reports ALL invalid paths, not just first (CLARITY-Y)"
@@ -347,7 +349,7 @@
       ;; Verify: Plan created with all items
       (is (= 3 (count (wave/get-pending-items plan-id))))
       ;; Verify: All paths valid
-      (is (nil? (wave/validate-task-paths (vec tasks)))))))
+      (is (true? (wave/validate-task-paths (vec tasks)))))))
 
 (deftest DroneWave-PathVariationsFiveDrones
   (testing "Wave 2: Various path formats all validate correctly"
@@ -363,7 +365,7 @@
                  {:file (abs-path "test/core_test.clj") :task "test"}
                  {:file (abs-path "resources/config.clj") :task "config"}]]
       ;; Verify: All paths valid regardless of nesting
-      (is (nil? (wave/validate-task-paths tasks))))))
+      (is (true? (wave/validate-task-paths tasks))))))
 
 (deftest DroneWave-StressTenDrones
   (testing "Wave 3: Stress test with 10 drones validates successfully"
@@ -376,7 +378,7 @@
           plan-id (wave/create-plan! (vec tasks))]
       ;; Verify
       (is (= 10 (count (wave/get-pending-items plan-id))))
-      (is (nil? (wave/validate-task-paths (vec tasks)))))))
+      (is (true? (wave/validate-task-paths (vec tasks)))))))
 
 (deftest DroneWave-ChaosTwentyDrones
   (testing "Wave 4: Chaos test with 20 drones across 5 subdirectories"
@@ -396,7 +398,7 @@
           plan-id (wave/create-plan! (vec tasks))]
       ;; Verify
       (is (= 20 (count (wave/get-pending-items plan-id))))
-      (is (nil? (wave/validate-task-paths (vec tasks)))))))
+      (is (true? (wave/validate-task-paths (vec tasks)))))))
 
 ;; =============================================================================
 ;; REPL Helpers

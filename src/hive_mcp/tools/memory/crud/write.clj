@@ -175,18 +175,34 @@
   [sym]
   (try (requiring-resolve sym) (catch Throwable _ nil)))
 
-(defn- validate-role-gate!
-  "Validate :role content against the RoleCard malli schema before storage.
+(defonce ^:private role-card-validator (atom nil))
 
-   Parses `content` as EDN and delegates to `hive-spi.role.card/valid?`
-   (reached via requiring-resolve — fail-soft skip when the role SPI leaf is
-   absent). FAIL-LOUD otherwise: throws `:role-gate-rejected` when the content
-   is unreadable EDN, not a map, or a non-conformant RoleCard (missing
-   :role/id keyword or :role/name string)."
+(defn set-role-card-validator!
+  "Inject the RoleCard validator as {:valid? fn :explain fn}.
+
+   nil restores resolution from the hive-spi role leaf. Returns the value set."
+  [v]
+  (reset! role-card-validator v))
+
+(defn current-role-card-validator
+  "The injected validator, else one resolved from hive-spi.role.card, else nil."
+  []
+  (or @role-card-validator
+      (when-let [valid? (resolve-role-card-sym (quote hive-spi.role.card/valid?))]
+        {:valid? valid?
+         :explain (or (resolve-role-card-sym (quote hive-spi.role.card/explain))
+                      (constantly nil))})))
+
+(defn- validate-role-gate!
+  "Validate :role content against the RoleCard schema before storage.
+
+   Resolves the validator via `current-role-card-validator` — injected first,
+   else the hive-spi role leaf, else nil (gate skipped). FAIL-LOUD otherwise:
+   throws `:role-gate-rejected` when the content is unreadable EDN, not a map,
+   or a non-conformant RoleCard."
   [content]
-  (when-let [valid? (resolve-role-card-sym 'hive-spi.role.card/valid?)]
-    (let [explain (resolve-role-card-sym 'hive-spi.role.card/explain)
-          card (try
+  (when-let [{:keys [valid? explain]} (current-role-card-validator)]
+    (let [card (try
                  (edn/read-string content)
                  (catch Exception e
                    (throw (ex-info (str "RoleCard content is not readable EDN: "

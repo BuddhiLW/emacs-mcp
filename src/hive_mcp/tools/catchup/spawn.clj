@@ -66,7 +66,7 @@
       (swap! sections conj (str "session {\"command\": \"context-get\", \"ctx_id\": \"" ctx-id "\"}")))
     (swap! sections conj "```")
     (swap! sections conj "")
-    (swap! sections conj (str "**TTL Warning**: These refs expire ~10 minutes after catchup. "
+    (swap! sections conj (str "**TTL Warning**: These refs expire ~1 hour after catchup. "
                               "If expired, run `/catchup` to refresh."))
     (swap! sections conj "")
 
@@ -107,8 +107,8 @@
                                                   (or kg-node-ids [])
                                                   project-id))]
                        (log/info "spawn-context :ref mode, found" (count refs) "refs"
-                                 {:categories (keys refs) :reconstructed? (some? reconstructed)})
-                       (if reconstructed
+                                 {:categories (keys refs) :reconstructed? (boolean (seq reconstructed))})
+                       (if (seq reconstructed)
                          (str reconstructed
                               (when git-info
                                 (str "\n\n### Git Status\n"

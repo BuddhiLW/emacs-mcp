@@ -20,7 +20,8 @@
             [hive-mcp.swarm.logic :as logic]
             [hive-mcp.tools.swarm.core :as swarm-core]
             [hive-test.isolation :as iso]
-            [hive-mcp.isolation-methods]))
+            [hive-mcp.isolation-methods]
+            [hive-mcp.test.stub.terminal-addon :as term-stub]))
 
 ;; =============================================================================
 ;; Test Fixtures
@@ -106,24 +107,26 @@
 
 (deftest test-spawn-guard-allows-coordinator-ling-spawn
   (testing "coordinator (non-child) can spawn lings normally"
-    (with-redefs [guards/child-ling? (constantly false)
-                  ec/eval-elisp-with-timeout (fn [_elisp _timeout]
-                                               {:success true :result "coord-ling-1"})]
-      (let [result (spawn/handle-spawn {:type "ling"
-                                        :name "coord-ling-1"
-                                        :cwd "/tmp/project"})
-            parsed (parse-response result)]
-        (is (not (:isError result))
-            (str "Coordinator should be allowed to spawn, got: " (:text result)))
-        (is (:success parsed))
-        (is (= "coord-ling-1" (:agent-id parsed)))))))
+    ;; Every terminal backend is addon-contributed, so a cold core resolves NO
+    ;; strategy for :claude. Arrange one the way an addon would.
+    (term-stub/with-terminal
+      (fn []
+        (with-redefs [guards/child-ling? (constantly false)]
+          (let [result (spawn/handle-spawn {:type "ling"
+                                            :name "coord-ling-1"
+                                            :cwd "/tmp/project"})
+                parsed (parse-response result)]
+            (is (not (:isError result))
+                (str "Coordinator should be allowed to spawn, got: " (:text result)))
+            (is (:success parsed))
+            (is (= "coord-ling-1" (:agent-id parsed)))))))))
 
 (deftest test-spawn-guard-allows-coordinator-type-validation
   (testing "coordinator reaches type validation for invalid types"
     (with-redefs [guards/child-ling? (constantly false)]
       (let [result (spawn/handle-spawn {:type "invalid" :cwd "/tmp"})]
         (is (:isError result))
-        (is (re-find #"must be 'ling' or 'drone'" (:text result))
+        (is (re-find #"type must be one of" (:text result))
             "Coordinator should get type validation error, not guard error")))))
 
 ;; =============================================================================
@@ -178,5 +181,5 @@
       ;; Should pass guard, hit type validation
       (let [result (spawn/handle-spawn {:type "invalid"})]
         (is (:isError result))
-        (is (re-find #"must be 'ling' or 'drone'" (:text result))
+        (is (re-find #"type must be one of" (:text result))
             "Depth 0 = coordinator, should pass through guard")))))

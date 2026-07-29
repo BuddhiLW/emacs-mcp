@@ -21,6 +21,7 @@
             [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
             [hive-mcp.dns.result :as result]
+            [hive-mcp.events.core :as ev]
             [hive-mcp.concurrency.pool :as pool]
             [hive-mcp.channel.piggyback :as piggyback]
             [clojure.data.json :as json]
@@ -54,6 +55,32 @@
   [s]
   (result/rescue nil (json/read-str s :key-fn keyword)))
 
+(defn- harvest-error
+  "Structured error map for a failed harvest source.
+
+   Shape: {:type :harvest-failed :fn FN-NAME :msg MSG}. Returned under the
+   :error key of the harvest result AND carried verbatim as the :context of
+   the :system/error telemetry event — one map, one source of truth.
+   `harvest-all` aggregates these under :errors."
+  [fn-name msg]
+  {:type :harvest-failed
+   :fn fn-name
+   :msg (str msg)})
+
+(defn- emit-harvest-error!
+  "Dispatch [:system/error ...] telemetry for ERR, a `harvest-error` map.
+
+   Returns nil. Never throws: a missing :system/error handler or a failing
+   effect must not break the harvest it observes."
+  [err]
+  (result/rescue nil
+                 (ev/dispatch [:system/error
+                               {:error-type (:type err)
+                                :source (str "crystal.harvest.collect/" (:fn err))
+                                :message (:msg err)
+                                :context err}]))
+  nil)
+
 ;; =============================================================================
 ;; Legacy Emacs-based Harvest Functions
 ;; =============================================================================
@@ -79,13 +106,12 @@
                          :count (count notes)
                          :session session-tag
                          :project-id project-id})
-                      (do
+                      (let [err (harvest-error "harvest-session-progress" error)]
                         (log/error "harvest-session-progress: Emacs query failed:" error)
+                        (emit-harvest-error! err)
                         {:notes []
                          :count 0
-                         :error {:type :harvest-failed
-                                 :fn "harvest-session-progress"
-                                 :msg error}}))))))
+                         :error err}))))))
 
 (defn ^:deprecated harvest-completed-tasks
   "DEPRECATED: Use harvest-all (direct DataScript+Chroma access). Legacy Emacs roundtrip version."
@@ -94,15 +120,18 @@
    (result/rescue {:tasks [] :count 0 :ds-count 0 :emacs-count 0}
                   (let [dir (or directory (ctx/current-directory))
                         project-id (when dir (scope/get-current-project-id dir))
-                        ds-tasks (result/rescue []
-                                                (->> (ds/get-completed-tasks-this-session
-                                                      :project-id project-id)
-                                                     (mapv (fn [t]
-                                                             {:id (:completed-task/id t)
-                                                              :title (:completed-task/title t)
-                                                              :completed-at (:completed-task/completed-at t)
-                                                              :agent-id (:completed-task/agent-id t)
-                                                              :source :datascript}))))
+                        ds-result (result/try-effect*
+                                   :harvest/datascript-failed
+                                   (->> (ds/get-completed-tasks-this-session
+                                         :project-id project-id)
+                                        (mapv (fn [t]
+                                                {:id (:completed-task/id t)
+                                                 :title (:completed-task/title t)
+                                                 :completed-at (:completed-task/completed-at t)
+                                                 :agent-id (:completed-task/agent-id t)
+                                                 :source :datascript}))))
+                        ds-ok? (result/ok? ds-result)
+                        ds-tasks (if ds-ok? (:ok ds-result) [])
                         elisp-ephemeral (if project-id
                                           (format "(hive-mcp-memory-query 'note '(\"kanban\") %s 50 'ephemeral nil)"
                                                   (pr-str project-id))
@@ -112,19 +141,29 @@
                                               (pr-str project-id))
                                       "(hive-mcp-memory-query 'note '(\"kanban\") nil 50 'short-term nil)")
                         elisp (format "(json-encode (append %s %s))" elisp-ephemeral elisp-short)
-                        {:keys [success result]} (eval-elisp-safe elisp 15000)
+                        {:keys [success result error]} (eval-elisp-safe elisp 15000)
                         emacs-tasks (if success
                                       (let [parsed (parse-json-safe result)]
                                         (->> (if (sequential? parsed) parsed [])
                                              (filter map?)
                                              (mapv #(assoc % :source :emacs))))
                                       [])
-                        all-tasks (concat ds-tasks emacs-tasks)]
-                    {:tasks all-tasks
-                     :count (count all-tasks)
-                     :ds-count (count ds-tasks)
-                     :emacs-count (count emacs-tasks)
-                     :project-id project-id}))))
+                        all-tasks (concat ds-tasks emacs-tasks)
+                        failures (cond-> []
+                                   (not ds-ok?) (conj (str "datascript: " (:message ds-result)))
+                                   (not success) (conj (str "emacs: " error)))
+                        err (when (seq failures)
+                              (harvest-error "harvest-completed-tasks"
+                                             (str/join "; " failures)))]
+                    (when err
+                      (log/error "harvest-completed-tasks: source failed:" (:msg err))
+                      (emit-harvest-error! err))
+                    (cond-> {:tasks all-tasks
+                             :count (count all-tasks)
+                             :ds-count (count ds-tasks)
+                             :emacs-count (count emacs-tasks)
+                             :project-id project-id}
+                      err (assoc :error err))))))
 
 (defn ^:deprecated harvest-git-commits
   "DEPRECATED: Use harvest-all (direct JVM subprocess). Legacy Emacs roundtrip version."
@@ -148,13 +187,12 @@
                         {:commits (or commits [])
                          :count (count (or commits []))
                          :directory dir})
-                      (do
+                      (let [err (harvest-error "harvest-git-commits" error)]
                         (log/error "harvest-git-commits: Emacs command failed:" error)
+                        (emit-harvest-error! err)
                         {:commits []
                          :count 0
-                         :error {:type :harvest-failed
-                                 :fn "harvest-git-commits"
-                                 :msg error}}))))))
+                         :error err}))))))
 
 ;; =============================================================================
 ;; Direct Harvest Functions (bypass Emacs — JVM-native)

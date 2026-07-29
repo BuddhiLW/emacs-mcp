@@ -43,7 +43,8 @@
             [hive-mcp.dns.result :refer [rescue]]
             [taoensso.timbre :as log]
             [hive-mcp.embeddings.routing :as routing]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [hive-mcp.embeddings.availability.multi :as multi]))
 
 (declare provider-for-collection dimension-for-collection)
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -354,14 +355,9 @@
     (:provider (build-resolved (embedder-config) k))))
 
 (defn- provider-available?
-  "A provider spec is usable only if its required secret is present; local
-   ollama needs none."
+  "Delegates to the open multi."
   [spec]
-  (case (:impl spec)
-    :openrouter (some? (global-config/get-secret :openrouter-api-key))
-    :openai     (some? (global-config/get-secret :openai-api-key))
-    :venice     (some? (global-config/get-secret :venice-api-key))
-    true))
+  (multi/secret-available? spec))
 
 (defn resolve-provider-for-type
   "Resolve embedding provider + metadata for a memory type.

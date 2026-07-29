@@ -21,7 +21,8 @@
             [hive-mcp.config.core :as config]
             [hive-mcp.server.guards :as guards]
             [taoensso.timbre :as log]
-            [hive-mcp.tools.consolidated.workflow.ir :as ir]))
+            [hive-mcp.tools.consolidated.workflow.ir :as ir]
+            [hive-mcp.tools.consolidated.workflow.goal :as goal]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -178,29 +179,31 @@
 ;; ── CLI Handler + Tool Definition ───────────────────────────────────────────
 
 (def canonical-handlers
-  {:catchup  c-session/handle-catchup
-   :wrap     c-session/handle-wrap
-   :complete (fn [params] (c-session/handle-session (assoc params :command "complete")))
-   :forge    {:strike             handle-forge-strike
-              :strike-imperative  handle-forge-strike-imperative
-              :status             handle-forge-status
-              :quench             handle-forge-quench
-              :multi-front        {:start    handle-multi-front-start
-                                   :status   handle-multi-front-status
-                                   :stop     handle-multi-front-stop
-                                   :_handler handle-multi-front-status}
-              :_handler           handle-forge-status}
-   :ir       {:list       ir/handle-list
-              :get        ir/handle-get
-              :describe   ir/handle-describe
-              :author     ir/handle-author
-              :register   ir/handle-register
-              :run        ir/handle-run
-              :status     ir/handle-status
-              :cancel     ir/handle-cancel
-              :method     ir/handle-describe-method
-              :vocabulary ir/handle-describe-vocabulary
-              :_handler   ir/handle-list}})
+  {:catchup    c-session/handle-catchup
+   :wrap       c-session/handle-wrap
+   :complete   (fn [params] (c-session/handle-session (assoc params :command "complete")))
+   :plan-goal  goal/handle-plan-goal
+   :goal-schema goal/handle-goal-schema
+   :forge      {:strike             handle-forge-strike
+                :strike-imperative  handle-forge-strike-imperative
+                :status             handle-forge-status
+                :quench             handle-forge-quench
+                :multi-front        {:start    handle-multi-front-start
+                                     :status   handle-multi-front-status
+                                     :stop     handle-multi-front-stop
+                                     :_handler handle-multi-front-status}
+                :_handler           handle-forge-status}
+   :ir         {:list       ir/handle-list
+                :get        ir/handle-get
+                :describe   ir/handle-describe
+                :author     ir/handle-author
+                :register   ir/handle-register
+                :run        ir/handle-run
+                :status     ir/handle-status
+                :cancel     ir/handle-cancel
+                :method     ir/handle-describe-method
+                :vocabulary ir/handle-describe-vocabulary
+                :_handler   ir/handle-list}})
 
 (def handlers canonical-handlers)
 
@@ -210,10 +213,11 @@
 (def tool-def
   {:name "workflow"
    :consolidated true
-   :description "Forja Belt workflow: catchup (restore context), wrap (crystallize), complete (full lifecycle), forge-strike (FSM-driven smite->survey->spark cycle), forge-strike-imperative (DEPRECATED legacy path), forge-status (belt dashboard), forge-quench (graceful stop). HWF2 combinator IR: ir list/get/describe/author/register/run/status/cancel, ir method (describe method strategies), ir vocabulary (describe effect verbs). Use command='help' to list all."
+   :description "Forja Belt workflow: catchup (restore context), wrap (crystallize), complete (full lifecycle), forge-strike (FSM-driven smite->survey->spark cycle), forge-strike-imperative (DEPRECATED legacy path), forge-status (belt dashboard), forge-quench (graceful stop). HWF2 combinator IR: ir list/get/describe/author/register/run/status/cancel, ir method (describe method strategies), ir vocabulary (describe effect verbs). Goal-directed synthesis: goal-schema (project the GoalSpec contract + example for authoring), plan-goal (synthesize + soundness-check a Plan-EDN from a GoalSpec; author=true persists). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :enum ["catchup" "wrap" "complete"
+                                                "plan-goal" "goal-schema"
                                                 "forge strike"
                                                 "forge strike-imperative"
                                                 "forge status" "forge quench"
@@ -245,14 +249,34 @@
                                         :description "Method key to describe (ir method); omit for all"}
                               "verb" {:type "string"
                                       :description "Effect verb to describe (ir vocabulary); omit for all"}
+                              "goal_spec" {:type "string"
+                                           :description "GoalSpec as an EDN string (plan-goal): {:goal #{facts} :init #{facts} :max-depth? :opaque?}. Call goal-schema for the contract + a valid example."}
+                              "verb_index" {:type "string"
+                                            :description "Verb effect-ontology index for plan-goal as an EDN map verb-id -> {:requires :provides :deletes :cost}. Omit to plan over the live verb federation."}
+                              "author" {:type "boolean"
+                                        :description "plan-goal: when true, persist the compiled workflow through the author path (fail-loud on unsound / unknown refs). Default false = dry-run cert."}
+                              "default_method" {:type "string"
+                                                :description "Dispatch method stamped on every compiled goal step (plan-goal); default dag-wave."}
                               "predicates" {:type "array"
                                             :items {:type "string"}
-                                            :description "Named predicates available at run time (ir author/register)"}
+                                            :description "Named predicates available at run time (ir author/register, plan-goal author)"}
                               "tags" {:type "array"
                                       :items {:type "string"}
                                       :description "Tag filter for ir list"}
                               "limit" {:type "integer"
-                                       :description "Row cap for ir list"}}
+                                       :description "Row cap for ir list"}
+                              "spawn_mode" {:type "string"
+                                            :enum ["claude" "vterm" "headless"]
+                                            :description "[forge strike] Spawn mode for every forged ling; default claude. 'headless' is ABSTRACT — the concrete backend is resolved at spawn time by the headless registry. Falls back to config [:forge :spawn-mode] when omitted."}
+                              "max_slots" {:type "integer"
+                                           :description "[forge strike] Cap on concurrently forged lings (default 10)."}
+                              "presets" {:type "array"
+                                         :items {:type "string"}
+                                         :description "[forge strike] Presets applied to every forged ling; default ling, mcp-first, saa."}
+                              "model" {:type "string"
+                                       :description "[forge strike] Model passed to every forged ling."}
+                              "restart" {:type "boolean"
+                                         :description "[forge quench] Restart the belt instead of stopping it, making forge strike available again."}}
                  :required ["command"]}
    :handler handle-workflow})
 

@@ -22,13 +22,18 @@
             [hive-mcp.swarm.datascript.connection :as conn]
             [hive-mcp.emacs.client :as ec]
             [hive-test.isolation :as iso]
-            hive-mcp.isolation-methods))
+            hive-mcp.isolation-methods
+            [hive-mcp.test.stub.terminal-addon :as terminal-stub]
+            [hive-mcp.test.stub.swarm-rows :as rows]
+            [hive-mcp.agent.ling.terminal-registry :as treg]))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(use-fixtures :each (iso/with-isolations :swarm-ds))
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds)
+  terminal-stub/with-terminal)
 
 ;; =============================================================================
 ;; Mock Helpers
@@ -155,15 +160,19 @@
               "Status should be :working after task dispatch"))))))
 
 (deftest ling-spawn-failure-throws
-  (testing "spawn! throws on elisp failure"
-    (let [ling (ling/->ling "spawn-fail-test" {:cwd "/tmp"})]
-      (with-redefs [ec/eval-elisp-with-timeout
-                    (fn [_code _timeout]
-                      (mock-elisp-failure "Emacs not running"))]
-        (is (thrown-with-msg? clojure.lang.ExceptionInfo
-                              #"Failed to spawn ling"
-                              (proto/spawn! ling {}))
-            "Should throw on elisp failure")))))
+  (testing "spawn! surfaces a terminal failure"
+    ;; The failure path is driven by a FAULTED terminal addon in the registry,
+    ;; not by redefining an elisp transport the spawn path no longer calls.
+    (let [prior (treg/get-terminal-addon :claude)]
+      (try
+        (treg/register-terminal!
+         :claude
+         (terminal-stub/->terminal :claude {:spawn! "Emacs not running"}))
+        (let [ling (ling/->ling "spawn-fail-test" {:cwd "/tmp"})]
+          (is (thrown? clojure.lang.ExceptionInfo (proto/spawn! ling {}))
+              "Should throw when the terminal addon fails to spawn"))
+        (finally
+          (treg/register-terminal! :claude prior))))))
 
 (deftest ling-spawn-with-parent
   (testing "spawn! sets parent relationship"
@@ -449,11 +458,11 @@
 
 (deftest list-lings-returns-all
   (testing "list-lings returns all registered lings"
-    ;; Add some lings (depth 1)
-    (ds-lings/add-slave! "ling-1" {:status :idle :depth 1})
-    (ds-lings/add-slave! "ling-2" {:status :working :depth 1})
-    ;; Add a drone (depth 2) - should be filtered out
-    (ds-lings/add-slave! "drone-1" {:status :idle :depth 2})
+    ;; add-live-slave!, not add-slave! — get-all-slaves filters on liveness.
+    (rows/add-live-slave! "ling-1" {:status :idle :depth 1})
+    (rows/add-live-slave! "ling-2" {:status :working :depth 1})
+    ;; A drone (depth 2) — should be filtered out
+    (rows/add-live-slave! "drone-1" {:status :idle :depth 2})
 
     (let [lings (ling/list-lings)]
       (is (= 2 (count lings)) "Should return only lings (depth 1)")
@@ -462,8 +471,8 @@
 
 (deftest list-lings-filters-by-project
   (testing "list-lings filters by project-id"
-    (ds-lings/add-slave! "proj-a-ling" {:status :idle :depth 1 :project-id "project-a"})
-    (ds-lings/add-slave! "proj-b-ling" {:status :idle :depth 1 :project-id "project-b"})
+    (rows/add-live-slave! "proj-a-ling" {:status :idle :depth 1 :project-id "project-a"})
+    (rows/add-live-slave! "proj-b-ling" {:status :idle :depth 1 :project-id "project-b"})
 
     (let [project-a-lings (ling/list-lings "project-a")]
       (is (= 1 (count project-a-lings)))
@@ -491,18 +500,16 @@
 (deftest with-critical-op-protects-ling
   (testing "with-critical-op prevents kill during operation"
     (ds-lings/add-slave! "guarded-ling" {:status :working})
-
-    (let [ling (ling/->ling "guarded-ling" {})]
-      ;; Start critical operation
-      (ling/with-critical-op "guarded-ling" :wrap
-        ;; Try to kill during critical op
+    ;; ling/with-critical-op is a FUNCTION taking a body thunk, not a macro.
+    (ling/with-critical-op
+      "guarded-ling" :wrap
+      (fn []
         (let [{:keys [can-kill? blocking-ops]} (ds-lings/can-kill? "guarded-ling")]
           (is (false? can-kill?) "Should not be killable")
-          (is (contains? blocking-ops :wrap))))
+          (is (contains? blocking-ops :wrap)))))
 
-      ;; After critical op exits, should be killable
-      (let [{:keys [can-kill?]} (ds-lings/can-kill? "guarded-ling")]
-        (is (true? can-kill?) "Should be killable after critical op")))))
+    (let [{:keys [can-kill?]} (ds-lings/can-kill? "guarded-ling")]
+      (is (true? can-kill?) "Should be killable after critical op"))))
 
 (comment
   ;; Run tests

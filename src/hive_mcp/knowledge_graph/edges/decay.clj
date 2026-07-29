@@ -48,14 +48,19 @@
 (defn decay-rate-for-edge
   "Return the decay rate for an edge based on its relation type.
 
-   Co-access edges decay at co-access-decay-rate (faster).
-   All other edges (semantic) decay at semantic-decay-rate (slower).
+   Semantic (core structural) relations decay at semantic-decay-rate
+   (slower). Everything else — :co-accessed, system-generated extension
+   relations (:projects-to, :contains), the open :relates, and unknown
+   relations — decays at co-access-decay-rate (faster): non-structural
+   edges are re-derivable, so aggressive decay is safe.
 
    Pure function — no side effects."
   [edge]
-  (if (= :co-accessed (:kg-edge/relation edge))
-    co-access-decay-rate
-    semantic-decay-rate))
+  (if (contains? #{:implements :supersedes :refines :contradicts
+                   :depends-on :derived-from :applies-to}
+                 (:kg-edge/relation edge))
+    semantic-decay-rate
+    co-access-decay-rate))
 
 (defn- update-edge-confidence!*
   "Lazy-resolved indirection to edges.write/update-edge-confidence! to break

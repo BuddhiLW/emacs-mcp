@@ -65,3 +65,24 @@
 (deftest unknown-backend-defaults-to-nil
   (testing "fact/backend->store :unknown returns nil (caller surfaces failure)"
     (is (nil? (fact/backend->store :unknown)))))
+
+(deftest datahike-health-is-late-bound
+  (let [store    (stub-store :datahike)
+        expected {:status :healthy
+                  :backend :datahike
+                  :compatible? true}]
+    (with-redefs-fn
+      {#'fact/resolve-fn
+       (fn [sym]
+         (when (= 'hive-datahike.kg.store/health sym)
+           (fn [resolved-store]
+             (is (identical? store resolved-store))
+             expected)))}
+      #(is (= expected (fact/backend-health :datahike store))))))
+
+(deftest default-backend-health-reports-ready-store
+  (let [store (stub-store :datascript)]
+    (is (= {:status :healthy
+            :backend :datascript
+            :store-class (str (class store))}
+           (fact/backend-health :datascript store)))))

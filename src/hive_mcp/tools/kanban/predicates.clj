@@ -17,6 +17,13 @@
   "Internal canonical statuses."
   #{"todo" "doing" "review" "done"})
 
+(def status-tag-set
+  "Every token that may legitimately occupy the STATUS slot of a kanban tag
+   vector: the canonical internal statuses plus the MCP enum spellings that
+   older entries were tagged with. Callers swapping a status tag must remove
+   this whole set, never just one spelling."
+  (into valid-statuses (keys status-enum->tag)))
+
 (def priority-order
   {"high"          0  "priority-high"   0
    "medium"        1  "priority-medium" 1

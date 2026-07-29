@@ -32,6 +32,13 @@
   (when-let [secret-key (get provider->secret-key (keyword provider))]
     (r/rescue nil (global-config/get-secret secret-key))))
 
+(def ^:const default-spawn-mode
+  "Spawn mode applied when a caller supplies none.
+   Single source of truth for the default — `resolve-effective-mode` and
+   `hive-mcp.agent.ling.spawn/->ling` both read it, and tests assert against
+   it rather than restating a literal."
+  :claude)
+
 (defn resolve-effective-mode
   "Pure function: raw spawn inputs -> effective spawn mode keyword.
 
@@ -48,9 +55,9 @@
    via META-INF discovery + register-headless! / register-mode!.
 
    When :spawn-mode is any other valid keyword, returned unchanged.
-   When omitted, defaults to :claude (legacy)."
+   When omitted, defaults to `default-spawn-mode`."
   [{:keys [spawn-mode]}]
-  (let [raw-mode (or spawn-mode :claude)]
+  (let [raw-mode (or spawn-mode default-spawn-mode)]
     (if (= raw-mode :headless)
       (or (headless-reg/resolve-default-backend nil)
           (do (log/warn "No headless backend resolvable, leaving :headless abstract"

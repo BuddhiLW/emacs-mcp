@@ -10,17 +10,26 @@
             [hive-mcp.tools.swarm :as swarm]
             [hive-mcp.tools.swarm.core :as swarm-core]
             [hive-mcp.swarm.datascript :as ds]
-            [hive-mcp.emacs.client :as ec]
+            ;; The swarm handlers moved to emacs-ext.client; redefining the old
+            ;; hive-mcp.emacs.client left every mock in this ns INERT while the
+            ;; assertions still read correctly.
+            [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.hivemind.core :as hivemind]
             [hive-dsl.bounded-atom :refer [bput! bget bclear!]]
             [hive-test.isolation :as iso]
+            [hive-mcp.test.stub.terminal-addon :as terminal-stub]
             [hive-mcp.isolation-methods]))
 
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
 
-(use-fixtures :each (iso/with-isolations :swarm-ds :agent-registry))
+;; A registered ling row is now VISIBLE to the default queries, so the kill
+;; path actually reaches the terminal registry instead of short-circuiting.
+;; Inject a stub addon rather than letting it block on a real terminal.
+(use-fixtures :each
+  (iso/with-isolations :swarm-ds :agent-registry)
+  terminal-stub/with-terminal)
 
 ;; =============================================================================
 ;; Bug 1: handle-lings-available Elisp Fallback
@@ -124,12 +133,13 @@
               "All slave IDs should be present"))))))
 
 (deftest swarm-status-merge-with-hivemind-preserves-all-test
-  (testing "Merging hivemind status preserves all slaves"
-    ;; Setup: Add hivemind status for some agents
-    (bput! hivemind/agent-registry
-           "slave-1" {:status :progress :task "Working on tests"})
-    (bput! hivemind/agent-registry
-           "slave-3" {:status :completed :task "Done with review"})
+  (testing "Merging live slave status preserves all slaves"
+    ;; `merge-hivemind-into-slaves` reads `:slave/status` from DataScript
+    ;; (via get-slave-working-status) despite its name — seeding
+    ;; hivemind/agent-registry here changed nothing and the merge assertions
+    ;; were being satisfied by the elisp payload's own "idle".
+    (ds/add-slave! "slave-1" {:name "worker-1" :status :working})
+    (ds/add-slave! "slave-3" {:name "worker-3" :status :terminated})
 
     (let [status-json (json/write-str
                        {:slaves-count 3
@@ -146,12 +156,12 @@
                                          (:slaves-detail parsed)))]
           (is (= 3 (count (:slaves-detail parsed)))
               "All 3 slaves should be preserved after merge")
-          ;; Check hivemind status was merged
+          ;; Check the live DataScript status was merged over the elisp payload
           (is (= "working" (name (:status (get slaves-by-id "slave-1"))))
-              "slave-1 should have hivemind 'working' status")
+              "slave-1 should take its 'working' status from DataScript")
           (is (= "idle" (name (:status (get slaves-by-id "slave-3"))))
-              "slave-3 should have hivemind 'idle' status (completed)")
-          ;; slave-2 has no hivemind entry, should retain original
+              "slave-3 (:terminated) should map to 'idle'")
+          ;; slave-2 has no DataScript row, should retain original
           (is (some? (get slaves-by-id "slave-2"))
               "slave-2 should still be present"))))))
 
@@ -204,25 +214,25 @@
 ;; =============================================================================
 
 (deftest get-slave-working-status-test
-  (testing "Maps hivemind event types to working status"
-    ;; Setup various agent states
-    (bput! hivemind/agent-registry
-           "agent-started" {:status :started})
-    (bput! hivemind/agent-registry
-           "agent-progress" {:status :progress})
-    (bput! hivemind/agent-registry
-           "agent-completed" {:status :completed})
-    (bput! hivemind/agent-registry
-           "agent-error" {:status :error})
-    (bput! hivemind/agent-registry
-           "agent-blocked" {:status :blocked})
-
-    (is (= "working" (swarm/get-slave-working-status "agent-started")))
-    (is (= "working" (swarm/get-slave-working-status "agent-progress")))
-    (is (= "idle" (swarm/get-slave-working-status "agent-completed")))
-    (is (= "idle" (swarm/get-slave-working-status "agent-error")))
-    (is (= "blocked" (swarm/get-slave-working-status "agent-blocked")))
-    (is (nil? (swarm/get-slave-working-status "nonexistent-agent")))))
+  (testing "Maps a slave's DataScript :slave/status to a working status"
+    ;; The subject takes an AGENT-ID and reads `:slave/status` from DataScript.
+    ;; It previously mapped hivemind EVENT-TYPE strings, and this suite still
+    ;; passed event names ("agent-started") as if they were ids — every lookup
+    ;; missed and returned nil while the assertions still read plausibly.
+    (doseq [[status expected] {:working      "working"
+                               :idle         "idle"
+                               :error        "idle"
+                               :blocked      "blocked"
+                               :spawning     "working"
+                               :starting     "working"
+                               :initializing "working"
+                               :terminated   "idle"}]
+      (let [slave-id (str "ling-" (name status))]
+        (ds/add-slave! slave-id {:name slave-id :status status})
+        (is (= expected (swarm/get-slave-working-status slave-id))
+            (str ":slave/status " status " should map to " expected))))
+    (is (nil? (swarm/get-slave-working-status "nonexistent-agent"))
+        "unknown agent-id resolves to nil, not a default status")))
 
 (deftest register-unregister-ling-test
   (testing "Register and unregister lings correctly"

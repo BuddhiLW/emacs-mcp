@@ -16,7 +16,9 @@
             [hive-mcp.events.core :as ev]
             [hive-mcp.events.handlers :as handlers]
             [hive-test.isolation :as iso]
-            hive-mcp.isolation-methods))
+            [hive-mcp.tools.swarm.wave.execution :as execution]
+            hive-mcp.isolation-methods
+            [clojure.java.io :as io]))
 
 ;; =============================================================================
 ;; Test Fixtures
@@ -157,20 +159,30 @@
 
 (deftest wave-start-event-handler-test
   (testing ":wave/start event produces correct effects"
-    (let [captured (atom nil)]
-      ;; Register test effect to capture channel-publish
-      (ev/reg-fx :channel-publish (fn [data] (reset! captured data)))
+    (let [captured (atom [])
+          prior    (ev/get-fx-handler :channel-publish)]
+      (try
+        ;; reg-fx is a GLOBAL registration and other tests' drones dispatch
+        ;; :wave/start concurrently, so collect every invocation and select
+        ;; this one by its own plan-id rather than reading a single slot.
+        (ev/reg-fx :channel-publish (fn [data] (swap! captured conj data)))
 
-      ;; Dispatch event
-      (ev/dispatch [:wave/start {:plan-id "plan-123"
-                                 :wave-id "wave-456"
-                                 :item-count 3}])
+        (ev/dispatch [:wave/start {:plan-id "plan-123"
+                                   :wave-id "wave-456"
+                                   :item-count 3}])
 
-      ;; Verify effects
-      (is (= :wave-started (:event @captured)))
-      (is (= "plan-123" (get-in @captured [:data :plan-id])))
-      (is (= "wave-456" (get-in @captured [:data :wave-id])))
-      (is (= 3 (get-in @captured [:data :item-count]))))))
+        (let [mine (first (filter #(= "plan-123" (get-in % [:data :plan-id]))
+                                  @captured))]
+          (is (some? mine)
+              ":wave/start must publish a channel-publish effect for this plan")
+          (is (= :wave-started (:event mine)))
+          (is (= "plan-123" (get-in mine [:data :plan-id])))
+          (is (= "wave-456" (get-in mine [:data :wave-id])))
+          (is (= 3 (get-in mine [:data :item-count]))))
+        (finally
+          (if prior
+            (ev/reg-fx :channel-publish prior)
+            (ev/unreg-fx :channel-publish)))))))
 
 (deftest wave-item-done-event-handler-test
   (testing ":wave/item-done event produces correct effects"
@@ -211,23 +223,27 @@
 
 (deftest handle-dispatch-drone-wave-creates-plan-test
   (testing "creates plan and returns wave-id"
-    ;; Mock execute-wave! to avoid async execution in tests
-    (with-redefs [wave/execute-wave! (fn [plan-id _opts]
-                                       (ds/create-wave! plan-id))]
+    ;; Stub the fn the HANDLER calls. `wave/execute-wave!` is a by-value
+    ;; re-export and is not on this path at all — redefining it lets a real
+    ;; wave reach a live drone backend.
+    (with-redefs [execution/execute-wave-async!
+                  (fn [plan-id & _]
+                    {:wave-id (ds/create-wave! plan-id) :item-count 2})]
       (let [result (wave/handle-dispatch-drone-wave
                     {:tasks [{"file" "a.clj" "task" "fix bug"}
                              {"file" "b.clj" "task" "add test"}]})]
         (is (= "text" (:type result)))
         (let [parsed (json/read-str (:text result) :key-fn keyword)]
-          (is (= "wave_started" (:status parsed)))
+          (is (= "dispatched" (:status parsed)))
           (is (string? (:plan_id parsed)))
           (is (string? (:wave_id parsed)))
           (is (= 2 (:item_count parsed))))))))
 
 (deftest handle-dispatch-drone-wave-custom-preset-test
   (testing "passes custom preset"
-    (with-redefs [wave/execute-wave! (fn [plan-id _opts]
-                                       (ds/create-wave! plan-id))]
+    (with-redefs [execution/execute-wave-async!
+                  (fn [plan-id & _]
+                    {:wave-id (ds/create-wave! plan-id) :item-count 1})]
       (let [result (wave/handle-dispatch-drone-wave
                     {:tasks [{"file" "a.clj" "task" "task"}]
                      :preset "tdd"})
@@ -292,18 +308,28 @@
             (.delete (java.io.File. dir))))))))
 
 (deftest ensure-parent-dirs-nil-file-test
-  (testing "handles tasks with nil file gracefully"
-    (let [tasks [{:file nil :task "task 1"}
-                 {:file "valid/path.clj" :task "task 2"}]]
-      ;; Should not throw
-      (is (nil? (wave/ensure-parent-dirs! tasks))))))
+  (testing "a nil :file is skipped; a real one still gets its parent created"
+    (let [root  (io/file (System/getProperty "java.io.tmpdir")
+                         (str "wave-parent-dirs-" (System/nanoTime)))
+          child (io/file root "nested" "path.clj")
+          tasks [{:file nil :task "task 1"}
+                 {:file (.getPath child) :task "task 2"}]]
+      (try
+        (is (= 1 (wave/ensure-parent-dirs! tasks))
+            "nil contributes nothing; only the one real file's parent is created")
+        (is (.isDirectory (.getParentFile child))
+            "the parent directory exists afterwards")
+        (is (zero? (wave/ensure-parent-dirs! tasks))
+            "second pass creates nothing — the parent is already there")
+        (finally
+          (doseq [f (reverse (file-seq root))] (.delete f)))))))
 
 (deftest ensure-parent-dirs-existing-dirs-test
   (testing "works idempotently with existing directories"
     (let [existing-dir (System/getProperty "java.io.tmpdir")
           tasks [{:file (str existing-dir "/file.clj") :task "task 1"}]]
       ;; Should not throw on existing directory
-      (is (nil? (wave/ensure-parent-dirs! tasks))))))
+      (is (zero? (wave/ensure-parent-dirs! tasks))))))
 
 ;; =============================================================================
 ;; P2: validate-task-paths Tests
@@ -324,7 +350,7 @@
     (let [existing-dir (System/getProperty "java.io.tmpdir")
           tasks [{:file (str existing-dir "/file.clj") :task "task 1"}]]
       ;; Should not throw
-      (is (nil? (wave/validate-task-paths tasks))))))
+      (is (true? (wave/validate-task-paths tasks))))))
 
 (deftest validate-task-paths-mixed-test
   (testing "reports all invalid paths in exception data"

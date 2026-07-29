@@ -66,11 +66,17 @@
     (is (nil? (:completed (kt/compute-new-content (:content fixture-entry) "todo"))))))
 
 (deftest compute-new-tags-shape
-  (let [tags (kt/compute-new-tags "done" "high" "hive-mcp")]
+  (let [tags (kt/compute-new-tags ["kanban" "todo" "priority-low" "scope:project:hive"
+                                   "topical" "agent:x"]
+                                  "done" "high" "hive-mcp")]
     (is (vector? tags))
     (is (every? string? tags))
     (is (some #{"done"} tags))
+    (is (not-any? #{"todo"} tags))
     (is (some #{"priority-high"} tags))
+    (is (not-any? #{"priority-low"} tags))
+    (is (some #{"topical"} tags))
+    (is (some #{"agent:x"} tags))
     (is (some #(.startsWith ^String % "scope:project:") tags))))
 
 (deftest transition-golden

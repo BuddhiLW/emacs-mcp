@@ -29,6 +29,12 @@
 
 (def ^:private default-backup-dir "data/backups")
 
+(def backup-format-version
+  "Current on-disk backup envelope version, stamped as :backup/version by
+   `backup-metadata`. v1 carried no :backup/project-id; v2 always does.
+   Readers treat a missing :backup/version as v1."
+  2)
+
 (defn ensure-backup-dir!
   "Ensure backup directory exists."
   [dir]
@@ -156,12 +162,13 @@
      counts     - Map of entity counts
      project-id - Project scope for this backup (optional, nil = 'global')
 
-   Returns metadata map to include in backup.
-   Always includes :backup/project-id for scope-aware restore filtering."
+   Returns metadata map to include in backup, stamped with
+   `backup-format-version`. Always includes :backup/project-id for
+   scope-aware restore filtering."
   ([scope backend counts]
    (backup-metadata scope backend counts nil))
   ([scope backend counts project-id]
-   (cond-> {:backup/version 2
+   (cond-> {:backup/version backup-format-version
             :backup/scope scope
             :backup/backend backend
             :backup/project-id (or project-id "global")

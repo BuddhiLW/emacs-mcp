@@ -21,6 +21,7 @@
             [hive-mcp.tools.cli :as cli]
             ;; All consolidated tools
             [hive-mcp.tools.consolidated.memory :as memory]
+            [hive-mcp.tools.consolidated.addon :as addon]
             [hive-mcp.tools.consolidated.kg :as kg]
             [hive-mcp.tools.consolidated.hivemind :as hivemind]
             [hive-mcp.tools.consolidated.kanban :as kanban]
@@ -281,6 +282,7 @@
 (def all-tool-defs
   "All consolidated tool definitions for cross-cutting tests."
   {:memory    memory/tool-def
+   :addon     addon/tool-def
    :kg        kg/tool-def
    :hivemind  hivemind/tool-def
    :kanban    kanban/tool-def
@@ -298,6 +300,21 @@
    :workflow  workflow/tool-def
    :migration migration/tool-def
    :agent     agent/tool-def})
+
+(def enum-less-tools
+  "Tool keys whose tool-def deliberately omits :enum on \"command\".
+
+   Their command set is contributed by addons at runtime, so a static enum
+   would advertise a surface that does not match the live one. Discovery for
+   these two is via command=\"help\"."
+  #{:memory :project})
+
+(def advertised-spawn-modes
+  "The spawn modes a tool-def may advertise.
+
+   'headless' is ABSTRACT: the concrete backend (:agent-sdk, :hive-agent, ...)
+   is resolved at spawn time by the headless registry and is never advertised."
+  #{"claude" "vterm" "headless"})
 
 (deftest test-all-tool-defs-have-required-fields
   (testing "every consolidated tool-def has :name, :description, :inputSchema, :handler"
@@ -318,15 +335,19 @@
           (str tool-key " should have :consolidated true")))))
 
 (deftest test-all-tool-defs-have-command-enum
-  (testing "every consolidated tool-def has command property with enum"
+  (testing "every consolidated tool-def declares 'command'; enum-bearing ones advertise 'help'"
     (doseq [[tool-key tool-def] all-tool-defs]
       (let [cmd-prop (get-in tool-def [:inputSchema :properties "command"])]
         (is (some? cmd-prop)
             (str tool-key " missing 'command' property"))
-        (is (vector? (:enum cmd-prop))
-            (str tool-key " missing command enum"))
-        (is (some #(= "help" %) (:enum cmd-prop))
-            (str tool-key " missing 'help' in command enum"))))))
+        (if (contains? enum-less-tools tool-key)
+          (is (nil? (:enum cmd-prop))
+              (str tool-key " now declares a command enum — drop it from enum-less-tools"))
+          (do
+            (is (vector? (:enum cmd-prop))
+                (str tool-key " missing command enum"))
+            (is (some #(= "help" %) (:enum cmd-prop))
+                (str tool-key " missing 'help' in command enum"))))))))
 
 (deftest test-all-tool-defs-require-command
   (testing "every consolidated tool-def requires 'command'"
@@ -338,6 +359,7 @@
   (testing "every consolidated module exposes a tools vector"
     (doseq [[tool-key {:keys [tools-var]}]
             {:memory    {:tools-var #'memory/tools}
+             :addon     {:tools-var #'addon/tools}
              :kg        {:tools-var #'kg/tools}
              :hivemind  {:tools-var #'hivemind/tools}
              :kanban    {:tools-var #'kanban/tools}
@@ -369,6 +391,7 @@
   (testing "every handler in every consolidated tool's handlers map is a fn or map"
     (doseq [[tool-key handlers-map]
             {:memory    memory/canonical-handlers
+             :addon     addon/handlers
              :kg        kg/handlers
              :hivemind  hivemind/handlers
              :kanban    kanban/handlers
@@ -394,6 +417,7 @@
   (testing "handler map keys match tool-def command enum (minus 'help')"
     (doseq [[tool-key {:keys [handlers-map tool-def-val]}]
             {:memory    {:handlers-map memory/canonical-handlers :tool-def-val memory/tool-def}
+             :addon     {:handlers-map addon/handlers :tool-def-val addon/tool-def}
              :kg        {:handlers-map kg/handlers :tool-def-val kg/tool-def}
              :hivemind  {:handlers-map hivemind/handlers :tool-def-val hivemind/tool-def}
              :wave      {:handlers-map wave/handlers :tool-def-val wave/tool-def}
@@ -402,13 +426,19 @@
              ;; :analysis — composite tool, tested separately
              :session   {:handlers-map session/handlers :tool-def-val session/tool-def}
              :config    {:handlers-map config/handlers :tool-def-val config/tool-def}
-             :migration {:handlers-map migration/handlers :tool-def-val migration/tool-def}}]
-      (let [enum-cmds (set (get-in tool-def-val [:inputSchema :properties "command" :enum]))
-            handler-keys (set (map name (keys handlers-map)))]
+             :migration {:handlers-map migration/handlers :tool-def-val migration/tool-def}}
+            :when (not (contains? enum-less-tools tool-key))]
+      (let [enum-cmds    (set (get-in tool-def-val [:inputSchema :properties "command" :enum]))
+            handler-keys (set (map name (keys handlers-map)))
+            ;; A subdomain handler dispatches a family the enum lists leaf-wise:
+            ;; handler :docs is advertised as "docs apropos", "docs list-packages", ...
+            advertised?  (fn [hk]
+                           (or (contains? enum-cmds hk)
+                               (some #(str/starts-with? % (str hk " ")) enum-cmds)))]
         ;; Every handler should be in the enum (except internal keys like _handler)
         (doseq [hk handler-keys
                 :when (not (str/starts-with? hk "_"))]
-          (is (contains? enum-cmds hk)
+          (is (advertised? hk)
               (str tool-key ": handler '" hk "' not in command enum")))))))
 
 ;; =============================================================================
@@ -419,6 +449,7 @@
   (testing "every consolidated tool responds to 'help' command"
     (doseq [[tool-key handler]
             {:memory    memory/handle-memory
+             :addon     addon/handle-addon
              :kg        kg/handle-kg
              :hivemind  hivemind/handle-hivemind
              :kanban    kanban/handle-kanban
@@ -450,6 +481,7 @@
   (testing "every consolidated tool returns error for unknown command"
     (doseq [[tool-key handler]
             {:memory    memory/handle-memory
+             :addon     addon/handle-addon
              :kg        kg/handle-kg
              :hivemind  hivemind/handle-hivemind
              :kanban    kanban/handle-kanban
@@ -1093,9 +1125,9 @@
       (is (contains? props "restart")))))
 
 (deftest test-workflow-spawn-mode-enum
-  (testing "workflow spawn_mode enum is correct"
+  (testing "workflow advertises the same spawn modes as agent"
     (let [enum (get-in workflow/tool-def [:inputSchema :properties "spawn_mode" :enum])]
-      (is (= #{"vterm" "headless"} (set enum))))))
+      (is (= advertised-spawn-modes (set enum))))))
 
 ;; =============================================================================
 ;; Part 24: Migration Consolidated Tool Integration Tests
@@ -1201,9 +1233,9 @@
       (is (= #{"ling" "drone"} (set enum))))))
 
 (deftest test-agent-spawn-mode-enum
-  (testing "agent spawn_mode enum is correct"
+  (testing "agent advertises exactly the abstract spawn modes"
     (let [enum (get-in agent/tool-def [:inputSchema :properties "spawn_mode" :enum])]
-      (is (= #{"vterm" "headless"} (set enum))))))
+      (is (= advertised-spawn-modes (set enum))))))
 
 ;; =============================================================================
 ;; Part 26: Multi Meta-Facade (consolidated/multi.clj) Integration Tests
@@ -1304,6 +1336,13 @@
       (is (str/includes? desc "agent"))
       (is (str/includes? desc "kg")))))
 
+(deftest test-multi-description-advertises-dsl-aliases
+  (testing "multi top-level description exposes DSL aliases"
+    (let [desc (:description multi/tool-def)]
+      (is (str/includes? desc "c=content"))
+      (is (str/includes? desc "#=tags"))
+      (is (str/includes? desc "d=directory")))))
+
 ;; =============================================================================
 ;; Part 26b: Multi Meta-Facade — Batch Dispatch Tests
 ;; =============================================================================
@@ -1333,6 +1372,21 @@
       (is (= 2 (get-in parsed [:summary :total])))
       ;; noop assign-waves: all ops land in wave 1
       (is (= 1 (get-in parsed [:summary :waves]))))))
+
+(deftest test-multi-batch-dry-run-resolves-directory
+  (testing "batch dry run shows effective caller directory and preserves per-op override"
+    (let [caller-dir "/tmp/caller-project"
+          explicit-dir "/tmp/explicit-project"
+          result (multi/handle-multi
+                  {"operations" [{"id" "op1" "tool" "memory" "command" "help"}
+                                 {"id" "op2" "tool" "kg" "command" "help"
+                                  "directory" explicit-dir}]
+                   "directory" caller-dir
+                   "dry_run" true})
+          parsed (json/read-str (:text result) :key-fn keyword)
+          ops (get-in parsed [:plan :wave_1])]
+      (is (= caller-dir (:directory (first ops))))
+      (is (= explicit-dir (:directory (second ops)))))))
 
 (deftest test-multi-batch-execution
   (testing "batch mode executes operations and returns wave results"
@@ -1378,6 +1432,14 @@
     (let [props (get-in multi/tool-def [:inputSchema :properties])]
       (is (contains? props "dry_run"))
       (is (= "boolean" (get-in props ["dry_run" :type]))))))
+
+(deftest test-multi-tool-def-exposes-addon-doctor
+  (testing "multi advertises addon routing and its doctor parameters"
+    (let [props (get-in multi/tool-def [:inputSchema :properties])]
+      (is (some #{"addon"} (get-in props ["tool" :enum])))
+      (is (contains? props "addon_id"))
+      (is (contains? props "emacs_features"))
+      (is (contains? props "timeout_ms")))))
 
 ;; =============================================================================
 ;; Part 27: Multi Router Cross-Tool Integration

@@ -8,7 +8,8 @@
             [taoensso.timbre :as log]
             [hive-mcp.knowledge-graph.slots.factory :as factory]))
 
-(declare store-live? ensure-store! get-conn ensure-conn! ensure-conn reset-conn! delete-database! close! set-backend!)
+(declare store-live? ensure-store! get-conn ensure-conn! ensure-conn reset-conn!
+         delete-database! close! set-backend! backend-health)
 
 (def ^:dynamic *test-store*
   "Per-thread override for the active KG store.
@@ -30,6 +31,42 @@
   []
   (and (proto/store-set?)
        (satisfies? pkg/IKGStore (proto/get-store))))
+
+(defn- preload-datahike-runtime!
+  []
+  (require 'konserve.protocols)
+  (require 'konserve.impl.storage-layout)
+  (require 'konserve.impl.defaults)
+  (require 'konserve.cache))
+
+(defn- datahike-unavailable-ex
+  [cause]
+  (let [data (ex-data cause)]
+    (ex-info
+     "Datahike KG backend unavailable"
+     (cond-> {:backend :datahike
+              :hint "Check :services.datahike.path / HIVE_KG_DB_PATH and the reported runtime/store version provenance."}
+       (:error data) (assoc :failure-type (:error data))
+       (:version-provenance data)
+       (assoc :version-provenance (:version-provenance data)))
+     cause)))
+
+(defn- initialize-datahike-store!
+  [writer-cfg]
+  (try
+    (preload-datahike-runtime!)
+    (let [store (factory/backend->store
+                 :datahike
+                 (when writer-cfg {:writer writer-cfg}))]
+      (when-not store
+        (throw (ex-info "Datahike store factory returned nil"
+                        {:error :datahike/store-unavailable})))
+      (pkg/ensure-conn! store)
+      store)
+    (catch Exception e
+      (log/error e
+                 "CRITICAL: Failed to initialize Datahike. Refusing to substitute another KG backend because :kg-backend requested :datahike.")
+      (throw (datahike-unavailable-ex e)))))
 
 (defn ensure-store!
   "Ensure a store is configured. Auto-detects backend from config.
@@ -63,30 +100,20 @@
 
               :datahike
               (let [writer-cfg (detect/detect-writer-config)
-                    store (r/guard Exception nil
-                                   ;; Preload konserve in order before datahike loads (the sibling
-                                   ;; store requires datahike.api via the factory's requiring-resolve).
-                                   (require 'konserve.protocols)
-                                   (require 'konserve.impl.storage-layout)
-                                   (require 'konserve.impl.defaults)
-                                   (require 'konserve.cache)
-                                   (factory/backend->store :datahike (when writer-cfg {:writer writer-cfg})))]
-                (if (and store
-                         (r/ok? (r/try-effect*
-                                 :datahike/ensure-conn-failed
-                                 (pkg/ensure-conn! store))))
-                  (do (proto/set-store! store)
-                      (events/dispatch [:kg.store/ready {:backend :datahike}]))
-                  (do
-                    (log/error "CRITICAL: Failed to initialize Datahike. Refusing to substitute another KG backend because :kg-backend requested :datahike.")
-                    (throw (ex-info "Datahike KG backend unavailable"
-                                    {:backend :datahike
-                                     :hint "Check :services.datahike.path / HIVE_KG_DB_PATH. The configured path must be a Datahike database, not a container directory."})))))
+                    store (initialize-datahike-store! writer-cfg)]
+                (proto/set-store! store)
+                (events/dispatch [:kg.store/ready {:backend :datahike}]))
 
               ;; Default: DataScript
               (do (proto/set-store! (ds-store/create-store))
                   (events/dispatch [:kg.store/ready {:backend :datascript}])))))
         (proto/get-store))))
+
+(defn backend-health
+  "Report health for the configured backend and its active store."
+  []
+  (let [backend (detect/detect-backend)]
+    (factory/backend-health backend (ensure-store!))))
 
 (defn get-conn
   "Get the current connection, initializing if needed.
@@ -166,10 +193,7 @@
           (proto/set-store! (ds-store/create-store)))))
 
     :datahike
-    (let [_ (require 'konserve.protocols)
-          _ (require 'konserve.impl.storage-layout)
-          _ (require 'konserve.impl.defaults)
-          _ (require 'konserve.cache)
+    (let [_ (preload-datahike-runtime!)
           ;; :fresh? — explicit reconfigure must build a distinct store, never
           ;; reuse the live global (which the datahike defmethod would otherwise return).
           store (factory/backend->store :datahike (assoc (or opts {}) :fresh? true))]
@@ -182,3 +206,15 @@
     ;; Unknown backend
     (throw (ex-info "Unknown KG backend" {:backend backend
                                           :valid #{:datascript :datalevin :datahike}}))))
+
+(defn install-store!
+  "Make STORE the active store for subsequent reads and writes.
+
+   Writes the thread-local `*test-store*` when it is bound, else the process
+   store — so a caller that switches backends stays inside whatever store
+   `ensure-store!` resolves. Returns STORE."
+  [store]
+  (if (thread-bound? #'*test-store*)
+    (set! *test-store* store)
+    (proto/set-store! store))
+  store)

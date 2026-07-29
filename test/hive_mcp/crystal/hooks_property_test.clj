@@ -23,10 +23,10 @@
    - P11: parse-json-safe valid JSON roundtrip
 
    Surface-rescue-error:
-   - P12: surface-rescue-error extracts ::result/error metadata into :error key
+   - P12: surface-rescue-error extracts result/error-key metadata into :error key
 
-   Crystallize-session structure (mocked):
-   - P13: result always contains all 4 lifecycle stat keys
+   Crystallize-session structure (stub store + mocked summarizer):
+   - P13: result always contains every synthesis/lifecycle-stat-keys key
    - P14: result always contains :session and :project-id
 
    Memory access tracking:
@@ -42,10 +42,10 @@
             [hive-mcp.crystal.recall :as recall]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.duration :as dur]
-            [hive-mcp.chroma.core :as chroma]
-            [hive-mcp.agent.context :as ctx]
             [hive-mcp.dns.result :as result]
-            [clojure.data.json :as json]))
+            [clojure.data.json :as json]
+            [hive-mcp.test.stub.memory-store :as stub-store]
+            [hive-mcp.test.stub.extensions :as stub-ext]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -244,10 +244,11 @@
 
 (defspec p8-rescue-failure-map-has-error-metadata 100
   (prop/for-all [fallback gen-fallback-map]
-                (let [r (result/rescue fallback (throw (Exception. "test-error")))]
+                (let [r   (result/rescue fallback (throw (Exception. "test-error")))
+                      err (get (meta r) result/error-key)]
                   (and (map? r)
-                       (some? (::result/error (meta r)))
-                       (= "test-error" (:message (::result/error (meta r))))))))
+                       (some? err)
+                       (= "test-error" (:message err))))))
 
 ;; =============================================================================
 ;; P9: rescue totality — never throws regardless of body behavior
@@ -300,7 +301,7 @@
   (prop/for-all [fallback gen-fallback-map
                  msg gen/string-alphanumeric]
                 (let [with-meta-fb (with-meta fallback
-                                     {::result/error {:message msg :form "test"}})
+                                     {result/error-key {:message msg :form "test"}})
                       surfaced (surface-rescue-error with-meta-fb)]
                   (and (map? surfaced)
                        (= msg (:error surfaced))
@@ -318,33 +319,37 @@
 
 (defmacro ^:private with-lifecycle-mocks
   "Bind all crystallize-session dependencies for property tests.
-   summary-result: what summarize-session-progress returns."
+   summary-result: what summarize-session-progress returns.
+
+   The memory store is a real IMemoryStore stub installed in the store
+   registry — the DIP seam `facade/index-memory-entry!` resolves through —
+   so the store branch is exercised instead of erroring on a missing backend.
+   `:cc/summarize-memory` is deregistered so a nil summary-result really is
+   the no-content path whether the JVM is cold or has addons loaded."
   [summary-result & body]
-  `(with-redefs [crystal/summarize-session-progress
-                 (fn [& _#] ~summary-result)
-                 crystal/session-id
-                 (fn [] "prop-test-session")
-                 scope/get-current-project-id
-                 (fn [_#] "prop-test-project")
-                 scope/inject-project-scope
-                 (fn [tags# _#] tags#)
-                 dur/calculate-expires
-                 (fn [_#] "2026-12-31T00:00:00Z")
-                 ctx/current-directory
-                 (fn [] "/tmp/prop-test")
-                 chroma/index-memory-entry!
-                 (fn [_#] "entry-prop-001")
-                 chroma/content-hash
-                 (fn [c#] (str (hash c#)))]
-     ~@body))
+  `(stub-ext/without-extensions
+    [:cc/summarize-memory]
+    (fn []
+      (stub-store/with-stub-store
+       (fn []
+         (with-redefs [crystal/summarize-session-progress
+                       (fn [& _#] ~summary-result)
+                       crystal/session-id
+                       (fn [] "prop-test-session")
+                       scope/get-current-project-id
+                       (fn [_#] "prop-test-project")
+                       dur/calculate-expires
+                       (fn [_#] "2026-12-31T00:00:00Z")]
+           ~@body))))))
 
 (def ^:private lifecycle-stat-keys
-  "All lifecycle stat keys crystallize-session must return."
-  #{:promotion-stats :decay-stats :xpoll-stats :memory-decay-stats})
+  "Lifecycle stat keys crystallize-session must return. Owned by
+   hive-mcp.crystal.synthesis — read from the source, never restated here."
+  synthesis/lifecycle-stat-keys)
 
 ;; =============================================================================
-;; P13: crystallize-session — result always contains all 4 lifecycle stat keys
-;;      Regardless of whether content exists (skipped vs stored)
+;; P13: crystallize-session — result always contains every lifecycle stat key
+;;      Regardless of whether content exists (minimal-wrap vs synthesized)
 ;; =============================================================================
 
 (defspec p13-crystallize-session-lifecycle-stats-present 50

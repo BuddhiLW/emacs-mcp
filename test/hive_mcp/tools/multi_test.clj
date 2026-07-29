@@ -11,11 +11,18 @@
   (:require [clojure.test :refer [deftest testing is are use-fixtures]]
             [clojure.string :as str]
             [clojure.data.json :as json]
-            [hive-mcp.tools.multi :as multi]))
+            [hive-mcp.tools.multi :as multi]
+            [hive-mcp.test.stub.batch-extensions :as bx]))
 
 ;; =============================================================================
 ;; Part 1: validate-ops Tests
 ;; =============================================================================
+
+;; The batch engine reaches cycle detection, wave assignment and $ref
+;; resolution through the :bx/* extension registry. A cold JVM has that
+;; registry empty; the live server has it filled. Arrange the collaborator
+;; rather than assert its absence.
+(use-fixtures :each bx/with-batch-extensions)
 
 (deftest validate-ops-valid-basic-test
   (testing "Simple valid ops pass validation"
@@ -89,21 +96,21 @@
       (is (some #(str/includes? % "depends on itself") (:errors result))))))
 
 (deftest validate-ops-circular-dependency-test
-  (testing "Circular dependency — noop detect-cycles returns [], validation passes"
+  (testing "Two-node cycle is rejected"
     (let [result (multi/validate-ops
                   [{:id "a" :tool "memory" :command "add" :depends_on ["b"]}
                    {:id "b" :tool "kg" :command "stats" :depends_on ["a"]}])]
-      ;; noop detect-cycles returns [] — no cycle errors detected
-      (is (:valid result)))))
+      (is (not (:valid result)))
+      (is (some #(str/includes? % "Circular dependency") (:errors result))))))
 
 (deftest validate-ops-three-node-cycle-test
-  (testing "Three-node cycle — noop detect-cycles returns [], validation passes"
+  (testing "Three-node cycle a -> b -> c -> a is rejected"
     (let [result (multi/validate-ops
                   [{:id "a" :tool "memory" :command "add" :depends_on ["c"]}
                    {:id "b" :tool "kg" :command "stats" :depends_on ["a"]}
                    {:id "c" :tool "preset" :command "list" :depends_on ["b"]}])]
-      ;; noop detect-cycles returns [] — no cycle errors detected
-      (is (:valid result)))))
+      (is (not (:valid result)))
+      (is (some #(str/includes? % "Circular dependency") (:errors result))))))
 
 (deftest validate-ops-multiple-errors-test
   (testing "Multiple errors collected simultaneously"
@@ -143,20 +150,19 @@
       (is (every? #(= 1 (:wave %)) result)))))
 
 (deftest assign-waves-linear-chain-test
-  (testing "Linear dependency chain — noop assign-waves puts all in wave 1"
+  (testing "Linear dependency chain gets one wave per link"
     (let [ops [{:id "a" :tool "memory"}
                {:id "b" :tool "kg" :depends_on ["a"]}
                {:id "c" :tool "preset" :depends_on ["b"]}]
           result (multi/assign-waves ops)]
       (is (= 3 (count result)))
-      ;; noop: all ops wave 1
       (let [by-id (into {} (map (juxt :id identity) result))]
         (is (= 1 (:wave (get by-id "a"))))
-        (is (= 1 (:wave (get by-id "b"))))
-        (is (= 1 (:wave (get by-id "c"))))))))
+        (is (= 2 (:wave (get by-id "b"))))
+        (is (= 3 (:wave (get by-id "c"))))))))
 
 (deftest assign-waves-diamond-test
-  (testing "Diamond dependency — noop assign-waves puts all in wave 1"
+  (testing "Diamond dependency: the two middle ops share a wave"
     ;; a → b, a → c, b → d, c → d
     (let [ops [{:id "a" :tool "memory"}
                {:id "b" :tool "kg" :depends_on ["a"]}
@@ -164,11 +170,10 @@
                {:id "d" :tool "agora" :depends_on ["b" "c"]}]
           result (multi/assign-waves ops)
           by-id (into {} (map (juxt :id identity) result))]
-      ;; noop: all ops wave 1
       (is (= 1 (:wave (get by-id "a"))))
-      (is (= 1 (:wave (get by-id "b"))))
-      (is (= 1 (:wave (get by-id "c"))))
-      (is (= 1 (:wave (get by-id "d")))))))
+      (is (= 2 (:wave (get by-id "b"))))
+      (is (= 2 (:wave (get by-id "c"))))
+      (is (= 3 (:wave (get by-id "d")))))))
 
 (deftest assign-waves-empty-ops-test
   (testing "Empty ops returns empty result"
@@ -191,7 +196,7 @@
       (is (= 1 (:wave (first result)))))))
 
 (deftest assign-waves-multi-root-test
-  (testing "Multiple root ops + one dependent — noop assign-waves puts all in wave 1"
+  (testing "Independent roots share wave 1; their dependent lands in wave 2"
     (let [ops [{:id "a" :tool "memory"}
                {:id "b" :tool "kg"}
                {:id "c" :tool "preset" :depends_on ["a" "b"]}]
@@ -199,8 +204,7 @@
           by-id (into {} (map (juxt :id identity) result))]
       (is (= 1 (:wave (get by-id "a"))))
       (is (= 1 (:wave (get by-id "b"))))
-      ;; noop: all ops wave 1 (L3+ topological sort stubbed)
-      (is (= 1 (:wave (get by-id "c")))))))
+      (is (= 2 (:wave (get by-id "c")))))))
 
 ;; =============================================================================
 ;; Part 3: execute-op Tests
@@ -276,14 +280,13 @@
       (is (contains? (:summary result) :waves)))))
 
 (deftest run-multi-circular-dep-rejects-test
-  (testing "run-multi with circular deps — noop detect-cycles passes validation, ops execute"
+  (testing "run-multi rejects a circular batch before executing anything"
     (let [result (multi/run-multi
                   [{:id "a" :tool "memory" :command "add" :depends_on ["b"]}
                    {:id "b" :tool "kg" :command "stats" :depends_on ["a"]}])]
-      ;; noop detect-cycles returns [] — validation passes, ops execute in wave 1
-      ;; Both ops fail because memory/add needs content and kg/stats may fail
-      ;; But validation itself passes (no cycle errors)
-      (is (nil? (:errors result))))))
+      (is (false? (:success result)))
+      (is (some #(str/includes? % "Circular dependency") (:errors result)))
+      (is (= 0 (get-in result [:summary :waves]))))))
 
 ;; =============================================================================
 ;; Part 5: format-results Tests
@@ -388,18 +391,23 @@
         (is (= ["a"] (:depends_on b)))))))
 
 (deftest run-multi-dep-failure-skips-downstream-test
-  (testing "run-multi with dep failure — noop assign-waves puts all in wave 1"
-    ;; Use a tool that won't exist to guarantee failure
-    (let [result (multi/run-multi
-                  [{:id "a" :tool "nonexistent-tool-xyz" :command "noop"}
-                   {:id "b" :tool "memory" :command "help" :depends_on ["a"]}])]
-      ;; noop: all ops in wave 1 → no cross-wave dep-failure skip
-      ;; a fails (tool not found), b executes independently in same wave
-      (is (false? (:success result)))
-      (is (= 2 (get-in result [:summary :total])))
-      ;; b succeeds (memory help works), a fails
-      (is (= 1 (get-in result [:summary :success])))
-      (is (= 1 (get-in result [:summary :failed]))))))
+  (testing "A failed op's dependents are skipped, never executed"
+    (let [ran (atom [])]
+      (with-redefs [multi/resolve-tool-handler
+                    (fn [tool-name]
+                      (when (= "mock-b" tool-name)
+                        (fn [_] (swap! ran conj "b")
+                          {:type "text" :text "{\"ok\":true}"})))]
+        ;; "a" resolves to no handler at all → guaranteed failure
+        (let [result (multi/run-multi
+                      [{:id "a" :tool "nonexistent-tool-xyz" :command "noop"}
+                       {:id "b" :tool "mock-b" :command "noop" :depends_on ["a"]}])]
+          (is (false? (:success result)))
+          (is (= 2 (get-in result [:summary :total])))
+          (is (= 0 (get-in result [:summary :success])))
+          (is (= 2 (get-in result [:summary :failed])))
+          (is (empty? @ran)
+              "the dependent handler must not be invoked once its dep failed"))))))
 
 ;; =============================================================================
 ;; Part 8: FX Effect Registration Tests (Step 4)
@@ -408,6 +416,10 @@
 (deftest fx-handlers-registered-test
   (testing ":multi/wave-complete and :multi/op-error are registered in hive.events.fx"
     (require 'hive.events.fx)
+    ;; Registration is an explicit boot step (`register-fx!`, documented safe to
+    ;; call repeatedly), not a load side effect — so ARRANGE it rather than
+    ;; depending on whether something else booted first in this JVM.
+    (multi/register-fx!)
     (let [get-fx (resolve 'hive.events.fx/get-fx)]
       (is (fn? (get-fx :multi/wave-complete))
           ":multi/wave-complete should be registered as an FX handler")
@@ -442,20 +454,20 @@
           (multi/register-fx!))))))
 
 (deftest fx-wave-complete-multi-wave-test
-  (testing "run-multi emits wave-complete — noop assign-waves puts all in 1 wave"
+  (testing "run-multi emits one :multi/wave-complete per dependency wave"
     (require 'hive.events.fx)
     (let [wave-calls (atom [])
           reg-fx (resolve 'hive.events.fx/reg-fx)]
       (reg-fx :multi/wave-complete (fn [data] (swap! wave-calls conj data)))
       (try
-        ;; noop assign-waves: both ops in wave 1 (despite depends_on)
+        ;; b depends on a → two waves
         (multi/run-multi
          [{:id "a" :tool "fake-tool-xyz" :command "noop"}
           {:id "b" :tool "fake-tool-xyz" :command "noop" :depends_on ["a"]}])
-        (is (= 1 (count @wave-calls))
-            "noop assign-waves: 1 wave (all ops wave 1)")
-        (is (= [1] (mapv :wave-num @wave-calls)))
-        (is (every? #(= 1 (:total-waves %)) @wave-calls))
+        (is (= 2 (count @wave-calls))
+            "a dependent op executes in its own wave")
+        (is (= [1 2] (mapv :wave-num @wave-calls)))
+        (is (every? #(= 2 (:total-waves %)) @wave-calls))
         (finally
           (multi/register-fx!))))))
 
@@ -538,21 +550,24 @@
 
 ;; --- 9b: parse-ref ---
 
+;; The contract these pin lives in hive-mcp.batch.ref-contract and is checked
+;; against every :bx/a provider by hive-mcp.batch.ref-conformance-test.
+
 (deftest parse-ref-with-path-test
-  (testing "parse-ref — noop returns nil"
-    (let [r (multi/parse-ref "$ref:op-1.data.id")]
-      ;; noop parse-ref returns nil for all inputs
-      (is (nil? r)))))
+  (testing "parse-ref splits the source op-id from a STRING path — the result
+            map's key encoding is resolve-ref's business, not the parser's"
+    (is (= {:op-id "op-1" :path ["data" "id"]}
+           (multi/parse-ref "$ref:op-1.data.id")))))
 
 (deftest parse-ref-no-path-test
-  (testing "parse-ref noop returns nil"
-    (let [r (multi/parse-ref "$ref:op-1")]
-      (is (nil? r)))))
+  (testing "A $ref carrying no path designates the whole op-result"
+    (is (= {:op-id "op-1" :path []}
+           (multi/parse-ref "$ref:op-1")))))
 
 (deftest parse-ref-deep-path-test
-  (testing "parse-ref noop returns nil for deep paths"
-    (let [r (multi/parse-ref "$ref:a.result.content.0.text")]
-      (is (nil? r)))))
+  (testing "parse-ref keeps every path segment, numeric ones included"
+    (is (= {:op-id "a" :path ["result" "content" "0" "text"]}
+           (multi/parse-ref "$ref:a.result.content.0.text")))))
 
 (deftest parse-ref-non-ref-test
   (testing "parse-ref returns nil for non-ref strings"
@@ -562,18 +577,17 @@
 ;; --- 9c: extract-result-data ---
 
 (deftest extract-result-data-mcp-text-test
-  (testing "extract-result-data noop returns input unchanged (identity)"
-    (let [input {:type "text" :text "{\"id\":\"mem-123\",\"ok\":true}"}
-          r (multi/extract-result-data input)]
-      ;; noop: identity pass-through, no JSON parsing
-      (is (= input r)))))
+  (testing "Parses the JSON body out of an MCP :text response"
+    (let [r (multi/extract-result-data
+             {:type "text" :text "{\"id\":\"mem-123\",\"ok\":true}"})]
+      (is (= "mem-123" (:id r)))
+      (is (true? (:ok r))))))
 
 (deftest extract-result-data-mcp-content-test
-  (testing "extract-result-data noop returns input unchanged (identity)"
-    (let [input {:content [{:type "text" :text "{\"id\":\"mem-456\"}"}]}
-          r (multi/extract-result-data input)]
-      ;; noop: identity pass-through
-      (is (= input r)))))
+  (testing "Parses the JSON body out of an MCP :content response"
+    (let [r (multi/extract-result-data
+             {:content [{:type "text" :text "{\"id\":\"mem-456\"}"}]})]
+      (is (= "mem-456" (:id r))))))
 
 (deftest extract-result-data-structured-test
   (testing "Passes through already-structured data"
@@ -609,68 +623,67 @@
 
 ;; --- 9e: resolve-ref ---
 
+;; The parsed-ref shape is parse-ref's output, so build it with parse-ref
+;; rather than restating the path encoding here.
+
 (deftest resolve-ref-data-path-test
-  (testing "resolve-ref noop returns sentinel for all inputs"
-    (let [results {"a" {:id "a" :success true :data {:id "mem-123" :status "ok"}}}
-          r (multi/resolve-ref {:op-id "a" :path ["data" "id"]} results)]
-      (is (= :hive-mcp.tools.multi/ref-not-found r)))))
+  (testing "Resolves into the source op's parsed :data"
+    (let [results {"a" {:id "a" :success true :data {:id "mem-123" :status "ok"}}}]
+      (is (= "mem-123"
+             (multi/resolve-ref (multi/parse-ref "$ref:a.data.id") results))))))
 
 (deftest resolve-ref-top-level-test
-  (testing "resolve-ref noop returns sentinel"
-    (let [results {"a" {:id "a" :success true :data {:id "mem-123"}}}
-          r (multi/resolve-ref {:op-id "a" :path ["success"]} results)]
-      (is (= :hive-mcp.tools.multi/ref-not-found r)))))
+  (testing "Resolves into a top-level op-result key"
+    (let [results {"a" {:id "a" :success true :data {:id "mem-123"}}}]
+      (is (true?
+           (multi/resolve-ref (multi/parse-ref "$ref:a.success") results))))))
 
 (deftest resolve-ref-full-result-test
-  (testing "resolve-ref noop returns sentinel even for empty path"
-    (let [results {"a" {:id "a" :success true :data {:id "mem-123"}}}
-          r (multi/resolve-ref {:op-id "a" :path []} results)]
-      (is (= :hive-mcp.tools.multi/ref-not-found r)))))
+  (testing "An empty path designates the whole op-result"
+    (let [results {"a" {:id "a" :success true :data {:id "mem-123"}}}]
+      (is (= (get results "a")
+             (multi/resolve-ref {:op-id "a" :path []} results))))))
 
 (deftest resolve-ref-missing-op-test
-  (testing "Returns sentinel for missing op-id"
-    (let [results {"a" {:id "a" :success true}}
-          r (multi/resolve-ref {:op-id "missing" :path ["data"]} results)]
-      (is (= :hive-mcp.tools.multi/ref-not-found r)))))
+  (testing "Returns the sentinel for a missing op-id"
+    (let [results {"a" {:id "a" :success true}}]
+      (is (= multi/ref-not-found
+             (multi/resolve-ref {:op-id "missing" :path ["data"]} results))))))
 
 (deftest resolve-ref-nil-path-value-test
-  (testing "resolve-ref noop returns sentinel"
-    (let [results {"a" {:id "a" :success true :data {:field nil}}}
-          r (multi/resolve-ref {:op-id "a" :path ["data" "field"]} results)]
-      (is (= :hive-mcp.tools.multi/ref-not-found r)))))
+  (testing "A path that exists but holds nil resolves to nil, not the sentinel"
+    (let [results {"a" {:id "a" :success true :data {:field nil}}}]
+      (is (nil? (multi/resolve-ref (multi/parse-ref "$ref:a.data.field") results))))))
 
 ;; --- 9f: resolve-refs-in-value ---
 
 (deftest resolve-refs-in-value-string-test
-  (testing "resolve-refs-in-value noop returns input unchanged"
+  (testing "A $ref string is replaced by the value it designates"
     (let [results {"a" {:data {:id "mem-123"}}}]
-      ;; noop: identity pass-through, $ref string not resolved
-      (is (= "$ref:a.data.id" (multi/resolve-refs-in-value "$ref:a.data.id" results))))))
+      (is (= "mem-123" (multi/resolve-refs-in-value "$ref:a.data.id" results))))))
 
 (deftest resolve-refs-in-value-map-test
-  (testing "resolve-refs-in-value noop returns map unchanged"
+  (testing "Refs inside a map are resolved, other entries left alone"
     (let [results {"a" {:data {:id "mem-123"}}}
-          input {:from "$ref:a.data.id" :to "static"}
-          r (multi/resolve-refs-in-value input results)]
-      ;; noop: identity pass-through
-      (is (= input r)))))
+          r (multi/resolve-refs-in-value {:from "$ref:a.data.id" :to "static"} results)]
+      (is (= {:from "mem-123" :to "static"} r)))))
 
 (deftest resolve-refs-in-value-vector-test
-  (testing "resolve-refs-in-value noop returns vector unchanged"
+  (testing "Refs inside a vector are resolved element-wise"
     (let [results {"a" {:data {:id "mem-123"}}}
-          input ["$ref:a.data.id" "static" 42]
-          r (multi/resolve-refs-in-value input results)]
-      ;; noop: identity pass-through
-      (is (= input r)))))
+          r (multi/resolve-refs-in-value ["$ref:a.data.id" "static" 42] results)]
+      (is (= ["mem-123" "static" 42] r)))))
 
 (deftest resolve-refs-in-value-nested-test
-  (testing "resolve-refs-in-value noop returns nested structures unchanged"
+  (testing "Refs resolve at any depth, keeping the resolved value's type"
     (let [results {"a" {:data {:id "mem-123"}} "b" {:success true}}
-          input {:outer {:inner "$ref:a.data.id"}
-                 :list ["$ref:b.success" "plain"]}
-          r (multi/resolve-refs-in-value input results)]
-      ;; noop: identity pass-through
-      (is (= input r)))))
+          r (multi/resolve-refs-in-value
+             {:outer {:inner "$ref:a.data.id"}
+              :list ["$ref:b.success" "plain"]}
+             results)]
+      (is (= {:outer {:inner "mem-123"}
+              :list [true "plain"]}
+             r)))))
 
 (deftest resolve-refs-in-value-passthrough-test
   (testing "Non-ref values pass through unchanged"
@@ -689,26 +702,26 @@
 ;; --- 9g: resolve-op-refs ---
 
 (deftest resolve-op-refs-preserves-meta-keys-test
-  (testing "resolve-op-refs noop returns op unchanged (identity)"
+  (testing "Only ref-walkable params are resolved — meta keys stay literal"
     (let [results {"a" {:data {:id "mem-123"}}}
           op {:id "$ref:a.data.id" :tool "$ref:a.data.id"
               :depends_on ["$ref:a.data.id"] :wave "$ref:a.data.id"
               :from "$ref:a.data.id"}
+          meta-keys [:id :tool :depends_on :wave]
           r (multi/resolve-op-refs op results)]
-      ;; noop: entire op passes through unchanged
-      (is (= op r)))))
+      (is (= "mem-123" (:from r)))
+      (is (= (select-keys op meta-keys) (select-keys r meta-keys))))))
 
 ;; --- 9h: collect-ref-op-ids ---
 
 (deftest collect-ref-op-ids-test
-  (testing "collect-ref-op-ids noop returns empty set"
+  (testing "Collects every op-id the ref-walkable params reference"
     (let [op {:id "b" :tool "kg" :command "edge"
               :from "$ref:a.data.id"
               :tags ["$ref:c.data.tag" "static"]
               :depends_on ["a" "c"]}
           refs (multi/collect-ref-op-ids op)]
-      ;; noop: always returns #{}
-      (is (= #{} refs)))))
+      (is (= #{"a" "c"} refs)))))
 
 (deftest collect-ref-op-ids-no-refs-test
   (testing "Returns empty set when no $refs present"
@@ -717,13 +730,12 @@
       (is (= #{} refs)))))
 
 (deftest collect-ref-op-ids-skips-meta-test
-  (testing "collect-ref-op-ids noop returns empty set"
+  (testing "Meta keys are not walked — only real params contribute op-ids"
     (let [op {:id "$ref:fake" :tool "$ref:fake"
               :depends_on ["$ref:fake"] :wave "$ref:fake"
               :real-param "$ref:a.data.id"}
           refs (multi/collect-ref-op-ids op)]
-      ;; noop: always returns #{}
-      (is (= #{} refs)))))
+      (is (= #{"a"} refs)))))
 
 ;; --- 9i: validate-ops with $ref validation ---
 
@@ -736,13 +748,24 @@
       (is (:valid r)))))
 
 (deftest validate-ops-ref-without-dep-test
-  (testing "validate-ref-deps noop: $ref without depends_on passes validation"
+  (testing "Invalid: a $ref is an ORDERING EDGE, not merely a name — an op
+            referenced but not declared in depends_on may not have run yet,
+            so the batch is refused even though the op is in it"
     (let [r (multi/validate-ops
              [{:id "a" :tool "memory" :command "add"}
               {:id "b" :tool "kg" :command "edge"
                :from "$ref:a.data.id"}])]
-      ;; noop validate-ref-deps returns [] — no ref validation errors
-      (is (:valid r)))))
+      (is (not (:valid r)))
+      (is (some #(str/includes? % "doesn't declare it in depends_on")
+                (:errors r))))))
+
+(deftest validate-ops-ref-to-absent-op-test
+  (testing "Invalid: a $ref naming an op the batch does not contain"
+    (let [r (multi/validate-ops
+             [{:id "b" :tool "kg" :command "edge"
+               :from "$ref:ghost.data.id"}])]
+      (is (not (:valid r)))
+      (is (some #(str/includes? % "ghost") (:errors r))))))
 
 (deftest validate-ops-ref-multiple-deps-test
   (testing "Valid: multiple $refs to different declared dependencies"
@@ -755,20 +778,22 @@
       (is (:valid r)))))
 
 (deftest validate-ops-ref-partial-dep-test
-  (testing "validate-ref-deps noop: partial $ref deps passes validation"
+  (testing "Invalid: one $ref declared, the other not — the undeclared ref is
+            refused and the declared one is not"
     (let [r (multi/validate-ops
              [{:id "a" :tool "memory" :command "add"}
               {:id "b" :tool "memory" :command "add"}
               {:id "c" :tool "kg" :command "edge"
                :from "$ref:a.data.id" :to "$ref:b.data.id"
                :depends_on ["a"]}])]
-      ;; noop validate-ref-deps returns [] — no ref validation errors
-      (is (:valid r)))))
+      (is (not (:valid r)))
+      (is (some #(str/includes? % "$ref to 'b'") (:errors r)))
+      (is (not-any? #(str/includes? % "$ref to 'a'") (:errors r))))))
 
 ;; --- 9j: Integration — run-multi with $ref threading ---
 
 (deftest ref-integration-basic-test
-  (testing "run-multi with $refs — noop resolve-op-refs passes $ref strings through"
+  (testing "run-multi threads a producer's data into its dependent's params"
     (let [captured (atom nil)]
       (with-redefs [multi/resolve-tool-handler
                     (fn [tool-name]
@@ -787,12 +812,12 @@
                         :depends_on ["a"]}])]
           (is (:success result))
           (is (= 2 (get-in result [:summary :success])))
-          ;; noop: handler receives raw $ref strings, not resolved values
-          (is (= "$ref:a.data.id" (:from @captured)))
-          (is (= "$ref:a.data.status" (:status @captured))))))))
+          ;; the handler receives resolved values, never the $ref string
+          (is (= "mem-123" (:from @captured)))
+          (is (= "created" (:status @captured))))))))
 
 (deftest ref-integration-chained-test
-  (testing "Three-op chain with $refs — noop passes $ref strings through"
+  (testing "A three-op chain threads each producer's id into the next op"
     (let [c-captured (atom nil)]
       (with-redefs [multi/resolve-tool-handler
                     (fn [tool-name]
@@ -810,9 +835,8 @@
                         :depends_on ["a" "b"]}])]
           (is (:success result))
           (is (= 3 (get-in result [:summary :success])))
-          ;; noop: c receives raw $ref strings
-          (is (= "$ref:a.data.id" (:from @c-captured)))
-          (is (= "$ref:b.data.id" (:to @c-captured))))))))
+          (is (= "id-a" (:from @c-captured)))
+          (is (= "id-b" (:to @c-captured))))))))
 
 (deftest ref-integration-dep-failure-test
   (testing "When dep fails, downstream op is skipped (not ref-resolved)"
@@ -831,16 +855,31 @@
         (is (= 2 (get-in result [:summary :failed])))))))
 
 (deftest ref-integration-validation-rejects-undeclared-ref-test
-  (testing "validate-ref-deps noop: undeclared $ref passes validation"
+  (testing "run-multi refuses a batch whose $ref names an op present in the
+            batch but undeclared in depends_on — the ref would be read from a
+            same-wave op that has not run"
     (let [result (multi/run-multi
                   [{:id "a" :tool "memory" :command "add"}
                    {:id "b" :tool "kg" :command "edge"
                     :from "$ref:a.data.id"}])]
-      ;; noop validate-ref-deps returns [] — no errors, ops execute
-      (is (nil? (:errors result))))))
+      (is (false? (:success result)))
+      (is (some #(str/includes? % "doesn't declare it in depends_on")
+                (:errors result)))
+      ;; refused at compile time — nothing was scheduled, let alone executed
+      (is (= 0 (get-in result [:summary :waves]))))))
+
+(deftest ref-integration-validation-rejects-ref-to-absent-op-test
+  (testing "run-multi refuses a batch whose $ref names an op it does not contain"
+    (let [result (multi/run-multi
+                  [{:id "a" :tool "memory" :command "add"}
+                   {:id "b" :tool "kg" :command "edge"
+                    :from "$ref:ghost.data.id"}])]
+      (is (false? (:success result)))
+      (is (some #(str/includes? % "ghost") (:errors result)))
+      (is (= 0 (get-in result [:summary :waves]))))))
 
 (deftest ref-integration-non-string-resolution-test
-  (testing "$ref noop — handler receives raw $ref strings"
+  (testing "A resolved $ref keeps its JSON type — number, bool, nested map"
     (let [captured (atom nil)]
       (with-redefs [multi/resolve-tool-handler
                     (fn [tool-name]
@@ -858,10 +897,9 @@
                         :meta "$ref:a.data.meta"
                         :depends_on ["a"]}])]
           (is (:success result))
-          ;; noop: handler receives raw $ref strings, not resolved values
-          (is (= "$ref:a.data.count" (:count @captured)))
-          (is (= "$ref:a.data.active" (:active @captured)))
-          (is (= "$ref:a.data.meta" (:meta @captured))))))))
+          (is (= 42 (:count @captured)))
+          (is (true? (:active @captured)))
+          (is (= {:key "val"} (:meta @captured))))))))
 
 (comment
   ;; Run all tests in this namespace via REPL

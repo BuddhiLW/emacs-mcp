@@ -198,8 +198,16 @@
                               "task_ids" {:type "array" :items {:type "string"}
                                           :description "[session/workflow] Kanban task IDs to mark done"}
                               "agent_id" {:type "string" :description "[session/workflow] Agent ID"}
+                              "ctx_refs" {:type "object"
+                                          :description "[session context-reconstruct] Map of category->ctx-id for ref resolution"}
+                              "kg_node_ids" {:type "array" :items {:type "string"}
+                                             :description "[session context-reconstruct] KG node IDs for graph traversal seeds"}
                               ;; Workflow params
                               "task_filter" {:type "string" :description "[workflow forge] Title prefix filter for survey"}
+                              "presets" {:type "array" :items {:type "string"}
+                                         :description "[workflow forge strike] Presets applied to every forged ling"}
+                              "predicates" {:type "array" :items {:type "string"}
+                                            :description "[workflow] Named predicates available at run time"}
                               ;; Shared
                               "operations" {:type "array" :items {:type "object"}
                                             :description "Array of operations for batch commands"}

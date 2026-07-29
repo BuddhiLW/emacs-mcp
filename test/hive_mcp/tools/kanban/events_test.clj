@@ -87,7 +87,7 @@
 ;; new status keyword and none of the others.
 ;; ---------------------------------------------------------------------------
 
-(def ^:private status-tags #{"todo" "doing" "review" "done"})
+(def ^:private status-tags kp/status-tag-set)
 
 (defspec move-tags-replace-not-union 200
   (prop/for-all [from gen-status

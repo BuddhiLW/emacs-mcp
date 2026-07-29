@@ -30,7 +30,8 @@
             [hive-mcp.knowledge-graph.connection :as kg-conn]
             [hive-mcp.tools.memory-kanban :as mem-kanban]
             [hive-test.isolation :as iso]
-            [hive-mcp.isolation-methods]))
+            [hive-mcp.isolation-methods]
+            [hive-mcp.test.stub.memory-store :as mem-stub]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -77,6 +78,7 @@
       (cleanup-test-data!))))
 
 (use-fixtures :each
+  mem-stub/with-stub-store
   (iso/with-isolations :kg-conn)
   integration-fixture)
 

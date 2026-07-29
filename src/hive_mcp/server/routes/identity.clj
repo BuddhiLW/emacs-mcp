@@ -90,38 +90,60 @@
   [args]
   (or (:_caller_id args) "coordinator"))
 
-(defn extract-project-id
-  "Extract project-id from args map with multi-level fallback.
+(defn- resolve-vessel-context
+  "Resolve caller agent context as {:project-id :cwd :session-id}, or nil."
+  [args]
+  (let [agent-id (if (contains? args :_caller_id)
+                   (:_caller_id args)
+                   (or (:agent_id args) (:agent-id args)))]
+    (when (and agent-id (not= agent-id "coordinator"))
+      (ctx/request-memoize
+       [:vessel-context agent-id]
+       (fn []
+         (try
+           (require 'hive-mcp.protocols.vessel)
+           (when-let [resolve-fn
+                      (resolve 'hive-mcp.protocols.vessel/resolve-agent-context)]
+             (resolve-fn agent-id))
+           (catch Exception e
+             (log/trace "routes: vessel resolution failed for"
+                        agent-id (.getMessage e))
+             nil)))))))
 
-   Key priority:
-   1. Explicit project_id/project-id
-   2. IVessel resolution (vessel owns agent-to-context mapping)
-   3. Derived from directory via scope/get-current-project-id
-   4. Derived from _caller_cwd (bb-mcp's cwd)
-   5. Derived from ctx/current-directory
-   6. Derived from server's working directory"
+(defn extract-directory
+  "Resolve request working directory from explicit args, caller injection,
+   caller vessel context, bound request context, then server cwd."
+  [args]
+  (or (:directory args)
+      (:_caller_cwd args)
+      (:cwd (resolve-vessel-context args))
+      (ctx/current-directory)
+      (System/getProperty "user.dir")))
+
+(defn- project-id-from-directory
+  "Derive and memoize project-id for a non-nil directory."
+  [directory]
+  (when directory
+    (ctx/request-memoize
+     [:project-id directory]
+     (fn []
+       (require 'hive-mcp.tools.memory.scope)
+       ((resolve 'hive-mcp.tools.memory.scope/get-current-project-id)
+        directory)))))
+
+(defn extract-project-id
+  "Resolve project-id from an explicit override, working directory, caller
+   vessel context, bound request context, then server cwd."
   [args]
   (or (:project_id args)
       (:project-id args)
-      (when-let [agent-id (or (:agent_id args) (:agent-id args) (:_caller_id args))]
-        (when-not (= agent-id "coordinator")
-          (ctx/request-memoize
-           [:vessel-project-id agent-id]
-           (fn []
-             (try
-               (require 'hive-mcp.protocols.vessel)
-               (when-let [resolve-fn (resolve 'hive-mcp.protocols.vessel/resolve-agent-context)]
-                 (:project-id (resolve-fn agent-id)))
-               (catch Exception e (log/trace "routes: vessel resolution failed for" agent-id (.getMessage e)) nil))))))
-      (when-let [dir (or (:directory args)
-                         (:_caller_cwd args)
-                         (ctx/current-directory)
-                         (System/getProperty "user.dir"))]
-        (ctx/request-memoize
-         [:project-id dir]
-         (fn []
-           (require 'hive-mcp.tools.memory.scope)
-           ((resolve 'hive-mcp.tools.memory.scope/get-current-project-id) dir))))))
+      (project-id-from-directory (or (:directory args) (:_caller_cwd args)))
+      (let [{:keys [cwd project-id]} (resolve-vessel-context args)]
+        (or (project-id-from-directory cwd)
+            project-id))
+      (project-id-from-directory
+       (or (ctx/current-directory)
+           (System/getProperty "user.dir")))))
 
 (defn extract-caller-identity
   "Extract CallerId ADT from MCP args."

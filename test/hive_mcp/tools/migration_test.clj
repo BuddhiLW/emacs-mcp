@@ -503,26 +503,33 @@
       (is (not (contains? result :project-id-filter))))))
 
 (deftest cmd-list-v1-backups-match-global-filter-test
-  (testing "V1 backups (no project-id) match 'global' filter"
-    ;; Create a v1 backup without project-id
-    (spit (str *test-dir* "/kg-datascript-20260201T100000.edn")
-          (pr-str {:backup/version 1
-                   :backup/scope :kg
-                   :backup/counts {:edges 0}}))
-    ;; Create a v2 backup with project-id
-    (spit (str *test-dir* "/kg-datascript-20260202T100000.edn")
-          (pr-str {:backup/version 2
-                   :backup/scope :kg
-                   :backup/project-id "hive-mcp"
-                   :backup/counts {:edges 0}}))
+  (testing "V1 backups (no project-id) are global-scoped and HCR-visible"
+    (let [v1 (str *test-dir* "/kg-datascript-20260201T100000.edn")
+          v2 (str *test-dir* "/kg-datascript-20260202T100000.edn")
+          names #(set (map (fn [b] (.getName (io/file (:path b)))) (:backups %)))]
+      ;; v1 backup: no :backup/project-id at all
+      (spit v1 (pr-str {:backup/version 1
+                        :backup/scope :kg
+                        :backup/counts {:edges 0}}))
+      ;; v2 backup: explicitly scoped to hive-mcp
+      (spit v2 (pr-str {:backup/version 2
+                        :backup/scope :kg
+                        :backup/project-id "hive-mcp"
+                        :backup/counts {:edges 0}}))
 
-    ;; Filter for global should find v1 backup
-    (let [result (migration/cmd-list {:dir *test-dir* :project-id "global"})]
-      (is (= 1 (:count result))))
+      ;; From "global" only the un-scoped v1 backup is visible: a
+      ;; project-scoped backup does not leak up to its ancestor scope.
+      (let [result (migration/cmd-list {:dir *test-dir* :project-id "global"})]
+        (is (= #{(.getName (io/file v1))} (names result)))
+        (is (= 1 (:count result)))
+        (is (= "global" (:project-id-filter result))))
 
-    ;; Filter for hive-mcp should find v2 backup
-    (let [result (migration/cmd-list {:dir *test-dir* :project-id "hive-mcp"})]
-      (is (= 1 (:count result))))))
+      ;; From "hive-mcp" both are visible — core/list-backups documents
+      ;; hierarchical scope matching: a child scope inherits every ancestor's
+      ;; backups, and "global" is the root ancestor of every project.
+      (let [result (migration/cmd-list {:dir *test-dir* :project-id "hive-mcp"})]
+        (is (= #{(.getName (io/file v1)) (.getName (io/file v2))} (names result)))
+        (is (= 2 (:count result)))))))
 
 ;; =============================================================================
 ;; Project Scope Awareness Tests - Restore Command

@@ -19,7 +19,8 @@
 
 (declare ensure-writer! stop-writer! writer-stats flush-pending! drain-writer! in-flight)
 
-(declare store-live? ensure-store! get-conn ensure-conn! ensure-conn reset-conn! delete-database! close! set-backend!)
+(declare store-live? ensure-store! get-conn ensure-conn! ensure-conn reset-conn!
+         delete-database! close! set-backend! backend-health)
 
 ;; =============================================================================
 ;; Config-based Backend Auto-detection
@@ -187,11 +188,13 @@
 
 (defn gen-edge-id
   "Generate a unique edge ID with timestamp prefix.
-   Format: edge-yyyyMMddTHHmmss-XXXXXX
-   The timestamp prefix enables chronological sorting."
+   Format: edge-yyyyMMddTHHmmssSSS-XXXXXX
+   The timestamp orders IDs chronologically to the millisecond; the random
+   suffix only disambiguates edges minted within the same millisecond, and
+   two such edges have no defined order."
   []
   (let [now (java.time.LocalDateTime/now)
-        formatter (java.time.format.DateTimeFormatter/ofPattern "yyyyMMdd'T'HHmmss")
+        formatter (java.time.format.DateTimeFormatter/ofPattern "yyyyMMdd'T'HHmmssSSS")
         timestamp (.format now formatter)
         random-hex (format "%06x" (rand-int 0xFFFFFF))]
     (str "edge-" timestamp "-" random-hex)))
@@ -227,6 +230,8 @@
 (def ensure-conn! hive-mcp.knowledge-graph.connection.store/ensure-conn!)
 
 (def ensure-conn hive-mcp.knowledge-graph.connection.store/ensure-conn)
+
+(def backend-health hive-mcp.knowledge-graph.connection.store/backend-health)
 
 (def reset-conn! hive-mcp.knowledge-graph.connection.store/reset-conn!)
 

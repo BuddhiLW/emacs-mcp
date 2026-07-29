@@ -429,18 +429,34 @@
 ;; =============================================================================
 
 (defn- compile-batch
-  "Normalize → validate → assign-waves. Returns Result.
+  "Normalize → resolve node refs → validate → assign-waves. Returns Result.
    Ok:  {:waved-ops [...] :wave-groups {1 [...] 2 [...]}}
    Err: :multi/validation-failed with :errors and :total."
   [ops]
   (let [normalized (mapv normalize-op ops)
-        validation (validate-ops normalized)]
-    (if-not (:valid validation)
+        ;; A node-id param (:from/:to/...) naming a sibling op is sugar for a
+        ;; cross-op ref. Resolved HERE rather than in the DSL compiler so both
+        ;; the `:dsl` and `:operations` surfaces get it. Idempotent: an already
+        ;; canonical `$ref:` renders unchanged, so DSL-compiled ops pass through.
+        resolved   (delegate-or-noop :dv/compile-ops normalized [normalized])
+        dangling   (filterv :dangling resolved)]
+    (if (seq dangling)
+      ;; A `$`-prefixed value naming no declared op cannot resolve. Refuse the
+      ;; batch instead of letting the placeholder be stored as a literal node id.
       (result/err :multi/validation-failed
-                  {:errors (:errors validation) :total (count ops)})
-      (let [waved (assign-waves normalized)]
-        (result/ok {:waved-ops   waved
-                    :wave-groups (group-by :wave waved)})))))
+                  {:errors (mapv (fn [op]
+                                   (str "Operation " (:id op)
+                                        " references undeclared op ids: "
+                                        (pr-str (:dangling op))))
+                                 dangling)
+                   :total  (count ops)})
+      (let [validation (validate-ops resolved)]
+        (if-not (:valid validation)
+          (result/err :multi/validation-failed
+                      {:errors (:errors validation) :total (count ops)})
+          (let [waved (assign-waves resolved)]
+            (result/ok {:waved-ops   waved
+                        :wave-groups (group-by :wave waved)})))))))
 
 (defn- build-dry-run-response
   "Build dry-run plan response from wave groups."
@@ -449,7 +465,7 @@
    :dry-run true
    :waves   (into (sorted-map)
                   (map (fn [[w ops]]
-                         [w {:ops (mapv #(select-keys % [:id :tool :command :depends_on]) ops)}])
+                         [w {:ops (mapv #(dissoc % :wave) ops)}])
                        wave-groups))
    :summary {:total total-count :success 0 :failed 0 :waves (count wave-groups)}})
 

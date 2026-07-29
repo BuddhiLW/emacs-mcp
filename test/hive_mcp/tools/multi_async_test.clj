@@ -101,7 +101,7 @@
         (let [{:keys [batch-id]} (async/run-multi-async
                                   [{:id "op-1" :tool "memory" :command "add"}]
                                   :dry-run true)]
-          (Thread/sleep 200)
+          (async/await-async-batch batch-id)
           (is (true? @dry-run-called?)
               "dry-run flag should be forwarded to run-multi"))))))
 
@@ -130,32 +130,29 @@
   (testing "collect returns completed status with full results after future finishes"
     (with-mock mock-run-multi
       (let [{:keys [batch-id]} (async/run-multi-async
-                                [{:id "op-1" :tool "memory" :command "add"}])]
-        ;; Give future time to complete and store result
-        (Thread/sleep 200)
-        (let [r (async/collect-async-result batch-id)]
-          (is (= "completed" (:status r))
-              "status should be completed")
-          (is (= batch-id (:batch-id r)))
-          (is (map? (:results r))
-              "results should contain the run-multi output map")
-          (is (true? (:success (:results r)))
-              "run-multi result should show success"))))))
+                                [{:id "op-1" :tool "memory" :command "add"}])
+            r (async/await-async-batch batch-id)]
+        (is (= "completed" (:status r))
+            "status should be completed")
+        (is (= batch-id (:batch-id r)))
+        (is (map? (:results r))
+            "results should contain the run-multi output map")
+        (is (true? (:success (:results r)))
+            "run-multi result should show success")))))
 
 (deftest test-collect-completed-results-shape
   (testing "completed results preserve run-multi output structure"
     (with-mock mock-run-multi
       (let [{:keys [batch-id]} (async/run-multi-async
                                 [{:id "a" :tool "memory" :command "add"}
-                                 {:id "b" :tool "kg"     :command "stats"}])]
-        (Thread/sleep 200)
-        (let [{:keys [results]} (async/collect-async-result batch-id)]
-          (is (contains? results :summary)
-              "results should contain :summary")
-          (is (= 2 (get-in results [:summary :total]))
-              "summary total should match ops count")
-          (is (contains? results :waves)
-              "results should contain :waves"))))))
+                                 {:id "b" :tool "kg"     :command "stats"}])
+            {:keys [results]}  (async/await-async-batch batch-id)]
+        (is (contains? results :summary)
+            "results should contain :summary")
+        (is (= 2 (get-in results [:summary :total]))
+            "summary total should match ops count")
+        (is (contains? results :waves)
+            "results should contain :waves")))))
 
 ;; =============================================================================
 ;; Collect Tests: Failed
@@ -165,15 +162,14 @@
   (testing "collect returns failed status when future throws an exception"
     (with-mock failing-mock-run-multi
       (let [{:keys [batch-id]} (async/run-multi-async
-                                [{:id "op-1" :tool "memory" :command "add"}])]
-        (Thread/sleep 200)
-        (let [r (async/collect-async-result batch-id)]
-          (is (= "failed" (:status r)))
-          (is (= batch-id (:batch-id r)))
-          (is (string? (:error r))
-              "should include error message")
-          (is (str/includes? (:error r) "Simulated")
-              "error should contain exception message"))))))
+                                [{:id "op-1" :tool "memory" :command "add"}])
+            r (async/await-async-batch batch-id)]
+        (is (= "failed" (:status r)))
+        (is (= batch-id (:batch-id r)))
+        (is (string? (:error r))
+            "should include error message")
+        (is (str/includes? (:error r) "Simulated")
+            "error should contain exception message")))))
 
 ;; =============================================================================
 ;; Collect Tests: Expired
@@ -182,11 +178,14 @@
 (deftest test-collect-expired
   (testing "collect returns expired when context-store TTL exceeded"
     (with-mock mock-run-multi
-      (let [{:keys [batch-id]} (async/run-multi-async
+      (let [ttl-ms 50
+            {:keys [batch-id]} (async/run-multi-async
                                 [{:id "op-1" :tool "memory" :command "add"}]
-                                :ttl-ms 50)]
-        ;; Wait for future to complete + TTL to expire
-        (Thread/sleep 300)
+                                :ttl-ms ttl-ms)]
+        ;; Completion is awaited through the batch future; only the TTL itself
+        ;; is wall-clock, and it is the subject of this test.
+        (is (= "completed" (:status (async/await-async-batch batch-id))))
+        (Thread/sleep (* 2 ttl-ms))
         (let [r (async/collect-async-result batch-id)]
           (is (= "expired" (:status r))
               "status should be expired after TTL")
@@ -227,7 +226,7 @@
     (with-mock mock-run-multi
       (let [{:keys [batch-id]} (async/run-multi-async
                                 [{:id "op-1" :tool "memory" :command "add"}])]
-        (Thread/sleep 200)
+        (is (= "completed" (:status (async/await-async-batch batch-id))))
         (let [r (async/cancel-async-batch batch-id)]
           (is (false? (:cancelled r)))
           (is (= "not-running" (:reason r))))))))
@@ -277,7 +276,7 @@
     (with-mock mock-run-multi
       ;; Dispatch two batches (instant completion)
       (let [r1 (async/run-multi-async [{:id "op-1" :tool "memory" :command "add"}])]
-        (Thread/sleep 200)
+        (async/await-async-batch (:batch-id r1))
         ;; Now dispatch a slow one
         (with-mock slow-mock-run-multi
           (let [r2 (async/run-multi-async [{:id "op-2" :tool "kg" :command "stats"}])
@@ -301,10 +300,9 @@
                             (range n))]
         (is (= n (count (set batch-ids)))
             "all batch-ids should be unique")
-        ;; Wait for all to complete (generous for CI)
-        (Thread/sleep 1000)
+        ;; Await each batch through its own future — no sleeping.
         (doseq [bid batch-ids]
-          (is (= "completed" (:status (async/collect-async-result bid)))
+          (is (= "completed" (:status (async/await-async-batch bid)))
               (str "batch " bid " should be completed")))))))
 
 (deftest test-concurrent-dispatches-via-futures
@@ -321,9 +319,9 @@
         (is (every? #(= "running" (:status %)) results))
         (is (= n (count (set (map :batch-id results))))
             "all batch-ids should be unique")
-        ;; Wait and verify all complete (generous for CI)
-        (Thread/sleep 1000)
-        (is (= n (count (filter #(= "completed" (:status (async/collect-async-result (:batch-id %))))
+        ;; Await every batch through its own future — a dispatch that finishes
+        ;; before its dispatcher returns must still settle as completed.
+        (is (= n (count (filter #(= "completed" (:status (async/await-async-batch (:batch-id %))))
                                 results))))))))
 
 (deftest test-concurrent-collects-same-batch
@@ -331,7 +329,7 @@
     (with-mock mock-run-multi
       (let [{:keys [batch-id]} (async/run-multi-async
                                 [{:id "op-1" :tool "memory" :command "add"}])]
-        (Thread/sleep 200)
+        (is (= "completed" (:status (async/await-async-batch batch-id))))
         (let [collect-futures (mapv (fn [_]
                                       (future (async/collect-async-result batch-id)))
                                     (range 20))
@@ -348,11 +346,13 @@
 (deftest test-gc-purges-expired-terminal
   (testing "gc-completed! removes terminal batches with expired context-store entries"
     (with-mock mock-run-multi
-      (let [{:keys [batch-id]} (async/run-multi-async
+      (let [ttl-ms 50
+            {:keys [batch-id]} (async/run-multi-async
                                 [{:id "op-1" :tool "memory" :command "add"}]
-                                :ttl-ms 50)]
-        ;; Wait for completion + TTL expiry
-        (Thread/sleep 300)
+                                :ttl-ms ttl-ms)]
+        (is (= "completed" (:status (async/await-async-batch batch-id))))
+        ;; Only the context-store TTL is wall-clock here.
+        (Thread/sleep (* 2 ttl-ms))
         (let [purged (async/gc-completed!)]
           (is (pos? purged)
               "should purge at least one entry")
@@ -371,13 +371,14 @@
 (deftest test-gc-preserves-live-completed
   (testing "gc-completed! does not purge completed batches with live context-store entries"
     (with-mock mock-run-multi
-      (async/run-multi-async [{:id "op-1" :tool "memory" :command "add"}]
-                             :ttl-ms 60000) ;; long TTL
-      (Thread/sleep 200)
-      (let [purged (async/gc-completed!)]
-        (is (zero? purged)
-            "completed batch with live result should not be purged")
-        (is (= 1 (count (async/list-async-batches))))))))
+      (let [{:keys [batch-id]} (async/run-multi-async
+                                [{:id "op-1" :tool "memory" :command "add"}]
+                                :ttl-ms 60000)] ;; long TTL
+        (is (= "completed" (:status (async/await-async-batch batch-id))))
+        (let [purged (async/gc-completed!)]
+          (is (zero? purged)
+              "completed batch with live result should not be purged")
+          (is (= 1 (count (async/list-async-batches)))))))))
 
 ;; =============================================================================
 ;; Reset Tests

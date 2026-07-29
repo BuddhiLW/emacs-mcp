@@ -335,7 +335,10 @@
 
 (deftest test-get-current-project-id-prefers-edn
   (testing "Prefers :project-id from .hive-project.edn over last path segment"
-    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "edn-project-id")]
+    ;; `read-direct-project-config` IS the seam: "what does exactly this
+    ;; directory declare". Everything below it (file existence, slurp, edn
+    ;; parsing, the config cache) is the concretion the test must not touch.
+    (with-redefs [kg-scope/read-direct-project-config (fn [_] {:project-id "edn-project-id"})]
       (is (= "edn-project-id"
              (scope/get-current-project-id "/home/user/projects/directory-name"))
           "Should use .hive-project.edn :project-id, not 'directory-name'"))))
@@ -343,32 +346,45 @@
 (deftest test-get-current-project-id-edn-differs-from-dirname
   (testing "Returns edn project-id even when directory name differs"
     ;; This is the key fix: renamed directories use the .edn project-id
-    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "canonical-name")]
+    (with-redefs [kg-scope/read-direct-project-config (fn [_] {:project-id "canonical-name"})]
       (is (= "canonical-name"
              (scope/get-current-project-id "/home/user/code/old-directory-name"))))))
 
 (deftest test-get-current-project-id-fallback-no-edn
   (testing "Falls back to last path segment when no .hive-project.edn found"
-    ;; infer-scope-from-path returns "global" when no .edn found
-    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "global")]
+    ;; nil config = no .hive-project.edn in this exact directory
+    (with-redefs [kg-scope/read-direct-project-config (fn [_] nil)]
       (is (= "directory-name"
              (scope/get-current-project-id "/home/user/projects/directory-name"))
           "Should fall back to last path segment when no .edn"))))
 
 (deftest test-get-current-project-id-fallback-infer-returns-nil
-  (testing "Falls back to last path segment when infer returns nil"
-    (with-redefs [kg-scope/infer-scope-from-path (fn [_] nil)]
+  (testing "Falls back to last path segment when the config declares no :project-id"
+    ;; A .hive-project.edn that exists but carries no :project-id key is not a
+    ;; scope declaration — it must not shadow the path segment.
+    (with-redefs [kg-scope/read-direct-project-config (fn [_] {:parent "some-parent"})]
       (is (= "my-project"
              (scope/get-current-project-id "/path/to/my-project"))
-          "nil from infer should trigger fallback"))))
+          "config without :project-id should trigger fallback"))))
 
 (deftest test-get-current-project-id-fallback-on-exception
-  (testing "Falls back to last path segment when infer-scope-from-path throws"
-    (with-redefs [kg-scope/infer-scope-from-path
-                  (fn [_] (throw (Exception. "disk error")))]
-      (is (= "directory-name"
-             (scope/get-current-project-id "/home/user/projects/directory-name"))
-          "Should gracefully fall back on exception"))))
+  (testing "Falls back to last path segment when .hive-project.edn is unreadable"
+    ;; Exercised against a REAL malformed file rather than a stubbed throw:
+    ;; `read-hive-project-config` rescues internally, so a seam stubbed to
+    ;; throw would assert a state production can never reach.
+    (let [dir (io/file (System/getProperty "java.io.tmpdir")
+                       (str "hive-scope-malformed-" (System/nanoTime))
+                       "directory-name")]
+      (.mkdirs dir)
+      (spit (io/file dir ".hive-project.edn") "{:project-id \"unclosed")
+      (try
+        (is (= "directory-name"
+               (scope/get-current-project-id (.getAbsolutePath dir)))
+            "Should gracefully fall back to the path segment on a parse failure")
+        (finally
+          (.delete (io/file dir ".hive-project.edn"))
+          (.delete dir)
+          (.delete (.getParentFile dir)))))))
 
 (deftest test-get-current-project-id-real-project-dir
   (testing "Integration: actual project dir resolves via .hive-project.edn"
@@ -456,11 +472,11 @@
 ;; 3. derive-hierarchy-scope-filter includes alias scope tags
 
 (deftest test-r3-get-current-project-id-resolves-alias-from-path-segment
-  (testing "R3: Directory name that's a known alias resolves to canonical project-id"
+  (testing "R3: Alias in path segment resolves to canonical project-id"
     ;; Scenario: directory is /path/to/emacs-mcp but emacs-mcp is alias for hive-mcp
     (kg-scope/register-project-config! "hive-mcp" {:aliases ["emacs-mcp"]})
     ;; No .hive-project.edn found, falls back to path segment -> alias resolution
-    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "global")]
+    (with-redefs [kg-scope/read-direct-project-config (fn [_] nil)]
       (is (= "hive-mcp"
              (scope/get-current-project-id "/home/user/projects/emacs-mcp"))
           "Should resolve alias 'emacs-mcp' to canonical 'hive-mcp'"))))
@@ -469,14 +485,14 @@
   (testing "R3: Even .hive-project.edn project-id is alias-resolved"
     ;; Scenario: .edn file itself has an old/aliased project-id
     (kg-scope/register-project-config! "canonical-proj" {:aliases ["edn-alias"]})
-    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "edn-alias")]
+    (with-redefs [kg-scope/read-direct-project-config (fn [_] {:project-id "edn-alias"})]
       (is (= "canonical-proj"
              (scope/get-current-project-id "/path/to/project"))
           "Should resolve even edn-returned aliases to canonical"))))
 
 (deftest test-r3-get-current-project-id-canonical-unchanged
   (testing "R3: Non-aliased project-id passes through unchanged"
-    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "global")]
+    (with-redefs [kg-scope/read-direct-project-config (fn [_] nil)]
       (is (= "my-project"
              (scope/get-current-project-id "/path/to/my-project"))
           "Non-aliased name passes through unchanged"))))
@@ -567,7 +583,7 @@
   (testing "R3 Integration: full flow from directory -> project-id -> scope tags -> match"
     (kg-scope/register-project-config! "hive-mcp" {:aliases ["emacs-mcp"]})
     ;; Step 1: Resolve project-id from aliased directory name
-    (with-redefs [kg-scope/infer-scope-from-path (fn [_] "global")]
+    (with-redefs [kg-scope/read-direct-project-config (fn [_] nil)]
       (let [project-id (scope/get-current-project-id "/path/to/emacs-mcp")]
         (is (= "hive-mcp" project-id) "Step 1: alias resolved to canonical")
         ;; Step 2: Expand scope tags (includes aliases)

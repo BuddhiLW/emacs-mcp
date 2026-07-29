@@ -341,9 +341,9 @@
               ;; Dual-write: Cache entry categories in context-store for pass-by-ref mode.
               ;; Uses context-put-batch! to write all categories in parallel via futures.
               ;; Each category gets its own ctx-id with 'catchup' + category tags.
-              ;; TTL: 10 minutes (catchup context useful for the session duration).
+              ;; TTL: 1 hour.
               ;; Non-fatal: context-store failure doesn't break catchup.
-              catchup-ttl 600000
+              catchup-ttl 3600000
               scope-tag  (or project-id "global")
               context-refs
               (rescue nil

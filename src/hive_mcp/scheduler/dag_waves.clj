@@ -147,8 +147,10 @@
    :spawn/request seam so Stage-A role overlay applies. Fail-soft: a
    nil/blank role adds no request.
    When :prefer-lightweight? is true (default), uses :headless spawn mode
-   which routes to TransparentAgenticLoop (~2MB vs ~280MB ProcessBuilder)."
-  [task-id title role {:keys [cwd presets project-id prefer-lightweight?]
+   which routes to TransparentAgenticLoop (~2MB vs ~280MB ProcessBuilder).
+   Threads :run-id (when present) into create-ling! so the ling's headless
+   completion publishes on hive.v1.wave.<run-id>.completed.<task-id>."
+  [task-id title role {:keys [cwd presets project-id prefer-lightweight? run-id]
                        :or {prefer-lightweight? true}}]
   (let [safe-title (-> (or title "task")
                        str/lower-case
@@ -163,6 +165,8 @@
                                                     :project-id project-id
                                                     :kanban-task-id task-id
                                                     :task title}
+                                             run-id
+                                             (assoc :run-id run-id)
                                              prefer-lightweight?
                                              (assoc :spawn-mode :headless)
                                              role*
@@ -333,7 +337,7 @@
     (throw (ex-info "DAG already active. Call stop-dag! first."
                     {:current-plan (:plan-id @dag-state)})))
 
-  (let [{:keys [max-slots cwd presets project-id]
+  (let [{:keys [max-slots cwd presets project-id run-id]
          :or {max-slots 5
               presets ["ling"]}} opts
         effective-project-id (or project-id
@@ -350,7 +354,8 @@
              :failed     #{}
              :opts       {:cwd cwd
                           :presets presets
-                          :project-id effective-project-id}})
+                          :project-id effective-project-id
+                          :run-id run-id}})
 
     ;; Start event listener for completion detection
     (start-event-listener!)

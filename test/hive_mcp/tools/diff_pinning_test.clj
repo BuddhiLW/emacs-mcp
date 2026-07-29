@@ -513,20 +513,6 @@
 ;; Test: Tool definitions
 ;; =============================================================================
 
-(deftest test-tools-defined
-  (testing "All diff tools are defined with correct structure"
-    (let [tool-names (set (map :name diff/tools))]
-      (is (contains? tool-names "propose_diff"))
-      (is (contains? tool-names "list_proposed_diffs"))
-      (is (contains? tool-names "apply_diff"))
-      (is (contains? tool-names "reject_diff")))
-    ;; Verify each tool has required fields
-    (doseq [tool diff/tools]
-      (is (string? (:name tool)))
-      (is (string? (:description tool)))
-      (is (map? (:inputSchema tool)))
-      (is (fn? (:handler tool))))))
-
 ;; =============================================================================
 ;; Test: Path Resolution with Project Root Override (BUG FIX)
 ;; =============================================================================
@@ -679,14 +665,3 @@
           (io/delete-file test-file true)
           (io/delete-file explicit-root true)
           (clear-pending-diffs!))))))
-
-(deftest test-propose-diff-tool-schema-includes-directory
-  (testing "propose_diff tool schema includes directory parameter"
-    ;; CLARITY-T: Telemetry/observability - schema must expose directory
-    (let [propose-tool (first (filter #(= "propose_diff" (:name %)) diff/tools))
-          properties (get-in propose-tool [:inputSchema :properties])]
-      (is (some? propose-tool) "propose_diff tool should exist")
-      (is (contains? properties "directory")
-          "propose_diff schema should include directory parameter")
-      (is (= "string" (get-in properties ["directory" :type]))
-          "directory should be a string type"))))

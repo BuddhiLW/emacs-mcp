@@ -21,8 +21,7 @@
             [hive-mcp.migration.adapter :as adapter]
             [hive-mcp.knowledge-graph.migration :as kg-mig]
             [hive-mcp.knowledge-graph.connection :as conn]
-            [hive-mcp.knowledge-graph.protocol :as proto]
-            [hive-mcp.knowledge-graph.store.datascript :as ds-store]
+            [hive-mcp.test.stub.kg-store :as kg-stub]
             [hive-test.isolation :as iso]
             [hive-mcp.isolation-methods])
   (:import [java.util UUID]))
@@ -57,37 +56,33 @@
 
    Structure:
    /tmp/hive-migration-integration-{uuid}/
-     ├── backups/
-     ├── datalevin/
-     └── datahike/
+     backups/
+     datalevin/
+     datahike/
 
-   Binds *test-store* to a fresh DataScript store so the override-aware
-   ensure-store! returns it without touching the global proto store."
+   Composes the :kg-conn isolation (fresh ephemeral store + synchronous
+   writes) with stub :datalevin/:datahike backends on the factory port, so
+   the migration pipeline runs with no deployed backend."
   [f]
   (let [uuid (gen-test-uuid)
         root (io/file (System/getProperty "java.io.tmpdir")
                       (str "hive-migration-integration-" uuid))
         backup-dir (io/file root "backups")
         datalevin-dir (io/file root "datalevin")
-        datahike-dir (io/file root "datahike")
-        store (ds-store/create-store)
-        test-store-var (requiring-resolve
-                         'hive-mcp.knowledge-graph.connection.store/*test-store*)]
+        datahike-dir (io/file root "datahike")]
     (.mkdirs backup-dir)
     (.mkdirs datalevin-dir)
     (.mkdirs datahike-dir)
-    (proto/ensure-conn! store)
     (binding [*test-root* (.getAbsolutePath root)
               *backup-dir* (.getAbsolutePath backup-dir)
               *datalevin-dir* (.getAbsolutePath datalevin-dir)
               *datahike-dir* (.getAbsolutePath datahike-dir)]
-      (with-bindings* {test-store-var store}
-        (fn []
-          (try
-            (f)
-            (finally
-              (try (proto/close! store) (catch Exception _ nil))
-              (delete-dir-recursive! root))))))))
+      (try
+        ((iso/with-isolations :kg-conn)
+         (fn []
+           (kg-stub/with-stub-backends #{:datalevin :datahike} f)))
+        (finally
+          (delete-dir-recursive! root))))))
 
 (use-fixtures :each integration-test-fixture)
 
@@ -296,37 +291,20 @@
 
 (deftest datascript-to-datalevin-migration-test
   (testing "Migration from DataScript to Datalevin preserves all data"
-    (let [{:keys [expected-counts]} (create-standard-test-data!)]
-      (try
-        ;; Perform migration
-        (let [result (kg-mig/migrate-store! :datascript :datalevin
-                                            {:target-opts {:db-path *datalevin-dir*}
-                                             :dry-run false})]
-          (is (= :datascript (:source-backend result)))
-          (is (= :datalevin (:target-backend result)))
-          (is (empty? (:errors result)))
-          (is (:valid? (:validation result)))
+    (let [{:keys [expected-counts]} (create-standard-test-data!)
+          result (kg-mig/migrate-store! :datascript :datalevin
+                                        {:target-opts {:db-path *datalevin-dir*}
+                                         :dry-run false})]
+      (is (= :datascript (:source-backend result)))
+      (is (= :datalevin (:target-backend result)))
+      (is (empty? (:errors result)))
+      (is (:valid? (:validation result)))
+      (is (= :datalevin (kg-mig/detect-current-backend))
+          "migration switches the active store to the target backend")
 
-          ;; Verify data exists in new store
-          (let [integrity (verify-data-integrity expected-counts)]
-            (is (:valid? integrity)
-                (str "Migration integrity check failed: " integrity))))
-
-        (catch Exception e
-          ;; Datalevin might not be available - skip test
-          (if (re-find #"Could not locate|No implementation" (str e))
-            (println "Datalevin not available, skipping migration test")
-            (throw e)))
-
-        (finally
-          ;; Clean up - close and switch back to DataScript
-          (try
-            (when (proto/store-set?)
-              (proto/close! (proto/get-store)))
-            (let [store (ds-store/create-store)]
-              (proto/set-store! store)
-              (proto/ensure-conn! store))
-            (catch Exception _ nil)))))))
+      (let [integrity (verify-data-integrity expected-counts)]
+        (is (:valid? integrity)
+            (str "Migration integrity check failed: " integrity))))))
 
 (deftest datascript-to-datalevin-dry-run-test
   (testing "Dry run migration exports without changing backend"
@@ -354,37 +332,17 @@
 
 (deftest datascript-to-datahike-migration-test
   (testing "Migration from DataScript to Datahike preserves all data"
-    (let [{:keys [expected-counts]} (create-standard-test-data!)]
-      (try
-        ;; Perform migration
-        (let [result (kg-mig/migrate-to-datahike!
-                      {:db-path *datahike-dir*
-                       :dry-run false})]
-          (is (= :datascript (:source-backend result)))
-          (is (= :datahike (:target-backend result)))
-          (is (empty? (:errors result)))
-          (is (:valid? (:validation result)))
+    (let [{:keys [expected-counts]} (create-standard-test-data!)
+          result (kg-mig/migrate-to-datahike! {:db-path *datahike-dir*
+                                               :dry-run false})]
+      (is (= :datascript (:source-backend result)))
+      (is (= :datahike (:target-backend result)))
+      (is (empty? (:errors result)))
+      (is (:valid? (:validation result)))
+      (is (= :datahike (kg-mig/detect-current-backend)))
 
-          ;; Verify current backend is now Datahike
-          (is (= :datahike (kg-mig/detect-current-backend)))
-
-          ;; Verify data exists
-          (let [integrity (verify-data-integrity expected-counts)]
-            (is (:valid? integrity))))
-
-        (catch Exception e
-          (if (re-find #"Could not locate|No implementation|already exists" (str e))
-            (println "Datahike not available or store exists, skipping migration test")
-            (throw e)))
-
-        (finally
-          (try
-            (when (proto/store-set?)
-              (proto/close! (proto/get-store)))
-            (let [store (ds-store/create-store)]
-              (proto/set-store! store)
-              (proto/ensure-conn! store))
-            (catch Exception _ nil)))))))
+      (let [integrity (verify-data-integrity expected-counts)]
+        (is (:valid? integrity))))))
 
 ;; =============================================================================
 ;; Sync to Secondary Backend Tests
@@ -393,25 +351,17 @@
 (deftest sync-to-datalevin-test
   (testing "Sync to Datalevin without switching primary backend"
     (let [{:keys [expected-counts]} (create-standard-test-data!)
-          original-backend (kg-mig/detect-current-backend)]
-      (try
-        ;; Sync to Datalevin (secondary)
-        (let [result (kg-mig/sync-to-backend! :datalevin
-                                              {:target-opts {:db-path *datalevin-dir*}})]
-          (is (= expected-counts (:exported result)))
-          (is (:valid? (:validation result))))
+          original-backend (kg-mig/detect-current-backend)
+          result (kg-mig/sync-to-backend! :datalevin
+                                          {:target-opts {:db-path *datalevin-dir*}})]
+      (is (= expected-counts (:exported result)))
+      (is (true? (:valid? (:validation result))))
 
-        ;; Primary backend should be unchanged
-        (is (= original-backend (kg-mig/detect-current-backend)))
+      (is (= original-backend (kg-mig/detect-current-backend))
+          "sync leaves the primary store untouched")
 
-        ;; Data should still exist in primary
-        (let [integrity (verify-data-integrity expected-counts)]
-          (is (:valid? integrity)))
-
-        (catch Exception e
-          (if (re-find #"Could not locate|No implementation" (str e))
-            (println "Datalevin not available, skipping sync test")
-            (throw e)))))))
+      (let [integrity (verify-data-integrity expected-counts)]
+        (is (:valid? integrity))))))
 
 ;; =============================================================================
 ;; Migration Validation Tests

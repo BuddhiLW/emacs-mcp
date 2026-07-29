@@ -70,6 +70,41 @@
   [msg]
   {:type :error :error msg :usage {:input 5 :output 0 :total 5}})
 
+(defn- register-recording-fx!
+  "Register FX handlers that append the drone-loop's recording effects to
+   OBS-LOG / REASON-LOG.
+
+   `hive-mcp.events.effects.drone-loop/register-drone-loop-effects!` is a no-op
+   stub, so nothing interprets these effects in production either — see the
+   kanban card. The FSM's own contract is that it DECLARES them, which is what
+   these tests verify."
+  [obs-log reason-log]
+  (require 'hive.events.fx)
+  (let [reg-fx (resolve 'hive.events.fx/reg-fx)]
+    (reg-fx :drone/record-obs
+            (fn [{:keys [turn tool-name result opts]}]
+              (swap! obs-log conj
+                     {:turn turn :tool tool-name
+                      :result result :file (:file opts)})))
+    (reg-fx :drone/record-reason
+            (fn [{:keys [turn action detail]}]
+              (swap! reason-log conj
+                     {:turn turn :action action :detail detail})))
+    :registered))
+
+(defn- register-emit-fx!
+  "Register the :drone/emit FX handler onto EMIT-LOG.
+
+   Same story as the recorders: `:emit-fn` in resources is dead, progress is
+   published as a [:drone/emit {:event-type … :data …}] effect."
+  [emit-log]
+  (require 'hive.events.fx)
+  (let [reg-fx (resolve 'hive.events.fx/reg-fx)]
+    (reg-fx :drone/emit
+            (fn [{:keys [event-type data]}]
+              (swap! emit-log conj {:event event-type :data data})))
+    :registered))
+
 (defn- make-test-resources
   "Build a full resources map for integration testing.
 
@@ -99,23 +134,16 @@
                               (mapv (fn [c]
                                       {:content (str "Result: " (:name c) " executed")})
                                     calls)))
-      :record-obs-fn    (when record?
-                          (fn [_store turn tool-name result opts]
-                            (swap! obs-log conj
-                                   {:turn turn :tool tool-name
-                                    :result result :file (:file opts)})
-                            (count @obs-log)))
-      :record-reason-fn (when record?
-                          (fn [_store turn action detail]
-                            (swap! reason-log conj
-                                   {:turn turn :action action :detail detail})))
+      ;; The handlers no longer take recorder FNS from resources — they DECLARE
+      ;; [:drone/record-obs ...] / [:drone/record-reason ...] effects. These
+      ;; resource keys were dead, so every observation assertion ran against an
+      ;; empty atom. Register the FX instead; see register-recording-fx! below.
+      :_recording       (when record? (register-recording-fx! obs-log reason-log))
       :reconstruct-fn   (when record?
                           (fn [_store task turn]
                             (str task " [KG-context-turn-" turn "]")))
       :seed-kg-fn       nil
-      :emit-fn          (when emit?
-                          (fn [event-type data]
-                            (swap! emit-log conj {:event event-type :data data})))}
+      :_emitting        (when emit? (register-emit-fx! emit-log))}
      ;; Expose logs for test assertions
      :obs-log    obs-log
      :reason-log reason-log
@@ -519,7 +547,10 @@
            {:responses [(tool-calls-response "read_file")
                         (text-response "Done")]
             :emit?     true})
-          _result (drone-loop/run-drone-loop (base-input) resources)]
+          ;; The :drone/emit FX is only declared when the INPUT sets :trace?.
+          ;; Without it the FSM emits nothing and this test asserted an
+          ;; always-empty log.
+          _result (drone-loop/run-drone-loop (base-input {:trace? true}) resources)]
 
       (testing "started event emitted"
         (is (some #(= :agentic-loop-started (:event %)) @emit-log)))

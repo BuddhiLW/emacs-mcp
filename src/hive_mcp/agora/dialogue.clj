@@ -454,13 +454,17 @@
   (log/info "Dialogue state reset (via schema)"))
 
 (defn dialogue-summary
-  "Get a human-readable summary of a dialogue."
+  "Get a human-readable summary of a dialogue.
+
+   Returns {:id :topic :status :participants :turn-count :last-signal
+   :consensus?}, or nil when the dialogue does not exist."
   [dialogue-id]
   (when-let [d (get-dialogue dialogue-id)]
-    {:id dialogue-id
-     :topic (:topic d)
-     :status (:status d)
-     :participants (vec (:participants d))
-     :turn-count (count (:turns d))
-     :last-signal (some-> (last (:turns d)) :signal)
-     :consensus? (= :consensus (:status d))}))
+    (let [turns (get-dialogue-turns dialogue-id)]
+      {:id dialogue-id
+       :topic (:topic d)
+       :status (:status d)
+       :participants (vec (:participants d))
+       :turn-count (count turns)
+       :last-signal (some-> (last turns) :signal)
+       :consensus? (= :consensus (:status d))})))

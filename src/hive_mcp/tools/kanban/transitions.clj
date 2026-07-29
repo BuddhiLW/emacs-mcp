@@ -70,9 +70,22 @@
     stamped))
 
 (defn compute-new-tags
-  "Pure: derive the new tag vector for a status transition."
-  [new-status priority project-id]
-  (build-kanban-tags new-status priority project-id))
+  "Pure: derive the new tag vector for a status transition, MERGING onto the
+   entry's `existing-tags`. Only the status tag is swapped and the priority
+   tag reset to `priority`; every other tag — topical, agent attribution,
+   extra scope tags — is preserved. The status tag is REPLACED, never
+   unioned: no token of `pred/status-tag-set` other than `new-status`
+   survives. Result is distinct, canonical tags first."
+  [existing-tags new-status priority project-id]
+  (let [kept (->> (or existing-tags [])
+                  (filter string?)
+                  (remove pred/status-tag-set)
+                  (remove #(str/starts-with? % "priority-")))]
+    (->> (concat ["kanban" new-status (str "priority-" priority)
+                  (scope/make-scope-tag project-id)]
+                 kept)
+         distinct
+         vec)))
 
 (defn current-status [entry] (content-val (:content entry) :status "todo"))
 (defn current-priority [entry] (content-val (:content entry) :priority "medium"))
@@ -114,7 +127,8 @@
 
 (defn transition
   "Pure: derive {:old-status :new-status :new-content :new-tags :title :project-id}.
-   Caller supplies project-id (typically from coeffect)."
+   Caller supplies project-id (typically from coeffect). Tags MERGE onto the
+   entry's existing tags — see compute-new-tags."
   [entry new-status project-id]
   (let [new-status (pred/normalize-status new-status)
         old-status (current-status entry)
@@ -126,7 +140,7 @@
      :title       title
      :project-id  project-id
      :new-content (compute-new-content (:content entry) new-status)
-     :new-tags    (compute-new-tags new-status priority project-id)}))
+     :new-tags    (compute-new-tags (:tags entry) new-status priority project-id)}))
 
 (defn sort-by-priority-then-created
   "Stable order: priority asc, then id asc (id encodes creation timestamp)."

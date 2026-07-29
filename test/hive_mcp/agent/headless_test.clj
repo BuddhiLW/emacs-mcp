@@ -14,9 +14,11 @@
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.agent.headless :as headless]
             [hive-mcp.agent.ling :as ling]
+            [hive-mcp.agent.ling.lifecycle :as lifecycle]
             [hive-mcp.agent.protocol :as proto]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.swarm.datascript.queries :as ds-queries]
+            [hive-mcp.test.stub.headless-backend :as stub-headless]
             [hive-test.isolation :as iso]
             [hive-mcp.isolation-methods]))
 
@@ -364,14 +366,26 @@
 ;; =============================================================================
 
 (deftest ling-record-spawn-mode-default-test
-  (testing "Ling record defaults to :vterm spawn-mode"
+  (testing "Ling record applies lifecycle/default-spawn-mode when none is given"
     (let [ling (ling/->ling "test-ling" {:cwd "/tmp"})]
-      (is (= :vterm (:spawn-mode ling))))))
+      (is (= lifecycle/default-spawn-mode (:spawn-mode ling))
+          "the default is read from the source constant, not restated here")
+      (is (= (ling/->ling "test-ling" {:cwd "/tmp"
+                                       :spawn-mode lifecycle/default-spawn-mode})
+             ling)
+          "omitting :spawn-mode is equivalent to passing the default"))))
 
 (deftest ling-record-spawn-mode-headless-test
-  (testing "Ling record accepts :headless spawn-mode"
-    (let [ling (ling/->ling "test-ling" {:cwd "/tmp" :spawn-mode :headless})]
-      (is (= :headless (:spawn-mode ling))))))
+  (testing ":headless is resolved against the headless registry"
+    (stub-headless/without-backends
+     (let [ling (ling/->ling "test-ling" {:cwd "/tmp" :spawn-mode :headless})]
+       (is (= :headless (:spawn-mode ling))
+           "with the registry explicitly emptied, :headless stays abstract")))
+    (let [backend-id :test/headless-stub]
+      (stub-headless/with-backend backend-id (stub-headless/->backend backend-id)
+        (let [ling (ling/->ling "test-ling" {:cwd "/tmp" :spawn-mode :headless})]
+          (is (= backend-id (:spawn-mode ling))
+              "with a backend registered, :headless resolves to its keyword"))))))
 
 (deftest ling-headless-spawn-with-datascript-test
   (testing "Headless ling spawn registers in DataScript with spawn-mode"
@@ -406,24 +420,31 @@
 
 (deftest ling-headless-kill-with-datascript-test
   (testing "Headless ling kill cleans up both process registry and DataScript"
-    (let [ling-id (gen-ling-id)
-          ;; Spawn the process
-          _ (headless/spawn-headless! ling-id {:cwd "/tmp" :claude-cmd "cat"
-                                               :buffer-capacity 100})
-          ;; Register in DataScript
-          _ (ds/add-slave! ling-id {:status :idle :depth 1 :cwd "/tmp"})
-          _ (ds/update-slave! ling-id {:ling/spawn-mode :headless})]
-      (Thread/sleep 100)
-      ;; Verify both exist
-      (is (headless/headless? ling-id))
-      (is (some? (ds-queries/get-slave ling-id)))
-      ;; Create ling record and kill
-      (let [ling (ling/->ling ling-id {:cwd "/tmp" :spawn-mode :headless})
-            result (proto/kill! ling)]
-        (is (:killed? result)))
-      ;; Both should be cleaned up
-      (is (not (headless/headless? ling-id)))
-      (is (nil? (ds-queries/get-slave ling-id))))))
+    (let [backend-id :test/headless-process
+          backend (stub-headless/->process-backend backend-id)]
+      (stub-headless/with-backend backend-id backend
+        (let [ling-id (gen-ling-id)
+              ;; Spawn the process
+              _ (headless/spawn-headless! ling-id {:cwd "/tmp" :claude-cmd "cat"
+                                                   :buffer-capacity 100})
+              ;; Register in DataScript
+              _ (ds/add-slave! ling-id {:status :idle :depth 1 :cwd "/tmp"})
+              _ (ds/update-slave! ling-id {:ling/spawn-mode :headless})]
+          (Thread/sleep 100)
+          ;; Verify both exist
+          (is (headless/headless? ling-id))
+          (is (some? (ds-queries/get-slave ling-id)))
+          ;; Create ling record and kill
+          (let [ling (ling/->ling ling-id {:cwd "/tmp" :spawn-mode :headless})
+                result (proto/kill! ling)]
+            (is (= backend-id (:spawn-mode ling))
+                ":headless resolved to the registered backend")
+            (is (:killed? result)))
+          (is (= 1 (count (stub-headless/calls-of backend :kill!)))
+              "the kill was delegated through the registered backend")
+          ;; Both should be cleaned up
+          (is (not (headless/headless? ling-id)))
+          (is (nil? (ds-queries/get-slave ling-id))))))))
 
 ;; =============================================================================
 ;; Edge Case Tests

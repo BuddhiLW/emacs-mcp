@@ -147,6 +147,16 @@
 ;; 5. Idempotency — cleanup-expired!, reset-store!
 ;; =============================================================================
 
+(deftest test-cleanup-expired-shape
+  (let [store (fresh-store)
+        r     (proto/cleanup-expired! store)]
+    (testing "cleanup-expired! returns a map"
+      (is (map? r)))
+    (testing "reports how many entries it reaped under :count"
+      (is (integer? (:count r))))
+    (testing "reports which ids it reaped under :deleted-ids"
+      (is (sequential? (:deleted-ids r))))))
+
 (deftest test-cleanup-expired-idempotent
   (let [store (fresh-store)]
     (testing "calling cleanup-expired! twice yields same effect"

@@ -190,15 +190,16 @@
 
    dialogue-id: identifier for the dialogue to check
 
-   Returns: boolean"
+   Returns: boolean — false (never nil) for an unknown or empty dialogue"
   [dialogue-id]
   (let [participants (get-participants dialogue-id)
         last-turns (map #(last-turn-for dialogue-id %) participants)
         signals (map :signal last-turns)]
-    (and (seq participants)                          ; Has participants
-         (every? some? last-turns)                   ; All have made a turn
-         (every? equilibrium-signals signals)        ; All in equilibrium state
-         (approvals-aligned? dialogue-id))))         ; Approvals are for same proposal
+    (boolean
+     (and (seq participants)                          ; Has participants
+          (every? some? last-turns)                   ; All have made a turn
+          (every? equilibrium-signals signals)        ; All in equilibrium state
+          (approvals-aligned? dialogue-id)))))         ; Approvals are for same proposal
 
 ;; =============================================================================
 ;; Threshold-based Consensus (N-party)

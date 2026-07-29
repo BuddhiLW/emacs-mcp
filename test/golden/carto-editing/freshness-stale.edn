@@ -1,0 +1,3 @@
+{:has-carto-stale? true,
+ :has-carto-stale-forms true,
+ :stale-form-count 2}

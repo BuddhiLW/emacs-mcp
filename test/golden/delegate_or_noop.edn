@@ -1,0 +1,4 @@
+{:map-default {:x 1},
+ :nil-default nil,
+ :string-default "",
+ :vector-default [:a :b]}

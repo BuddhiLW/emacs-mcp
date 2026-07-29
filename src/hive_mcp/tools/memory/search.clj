@@ -53,37 +53,29 @@
 ;; Timeout budgets
 ;; =============================================================================
 
-(def ^:const ^:private memory-search-timeout-ms
-  "Overall timeout budget for a memory search (collective ceiling).
+(def ^:dynamic *timeout-budgets*
+  "Timeout budgets for a memory search, in milliseconds.
 
-   90s (was 30s) accommodates multi-project fan-out on cold Milvus paths
-   plus the new 60s vectordb-timeout-ms; it also matches the outer
-   wpool/await! safety net (which the caller must bump separately if
-   tighter)."
-  90000)
+     :total       collective ceiling for the whole search
+     :embed       embedding round-trip, nested inside the vectordb stage;
+                  used to classify a provider-side timeout as :stage :embed
+     :vectordb    one vectordb query (store or ingest side); the two sides
+                  run concurrently, so the wall clock is one budget, not two
+     :post-filter merge/rerank/format
 
-(def ^:const ^:private embed-timeout-ms
-  "Per-stage timeout for an embedding round-trip. Embedding is nested
-   inside the vectordb stage; this bound is used to classify a timeout
-   that fires inside the embedding provider as :stage :embed."
-  10000)
+   Dynamic so a caller — a test, or an operator with a tighter SLA — can bind
+   smaller budgets. The defaults accommodate a COLD embedder: first-call
+   Ollama/Venice model load routinely takes 30-60s, which a 15s vectordb
+   budget failed every time."
+  {:total       90000
+   :embed       10000
+   :vectordb    60000
+   :post-filter 5000})
 
-(def ^:const ^:private vectordb-timeout-ms
-  "Per-stage timeout for one vectordb query (store or ingest side).
-
-   60s (was 15s) covers cold-embed → milvus search → filter. Cold Ollama
-   /Venice embedding alone routinely takes 30–60s on the first call after
-   a JVM restart (model load + warm-up); 15s guaranteed-failed on every
-   first semantic search until the embedder warmed.
-
-   Two sides run concurrently so the wall clock is still 60s, not 120s."
-  60000)
-
-(def ^:const ^:private post-filter-timeout-ms
-  "Per-stage timeout for merge/rerank/format. Pure CPU work; 5s is
-   a generous ceiling that still prevents a pathological reducer from
-   wedging the handler."
-  5000)
+(defn- budget
+  "Milliseconds allowed for STAGE, per the current `*timeout-budgets*`."
+  [stage]
+  (get *timeout-budgets* stage))
 
 ;; =============================================================================
 ;; Helpers
@@ -218,11 +210,11 @@
   "Vectordb stage A: the primary store search + one fallback retry
    without exclude-tags (for false-negative recovery).
 
-   Wrapped in `safe-future-call` with vectordb-timeout-ms. A dropped
+   Wrapped in `safe-future-call` with the :vectordb budget. A dropped
    HTTP transport kicks the Milvus heal loop via with-resilience."
   [query limit-val type visible-project-ids effective-excludes]
   (safe/safe-future-call
-   {:timeout-ms vectordb-timeout-ms :name "memory-search/store"}
+   {:timeout-ms (budget :vectordb) :name "memory-search/store"}
    (fn []
      (let [first-pass (with-resilience
                         (mem-proto/search-similar
@@ -244,10 +236,10 @@
 (defn- run-ingest-query
   "Vectordb stage B: ingest cross-collection search (carto snippets).
    Optional — when no ingest search-fn is registered, returns an empty
-   vector. Wrapped in safe-future-call with vectordb-timeout-ms."
+   vector. Wrapped in safe-future-call with the :vectordb budget."
   [query limit-val]
   (safe/safe-future-call
-   {:timeout-ms vectordb-timeout-ms :name "memory-search/ingest"}
+   {:timeout-ms (budget :vectordb) :name "memory-search/ingest"}
    (fn []
      (if-let [search-fn (chroma-search/resolve-ingest-search)]
        (rescue []
@@ -259,11 +251,11 @@
 
 (defn- run-post-filter
   "Post-filter / aggregation stage: normalize, merge, rerank, format.
-   Pure CPU but bounded by post-filter-timeout-ms so a pathological
+   Pure CPU but bounded by the :post-filter budget so a pathological
    reducer (e.g. million-row dedupe) cannot wedge the handler."
   [store-results ingest-results limit-val]
   (safe/safe-future-call
-   {:timeout-ms post-filter-timeout-ms :name "memory-search/post"}
+   {:timeout-ms (budget :post-filter) :name "memory-search/post"}
    (fn []
      (let [normalized-store (mapv store-entry->normalized (or store-results []))
            merged (chroma-search/merge-and-rerank normalized-store
@@ -292,7 +284,7 @@
       :cause <ex-message>}
 
    Budget rationale:
-   - store and ingest run in parallel; collective 30s = memory-search-timeout-ms.
+   - store and ingest run in parallel under the collective :total budget.
    - each vectordb side has its own 15s cap, so one hung backend cannot
      eat the whole budget (the other side still races to complete).
    - post-filter gets 5s — bounded CPU, independent of network health."
@@ -302,9 +294,9 @@
                                     descendants (when include_descendants
                                                   (kg-scope/descendant-scopes project-id))]
                                 (vec (distinct (concat visible descendants)))))
-        effective-excludes (into (vec default-exclude-tags) exclude-tags)
+        effective-excludes (vec exclude-tags)
         fj (parallel/fork-join
-            {:budget-ms memory-search-timeout-ms}
+            {:budget-ms (budget :total)}
             [:store
              #(unwrap-safe-future :vectordb
                                   (run-store-query query limit-val type
@@ -354,7 +346,8 @@
 (defn- search-semantic*
   "Pure search logic returning Result. Validates inputs and dispatches to the
    default IMemoryStore via search-store*.
-   exclude_tags defaults to [\"carto\"] — pass [] to include carto snippets explicitly.
+   exclude_tags defaults to `default-exclude-tags` — pass a tag vector to
+   replace that default with your own exclusion set.
    include_descendants defaults to true — pass false to restrict to current project."
   [{:keys [query limit type directory include_descendants scope exclude_tags]}]
   (let [directory (or directory (ctx/current-directory))
@@ -394,7 +387,7 @@
              (pool/memory-pool)
              #(try (search-semantic* params)
                    (catch Throwable t {::caught t}))
-             {:timeout-ms memory-search-timeout-ms
+             {:timeout-ms (budget :total)
               :fallback   timeout-sentinel
               :name       "memory-search"})]
     (cond
@@ -403,9 +396,9 @@
        (result/err :memory/search-failed
                    {:stage   :vectordb
                     :cause   (str "outer pool timeout after "
-                                  memory-search-timeout-ms "ms")
+                                  (budget :total) "ms")
                     :message (str "memory search timed out after "
-                                  memory-search-timeout-ms "ms")}))
+                                  (budget :total) "ms")}))
 
       (and (map? raw) (contains? raw ::caught))
       (rb/result->mcp

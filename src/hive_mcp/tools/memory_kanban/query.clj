@@ -119,7 +119,7 @@
         project-id (scope/get-current-project-id eff-dir)
         {:keys [entries multi-project?]} (query-kanban-entries
                                           project-id include_descendants
-                                          500 ["kanban"] {:scope scope})
+                                          20000 ["kanban"] {:scope scope})
         kanban-entries (filter-kanban-by-tags entries ["kanban"])
         ;; Drop entries with missing/invalid status from the bucket counts —
         ;; defaulting to :todo silently resurrected entries whose tag-based
@@ -158,8 +158,8 @@
 (defn list-slim*
   "List kanban tasks with optional token-budget filters.
 
-   Filters (all optional, all applied server-side):
-   - :status               todo | inprogress | inreview | done
+   Filters (all optional):
+   - :status               todo | inprogress | inreview | done (pushed to store)
    - :project_id           explicit project scope override (defaults to dir-resolved)
    - :include_descendants  aggregate child-project tasks (default true)
    - :scope                \"all\" lifts the project filter — whole board across
@@ -172,7 +172,11 @@
    - :updated_after        ISO-8601 string; checks :updated/:started/:completed
    - :limit                cap response array size
    - :offset               skip first N (after sort)
-   - :fields               seq of field names to project (default = full slim shape)"
+   - :fields               seq of field names to project (default = full slim shape)
+
+   status + AND-tags are pushed into the store query; query/priority/date/OR-tags
+   are client-side post-filters, so a narrowing request fetches the whole scoped
+   board (else a match beyond the newest window silently vanishes)."
   [{:keys [status include_descendants project_id scope
            query tags tag_match priority
            created_after updated_after
@@ -193,10 +197,13 @@
         required-tags (vec (concat ["kanban"]
                                    (when status-tag [status-tag])
                                    and-extra))
-        ;; Bump fetch window when post-filters narrow the result set —
-        ;; a 100-row store window can drop matching rows before our
-        ;; clojure-side filter runs.
-        fetch-limit   (if (kf/post-filters? params) 500 100)
+        ;; Fetch window: a narrowing client-side filter must see the whole
+        ;; scoped board (20000 > largest scoped board); other post-filters
+        ;; widen to 500; a bare list stays at 100.
+        fetch-limit   (cond
+                        (kf/narrowing-post-filters? params) 20000
+                        (kf/post-filters? params)           500
+                        :else                               100)
         {:keys [entries multi-project?]} (query-kanban-entries
                                           scoped-pid include_descendants
                                           fetch-limit required-tags {:scope scope})

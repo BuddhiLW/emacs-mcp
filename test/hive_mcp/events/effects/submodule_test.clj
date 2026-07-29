@@ -80,12 +80,15 @@
     (is (fn? (ev/get-fx-handler :tool-registry-refresh)) ":tool-registry-refresh registered")))
 
 (deftest drone-loop-effects-register-test
-  (testing "Drone-loop submodule registers all expected effects"
-    (drone-loop-fx/register-drone-loop-effects!)
-    (is (fn? (ev/get-fx-handler :drone/seed-session)) ":drone/seed-session registered")
-    (is (fn? (ev/get-fx-handler :drone/emit)) ":drone/emit registered")
-    (is (fn? (ev/get-fx-handler :drone/record-obs)) ":drone/record-obs registered")
-    (is (fn? (ev/get-fx-handler :drone/record-reason)) ":drone/record-reason registered")))
+  (testing "Drone-loop submodule is a no-op seam in core"
+    ;; The `:drone/*` effects are contributed by the drone addon. Core keeps a
+    ;; stub so the facade can delegate unconditionally; registering it must be
+    ;; harmless and must NOT fabricate handlers core cannot honour.
+    (is (nil? (drone-loop-fx/register-drone-loop-effects!))
+        "core's drone-loop registration is a no-op")
+    (doseq [fx [:drone/seed-session :drone/emit :drone/record-obs :drone/record-reason]]
+      (is (nil? (ev/get-fx-handler fx))
+          (str fx " is addon-supplied, not core-registered")))))
 
 ;; =============================================================================
 ;; Facade delegation test
@@ -96,14 +99,17 @@
     (effects/register-effects!)
     ;; Spot-check one coeffect
     (is (fn? (ev/get-cofx-handler :now)) "coeffect registered via facade")
-    ;; Spot-check one effect from each submodule
+    ;; Spot-check one effect from each submodule core owns
     (is (fn? (ev/get-fx-handler :shout)) "notification registered via facade")
     (is (fn? (ev/get-fx-handler :memory-write)) "memory registered via facade")
     (is (fn? (ev/get-fx-handler :dispatch-task)) "agent registered via facade")
     (is (fn? (ev/get-fx-handler :dispatch)) "dispatch registered via facade")
     (is (fn? (ev/get-fx-handler :ds-transact)) "infrastructure registered via facade")
     (is (fn? (ev/get-fx-handler :kg-add-edge)) "kg registered via facade")
-    (is (fn? (ev/get-fx-handler :drone/seed-session)) "drone-loop registered via facade")))
+    ;; drone-loop is addon-supplied: the facade must delegate to the stub
+    ;; without throwing, and without inventing a handler.
+    (is (nil? (ev/get-fx-handler :drone/seed-session))
+        "drone-loop stays absent until the drone addon registers it")))
 
 ;; =============================================================================
 ;; Re-export test

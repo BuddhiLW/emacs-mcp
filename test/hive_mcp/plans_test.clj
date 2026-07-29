@@ -94,7 +94,7 @@
 ;; Test: Index and Retrieve
 ;; =============================================================================
 
-(deftest test-index-and-get-plan
+(deftest ^:integration test-index-and-get-plan
   (testing "Can index a plan and retrieve it by ID"
     (setup-embedder! 384)
     (let [plan-id (plans/index-plan! (assoc sample-plan :id "test-plan-1"))]
@@ -113,7 +113,7 @@
         (is (string? (:content retrieved))
             "Content should be a string")))))
 
-(deftest test-index-plan-auto-generates-id
+(deftest ^:integration test-index-plan-auto-generates-id
   (testing "index-plan! auto-generates ID when not provided"
     (setup-embedder! 384)
     (let [plan-id (plans/index-plan! (dissoc sample-plan :id))]
@@ -122,7 +122,7 @@
       (is (pos? (count plan-id))
           "Auto-generated ID should not be empty"))))
 
-(deftest test-get-plan-not-found
+(deftest ^:integration test-get-plan-not-found
   (testing "get-plan returns nil for non-existent plan"
     (setup-embedder! 384)
     ;; Force collection creation by indexing something first
@@ -134,7 +134,7 @@
 ;; Test: Plan Metadata
 ;; =============================================================================
 
-(deftest test-steps-count-auto-detection
+(deftest ^:integration test-steps-count-auto-detection
   (testing "Steps count is auto-detected from content"
     (setup-embedder! 384)
     (plans/index-plan! (assoc sample-plan :id "steps-test"))
@@ -145,7 +145,7 @@
       (is (pos? (:steps-count plan))
           "Steps count should be positive for plan with ## Step headers"))))
 
-(deftest test-plan-metadata-preserved
+(deftest ^:integration test-plan-metadata-preserved
   (testing "Plan-specific metadata is preserved through index/get cycle"
     (setup-embedder! 384)
     (plans/index-plan! (assoc sample-plan :id "meta-test"))
@@ -162,7 +162,7 @@
 ;; Test: Search
 ;; =============================================================================
 
-(deftest test-search-plans
+(deftest ^:integration test-search-plans
   (testing "Can search plans by semantic similarity"
     (setup-embedder! 384)
     (plans/index-plan! (assoc sample-plan :id "search-auth"))
@@ -179,7 +179,7 @@
       (is (every? :distance results)
           "Each result should have a distance score"))))
 
-(deftest test-search-plans-with-project-filter
+(deftest ^:integration test-search-plans-with-project-filter
   (testing "Can filter search results by project-id"
     (setup-embedder! 384)
     (plans/index-plan! (assoc sample-plan :id "proj-1" :project-id "project-a"))
@@ -197,7 +197,7 @@
 ;; Test: Query
 ;; =============================================================================
 
-(deftest test-query-plans
+(deftest ^:integration test-query-plans
   (testing "Can query plans with metadata filtering"
     (setup-embedder! 384)
     (plans/index-plan! (assoc sample-plan :id "query-1"))
@@ -208,7 +208,7 @@
       (is (= 2 (count all-plans))
           "Should find both plans"))))
 
-(deftest test-query-plans-by-status
+(deftest ^:integration test-query-plans-by-status
   (testing "Can filter plans by status"
     (setup-embedder! 384)
     (plans/index-plan! (assoc sample-plan :id "active-1" :plan-status "active"))
@@ -222,7 +222,7 @@
 ;; Test: Status Update
 ;; =============================================================================
 
-(deftest test-update-plan-status
+(deftest ^:integration test-update-plan-status
   (testing "Can update plan status"
     (setup-embedder! 384)
     (plans/index-plan! (assoc sample-plan :id "status-update" :plan-status "draft"))
@@ -239,7 +239,7 @@
       (is (= "active" (:plan-status updated))
           "Plan status should be updated to active"))))
 
-(deftest test-update-plan-status-invalid
+(deftest ^:integration test-update-plan-status-invalid
   (testing "Invalid status throws exception"
     (setup-embedder! 384)
     (plans/index-plan! (assoc sample-plan :id "invalid-status"))
@@ -251,7 +251,7 @@
 ;; Test: Delete
 ;; =============================================================================
 
-(deftest test-delete-plan
+(deftest ^:integration test-delete-plan
   (testing "Can delete a plan"
     (setup-embedder! 384)
     (plans/index-plan! (assoc sample-plan :id "to-delete"))
@@ -270,7 +270,7 @@
 ;; Test: Flex Embedding Dimensions
 ;; =============================================================================
 
-(deftest test-dimension-mismatch-triggers-recreation
+(deftest ^:integration test-dimension-mismatch-triggers-recreation
   (testing "When embedding dimension changes, plans collection is recreated"
     (setup-embedder! 384)
 
@@ -289,7 +289,7 @@
 ;; Test: Status Reporting
 ;; =============================================================================
 
-(deftest test-status-reports-info
+(deftest ^:integration test-status-reports-info
   (testing "Status includes plan collection information"
     (setup-embedder! 384)
     (plans/index-plan! (assoc sample-plan :id "status-info"))

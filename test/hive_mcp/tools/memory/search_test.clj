@@ -148,31 +148,31 @@
 ;; =============================================================================
 
 (deftest slow-vectordb-returns-structured-error-test
-  (testing "store.search-similar hangs > vectordb-timeout → structured err with
-            :stage :vectordb and elapsed within vectordb-timeout + slack"
-    ;; Block 20s — exceeds the 15s vectordb-timeout. Without defensive
-    ;; timeouts this would pin the pool for 20s (or forever on a dead
-    ;; grpc client). With them, fork-join cancels after its budget and
-    ;; we get a structured err.
-    (let [store (->StubStore
-                 (fn [_q _opts]
-                   (Thread/sleep 20000)
-                   [{:id "never" :type "note" :content "x" :distance 0.0}]))]
-      (with-stubs
-        (with-stub-store store
-          (let [t0 (System/currentTimeMillis)
-                resp (search/handle-search-semantic
-                      {:query "x" :limit 3 :directory "/tmp/test"})
-                elapsed (- (System/currentTimeMillis) t0)]
-            (is (:isError resp) "hung vectordb must surface an error")
-            (is (< elapsed 16500)
-                (str "must cancel at vectordb-timeout (15s) + slack, got "
-                     elapsed "ms"))
-            (let [body (:text resp)]
-              (is (or (re-find #"vectordb" (str body))
-                      (re-find #"timed? out" (str body))
-                      (re-find #"timeout"    (str body)))
-                  (str "body should name vectordb/timeout: " body)))))))))
+  (testing "a vectordb that outlives its budget yields a structured err, not a hang"
+    ;; Bind SMALL budgets rather than pinning the production numbers: the
+    ;; shipped :vectordb budget is 60s (cold embedders need it), and a unit
+    ;; test must not sleep that long to observe the cancellation.
+    (binding [search/*timeout-budgets* {:total 3000 :embed 500
+                                        :vectordb 500 :post-filter 500}]
+      (let [store (->StubStore
+                   (fn [_q _opts]
+                     (Thread/sleep 5000)
+                     [{:id "never" :type "note" :content "x" :distance 0.0}]))]
+        (with-stubs
+          (with-stub-store store
+            (let [t0 (System/currentTimeMillis)
+                  resp (search/handle-search-semantic
+                        {:query "x" :limit 3 :directory "/tmp/test"})
+                  elapsed (- (System/currentTimeMillis) t0)]
+              (is (:isError resp) "hung vectordb must surface an error")
+              (is (< elapsed 3000)
+                  (str "must cancel at the :vectordb budget + slack, got "
+                       elapsed "ms"))
+              (let [body (:text resp)]
+                (is (or (re-find #"vectordb" (str body))
+                        (re-find #"timed? out" (str body))
+                        (re-find #"timeout"    (str body)))
+                    (str "body should name vectordb/timeout: " body))))))))))
 
 ;; =============================================================================
 ;; Throwing vectordb → structured err
@@ -200,17 +200,18 @@
 ;; =============================================================================
 
 (deftest total-budget-enforced-test
-  (testing "even if both vectordb sides misbehave, total elapsed stays within
-            overall 30s budget + slack"
-    (let [store (->StubStore
-                 (fn [_q _opts]
-                   (Thread/sleep 40000)
-                   []))]
-      (with-stubs
-        (with-stub-store store
-          (let [t0 (System/currentTimeMillis)
-                _ (search/handle-search-semantic
-                   {:query "x" :limit 3 :directory "/tmp/test"})
-                elapsed (- (System/currentTimeMillis) t0)]
-            (is (< elapsed 31000)
-                (str "overall budget must cap hang, got " elapsed "ms"))))))))
+  (testing "even if both vectordb sides misbehave, total elapsed stays within the :total budget"
+    (binding [search/*timeout-budgets* {:total 2000 :embed 500
+                                        :vectordb 10000 :post-filter 500}]
+      (let [store (->StubStore
+                   (fn [_q _opts]
+                     (Thread/sleep 40000)
+                     []))]
+        (with-stubs
+          (with-stub-store store
+            (let [t0 (System/currentTimeMillis)
+                  _ (search/handle-search-semantic
+                     {:query "x" :limit 3 :directory "/tmp/test"})
+                  elapsed (- (System/currentTimeMillis) t0)]
+              (is (< elapsed 4000)
+                  (str "overall budget must cap the hang, got " elapsed "ms")))))))))

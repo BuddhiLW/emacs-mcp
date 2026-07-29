@@ -20,9 +20,14 @@
 
 (do
   (def IMemoryStoreLiveness ports/IMemoryStoreLiveness)
-  (def -probe! ports/-probe!)
-  (def -kick-reconnect! ports/-kick-reconnect!)
-  (def -await-reconnect! ports/-await-reconnect!))
+
+  ;; Method re-exports must DELEGATE, never `def`-alias. `extend` rebinds each
+  ;; protocol method var's root to a fn carrying a fresh MethodImplCache, so a
+  ;; value alias freezes the cache as of THIS namespace's load and never sees an
+  ;; impl registered afterwards.
+  (defn -probe! [store] (ports/-probe! store))
+  (defn -kick-reconnect! [store] (ports/-kick-reconnect! store))
+  (defn -await-reconnect! [store budget-ms] (ports/-await-reconnect! store budget-ms)))
 
 (defn liveness-store?
   "Check if the store extends the resilience seam."

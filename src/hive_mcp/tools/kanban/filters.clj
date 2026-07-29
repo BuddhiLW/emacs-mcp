@@ -97,3 +97,14 @@
                offset
                limit
                (seq fields))))
+
+(defn narrowing-post-filters?
+  "True iff a client-side NARROWING filter is active — query, priority,
+   created_after, updated_after, or OR-tags (tag_match=any) — as opposed to
+   pagination-only params (offset/limit/fields)."
+  [{:keys [query priority created_after updated_after tags tag_match]}]
+  (boolean (or (and (string? query) (not (str/blank? query)))
+               priority
+               created_after
+               updated_after
+               (and (or (= tag_match "any") (= tag_match :any)) (seq tags)))))

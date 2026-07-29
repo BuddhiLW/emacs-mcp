@@ -35,6 +35,10 @@
   "Default TTL for async batch results in context-store (10 minutes)."
   600000)
 
+(def ^:const default-await-timeout-ms
+  "Default bound for await-async-batch (30 seconds)."
+  30000)
+
 ;; =============================================================================
 ;; Batch Registry (in-process state for future lifecycle management)
 ;; =============================================================================
@@ -96,34 +100,51 @@
    :result-ctx-id nil
    :error         nil})
 
+(defn- transition-batch!
+  "Atomically merge `updates` into the registry entry for `batch-id`, but only
+   while its :status is one of `from-statuses`.
+   Returns true when the transition was applied, false when the batch is absent
+   or already left `from-statuses`."
+  [batch-id from-statuses updates]
+  (let [applied (volatile! false)]
+    (bounded-swap! batches
+                   (fn [m]
+                     (vreset! applied false)
+                     (if (contains? from-statuses (get-in m [batch-id :data :status]))
+                       (do (vreset! applied true)
+                           (update-in m [batch-id :data] merge updates))
+                       m)))
+    @applied))
+
 (defn- complete-batch!
   "Mark a batch as completed and store result in context-store.
-   Called from within the batch future on successful completion."
+   Called from within the batch future on successful completion.
+   The status write applies only while the batch is still \"running\", so a
+   concurrent cancel is never overwritten."
   [batch-id batch-result ttl-ms]
   (result/try-effect* :multi-async/store-failed
                       (let [ctx-id (ctx/context-put! batch-result
                                                      :tags #{"async-batch" (str "batch:" batch-id)}
                                                      :ttl-ms ttl-ms)]
-                        (when-let [current (bget batches batch-id)]
-                          (bput! batches batch-id
-                                 (assoc current
-                                        :status        "completed"
-                                        :result-ctx-id ctx-id
-                                        :completed-at  (now-ms))))
+                        (transition-batch! batch-id #{"running"}
+                                           {:status        "completed"
+                                            :result-ctx-id ctx-id
+                                            :completed-at  (now-ms)})
                         (log/info "[multi-async] Batch completed" batch-id "ctx-id:" ctx-id)
                         ctx-id)))
 
 (defn- fail-batch!
   "Mark a batch as failed with error details.
-   Called from within the batch future on exception."
+   Called from within the batch future on exception. The status write applies
+   only while the batch is still \"running\" — an already cancelled or completed
+   batch keeps its terminal status."
   [batch-id error-msg]
-  (when-let [current (bget batches batch-id)]
-    (bput! batches batch-id
-           (assoc current
-                  :status       "failed"
-                  :error        error-msg
-                  :completed-at (now-ms))))
-  (log/error "[multi-async] Batch failed" batch-id "error:" error-msg))
+  (when (transition-batch! batch-id #{"running"}
+                           {:status       "failed"
+                            :error        error-msg
+                            :completed-at (now-ms)})
+    (log/error "[multi-async] Batch failed" batch-id "error:" error-msg)
+    true))
 
 ;; =============================================================================
 ;; Public API: Dispatch
@@ -132,6 +153,10 @@
 (defn run-multi-async
   "Execute a vector of cross-tool operations asynchronously.
    Wraps tools.multi/run-multi in a future, stores result in context-store.
+
+   The batch is registered before its future is allowed to run, so a batch that
+   finishes faster than the dispatching thread can never lose its terminal
+   status.
 
    Returns immediately with batch descriptor:
    {:batch-id   \"batch-<uuid>\"
@@ -150,7 +175,11 @@
     (let [batch-id   (generate-batch-id)
           created-at (now-ms)
           ops-count  (count ops)
+          registered (promise)
           fut        (future
+                       ;; Registration gate — no status transition may be
+                       ;; attempted before the entry exists in the registry.
+                       @registered
                        (try
                          (let [r (if dry-run
                                    (run-multi-fn ops :dry-run true)
@@ -158,13 +187,14 @@
                            (complete-batch! batch-id r ttl-ms)
                            r)
                          (catch Exception e
-                           ;; Only mark as failed if not already cancelled
-                           ;; (future-cancel triggers InterruptedException which
-                           ;;  would overwrite "cancelled" status without this guard)
-                           (when (= "running" (:status (bget batches batch-id)))
-                             (fail-batch! batch-id (ex-message e)))
+                           (fail-batch! batch-id (ex-message e))
                            nil)))]
-      (bput! batches batch-id (make-batch-entry fut ops-count created-at))
+      (try
+        (bput! batches batch-id (make-batch-entry fut ops-count created-at))
+        (finally
+          ;; Always open the gate — a registry write that blew up must not
+          ;; strand the batch thread on the promise.
+          (deliver registered true)))
       (log/info "[multi-async] Batch dispatched" batch-id "ops:" ops-count)
       {:batch-id   batch-id
        :status     "running"
@@ -224,6 +254,26 @@
     ;; Batch-id not in registry
     {:status "not-found" :batch-id batch-id}))
 
+(defn await-async-batch
+  "Block until an async batch leaves the \"running\" state, then collect it.
+
+   Waits on the batch future itself — every terminal status write happens inside
+   the future body — so callers need no polling or sleeping to observe a settled
+   batch.
+
+   Returns the same map as collect-async-result: on timeout that is the still
+   \"running\" descriptor; for an unknown batch-id, {:status \"not-found\" ...}.
+
+   Options:
+   - :timeout-ms — maximum wait in ms (default: 30000)"
+  [batch-id & {:keys [timeout-ms] :or {timeout-ms default-await-timeout-ms}}]
+  (when-let [fut (:future (bget batches batch-id))]
+    (try
+      (deref fut timeout-ms ::timeout)
+      ;; Cancelled/interrupted futures settle their status before throwing.
+      (catch Exception _ nil)))
+  (collect-async-result batch-id))
+
 ;; =============================================================================
 ;; Public API: List
 ;; =============================================================================
@@ -250,19 +300,22 @@
 (defn cancel-async-batch
   "Cancel a running async batch via future-cancel.
 
+   The registry is moved to \"cancelled\" BEFORE the future is interrupted, so
+   the interrupt handler inside the future observes a terminal status and
+   cannot overwrite it with \"failed\".
+
    Returns:
    {:cancelled true  :batch-id ...}              — successfully cancelled
    {:cancelled false :batch-id ... :reason \"not-running\"} — terminal state
    {:cancelled false :batch-id ... :reason \"not-found\"}   — invalid id"
   [batch-id]
   (if-let [entry (bget batches batch-id)]
-    (if (= "running" (:status entry))
+    (if (transition-batch! batch-id #{"running"}
+                           {:status       "cancelled"
+                            :completed-at (now-ms)})
       (do
-        (future-cancel (:future entry))
-        (bput! batches batch-id
-               (assoc entry
-                      :status       "cancelled"
-                      :completed-at (now-ms)))
+        (when-let [fut (:future entry)]
+          (future-cancel fut))
         (log/info "[multi-async] Batch cancelled" batch-id)
         {:cancelled true :batch-id batch-id})
       {:cancelled false :batch-id batch-id :reason "not-running"})
@@ -292,12 +345,16 @@
     (count ids)))
 
 (defn reset-all!
-  "Cancel all in-flight futures and clear batch registry. For testing."
+  "Cancel all in-flight futures and clear batch registry. For testing.
+   Marks each batch cancelled before interrupting it, so a deliberate shutdown
+   is never reported as a batch failure."
   []
-  (doseq [[_ entry] @(:atom batches)]
+  (doseq [[batch-id entry] @(:atom batches)]
     (let [data (:data entry)
           fut (:future data)]
       (when (and fut (not (future-done? fut)))
+        (transition-batch! batch-id #{"running"} {:status       "cancelled"
+                                                  :completed-at (now-ms)})
         (future-cancel fut)
         (try (deref fut 100 nil) (catch Exception _)))))
   (bclear! batches))

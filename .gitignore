@@ -97,3 +97,4 @@ dev/experiments/private/
 dev/experiments/**/*.private.edn
 dev/experiments/**/*.local.edn
 .lsp/.cache/
+kondo-sweep.tsv

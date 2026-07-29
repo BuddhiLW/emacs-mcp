@@ -36,7 +36,9 @@
             [clojure.string :as str]
             [clojure.data.json :as json]
             [hive-mcp.tools.multi :as multi]
-            [hive-mcp.tools.consolidated.multi :as c-multi]))
+            [hive-mcp.tools.consolidated.multi :as c-multi]
+            [hive-mcp.test.stub.memory-store :as stub]
+            [hive-mcp.test.stub.batch-extensions :as bx]))
 
 ;; =============================================================================
 ;; Helpers
@@ -62,6 +64,8 @@
   [parsed]
   (when-let [waves (:waves parsed)]
     (mapcat val waves)))
+
+(use-fixtures :each stub/with-stub-store bx/with-batch-extensions)
 
 ;; =============================================================================
 ;; Part 1: normalize-op Tests
@@ -281,10 +285,12 @@
 
 (deftest handle-multi-analysis-scc-test
   (testing "handle-multi routes analysis scc (code metrics)"
-    (let [result (c-multi/handle-multi {"tool" "analysis" "command" "scc"})]
-      ;; scc may succeed or fail depending on scc binary, but shouldn't NPE
+    (let [result (c-multi/handle-multi {"tool" "analysis" "command" "scc"})
+          text   (or (:text result) (some :text (:content result)))]
+      ;; scc may succeed or fail depending on the scc binary; either way the
+      ;; response must be a well-formed MCP result carrying text.
       (is (some? result))
-      (is (string? (:text result))))))
+      (is (string? text)))))
 
 ;; =============================================================================
 ;; Part 5: Batch Dispatch — handle-multi with operations
@@ -331,8 +337,7 @@
       (is (:success parsed))
       (is (= 2 (get-in parsed [:summary :total])))
       (is (= 2 (get-in parsed [:summary :success])))
-      ;; noop assign-waves: all ops in wave 1
-      (is (= 1 (get-in parsed [:summary :waves]))))))
+      (is (= 2 (get-in parsed [:summary :waves]))))))
 
 (deftest handle-multi-batch-parallel-independent-test
   (testing "Independent batch ops execute in the same wave"
@@ -401,8 +406,7 @@
           parsed (parse-json-response result)]
       (is (:success parsed))
       (is (= 3 (get-in parsed [:summary :success])))
-      ;; noop assign-waves: all ops in wave 1
-      (is (= 1 (get-in parsed [:summary :waves]))))))
+      (is (= 3 (get-in parsed [:summary :waves]))))))
 
 ;; =============================================================================
 ;; Part 6: handle-batch (consolidated/multi.clj) Direct Tests
@@ -492,12 +496,11 @@
       (is (:success result))
       (is (= 3 (get-in result [:summary :total])))
       (is (= 3 (get-in result [:summary :success])))
-      ;; noop: all ops in wave 1
-      (is (= 1 (get-in result [:summary :waves]))))))
+      (is (= 3 (get-in result [:summary :waves]))))))
 
 (deftest run-multi-real-diamond-dependency-test
   (testing "run-multi executes diamond dependency with real tools"
-    ;; op-1 → op-2, op-1 → op-3, op-2 + op-3 → op-4
+    ;; op-1 -> op-2, op-1 -> op-3, op-2 + op-3 -> op-4
     (let [result (multi/run-multi
                   [{:id "op-1" :tool "config" :command "help"}
                    {:id "op-2" :tool "preset" :command "help" :depends_on ["op-1"]}
@@ -505,8 +508,7 @@
                    {:id "op-4" :tool "migration" :command "help" :depends_on ["op-2" "op-3"]}])]
       (is (:success result))
       (is (= 4 (get-in result [:summary :success])))
-      ;; noop: all ops in wave 1
-      (is (= 1 (get-in result [:summary :waves]))))))
+      (is (= 3 (get-in result [:summary :waves]))))))
 
 (deftest run-multi-real-mixed-success-failure-test
   (testing "run-multi handles mix of valid and invalid tool ops"
@@ -526,24 +528,24 @@
                    {:id "op-3" :tool "preset" :command "help" :depends_on ["op-2"]}])]
       (is (false? (:success result)))
       (is (= 3 (get-in result [:summary :total])))
-      ;; noop: all ops in wave 1, no dep-failure cascade
-      ;; op-1 fails, op-2 and op-3 execute independently
-      (is (= 2 (get-in result [:summary :success])))
-      (is (= 1 (get-in result [:summary :failed]))))))
+      (is (= 0 (get-in result [:summary :success])))
+      (is (= 3 (get-in result [:summary :failed])))
+      (is (= 3 (get-in result [:summary :waves]))))))
 
 (deftest run-multi-partial-dep-failure-test
   (testing "run-multi only cascades failure to direct dependents"
-    ;; op-1 fails, op-2 depends on op-1, op-3 is independent
-    ;; noop: all in wave 1, dep-failure not checked
-    (let [result (multi/run-multi
-                  [{:id "op-1" :tool "nonexistent-tool-xyz" :command "noop"}
-                   {:id "op-2" :tool "config" :command "help" :depends_on ["op-1"]}
-                   {:id "op-3" :tool "preset" :command "help"}])]
+    (let [result  (multi/run-multi
+                   [{:id "op-1" :tool "nonexistent-tool-xyz" :command "noop"}
+                    {:id "op-2" :tool "config" :command "help" :depends_on ["op-1"]}
+                    {:id "op-3" :tool "preset" :command "help"}])
+          by-id   (into {} (map (juxt :id :success))
+                        (mapcat :results (vals (:waves result))))]
       (is (false? (:success result)))
       (is (= 3 (get-in result [:summary :total])))
-      ;; noop: op-2 also executes (no dep-failure skip)
-      (is (= 2 (get-in result [:summary :success])))
-      (is (= 1 (get-in result [:summary :failed]))))))
+      (is (= 1 (get-in result [:summary :success])))
+      (is (= 2 (get-in result [:summary :failed])))
+      (is (true? (get by-id "op-3")) "independent op still runs")
+      (is (false? (get by-id "op-2")) "direct dependent is skipped"))))
 
 ;; =============================================================================
 ;; Part 8b: Real Tool Execution — Result Data Verification
@@ -576,16 +578,17 @@
 
 (deftest run-multi-skipped-op-has-dep-failure-message-test
   (testing "run-multi skipped op has dependency failure error message"
-    (let [result (multi/run-multi
-                  [{:id "fail" :tool "nonexistent-tool-xyz" :command "noop"}
-                   {:id "skip" :tool "config" :command "help" :depends_on ["fail"]}])
-          ;; noop: all ops in wave 1, no dep-failure skip
-          wave-1 (get-in result [:waves 1])
-          skip-result (->> (:results wave-1)
+    (let [result      (multi/run-multi
+                       [{:id "fail" :tool "nonexistent-tool-xyz" :command "noop"}
+                        {:id "skip" :tool "config" :command "help" :depends_on ["fail"]}])
+          skip-result (->> (vals (:waves result))
+                           (mapcat :results)
                            (filter #(= "skip" (:id %)))
                            first)]
-      ;; "skip" op executes successfully (no dep-failure check)
-      (is (true? (:success skip-result))))))
+      (is (some? skip-result))
+      (is (false? (:success skip-result)))
+      (is (str/includes? (str (:error skip-result)) "dependencies failed"))
+      (is (str/includes? (str (:error skip-result)) "fail")))))
 
 ;; =============================================================================
 ;; Part 9: Wave Result Structure Verification
@@ -598,15 +601,16 @@
                    {:id "op-2" :tool "preset" :command "help" :depends_on ["op-1"]}])
           wave-1 (get-in result [:waves 1])
           wave-2 (get-in result [:waves 2])]
-      ;; noop: both ops in wave 1
       (is (some? wave-1))
       (is (vector? (:ops wave-1)))
-      (is (= 2 (count (:ops wave-1))))
+      (is (= ["op-1"] (mapv :id (:ops wave-1))))
       (is (vector? (:results wave-1)))
-      (is (= 2 (count (:results wave-1))))
+      (is (= 1 (count (:results wave-1))))
       (is (every? :success (:results wave-1)))
-      ;; Wave 2 doesn't exist
-      (is (nil? wave-2)))))
+      (is (some? wave-2))
+      (is (= ["op-2"] (mapv :id (:ops wave-2))))
+      (is (every? :success (:results wave-2)))
+      (is (nil? (get-in result [:waves 3]))))))
 
 (deftest run-multi-wave-result-has-id-and-success-test
   (testing "Each op result in waves has :id and :success"
@@ -682,8 +686,7 @@
                                   "depends_on" ["step-1"]}]})
           parsed (parse-json-response result)]
       (is (:success parsed))
-      ;; noop: all ops in wave 1
-      (is (= 1 (get-in parsed [:summary :waves])))
+      (is (= 2 (get-in parsed [:summary :waves])))
       (is (= 2 (get-in parsed [:summary :success]))))))
 
 (deftest e2e-batch-dispatch-with-failure-test
@@ -719,9 +722,9 @@
                                  {"id" "b" "tool" "preset" "command" "help"
                                   "depends_on" ["a"]}]})
           parsed (parse-json-response result)]
-      ;; noop: detect-cycles returns [], circular deps pass validation
-      (is (:success parsed))
-      (is (= 2 (get-in parsed [:summary :success]))))))
+      (is (false? (:success parsed)))
+      (is (= 0 (get-in parsed [:summary :success])))
+      (is (some #(str/includes? (str %) "Circular dependency") (:errors parsed))))))
 
 (deftest e2e-batch-self-dependency-test
   (testing "E2E: MCP client sends batch with self-referencing dependency"
@@ -753,8 +756,7 @@
           parsed (parse-json-response result)]
       (is (:success parsed))
       (is (= 2 (get-in parsed [:summary :success])))
-      ;; noop: all ops in wave 1
-      (is (= 1 (get-in parsed [:summary :waves]))))))
+      (is (= 2 (get-in parsed [:summary :waves]))))))
 
 (deftest e2e-single-dispatch-real-kg-stats-test
   (testing "E2E: single dispatch to kg stats returns real data"
@@ -829,13 +831,11 @@
         (multi/run-multi
          [{:id "a" :tool "config" :command "list"}
           {:id "b" :tool "migration" :command "status" :depends_on ["a"]}])
-        ;; noop: all ops in wave 1
-        (is (= 1 (count @wave-calls))
-            "Should emit 1 wave-complete for 1 wave")
-        (is (= [1] (mapv :wave-num @wave-calls)))
-        (is (every? #(= 1 (:total-waves %)) @wave-calls))
-        ;; Both ops in wave 1
-        (is (every? #(= 2 (:success-count %)) @wave-calls))
+        (is (= 2 (count @wave-calls))
+            "Should emit one wave-complete per wave")
+        (is (= [1 2] (mapv :wave-num @wave-calls)))
+        (is (every? #(= 2 (:total-waves %)) @wave-calls))
+        (is (every? #(= 1 (:success-count %)) @wave-calls))
         (is (every? #(= 0 (:failed-count %)) @wave-calls))
         (finally
           (multi/register-fx!))))))
@@ -1070,7 +1070,7 @@
       (is (= 1 (get-in result [:summary :waves]))))))
 
 (deftest run-multi-wide-diamond-test
-  (testing "run-multi handles wide diamond (1 root → N middle → 1 merge)"
+  (testing "run-multi handles wide diamond (1 root -> N middle -> 1 merge)"
     (let [n 5
           root {:id "root" :tool "config" :command "help"}
           middle (mapv (fn [i]
@@ -1084,8 +1084,7 @@
       (is (:success result))
       (is (= (+ 2 n) (get-in result [:summary :total])))
       (is (= (+ 2 n) (get-in result [:summary :success])))
-      ;; noop: all ops in wave 1
-      (is (= 1 (get-in result [:summary :waves]))))))
+      (is (= 3 (get-in result [:summary :waves]))))))
 
 ;; =============================================================================
 ;; Part 19: Dry-Run Plan Verification
@@ -1100,15 +1099,13 @@
                   :dry-run true)]
       (is (:success result))
       (is (true? (:dry-run result)))
-      ;; noop: all ops in wave 1
-      (is (= 1 (count (:waves result))))
-      (let [wave-1 (get-in result [:waves 1])]
-        (is (= 3 (count (:ops wave-1))))
-        ;; Each op should have :id, :tool, :command
-        (doseq [op (:ops wave-1)]
-          (is (contains? op :id))
-          (is (contains? op :tool))
-          (is (contains? op :command)))))))
+      (is (= 2 (count (:waves result))))
+      (is (= #{"a" "b"} (set (mapv :id (get-in result [:waves 1 :ops])))))
+      (is (= ["c"] (mapv :id (get-in result [:waves 2 :ops]))))
+      (doseq [op (mapcat :ops (vals (:waves result)))]
+        (is (contains? op :id))
+        (is (contains? op :tool))
+        (is (contains? op :command))))))
 
 (deftest dry-run-does-not-execute-test
   (testing "dry-run does not actually call tool handlers"
@@ -1155,10 +1152,12 @@
                                   "depends_on" ["z"]}
                                  {"id" "z" "tool" "config" "command" "help"
                                   "depends_on" ["x"]}]})
-          parsed (parse-json-response result)]
-      ;; noop: detect-cycles returns [], circular deps pass validation
-      (is (:success parsed))
-      (is (= 3 (get-in parsed [:summary :success]))))))
+          parsed (parse-json-response result)
+          errors (mapv str (:errors parsed))]
+      (is (false? (:success parsed)))
+      (is (= 0 (get-in parsed [:summary :waves])))
+      (is (some #(str/includes? % "Circular dependency") errors))
+      (is (every? (fn [node] (some #(str/includes? % node) errors)) ["x" "y" "z"])))))
 
 ;; =============================================================================
 ;; Helpers for Mutating Operation Tests (Parts 21+)
@@ -1229,7 +1228,7 @@
 ;; =============================================================================
 
 (deftest batch-memory-add-then-query-chain-test
-  (testing "Batch: memory add → memory query dependency chain"
+  (testing "Batch: memory add -> memory query dependency chain"
     (let [tag (unique-tag)
           result (c-multi/handle-multi
                   {"operations"
@@ -1251,11 +1250,10 @@
                      "depends_on" ["add-mem"]}]})
           parsed (parse-json-response result)]
       (is (:success parsed)
-          (str "Batch memory add→query chain should succeed: " (:text result)))
+          (str "Batch memory add->query chain should succeed: " (:text result)))
       (is (= 2 (get-in parsed [:summary :total])))
       (is (= 2 (get-in parsed [:summary :success])))
-      ;; noop: all ops in wave 1
-      (is (= 1 (get-in parsed [:summary :waves]))))))
+      (is (= 2 (get-in parsed [:summary :waves]))))))
 
 ;; =============================================================================
 ;; Part 23: Cross-Tool Parallel Operations (Memory + KG + Config)
@@ -1293,7 +1291,7 @@
 ;; =============================================================================
 
 (deftest batch-cross-tool-sequential-chain-test
-  (testing "Batch: sequential chain across memory → kg → config tools"
+  (testing "Batch: sequential chain across memory -> kg -> config tools"
     (let [tag (unique-tag)
           result (c-multi/handle-multi
                   {"operations"
@@ -1317,8 +1315,7 @@
       (is (:success parsed)
           (str "Cross-tool sequential chain should succeed: " (:text result)))
       (is (= 3 (get-in parsed [:summary :success])))
-      ;; noop: all ops in wave 1
-      (is (= 1 (get-in parsed [:summary :waves]))))))
+      (is (= 3 (get-in parsed [:summary :waves]))))))
 
 ;; =============================================================================
 ;; Part 25: E2E Batch Memory Add via handle-multi (Full MCP Path)
@@ -1416,10 +1413,9 @@
                      "depends_on" ["ctx-put"]}]})
           parsed (parse-json-response result)]
       (is (:success parsed)
-          (str "Session context-put→stats chain should succeed: " (:text result)))
+          (str "Session context-put->stats chain should succeed: " (:text result)))
       (is (= 2 (get-in parsed [:summary :success])))
-      ;; noop: all ops in wave 1
-      (is (= 1 (get-in parsed [:summary :waves]))))))
+      (is (= 2 (get-in parsed [:summary :waves]))))))
 
 ;; =============================================================================
 ;; Part 29: Kanban Operations Through Multi
@@ -1496,7 +1492,6 @@
 
 (deftest batch-diamond-with-mutating-ops-test
   (testing "Batch: diamond dependency with real mutating ops at each node"
-    ;; root: memory add → mid-1: kg stats (dep), mid-2: config list (dep) → merge: memory query (dep on both)
     (let [tag (unique-tag)
           result (c-multi/handle-multi
                   {"operations"
@@ -1529,8 +1524,7 @@
           (str "Diamond with mutating ops should succeed: " (:text result)))
       (is (= 4 (get-in parsed [:summary :total])))
       (is (= 4 (get-in parsed [:summary :success])))
-      ;; noop: all ops in wave 1
-      (is (= 1 (get-in parsed [:summary :waves]))))))
+      (is (= 3 (get-in parsed [:summary :waves]))))))
 
 ;; =============================================================================
 ;; Part 33: FX Emission with Mutating Operations
@@ -1577,11 +1571,10 @@
            :type "note" :tags [tag] :limit 3
            :directory "/home/lages/PP/hive/hive-mcp"
            :depends_on ["add-1"]}])
-        ;; noop: all ops in wave 1
-        (is (= 1 (count @wave-calls))
-            "Should emit 1 wave-complete for 1 wave")
-        (is (= [1] (mapv :wave-num @wave-calls)))
-        (is (every? #(= 2 (:success-count %)) @wave-calls))
+        (is (= 2 (count @wave-calls))
+            "Should emit one wave-complete per wave")
+        (is (= [1 2] (mapv :wave-num @wave-calls)))
+        (is (every? #(= 1 (:success-count %)) @wave-calls))
         (finally
           (multi/register-fx!))))))
 
@@ -1617,8 +1610,7 @@
       (is (:success result))
       (is (= 10 (get-in result [:summary :total])))
       (is (= 10 (get-in result [:summary :success])))
-      ;; noop: all ops in wave 1
-      (is (= 1 (get-in result [:summary :waves]))))))
+      (is (= 10 (get-in result [:summary :waves]))))))
 
 (deftest stress-wide-parallel-real-ops-test
   (testing "Stress: 15 independent operations in 1 wave"

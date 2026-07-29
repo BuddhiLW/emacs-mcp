@@ -1,0 +1,8 @@
+{:done
+ {:status :done,
+  :started-at 100,
+  :finished-at 200,
+  :result {:snippets 5, :files 2, :edges 1}},
+ :error
+ {:status :error, :started-at 100, :finished-at 150, :error "boom"},
+ :running {:status :running, :started-at 100}}

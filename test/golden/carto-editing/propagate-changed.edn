@@ -1,0 +1,4 @@
+{:has-events true,
+ :event-count 3,
+ :event-types
+ [:carto/edges-dirty :carto/impact-warning :carto/snippet-stale]}

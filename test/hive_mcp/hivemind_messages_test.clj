@@ -128,15 +128,15 @@
             ":message should take precedence over :task")))))
 
 (deftest piggyback-no-nil-message-when-both-nil-test
-  (testing "Bug regression: :m should never be nil, use empty string when both :task and :message are nil"
+  (testing "a shout carrying neither :task nor :message is suppressed, never stored as {:m nil}"
     (piggyback/reset-all-cursors!)
 
-    ;; Shout with NEITHER :task NOR :message - this was causing {:m nil}
-    (hivemind/shout! "nil-both-agent" :started {})
+    ;; The empty-payload guard supersedes the older ':m is an empty string'
+    ;; fix: a signal-free shout is dropped at the source, so no piggyback
+    ;; entry exists to carry a nil :m at all.
+    (is (false? (hivemind/shout! "nil-both-agent" :started {}))
+        "shout! answers false when it suppresses an empty payload")
 
     (let [msgs (piggyback/get-messages "coordinator" :project-id "global")]
-      (is (seq msgs) "Should have messages")
-      (let [msg (first (filter #(= "nil-both-agent" (:a %)) msgs))]
-        (is (some? msg) "Should find the agent's message")
-        (is (string? (:m msg)) "Bug fix: :m should be a string, never nil")
-        (is (= "" (:m msg)) "Bug fix: :m should be empty string when both :task and :message are nil")))))
+      (is (nil? (first (filter #(= "nil-both-agent" (:a %)) msgs)))
+          "no piggyback message is recorded for a payload-free shout"))))

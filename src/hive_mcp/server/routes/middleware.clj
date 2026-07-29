@@ -18,7 +18,8 @@
             [hive-dsl.context.identity :as ctx-id]
             [taoensso.timbre :as log]
             [clojure.walk :as walk]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [hive-mcp.channel.task-signal :as task-signal]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -97,16 +98,14 @@
 ;; =============================================================================
 
 (defn wrap-handler-context
-  "Bind request context: keywordize args, extract identity, bind ctx vars."
+  "Bind request context: keywordize args, resolve identity, bind ctx vars."
   [handler]
   (fn [args]
     (let [args (walk/keywordize-keys args)]
       (binding [ctx/*request-cache* (atom {})]
         (let [agent-id (id/extract-agent-id args nil)
               project-id (id/extract-project-id args)
-              directory (or (:directory args)
-                            (:_caller_cwd args)
-                            (System/getProperty "user.dir"))]
+              directory (id/extract-directory args)]
           (crystal/record-session-start! agent-id)
           (ctx/with-request-context {:agent-id agent-id
                                      :project-id project-id
@@ -208,46 +207,52 @@
      :project-id project-id
      :additional-project-ids child-pids)))
 
-(defn- drain-memory-piggyback [caller-id]
-  (require 'hive-mcp.channel.memory-piggyback)
-  ((resolve 'hive-mcp.channel.memory-piggyback/drain!) caller-id))
+(defn- drain-memory-piggyback
+  ([caller-id] (drain-memory-piggyback caller-id nil))
+  ([caller-id ctx]
+   (require 'hive-mcp.channel.memory-piggyback)
+   ((resolve 'hive-mcp.channel.memory-piggyback/drain!) caller-id ctx)))
 
 (defn wrap-handler-piggybacks
-  "Unified piggyback wrapper — drains all 4 channels in a single pass."
-  [handler]
-  (fn [args]
-    (let [content (handler args)
-          caller-id (or (:_caller_id args) "coordinator")
-          async-drain (async-buf/drain! caller-id)
-          memory-drain (drain-memory-piggyback caller-id)
-          catchup-blocks (when-let [drain-fn (ext/get-extension :cu/piggyback-drain)]
-                           (try (drain-fn caller-id)
-                                (catch Exception e
-                                  (log/debug "catchup-piggyback drain failed:" (.getMessage e))
-                                  nil)))
-          caller (id/extract-caller-identity args)
-          scope (id/extract-project-scope args)
-          hm-agent-id (ctx-id/make-piggyback-agent-id caller scope)
-          hm-project-id (ctx-id/project-scope-string scope)
-          hivemind-msgs (get-piggyback-messages hm-agent-id hm-project-id)]
+  "Unified piggyback wrapper — drains all 4 channels in a single pass.
+   Task cues harvested from the request args steer the MEMORY drain that rides
+   this response; they are empty unless task-signal/enabled?."
+  ([handler] (wrap-handler-piggybacks handler nil))
+  ([handler tool-name]
+   (fn [args]
+     (let [task-tokens (task-signal/cues tool-name args)
+           content (handler args)
+           caller-id (or (:_caller_id args) "coordinator")
+           async-drain (async-buf/drain! caller-id)
+           memory-drain (drain-memory-piggyback caller-id {:tokens task-tokens})
+           catchup-blocks (when-let [drain-fn (ext/get-extension :cu/piggyback-drain)]
+                            (try (drain-fn caller-id)
+                                 (catch Exception e
+                                   (log/debug "catchup-piggyback drain failed:" (.getMessage e))
+                                   nil)))
+           caller (id/extract-caller-identity args)
+           scope (id/extract-project-scope args)
+           hm-agent-id (ctx-id/make-piggyback-agent-id caller scope)
+           hm-project-id (ctx-id/project-scope-string scope)
+           hivemind-msgs (get-piggyback-messages hm-agent-id hm-project-id)]
 
-      (cond-> content
-        async-drain
-        (id/wrap-delimited-block "TOOLRESULT" (pr-str async-drain))
+       (cond-> content
+         async-drain
+         (id/wrap-delimited-block "TOOLRESULT" (pr-str async-drain))
 
-        memory-drain
-        (id/wrap-memory-piggyback-content memory-drain)
+         memory-drain
+         (id/wrap-memory-piggyback-content memory-drain)
 
-        (seq catchup-blocks)
-        (as-> c (reduce-kv
-                  (fn [acc tag body]
-                    (id/wrap-delimited-block acc
-                      (str/upper-case (name tag))
-                      (if (string? body) body (pr-str body))))
-                  c catchup-blocks))
+         (seq catchup-blocks)
+         (as-> c (reduce-kv
+                   (fn [acc tag body]
+                     (id/wrap-delimited-block acc
+                       (str/upper-case (name tag))
+                       (if (string? body) body (pr-str body))))
+                   c catchup-blocks))
 
-        true
-        (id/wrap-piggyback hivemind-msgs)))))
+         true
+         (id/wrap-piggyback hivemind-msgs))))))
 
 
 ;; =============================================================================
@@ -266,6 +271,6 @@
         (wrap-handler-default-async-for-commands default-async-commands))
       wrap-handler-normalize
       wrap-handler-compress
-      wrap-handler-piggybacks
+      (wrap-handler-piggybacks tool-name)
       wrap-handler-context
       wrap-handler-response))

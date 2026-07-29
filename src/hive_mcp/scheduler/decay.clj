@@ -185,6 +185,11 @@
 (defn start!
   "Start the periodic decay scheduler."
   []
+  ;; Install the synthesis-afterlife provider before any reap can fire, so
+  ;; expired entries a live synthesis references are spared. Lazy resolve keeps
+  ;; the scheduler free of a hard dep on the KG-reading provider ns.
+  (resolve-and-call 'hive-mcp.memory.synthesis-protection/install!
+                    #(%) nil)
   (let [{:keys [enabled interval-minutes] :as cfg} (get-scheduler-config)]
     (cond
       (not enabled)

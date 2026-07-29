@@ -73,6 +73,8 @@
    {:drone-id      \"drone-1705000000\"
     :task-id       \"task-drone-1705000000\"
     :parent-id     \"swarm-ling-123\" (optional)
+    :run-id        \"wave-abc\" (optional — wave run id; when present a
+                     wave-scoped completion is also published to NATS)
     :files-modified [\"src/foo.clj\"]
     :files-failed   [{:file \"path\" :error \"reason\"}]
     :duration-ms   5000
@@ -84,7 +86,7 @@
    - :log             - Log drone completion message (includes failure details)
    - :prometheus      - Increment drone_completed counter, record duration"
 
-  [_coeffects [_ {:keys [drone-id task-id parent-id files-modified files-failed
+  [_coeffects [_ {:keys [drone-id task-id parent-id run-id files-modified files-failed
                          duration-ms model task-type] :as _event-data}]]
   (let [;; Format failure details for log message
         failure-details (when (seq files-failed)
@@ -105,7 +107,6 @@
                               :parent-id parent-id
                               :files-modified files-modified
                               :files-failed files-failed
-                              :duration-ms duration-ms
                               ;; Include partial-success flag for coordinator decision
                               :partial-success (boolean (seq files-failed))}}
      :olympus-broadcast {:type :agent-status
@@ -127,6 +128,7 @@
      :nats-publish {:event-type :completed
                     :task-id task-id
                     :parent-id parent-id
+                    :run-id run-id
                     :result {:files-modified files-modified
                              :files-failed files-failed
                              :duration-ms duration-ms}}}))
@@ -145,6 +147,8 @@
    {:drone-id    \"drone-1705000000\"
     :task-id     \"task-drone-1705000000\"
     :parent-id   \"swarm-ling-123\" (optional)
+    :run-id      \"wave-abc\" (optional — wave run id; when present a
+                   wave-scoped completion is also published to NATS)
     :error       \"Connection timeout\"
     :error-type  :nrepl-connection | :nrepl-timeout | :validation | :conflict | :execution | :unknown
     :files       [\"src/foo.clj\"]
@@ -158,7 +162,7 @@
    - :prometheus      - Increment drone_failed counter with drone_id label
                       - Record duration histogram with status=failed"
 
-  [_coeffects [_ {:keys [drone-id task-id parent-id error error-type files
+  [_coeffects [_ {:keys [drone-id task-id parent-id run-id error error-type files
                          duration-ms model task-type] :as _event-data}]]
 
   (when (and model task-type)
@@ -198,6 +202,7 @@
    :nats-publish {:event-type :failed
                   :task-id task-id
                   :parent-id parent-id
+                  :run-id run-id
                   :error error}})
 
 ;; =============================================================================

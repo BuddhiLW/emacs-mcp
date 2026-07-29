@@ -65,7 +65,7 @@
 ;; CASE 5 (LIVE) — the dimension invariant, on the real configured providers
 ;; =============================================================================
 
-(deftest live-dimension-invariant
+(deftest ^:integration live-dimension-invariant
   (testing "for every configured memory collection, the width the EMBEDDER emits
             must equal the width the COLLECTION holds. This needs no Milvus
             connection — only the live config — and it is the single check that
@@ -91,7 +91,7 @@
 ;; CASE 1 (LIVE) — the anchor, from the real store
 ;; =============================================================================
 
-(deftest live-lexical-anchor
+(deftest ^:integration live-lexical-anchor
   (testing "'SIGSEGV crash JDK 25 bug use Java 21' must retrieve
             20260511194834-344a3bc0 from the LIVE store. This is the exact query
             that failed on 2026-07-12 and the exact entry it failed to find."
@@ -109,7 +109,7 @@
                                    :must-contain [g/anchor-id]}))))
       (is (nil? (backend-absent-fault))))))
 
-(deftest live-results-are-ordered-nearest-first
+(deftest ^:integration live-results-are-ordered-nearest-first
   (testing "THE WIRE TEST. `:distance` must ascend. If the Milvus boundary ever
             regresses to passing a COSINE similarity through under the :distance
             key (MEM-P0-EMBED-LANE), the numbers still look plausible and the
@@ -128,7 +128,7 @@
                                  :results (:results body)}))))
       (is (nil? (backend-absent-fault))))))
 
-(deftest live-store-is-actually-populated
+(deftest ^:integration live-store-is-actually-populated
   (testing "the premise every other assertion rests on. If the store is empty,
             an empty result IS honest, and this whole suite is measuring nothing
             — so state the premise as an assertion rather than assuming it."

@@ -152,7 +152,8 @@
 (deftest backup-metadata-structure-test
   (testing "backup-metadata creates correct structure"
     (let [meta (core/backup-metadata :kg :datalevin {:edges 10 :disc 5 :synthetic 3})]
-      (is (= 1 (:backup/version meta)))
+      ;; version is owned by the source constant, not restated here
+      (is (= core/backup-format-version (:backup/version meta)))
       (is (= :kg (:backup/scope meta)))
       (is (= :datalevin (:backup/backend meta)))
       (is (inst? (:backup/created-at meta)))

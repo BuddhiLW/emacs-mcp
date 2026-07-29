@@ -58,7 +58,7 @@
   (prop/for-all [status     gen-status
                  priority   gen-priority
                  project-id gen-project-id]
-    (let [tags (kt/compute-new-tags status priority project-id)]
+    (let [tags (kt/compute-new-tags [] status priority project-id)]
       (and (vector? tags)
            (every? string? tags)
            (every? seq tags)

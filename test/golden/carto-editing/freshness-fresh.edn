@@ -1,0 +1,5 @@
+{:has-carto-fresh? true,
+ :has-carto-context? true,
+ :context-keys [:file :outline :snippets],
+ :snippet-count 2,
+ :outline-keys ["my.app.core/greet" "my.app.core/internal-fn"]}

@@ -10,10 +10,15 @@
             [hive-mcp.knowledge-graph.edge-cycle :as edge-cycle]
             [hive-mcp.knowledge-graph.edges.queries :as queries]
             [hive-mcp.knowledge-graph.edges.write :as write]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.knowledge-graph.schema :as schema]))
 
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
+
+;; This module writes :co-accessed edges, so it owns the registration —
+;; loading it must be sufficient for write-path validation to accept them.
+(schema/register-relation-type! :co-accessed)
 
 ;; =============================================================================
 ;; Co-Access Recording

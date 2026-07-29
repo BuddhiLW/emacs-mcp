@@ -17,7 +17,13 @@
             [clojure.test.check.properties :as prop]
             [hive-dsl.result :as r]
             [hive-mcp.plan.kg-degraded :as sut]
-            [hive-mcp.plan.tool :as plan-tool]))
+            [hive-mcp.plan.tool :as plan-tool]
+            [clojure.data.json :as json]
+            [hive-spi.memory.registry :as sreg]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]
+            [hive-mcp.test.stub.memory-store :as mem-stub]
+            [hive-mcp.plan.schema :as schema]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -27,6 +33,12 @@
 ;; =============================================================================
 
 (use-fixtures :each
+  ;; The kanban collaborator is reached through its real port: an
+  ;; atom-backed IMemoryStore stub registered in the store registry, so
+  ;; the integration tests drive the production create path instead of a
+  ;; hand-rolled fn whose arity can drift.
+  mem-stub/with-stub-store
+  (iso/with-isolations :kg-conn)
   (fn [f]
     ;; 200ms is fast enough to keep tests sub-second yet generous enough
     ;; to absorb agent-thread-pool scheduling jitter under load. Tighter
@@ -203,29 +215,50 @@
 ;; Pin: tasks land + kg-degraded? true + warnings emitted, even when
 ;; every KG batch hangs. Faster KG = ok-edges, no warnings.
 
-(defn- mock-kanban-create
-  "Stub: returns a deterministic fake task id for any step."
-  [{:keys [title]} _directory]
-  {:ok (str "fake-task:" title)})
+(defn- kanban-rows
+  "What the kanban collaborator actually received, read back off the
+   registered IMemoryStore stub.
+
+   Returns {title -> {:id assigned-id :tags #{tag ...}}}."
+  []
+  (into {}
+        (map (fn [entry]
+               [(:title (json/read-str (:content entry) :key-fn keyword))
+                {:id (:id entry) :tags (set (:tags entry))}]))
+        (vals (mem-stub/entries (sreg/get-store :default)))))
+
+(defn- plan-with
+  "Plan whose STEPS ran through the schema layer's own normalizer, so
+   build-execute-fn sees the shape production hands it (defaults come from
+   the source, not from this test)."
+  [steps]
+  {:steps (mapv schema/normalize-step steps)
+   :decision-id "dec-1"})
 
 (deftest integration-build-execute-fn-kg-hangs-test
   (testing "all KG batches hang → tasks still land, warnings populated"
-    (with-redefs [;; Real kanban create is slow + nondeterministic — stub.
-                  plan-tool/create-kanban-task! mock-kanban-create
-                  ;; Force every KG batch to hang.
-                  plan-tool/create-plan-decision-edge! (fn [& _] (try (Thread/sleep 60000) (catch InterruptedException _ ::interrupted)))
-                  plan-tool/create-plan-task-edges!    (fn [& _] (try (Thread/sleep 60000) (catch InterruptedException _ ::interrupted)))
-                  plan-tool/create-task-dependency-edges! (fn [& _] (try (Thread/sleep 60000) (catch InterruptedException _ ::interrupted)))]
+    (with-redefs [;; Only the KG batches are faked — they are the subject.
+                  ;; Kanban creation runs for real against the registered
+                  ;; IMemoryStore stub (see the :each fixture).
+                  plan-tool/create-plan-decision-edge!    (fn [& _] ((thunk-hang)))
+                  plan-tool/create-plan-task-edges!       (fn [& _] ((thunk-hang)))
+                  plan-tool/create-task-dependency-edges! (fn [& _] ((thunk-hang)))]
       (let [execute-fn (#'plan-tool/build-execute-fn
                         "/tmp/nodir" "plan-id" "test-project" "test-agent")
-            plan      {:steps [{:id "s1" :title "T1" :depends-on []}
-                               {:id "s2" :title "T2" :depends-on ["s1"]}]
-                       :decision-id "dec-1"}
+            plan      (plan-with [{:id "s1" :title "T1" :depends-on []}
+                                  {:id "s2" :title "T2" :depends-on ["s1"]}])
             t0        (System/currentTimeMillis)
             result    (execute-fn {:plan plan})
-            elapsed   (- (System/currentTimeMillis) t0)]
-        (is (= ["fake-task:T1" "fake-task:T2"] (:task-ids result))
-            "tasks must land regardless of KG status")
+            elapsed   (- (System/currentTimeMillis) t0)
+            rows      (kanban-rows)]
+        (is (= #{"T1" "T2"} (set (keys rows)))
+            "every step must reach the kanban port regardless of KG status")
+        (is (= [(get-in rows ["T1" :id]) (get-in rows ["T2" :id])]
+               (:task-ids result))
+            "returned ids are the ids the store assigned, in step order")
+        (is (contains? (get-in rows ["T1" :tags]) "wave:0"))
+        (is (contains? (get-in rows ["T2" :tags]) "wave:1")
+            "wave number threads through to the created task's tags")
         (is (true? (:kg-degraded? result)))
         (is (= 3 (count (:kg-warnings result)))
             "one warning per stuck KG batch (decision + plan-task + task-dep)")
@@ -236,17 +269,21 @@
 
 (deftest integration-build-execute-fn-kg-ok-test
   (testing "KG returns edges → kg-degraded? false, edges flow through"
-    (with-redefs [plan-tool/create-kanban-task! mock-kanban-create
-                  plan-tool/create-plan-decision-edge! (fn [& _] :decision-edge-id)
-                  plan-tool/create-plan-task-edges!    (fn [& _] [:e1 :e2])
+    (with-redefs [plan-tool/create-plan-decision-edge!    (fn [& _] :decision-edge-id)
+                  plan-tool/create-plan-task-edges!       (fn [& _] [:e1 :e2])
                   plan-tool/create-task-dependency-edges! (fn [& _] [:e3])]
       (let [execute-fn (#'plan-tool/build-execute-fn
                         "/tmp/nodir" "plan-id" "test-project" "test-agent")
-            plan      {:steps [{:id "s1" :title "T1" :depends-on []}
-                               {:id "s2" :title "T2" :depends-on ["s1"]}]
-                       :decision-id "dec-1"}
-            result    (execute-fn {:plan plan})]
-        (is (= ["fake-task:T1" "fake-task:T2"] (:task-ids result)))
+            plan      (plan-with [{:id "s1" :title "T1" :depends-on []}
+                                  {:id "s2" :title "T2" :depends-on ["s1"]}])
+            result    (execute-fn {:plan plan})
+            rows      (kanban-rows)]
+        (is (= #{"T1" "T2"} (set (keys rows))))
+        (is (= [(get-in rows ["T1" :id]) (get-in rows ["T2" :id])]
+               (:task-ids result)))
+        (is (= {"s1" (get-in rows ["T1" :id]) "s2" (get-in rows ["T2" :id])}
+               (:step-mapping result))
+            "step-id → task-id mapping names the real created tasks")
         (is (false? (:kg-degraded? result)))
         (is (= [] (:kg-warnings result)))
         ;; All three batches contributed edges.
@@ -254,16 +291,16 @@
 
 (deftest integration-build-execute-fn-kg-partial-test
   (testing "one batch hangs, others ok → partial edges + 1 warning"
-    (with-redefs [plan-tool/create-kanban-task! mock-kanban-create
-                  plan-tool/create-plan-decision-edge! (fn [& _] :ok-decision)
-                  plan-tool/create-plan-task-edges!    (fn [& _] (try (Thread/sleep 60000) (catch InterruptedException _ ::interrupted)))
+    (with-redefs [plan-tool/create-plan-decision-edge!    (fn [& _] :ok-decision)
+                  plan-tool/create-plan-task-edges!       (fn [& _] ((thunk-hang)))
                   plan-tool/create-task-dependency-edges! (fn [& _] [:dep-edge])]
       (let [execute-fn (#'plan-tool/build-execute-fn
                         "/tmp/nodir" "plan-id" "test-project" "test-agent")
-            plan      {:steps [{:id "s1" :title "T1" :depends-on []}]
-                       :decision-id "dec-1"}
-            result    (execute-fn {:plan plan})]
-        (is (= ["fake-task:T1"] (:task-ids result)))
+            plan      (plan-with [{:id "s1" :title "T1" :depends-on []}])
+            result    (execute-fn {:plan plan})
+            rows      (kanban-rows)]
+        (is (= #{"T1"} (set (keys rows))))
+        (is (= [(get-in rows ["T1" :id])] (:task-ids result)))
         (is (true? (:kg-degraded? result)))
         (is (= 1 (count (:kg-warnings result))))
         (is (re-find #"plan-task-edges" (first (:kg-warnings result))))

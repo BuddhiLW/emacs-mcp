@@ -30,6 +30,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [hive-mcp.addons.protocol :as proto]
+            [hive-mcp.addons.runtime-ports :as runtime-ports]
             [hive-mcp.dns.result :as r]
             [malli.core :as m]
             [malli.error :as me]
@@ -347,6 +348,7 @@
    2. Strip pure ${VAR} placeholders so the addon's hive-di defconfig resolves
       env-sourced fields directly (typed coercion + blank->nil + Result errors)
    3. Inject :addon/id and :addon/type for context
+   4. Inject host-neutral function adapters under :runtime/ports (DIP)
 
    Config precedence (highest wins, after addon defconfig resolution):
      manifest :addon/config literal > config.edn :services > env vars > defaults
@@ -373,7 +375,8 @@
     (-> (merge raw-config file-config)
         strip-env-templates
         (assoc :addon/id (:addon/id manifest)
-               :addon/type (:addon/type manifest)))))
+               :addon/type (:addon/type manifest)
+               :runtime/ports (runtime-ports/runtime-ports)))))
 
 ;; =============================================================================
 ;; Classpath Manifest Scanner

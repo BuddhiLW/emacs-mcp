@@ -6,8 +6,8 @@
 
    For isolation fixtures (DataScript swarm, agent registry, events, …)
    see `hive-mcp.isolation-methods` and `hive-test.isolation`."
-  (:require [hive-mcp.chroma.core :as chroma]
-            [hive-mcp.swarm.datascript.connection :as ds-conn]))
+  (:require [hive-mcp.swarm.datascript.connection :as ds-conn]
+            [hive-spi.embeddings.ports :as emb]))
 
 ;;; ============================================================
 ;;; Swarm DataScript reset helper
@@ -29,9 +29,8 @@
 ;;; ============================================================
 
 (defrecord MockEmbedder [dimension]
-  chroma/EmbeddingProvider
+  emb/EmbeddingProvider
   (embed-text [_ text]
-    ;; Generate deterministic pseudo-random embedding based on text hash
     (let [h (hash text)]
       (vec (for [i (range dimension)]
              (-> (bit-xor h i)
@@ -40,7 +39,7 @@
                  (* 2)
                  (- 1))))))
   (embed-batch [this texts]
-    (mapv #(chroma/embed-text this %) texts))
+    (mapv #(emb/embed-text this %) texts))
   (embedding-dimension [_] dimension))
 
 (defn ->MockEmbedder

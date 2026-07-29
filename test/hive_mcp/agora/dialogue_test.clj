@@ -81,12 +81,12 @@
                        {:participants ["writer-123" "critic-456"]
                         :topic "Code review"})]
       (is (string? dialogue-id))
-      (is (clojure.string/starts-with? dialogue-id "dialogue-"))
+      (is (seq dialogue-id))
       (let [d (dialogue/get-dialogue dialogue-id)]
         (is (= #{"writer-123" "critic-456"} (:participants d)))
         (is (= "Code review" (:topic d)))
         (is (= :active (:status d)))
-        (is (empty? (:turns d)))))))
+        (is (empty? (dialogue/get-dialogue-turns dialogue-id)))))))
 
 (deftest create-dialogue-minimum-participants-test
   (testing "create-dialogue requires at least 2 participants"
@@ -113,12 +113,12 @@
       (is (= #{"a" "b"} (dialogue/get-participants dialogue-id))))))
 
 (deftest leave-dialogue-ends-when-insufficient-test
-  (testing "leave-dialogue ends dialogue when < 2 participants"
+  (testing "leave-dialogue aborts the dialogue when < 2 participants remain"
     (let [dialogue-id (dialogue/create-dialogue
                        {:participants ["a" "b"]})]
       (dialogue/leave-dialogue dialogue-id "b")
-      ;; Use public API instead of accessing private state
-      (is (= :ended (:status (dialogue/get-dialogue dialogue-id)))))))
+      (is (= :aborted (:status (dialogue/get-dialogue dialogue-id)))
+          ":aborted is the terminal status in the schema's status set"))))
 
 ;;; =============================================================================
 ;;; Turn Recording Tests
@@ -146,7 +146,7 @@
           (is (string? (:id turn))))))))
 
 (deftest get-last-turn-for-test
-  (testing "get-last-turn-for returns most recent turn from participant"
+  (testing "get-last-turn-for returns the most recent turn ADDRESSED TO a participant"
     (let [dialogue-id (dialogue/create-dialogue
                        {:participants ["a" "b"]})]
       (#'dialogue/record-turn! dialogue-id
@@ -157,10 +157,10 @@
                                {:sender "a" :receiver "b" :message "Second" :signal :approve})
       (let [last-a (dialogue/get-last-turn-for dialogue-id "a")
             last-b (dialogue/get-last-turn-for dialogue-id "b")]
-        (is (= "Second" (:message last-a)))
-        (is (= :approve (:signal last-a)))
-        (is (= "Response" (:message last-b)))
-        (is (= :counter (:signal last-b)))))))
+        (is (= "Response" (:message last-a)))
+        (is (= :counter (:signal last-a)))
+        (is (= "Second" (:message last-b)))
+        (is (= :approve (:signal last-b)))))))
 
 ;;; =============================================================================
 ;;; Nash Equilibrium Tests

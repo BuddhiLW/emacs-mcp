@@ -11,7 +11,7 @@
             [hive-mcp.crystal.recall :as recall]
             [hive-mcp.crystal.synthesis :as synthesis]
             [hive-mcp.crystal.harvest.collect :as collect]
-            [hive-mcp.emacs-ext.client :as ec]       ;; eval-elisp-safe
+            [hive-mcp.crystal.persist :as persist]   ;; on-kanban-done
             [hive-mcp.channel.core :as channel]   ;; on-kanban-done, on-session-end
             [hive-mcp.hooks.core :as hooks]       ;; register-hooks!
             [hive-mcp.swarm.datascript :as ds]    ;; on-kanban-done
@@ -24,27 +24,15 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
-;; Shared Helpers (used by on-kanban-done)
-;; =============================================================================
-
-(defn- eval-elisp-safe
-  "Eval elisp with timeout. Returns {:success :result :error :timed-out}."
-  [elisp timeout-ms]
-  (let [r (result/try-effect* :elisp/eval-failed
-                              (ec/eval-elisp-with-timeout elisp timeout-ms))]
-    (if (result/ok? r)
-      (let [v (:ok r)]
-        (when (:timed-out v)
-          (log/warn "eval-elisp-safe: timed out"))
-        v)
-      {:success false :error (:message r)})))
-
-;; =============================================================================
 ;; Kanban DONE Hook
 ;; =============================================================================
 
 (defn on-kanban-done
-  "Hook called when a kanban task moves to DONE."
+  "Hook called when a kanban task moves to DONE.
+
+   Writes the progress note through `mem-proto/add-entry!` (via
+   crystal.persist). Returns {:success true :progress-note-id id :task task}
+   or {:success false :error msg :task task}."
   [{:keys [id title project-id _context _priority _started] :as task}]
   (log/info "Kanban DONE hook triggered for task:" id title "project-id:" project-id)
   (result/rescue nil
@@ -52,25 +40,21 @@
                      (log/debug "Registered completed task in DataScript:" id "project-id:" project-id)))
   (let [progress-note (crystal/task-to-progress-note
                        (assoc task :completed-at (.toString (java.time.Instant/now))))
-        tags-elisp (str "(" (str/join " " (map pr-str (:tags progress-note))) ")")
-        elisp (format "(hive-mcp-memory-add 'note %s '%s nil 'ephemeral)"
-                      (pr-str (:content progress-note))
-                      tags-elisp)
-        {:keys [success result error timed-out]} (eval-elisp-safe elisp 10000)]
-    (when timed-out
-      (log/warn "on-kanban-done: elisp eval timed out for task:" id))
-    (if success
+        {:keys [results error]} (persist/persist-wraps!
+                                 [{:pid project-id :entry progress-note}])
+        {note-id :id ok? :success? note-error :error} (first results)]
+    (if ok?
       (do
         (log/info "Created progress note for completed task:" id)
         (when (channel/server-connected?)
           (channel/broadcast! {:type "task-completed"
                                :task-id id
                                :title title
-                               :progress-note-id result}))
-        {:success true :progress-note-id result :task task})
-      (do
-        (log/error "Failed to create progress note:" error)
-        {:success false :error error :task task}))))
+                               :progress-note-id note-id}))
+        {:success true :progress-note-id note-id :task task})
+      (let [msg (or note-error error "progress-note persist returned no id")]
+        (log/error "Failed to create progress note:" msg)
+        {:success false :error msg :task task}))))
 
 (defn extract-task-from-kanban-entry
   "Extract task data from a kanban memory entry."

@@ -100,7 +100,7 @@
   "Resolve a tool name to its handler.
 
    Order (T13 Phase 3 / multi-IAddon-native):
-     1. multi.registry — covers :multi/core seed (existing 20 consolidated tools)
+     1. multi.registry — covers :multi/core seed (existing 21 consolidated tools)
         AND any addon contributions registered via :multi/tool hook key.
      2. consolidated.multi — back-compat for callers that haven't loaded
         multi.registry yet (e.g. early bootstrap before core-seed fires).

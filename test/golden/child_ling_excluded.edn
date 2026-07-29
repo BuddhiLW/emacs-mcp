@@ -1,0 +1,6 @@
+{:emacs true,
+ :memory false,
+ :multi true,
+ :nil-name false,
+ :prefixed false,
+ :swarm true}

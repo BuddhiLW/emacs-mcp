@@ -48,22 +48,28 @@
 ;; Test data
 ;; =============================================================================
 
-(def ^:private catchup-input
-  "Deterministic input for build-catchup-response — pure function, no mocking."
-  {:project-name   "golden-proj"
-   :project-id     "golden-proj"
-   :scopes         ["scope:project:golden-proj"]
-   :git-info       {:branch "main" :uncommitted false :last-commit "abc - test"}
-   :permeation     nil
-   :axioms-meta    [{:id "ax-1" :content "Rule 1" :tags ["axiom"] :severity "INVIOLABLE"}]
-   :principles-meta []
-   :priority-meta  [{:id "p-1" :content "Priority 1" :tags ["catchup-priority"]}]
-   :sessions-meta  [{:id "s-1" :T "note" :P "Session summary"}]
-   :decisions-meta [{:id "d-1" :T "decision" :P "Decision preview"}]
+(def catchup-input
+  "Deterministic input for build-catchup-response. No I/O, no clock, no store."
+  {:scopes           ["scope:project:golden"]
+   :project-name     "golden"
+   :git-info         {:branch "main" :uncommitted false :last-commit "abc1234"}
+   :counts           {:axioms 1 :principles 1 :priority-principles 1
+                      :conventions 1 :priority-conventions 1 :decisions 1
+                      :snippets 1 :sessions 1 :recent-wraps 1 :expiring 1}
+   :axioms-meta      []
+   :principles-meta  []
+   :priority-principles-meta []
+   :priority-conventions-meta []
+   :decisions-meta   []
+   :sessions-meta    [{:id "s1" :T "note" :P "session one"}]
+   :recent-wraps     []
    :conventions-meta []
    :snippets-meta    []
    :expiring-meta    []
-   :kg-insights      nil
+   :kg-insights      {:stale-files        ["src/a.clj" "src/b.clj"]
+                      :contradictions     []
+                      :superseded         []
+                      :grounding-warnings {:stale-entries []}}
    :project-tree-scan nil
    :disc-decay       nil
    :context-refs     nil})

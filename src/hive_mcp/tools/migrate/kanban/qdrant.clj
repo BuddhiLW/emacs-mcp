@@ -9,12 +9,12 @@
 
      2. Writes batch into a single `upsert-points` call, eliminating
         per-id grpc overhead during migration."
-  (:require [clj-qdrant.api :as q-api]
-            [clojure.data.json :as json]
+  (:require [clojure.data.json :as json]
             [clojure.edn :as edn]
             [hive-dsl.result :as r]
             [hive-mcp.tools.migrate.kanban.ports :as ports]
-            [taoensso.timbre :as log])
+            [taoensso.timbre :as log]
+            [hive-mcp.tools.migrate.optional :as opt])
   (:import [java.util UUID]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -76,7 +76,7 @@
   "Map of id-string → entry, only for points that came back with non-empty
    payload (stub points are dropped at the boundary)."
   [points ids-vec]
-  (let [decoded   (mapv q-api/point->map points)
+  (let [decoded   (mapv (opt/backend-var "clj-qdrant.api" (quote point->map)) points)
         ;; clj-qdrant's get-points preserves order; map UUID-string back
         ;; to original id.
         uuid->id  (into {} (map (fn [id] [(str (->qdrant-uuid id)) id]) ids-vec))]
@@ -100,7 +100,7 @@
           (nil? client) (r/err :qdrant/disconnected {})
           :else
           (let [uuids  (mapv ->qdrant-uuid ids)
-                res    (q-api/get-points client :collection coll :ids uuids)
+                res    ((opt/backend-var "clj-qdrant.api" (quote get-points)) client :collection coll :ids uuids)
                 points (:points res)]
             (r/ok (decode-results-by-id points ids)))))
       (catch Throwable t
@@ -147,7 +147,7 @@
           (nil? client) (r/err :qdrant/disconnected {})
           :else
           (let [points (mapv #(entry->point % vs) entries)
-                _      (q-api/upsert-points client :collection coll :points points)
+                _      ((opt/backend-var "clj-qdrant.api" (quote upsert-points)) client :collection coll :points points)
                 results (mapv (fn [e] {:id (:id e) :ok? true}) entries)]
             (r/ok results))))
       (catch Throwable t

@@ -31,9 +31,14 @@
             [hive-mcp.swarm.datascript.schema :as schema]
             [hive-mcp.agent.headless :as headless]
             [hive-mcp.agent.context-envelope :as envelope]
-            ;; Required for the fully-qualified `hive-mcp.agent.protocol/kill!`
-            ;; with-redefs targets below (previously only loaded transitively).
-            [hive-mcp.agent.protocol]
+            ;; Collaborators registered in their REAL registries (DIP), because
+            ;; a cold test JVM never runs server boot:
+            ;;   stub-belt  -> :fb/* forge-belt defaults (else every belt op noops)
+            ;;   stub-term  -> :claude terminal addon (else `ling` kill! throws
+            ;;                 "No strategy registered for mode: :claude" and
+            ;;                 smite reports 0)
+            [hive-mcp.test.stub.forge-belt :as stub-belt]
+            [hive-mcp.test.stub.terminal-addon :as stub-term]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.consolidated.workflow.forge-cycle :as forge-cycle]
             ;; Since the workflow.clj decomposition (commit bb40986), `spark!` and
@@ -80,7 +85,29 @@
       (finally
         (reset! forge-state saved-state)))))
 
-(use-fixtures :each isolated-ds-fixture reset-forge-state-fixture)
+(defn ready-lings-fixture
+  "Report every spawned ling ready immediately.
+
+   The seam must be `wait-for-ling-ready`, not `ling-cli-ready?`: readiness is
+   two-phase and blocks on the DataScript phase FIRST, which a stubbed
+   `spawn/handle-spawn` never satisfies. Mocking only the CLI phase leaves each
+   spark burning the full 60s + 2s + 60s timeout."
+  [f]
+  (with-redefs [readiness/wait-for-ling-ready
+                (fn [agent-id _spawn-mode]
+                  {:ready?     true
+                   :slave      {:slave/id agent-id}
+                   :attempts   1
+                   :elapsed-ms 0
+                   :phase      :cli-ready})]
+    (f)))
+
+(use-fixtures :each
+  isolated-ds-fixture
+  reset-forge-state-fixture
+  ready-lings-fixture
+  stub-belt/forge-belt-fixture
+  stub-term/with-terminal)
 
 ;; =============================================================================
 ;; Test Helpers
@@ -99,6 +126,28 @@
                     :else nil)]
     (try (json/read-str text :key-fn keyword)
          (catch Exception _ nil))))
+
+(def ^:private await-strike-timeout-ms 10000)
+
+(defn await-fsm-strike!
+  "Block until the background FSM strike finishes, then return its result map.
+
+   `handle-forge-strike` is non-blocking: it acks with {:queued true} and runs
+   the FSM cycle in a future, parking the outcome in forge-state under
+   :last-fsm-result. `forge status` is the published reader for it, so the
+   awaited value is taken from there — same JSON round-trip the MCP client sees.
+
+   Must be called INSIDE the with-redefs the strike depends on: the future runs
+   on another thread and with-redefs restores root bindings on scope exit."
+  []
+  (let [forge-state @#'workflow/forge-state
+        deadline    (+ (System/currentTimeMillis) await-strike-timeout-ms)]
+    (while (and (:strike-in-progress? @forge-state)
+                (< (System/currentTimeMillis) deadline))
+      (Thread/sleep 5))
+    (-> (workflow/handle-forge-status {})
+        parse-mcp-result
+        (get-in [:forge :last-fsm-result :ok]))))
 
 ;; =============================================================================
 ;; Section 1: FSM Layer — Pure Handlers with Headless Config
@@ -133,15 +182,24 @@
                      :clock-fn   fixed-clock}
           result (belt/run-single-strike resources)]
 
-      ;; Noop: forge-belt returns defaults (extension not registered)
-      (is (= 0 (:strike-count result)) "Noop: zero strikes")
-      (is (= 0 (:total-smited result)) "Noop: zero smited")
-      (is (= 0 (:total-sparked result)) "Noop: zero sparked")
-      (is (nil? (:last-strike result)) "Noop: no last strike")
-      (is (false? (:success result)) "Noop: not successful")
+      ;; One full smite→survey→spark cycle
+      (is (= 1 (:strike-count result)) "One strike cycle")
+      (is (= 1 (:total-smited result)) "One zombie smited")
+      (is (= 1 (:total-sparked result)) "One ling sparked")
+      (is (some? (:last-strike result)) "Cycle stamped last-strike")
+      (is (true? (:success result)) "Cycle did work, so it succeeded")
 
-      ;; Noop path never calls resource fns
-      (is (nil? @spawn-opts-received) "Noop: spawn-fn not called"))))
+      ;; spawn-fn receives the headless spawn-mode from config
+      (is (some? @spawn-opts-received) "spawn-fn was called")
+      (is (= :headless (:spawn-mode @spawn-opts-received))
+          "Headless spawn-mode reaches spawn-fn")
+      (is (= 3 (:max_slots @spawn-opts-received))
+          "max-slots from config reaches spawn-fn")
+      (is (= ["ling" "saa"] (:presets @spawn-opts-received))
+          "Presets from config reach spawn-fn")
+      (is (= [{:id "task-1" :title "Fix headless bug"}]
+             (:tasks @spawn-opts-received))
+          "Surveyed tasks reach spawn-fn"))))
 
 (deftest fsm-headless-with-model-override
   (testing "FSM correctly propagates model override alongside headless spawn-mode"
@@ -164,9 +222,12 @@
                      :clock-fn   fixed-clock}
           result (belt/run-single-strike resources)]
 
-      ;; Noop: forge-belt returns defaults
-      (is (= 0 (:total-sparked result)) "Noop: zero sparked")
-      (is (nil? @spawn-opts-received) "Noop: spawn-fn not called"))))
+      (is (= 1 (:total-sparked result)) "One ling sparked")
+      (is (some? @spawn-opts-received) "spawn-fn was called")
+      (is (= :headless (:spawn-mode @spawn-opts-received))
+          "Headless spawn-mode reaches spawn-fn")
+      (is (= "deepseek/deepseek-chat" (:model @spawn-opts-received))
+          "Model override travels alongside spawn-mode"))))
 
 (deftest fsm-continuous-headless-exhausts-tasks
   (testing "Continuous FSM belt with headless mode loops until no tasks"
@@ -186,10 +247,11 @@
                      :clock-fn   fixed-clock}
           result (belt/run-continuous-belt resources)]
 
-      ;; Noop: forge-belt returns defaults
-      (is (= 0 (:strike-count result)) "Noop: zero strikes")
-      (is (= 0 (:total-sparked result)) "Noop: zero sparked")
-      (is (false? (:continuous? result)) "Noop: not continuous"))))
+      ;; 3 cycles produced a task each; the 4th survey found none and ended
+      (is (= 3 (:strike-count result)) "Looped once per available task")
+      (is (= 3 (:total-sparked result)) "One ling sparked per cycle")
+      (is (= 4 @cycle-count) "Belt surveyed once more, found nothing, stopped")
+      (is (true? (:continuous? result)) "Belt ran in continuous mode"))))
 
 ;; =============================================================================
 ;; Section 2: build-fsm-resources — Adapter Layer
@@ -278,12 +340,7 @@
                     dispatch/handle-dispatch
                     (fn [params]
                       (swap! dispatch-calls conj params)
-                      {:text (json/write-str {:success true})})
-
-                    ;; Mock ling kill protocol (for smite)
-                    hive-mcp.agent.protocol/kill!
-                    (fn [_agent]
-                      {:killed? true})]
+                      {:text (json/write-str {:success true})})]
 
         (let [result (parse-mcp-result
                       (workflow/handle-forge-strike-imperative
@@ -380,30 +437,33 @@
                   readiness/ling-cli-ready? (constantly true)
 
                   dispatch/handle-dispatch
-                  (fn [_] {:text (json/write-str {:success true})})
+                  (fn [_] {:text (json/write-str {:success true})})]
 
-                  hive-mcp.agent.protocol/kill!
-                  (fn [_] {:killed? true})]
+      (let [ack (parse-mcp-result
+                 (workflow/handle-forge-strike-fsm
+                  {:directory "/tmp/fsm"
+                   :spawn_mode "headless"
+                   :max_slots 3}))
+            result (await-fsm-strike!)]
 
-      (let [result (parse-mcp-result
-                    (workflow/handle-forge-strike-fsm
-                     {:directory "/tmp/fsm"
-                      :spawn_mode "headless"
-                      :max_slots 3}))]
+        (is (true? (:queued ack)) "Strike is acked immediately and runs async")
 
         (is (true? (:success result)) "FSM strike should succeed")
         (is (= "fsm" (:mode result)) "Should report FSM mode")
         (is (= "headless" (:spawn-mode result))
             "Should reflect headless in result")
 
-        ;; Noop: forge-belt returns zeroed counts
         (is (some? (:smite result)))
-        (is (= 0 (:count (:smite result))))
+        (is (= 1 (:count (:smite result)))
+            "Should have smited the terminal forja ling")
 
-        (is (= 0 (:todo-count (:survey result))))
+        (is (= 1 (:todo-count (:survey result)))
+            "Should find the single todo task")
+        (is (= ["FSM headless test task"] (:task-titles (:survey result))))
 
         (is (some? (:spark result)))
-        (is (= 0 (:count (:spark result))))))))
+        (is (= 1 (:count (:spark result)))
+            "Should have sparked 1 ling for the todo task")))))
 
 ;; =============================================================================
 ;; Section 4b: Verify default handle-forge-strike IS FSM
@@ -435,16 +495,15 @@
                   readiness/ling-cli-ready? (constantly true)
 
                   dispatch/handle-dispatch
-                  (fn [_] {:text (json/write-str {:success true})})
+                  (fn [_] {:text (json/write-str {:success true})})]
 
-                  hive-mcp.agent.protocol/kill!
-                  (fn [_] {:killed? true})]
-
-      (let [result (parse-mcp-result
-                    (workflow/handle-forge-strike
-                     {:directory "/tmp/fsm-check"
-                      :spawn_mode "headless"
-                      :max_slots 3}))]
+      (let [ack (parse-mcp-result
+                 (workflow/handle-forge-strike
+                  {:directory "/tmp/fsm-check"
+                   :spawn_mode "headless"
+                   :max_slots 3}))
+            result (await-fsm-strike!)]
+        (is (true? (:queued ack)) "Strike is acked immediately and runs async")
         (is (true? (:success result)) "Default strike should succeed")
         (is (= "fsm" (:mode result))
             "Default handle-forge-strike MUST report 'fsm' mode (not imperative)")
@@ -737,11 +796,11 @@
                   readiness/ling-cli-ready? (constantly true)
                   dispatch/handle-dispatch (fn [_] {:text (json/write-str {:success true})})]
 
-      (let [result (parse-mcp-result
-                    (workflow/handle-forge-strike
-                     {:directory "/tmp/summary"
-                      :spawn_mode "headless"
-                      :model "deepseek/deepseek-chat"}))]
+      (let [_ack   (workflow/handle-forge-strike
+                    {:directory "/tmp/summary"
+                     :spawn_mode "headless"
+                     :model "deepseek/deepseek-chat"})
+            result (await-fsm-strike!)]
         (is (true? (:success result)) "FSM strike should succeed")
         (is (= "fsm" (:mode result)) "Should report FSM mode")
         (is (str/includes? (:summary result) "headless")
@@ -754,3 +813,4 @@
 (comment
   ;; Run all forge-strike headless tests
   (clojure.test/run-tests 'hive-mcp.workflows.forge-strike-headless-test))
+

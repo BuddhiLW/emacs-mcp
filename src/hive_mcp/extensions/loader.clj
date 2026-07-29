@@ -172,12 +172,73 @@
                             (str (:addon/init-ns m))
                             (str (:addon/description m "")))))))))
 
+(defn mount-event-logger
+  "Write one structured hive-addon mount lifecycle event through Timbre."
+  [event]
+  (let [level (:level event)
+        payload (dissoc event :level)]
+    (case level
+      :debug (log/debug "Addon mount lifecycle" payload)
+      :warn  (log/warn "Addon mount lifecycle" payload)
+      :error (log/error "Addon mount lifecycle" payload)
+      (log/info "Addon mount lifecycle" payload))))
+
+(defn load-extensions-via-mount!
+  "Mount manifest-discovered addons through hive-addon.mount.compose (MQ-ADOPT).
+
+   Gate: :addons service config {:mount-compose? true}, overridable by env
+   HIVE_MCP_MOUNT_COMPOSE=1|true. Returns nil when disabled or when
+   hive-addon.mount.compose / the mount-host adapter are not resolvable —
+   the caller then falls back to the legacy self-registration path.
+
+   Delegates discovery + plug-select + topo-order + register!/init! to the
+   composer, driven through the IMountHost adapter over addons.core.
+   Per-addon base config resolves via manifest/prepare-config (config.edn
+   precedence + env-template stripping preserved); plug :config overrides
+   merge on top inside the composer. :layer-paths come from the :addons
+   service config (missing files are skipped by the composer).
+
+   Returns the composer's :ok map ({:plan .. :report MountReport ..}) on
+   success; nil on any failure (logged)."
+  []
+  (let [svc-cfg  (rescue {} ((requiring-resolve 'hive-mcp.config.core/get-service-config) :addons))
+        env-flag (System/getenv "HIVE_MCP_MOUNT_COMPOSE")
+        enabled? (if (some? env-flag)
+                   (contains? #{"1" "true"} env-flag)
+                   (boolean (:mount-compose? svc-cfg)))]
+    (when enabled?
+      (if-let [compose (try-resolve 'hive-addon.mount.compose/compose-classpath!)]
+        (if-let [host-ctor (try-resolve 'hive-mcp.extensions.mount-host/addon-registry-host)]
+          (let [opts   (cond-> {:resolve-config manifest/prepare-config
+                                :on-event mount-event-logger}
+                         (seq (:layer-paths svc-cfg))
+                         (assoc :layer-paths (mapv str (:layer-paths svc-cfg))))
+                result (rescue nil (compose (host-ctor) opts))]
+            (if-let [ok (:ok result)]
+              (let [report (:report ok)]
+                (log/info "Mount-compose loaded addons"
+                          {:order   (:order report)
+                           :ok?     (:ok? report)
+                           :skipped (:skipped report)
+                           :dropped (:dropped ok)})
+                ok)
+              (do (log/warn "Mount-compose failed — falling back to legacy loader"
+                            {:error result})
+                  nil)))
+          (do (log/warn "Mount-compose enabled but mount-host adapter unavailable")
+              nil))
+        (do (log/debug "Mount-compose enabled but hive-addon.mount.compose not on classpath")
+            nil)))))
+
 (defn load-extensions!
   "Resolve and register all available extensions.
    Called once at startup. Thread-safe, idempotent.
 
    Strategy:
    1. Scan classpath for addon manifests (META-INF/hive-addons/*.edn)
+   1.5 Gated MQ-ADOPT delegate: load-extensions-via-mount! — when it runs,
+       manifest addons are mounted by hive-addon.mount.compose and steps 3/4
+       only cover the hardcoded extension-namespaces
    2. Merge discovered init-ns with hardcoded extension-namespaces (dedup)
    3. Try extension self-registration (init! functions) — preferred path
    4. For manifests whose init-ns failed, try init-from-manifest! (constructor)
@@ -192,12 +253,22 @@
         {:keys [ordered init-ns-set]}
         (discover-addon-manifests)
 
-        ;; Step 2: Merge with hardcoded list, dedup by init-ns
-        all-init-ns (into (vec (distinct
-                                (concat
-                                 (map (comp symbol :addon/init-ns) ordered)
-                                 extension-namespaces)))
-                          [])
+        ;; Step 1.5 (MQ-ADOPT): gated mount-compose delegate — nil when disabled
+        ;; or unavailable, in which case the legacy path below is authoritative.
+        mount-result (load-extensions-via-mount!)
+        mounted?     (some? mount-result)
+        manifest-ns  (into #{} (map (comp symbol :addon/init-ns)) ordered)
+
+        ;; Step 2: Merge with hardcoded list, dedup by init-ns. When the
+        ;; composer ran, manifest-covered nses are already mounted — only the
+        ;; hardcoded leftovers self-register.
+        all-init-ns (if mounted?
+                      (vec (remove manifest-ns extension-namespaces))
+                      (into (vec (distinct
+                                  (concat
+                                   (map (comp symbol :addon/init-ns) ordered)
+                                   extension-namespaces)))
+                            []))
         _ (when (seq init-ns-set)
             (log/debug "Init namespaces (merged)" {:count (count all-init-ns)
                                                    :ns all-init-ns}))
@@ -218,18 +289,20 @@
         init-total (reduce + 0 (keep :total (vals init-results)))
 
         ;; Step 4: For manifests whose init-ns failed, try init-from-manifest!
+        ;; (skipped when the composer already mounted the manifests)
         manifest-init-count
         (atom 0)
-        _ (doseq [m ordered
-                  :let [ns-sym (symbol (:addon/init-ns m))]
-                  :when (not (contains? successful-ns ns-sym))
-                  :when (not (addon-core/addon-registered? (:addon/id m)))]
-            (when-let [result (manifest/init-from-manifest!
-                               m
-                               addon-core/register-addon!
-                               addon-core/init-addon!)]
-              (when (:success? result)
-                (swap! manifest-init-count inc))))
+        _ (when-not mounted?
+            (doseq [m ordered
+                    :let [ns-sym (symbol (:addon/init-ns m))]
+                    :when (not (contains? successful-ns ns-sym))
+                    :when (not (addon-core/addon-registered? (:addon/id m)))]
+              (when-let [result (manifest/init-from-manifest!
+                                 m
+                                 addon-core/register-addon!
+                                 addon-core/init-addon!)]
+                (when (:success? result)
+                  (swap! manifest-init-count inc)))))
 
         total-registered (count (ext/registered-keys))]
 
@@ -240,6 +313,7 @@
       (log/info "Extensions loaded:" total-registered "total capabilities"
                 "(init!:" init-total
                 ", classpath-manifests:" (count ordered)
+                ", mount-compose:" (if mounted? (count (get-in mount-result [:report :order])) 0)
                 ", manifest-fallback:" @manifest-init-count ")")
       (log/debug "No extensions found on classpath — all capabilities will use defaults"))
 
@@ -274,4 +348,5 @@
      :total total-registered
      :sources {:initializers init-total
                :classpath-manifests (count ordered)
+               :mount-compose (if mounted? (count (get-in mount-result [:report :order])) 0)
                :manifest-fallback @manifest-init-count}}))

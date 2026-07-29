@@ -34,27 +34,31 @@
 (deftest resolve-allowlist-task-type
   (testing "Task-type profile used when no explicit allowlist"
     (let [result (allowlist/resolve-allowlist {:task-type :documentation})]
-      ;; :documentation profile is minimal: read_file + core-tools
+      ;; :documentation is the one narrowed profile — a fixed literal set,
+      ;; not the discovered toolset.
       (is (contains? result "read_file"))
-      (is (contains? result "propose_diff"))
-      (is (contains? result "hivemind_shout"))
-      ;; Should NOT include tools not in documentation profile
-      (is (not (contains? result "grep"))))))
+      (is (contains? result "file_write"))
+      (is (contains? result "glob_files"))
+      (is (contains? result "grep"))
+      ;; Narrower than the full toolset: no shell, no eval, no editing surface
+      (is (not (contains? result "bash")))
+      (is (not (contains? result "clojure")))
+      (is (not (contains? result "code")))
+      (is (not (contains? result "edit"))))))
 
 (deftest resolve-allowlist-default-fallback
   (testing "Default allowlist used when no options provided"
     (let [result (allowlist/resolve-allowlist {})]
-      (is (= allowlist/default-allowlist result))
-      (is (contains? result "read_file"))
-      (is (contains? result "bash"))
-      (is (contains? result "cider_eval_silent"))
-      (is (contains? result "propose_diff")))))
+      (is (= (allowlist/default-allowlist) result))
+      ;; Only assert the registry-independent member — see
+      ;; default-allowlist-contains-required-tools for why.
+      (is (contains? result "bash")))))
 
 (deftest resolve-allowlist-nil-opts
   (testing "nil task-type and nil allowlist returns default"
     (let [result (allowlist/resolve-allowlist {:tool-allowlist nil
                                                :task-type nil})]
-      (is (= allowlist/default-allowlist result)))))
+      (is (= (allowlist/default-allowlist) result)))))
 
 ;;; ============================================================
 ;;; tool-allowed? tests
@@ -148,29 +152,44 @@
 ;;; ============================================================
 
 (deftest default-allowlist-contains-required-tools
-  (testing "Default allowlist includes all documented tools from task spec"
-    (let [al allowlist/default-allowlist]
-      ;; Core drone tools
-      (is (contains? al "read_file"))
-      (is (contains? al "file_write"))
-      (is (contains? al "grep"))
-      (is (contains? al "glob_files"))
-      (is (contains? al "bash"))
-      (is (contains? al "clojure_eval"))
-      (is (contains? al "cider_eval_silent"))
-      ;; Drone-specific
-      (is (contains? al "propose_diff"))
-      (is (contains? al "hivemind_shout")))))
+  (testing "Default allowlist is the discovered toolset, not empty"
+    (let [al (allowlist/default-allowlist)]
+      (is (seq al))
+      (is (every? string? al))
+      ;; `bash` is the one guaranteed member: drone-extra-tools adds it
+      ;; unconditionally because the drone tool proxy provides it, so it does
+      ;; not depend on which addons happen to be registered.
+      (is (contains? al "bash"))))
+  (testing "everything else is registry-dependent, so assert the RULE not the roster"
+    ;; The discovered set differs between a cold JVM (agent registry only) and a
+    ;; live server (extension registry populated by addons) — a cold run has no
+    ;; read_file/grep/edit at all. Pinning names here is what made this suite
+    ;; pass hot and fail cold; the invariant the ns actually owns is the
+    ;; blacklist, asserted in default-allowlist-excludes-dangerous-tools.
+    (let [al (allowlist/default-allowlist)]
+      (is (= al (allowlist/default-allowlist)) "discovery is stable within a run"))))
 
 (deftest default-allowlist-excludes-dangerous-tools
-  (testing "Default allowlist does NOT include dangerous tools"
-    (let [al allowlist/default-allowlist]
-      ;; Agent spawning — forbidden for drones
+  (testing "Default allowlist excludes the recursive-spawn and coordinator-only tools"
+    (let [al (allowlist/default-allowlist)]
+      ;; Recursive self-call / resource amplification
+      (is (not (contains? al "agent")))
+      (is (not (contains? al "wave")))
+      (is (not (contains? al "workflow")))
+      (is (not (contains? al "delegate")))
+      ;; Bypass vector — routes to everything else
+      (is (not (contains? al "multi")))
+      ;; Coordinator-only surfaces
+      (is (not (contains? al "olympus")))
+      (is (not (contains? al "emacs")))
+      (is (not (contains? al "config")))
+      ;; Destructive
+      (is (not (contains? al "migration")))))
+  (testing "deprecated fine-grained names are gone from the registry entirely"
+    ;; These were the old assertions. They pass trivially now — the shims no
+    ;; longer exist — so they prove nothing about the blacklist. Kept only to
+    ;; catch a regression that re-registers them.
+    (let [al (allowlist/default-allowlist)]
       (is (not (contains? al "swarm_spawn")))
-      (is (not (contains? al "swarm_dispatch")))
       (is (not (contains? al "delegate_drone")))
-      ;; Memory writes — drones should be read-only for memory
-      (is (not (contains? al "mcp_memory_add")))
-      ;; Destructive git
-      (is (not (contains? al "magit_push")))
-      (is (not (contains? al "magit_commit"))))))
+      (is (not (contains? al "magit_push"))))))

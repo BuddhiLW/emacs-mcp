@@ -34,10 +34,11 @@
   (gen/hash-map :pid   gen-scope-or-umbrella
                 :datum (gen/hash-map :sample gen/string-alphanumeric)))
 
-(def ^:private gen-slice-key
-  (gen/elements [:progress-notes :completed-tasks :git-commits :recalls
-                 :hivemind-messages :kg-edges-created :kanban-movements
-                 :memory-ids-created :memory-ids-accessed]))
+(def ^:private slice-keys-all
+  "Every ScopeSlice field the partitioner routes to."
+  [:progress-notes :completed-tasks :git-commits :recalls
+   :hivemind-messages :kg-edges-created :kanban-movements
+   :memory-ids-created :memory-ids-accessed])
 
 (def ^:private slice-key->datum-gen
   "Each ScopeSlice field expects datums of a specific type. Map slice-key
@@ -61,9 +62,14 @@
 
 (def ^:private gen-attribution-output
   "An attribution-shaped map with arbitrary slice-keys and a small bag of
-   type-correct attributed datums per slice."
+   type-correct attributed datums per slice.
+
+   Slice keys are drawn by shuffle-and-take rather than gen/vector-distinct:
+   distinctness holds by construction, with no rejection loop that can run
+   out of tries."
   (gen/let [n-slices (gen/choose 1 6)
-            slice-keys (gen/vector-distinct gen-slice-key {:num-elements n-slices})]
+            slice-keys (gen/fmap #(vec (take n-slices %))
+                                 (gen/shuffle slice-keys-all))]
     (gen/let [datums-per-slice (apply gen/tuple
                                       (mapv (fn [k]
                                               (gen/vector (gen-attributed-for k) 0 5))

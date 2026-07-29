@@ -153,7 +153,7 @@
   ([{:keys [level output-fn appenders]
      :or {level :info}}]
    (log/merge-config!
-    {:level level
+    {:min-level level
      :output-fn (or output-fn
                     (fn [{:keys [level ?ns-str msg_ ?err]}]
                       (format "%s [%s] %s%s"

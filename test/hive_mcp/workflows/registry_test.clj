@@ -13,7 +13,8 @@
    CLARITY-T: Each test category isolated."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.workflows.registry :as reg]
-            [hive.events.fsm :as fsm]))
+            [hive.events.fsm :as fsm]
+            [hive-mcp.test.stub.forge-belt :as stub-fb]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -29,7 +30,7 @@
   (f)
   (reg/reset-registry!))
 
-(use-fixtures :each clean-registry-fixture)
+(use-fixtures :each clean-registry-fixture stub-fb/forge-belt-fixture)
 
 ;; =============================================================================
 ;; Mock FSM Spec (minimal valid spec for testing)

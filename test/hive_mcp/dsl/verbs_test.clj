@@ -65,7 +65,19 @@
       "b+" "create"
       "b>" "update"
       "b?" "list"
-      "b#" "status")))
+      "b#" "status"))
+  (testing "b>/b- remap the advertised `id` alias to :task_id (handler shape)"
+    (is (= {:tool "kanban" :command "update" :task_id "t-1" :new_status "done"}
+           (verbs/parse-sentence ["b>" {"id" "t-1" "new_status" "done"}])))
+    (is (= {:tool "kanban" :command "delete" :task_id "t-2"}
+           (verbs/parse-sentence ["b-" {"id" "t-2"}])))
+    (is (= "keep" (:task_id (verbs/parse-sentence ["b>" {"task_id" "keep"}])))
+        "an explicit :task_id is preserved, never overwritten by :id")
+    (is (nil? (:id (verbs/parse-sentence ["b>" {"id" "t-1"}])))
+        ":id is freed so the batch compiler assigns its own $N ref id"))
+  (testing "non-kanban verbs keep :id (memory get, kg node)"
+    (is (= {:tool "memory" :command "get" :id "mem-1"}
+           (verbs/parse-sentence ["m@" {"id" "mem-1"}])))))
 
 (deftest session-verbs-test
   (testing "session verb family"

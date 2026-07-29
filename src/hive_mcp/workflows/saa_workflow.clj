@@ -115,6 +115,18 @@
    :plan-nil-with-error?              pred/plan-nil-with-error?
    :always                            pred/always})
 
+(def spec-ref-map
+  "Keyword -> fn table for every NON-`:handler` reference the EDN spec uses:
+   dispatch predicates, `:subscriptions` handlers and the `:pre`/`:post` hooks.
+
+   Contract: any compiler of `resources/fsm/saa-workflow.edn` that is not
+   `compile-saa` (e.g. `hive-mcp.workflows.registry`) must resolve those
+   keyword references through THIS map before calling `fsm/compile`."
+  (merge predicate-map
+         {:noop-subscription pred/noop-subscription
+          :trace-log-enter   pred/trace-log-enter
+          :trace-log-exit    pred/trace-log-exit}))
+
 
 ;; =============================================================================
 ;; In-Code FSM Spec (inline functions, fallback for EDN)
@@ -194,16 +206,13 @@
 ;; =============================================================================
 
 (defn- resolve-keyword
-  "Resolve a keyword reference to a function via handler-map or predicate-map."
+  "Resolve a keyword reference to a function via handler-map or spec-ref-map.
+   Unknown keywords and non-keywords pass through unchanged."
   [k]
   (if (keyword? k)
     (or (get handler-map k)
-        (get predicate-map k)
-        (case k
-          :noop-subscription pred/noop-subscription
-          :trace-log-enter   pred/trace-log-enter
-          :trace-log-exit    pred/trace-log-exit
-          k))
+        (get spec-ref-map k)
+        k)
     k))
 
 (defn- resolve-dispatches [dispatches]

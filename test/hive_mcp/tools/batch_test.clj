@@ -11,6 +11,7 @@
    - Shared param merging"
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.data.json :as json]
+            [clojure.string :as str]
             [hive-mcp.tools.cli :as cli]))
 
 ;; =============================================================================
@@ -248,20 +249,27 @@
       (is (fn? (get handlers :batch-traverse)) ":batch-traverse handler is a function"))))
 
 (deftest memory-batch-commands-wiring
-  (testing "memory tool-def has batch-add and batch-feedback in schema"
+  (testing "memory advertises batch-add and batch-feedback on its command surface"
+    ;; `memory` deliberately carries no static command enum — addon subdomains
+    ;; contribute commands at runtime, so the advertised surface is the tool's
+    ;; own command="help" answer (cli/format-help over the live handler tree).
     (require 'hive-mcp.tools.consolidated.memory)
     (let [tool-def @(resolve 'hive-mcp.tools.consolidated.memory/tool-def)
           schema (:inputSchema tool-def)
-          enum (get-in schema [:properties "command" :enum])]
-      (is (some #{"batch-add"} enum) "batch-add in command enum")
-      (is (some #{"batch-feedback"} enum) "batch-feedback in command enum")
+          advertised (:text ((:handler tool-def) {:command "help"}))]
+      (is (nil? (get-in schema [:properties "command" :enum]))
+          "no static enum: the command surface is open (addon-extensible)")
+      (is (str/includes? advertised "- batch-add") "batch-add advertised by help")
+      (is (str/includes? advertised "- batch-feedback") "batch-feedback advertised by help")
       (is (get-in schema [:properties "operations"]) "operations property exists")
       (is (get-in schema [:properties "parallel"]) "parallel property exists")))
 
-  (testing "memory canonical-handlers has both batch keys"
+  (testing "memory canonical-handlers dispatches both batch commands"
     (let [handlers @(resolve 'hive-mcp.tools.consolidated.memory/canonical-handlers)]
-      (is (fn? (get handlers :batch-add)) ":batch-add handler is a function")
-      (is (fn? (get handlers :batch-feedback)) ":batch-feedback handler is a function"))))
+      (doseq [cmd [:batch-add :batch-feedback]]
+        (let [{:keys [handler error]} (cli/resolve-handler handlers [cmd])]
+          (is (nil? error) (str cmd " resolves through the command router"))
+          (is (fn? handler) (str cmd " handler is a function")))))))
 
 (deftest magit-batch-commit-wiring
   (testing "magit tool-def has batch-commit in schema"

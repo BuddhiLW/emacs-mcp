@@ -124,7 +124,12 @@
   (testing "handler returns error for empty tasks array"
     (let [response (validated-wave/handle-dispatch-validated-wave {:tasks []})]
       (is (= "text" (:type response)))
-      (is (str/includes? (:text response) "error")))))
+      ;; Assert the CONTENT of the rejection, not the incidental word "error" —
+      ;; the message now reads "Validated wave failed: tasks array is required
+      ;; and must not be empty", which satisfies the intent while failing a
+      ;; substring check for "error".
+      (is (str/includes? (:text response) "failed"))
+      (is (str/includes? (:text response) "tasks array is required")))))
 
 (deftest test-handler-validates-task-structure
   (testing "handler normalizes task keys from string maps"
@@ -135,7 +140,7 @@
                                       "plan-1")
                   wave/execute-wave! (fn [_ _] "wave-1")
                   wave/get-plan-status (fn [_] {:items [{:file "test.clj" :status :completed}]})
-                  resolve/resolve-kondo-analysis (fn [] (fn [_] {:findings []}))]
+                  resolve/resolve-kondo-analysis (fn [] (fn [_ & _opts] {:findings []}))]
       (let [response (validated-wave/handle-dispatch-validated-wave
                       {:tasks [{"file" "test.clj" "task" "test task"}]
                        :validate false})]
@@ -150,7 +155,7 @@
     (with-redefs [wave/create-plan! mock-wave-create-plan!
                   wave/execute-wave! mock-wave-execute!
                   wave/get-plan-status (fn [_] {:items [{:file "src/foo.clj" :status :completed}]})
-                  resolve/resolve-kondo-analysis (fn [] (fn [_] {:findings []}))]
+                  resolve/resolve-kondo-analysis (fn [] (fn [_ & _opts] {:findings []}))]
       (let [result (validated-wave/execute-validated-wave!
                     [{:file "src/foo.clj" :task "test"}]
                     {:validate true :trace false})]
@@ -176,7 +181,7 @@
                     wave/execute-wave! mock-wave-execute!
                     wave/get-plan-status (fn [_] {:items [{:file "src/foo.clj" :status :completed}]})
                     resolve/resolve-kondo-analysis
-                    (fn [] (fn [_]
+                    (fn [] (fn [_ & _opts]
                              (swap! lint-calls inc)
                              (if (= 1 @lint-calls)
                                {:findings [{:filename "src/foo.clj"
@@ -198,7 +203,7 @@
                   wave/execute-wave! mock-wave-execute!
                   wave/get-plan-status (fn [_] {:items [{:file "src/foo.clj" :status :completed}]})
                   resolve/resolve-kondo-analysis
-                  (fn [] (fn [_]
+                  (fn [] (fn [_ & _opts]
                            {:findings [{:filename "src/foo.clj"
                                         :row 1 :col 1
                                         :level :error
@@ -220,7 +225,7 @@
                     wave/execute-wave! mock-wave-execute!
                     wave/get-plan-status (fn [_] {:items [{:file "src/foo.clj" :status :completed}]})
                     resolve/resolve-kondo-analysis
-                    (fn [] (fn [_]
+                    (fn [] (fn [_ & _opts]
                              (swap! lint-calls inc)
                              (if (<= @lint-calls 2)
                                {:findings [{:filename "src/foo.clj"
@@ -246,7 +251,7 @@
 (deftest test-lint-files-error-level
   (testing "lint-files filters to errors only at error level"
     (with-redefs [resolve/resolve-kondo-analysis
-                  (fn [] (fn [_]
+                  (fn [] (fn [_ & _opts]
                            {:findings [{:level :error :filename "a.clj"}
                                        {:level :warning :filename "a.clj"}
                                        {:level :info :filename "a.clj"}]}))]
@@ -257,7 +262,7 @@
 (deftest test-lint-files-warning-level
   (testing "lint-files includes errors and warnings at warning level"
     (with-redefs [resolve/resolve-kondo-analysis
-                  (fn [] (fn [_]
+                  (fn [] (fn [_ & _opts]
                            {:findings [{:level :error :filename "a.clj"}
                                        {:level :warning :filename "a.clj"}
                                        {:level :info :filename "a.clj"}]}))]
@@ -267,7 +272,7 @@
 (deftest test-lint-files-info-level
   (testing "lint-files includes all at info level"
     (with-redefs [resolve/resolve-kondo-analysis
-                  (fn [] (fn [_]
+                  (fn [] (fn [_ & _opts]
                            {:findings [{:level :error :filename "a.clj"}
                                        {:level :warning :filename "a.clj"}
                                        {:level :info :filename "a.clj"}]}))]

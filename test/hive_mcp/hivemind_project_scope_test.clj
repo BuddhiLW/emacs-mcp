@@ -18,7 +18,8 @@
             [hive-mcp.swarm.datascript.registry :as registry]
             [hive-mcp.swarm.datascript.connection :as conn]
             [hive-mcp.tools.memory.scope :as mem-scope]
-            [datascript.core :as d]))
+            [datascript.core :as d]
+            [hive-mcp.test.stub.vessel :as vessel-stub]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
@@ -42,7 +43,9 @@
     (conn/ensure-conn)
     (try (f) (finally (reset-state!)))))
 
-(use-fixtures :each reset-hivemind-and-datascript-state)
+(use-fixtures :each
+  reset-hivemind-and-datascript-state
+  vessel-stub/with-datascript-vessel)
 
 ;;; =============================================================================
 ;;; Helper Functions

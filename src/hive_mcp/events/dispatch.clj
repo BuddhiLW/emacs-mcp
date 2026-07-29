@@ -11,7 +11,8 @@
             [hive-mcp.events.registry :as registry]
             [hive-mcp.events.schemas :as schemas]
             [hive-mcp.telemetry.prometheus :as prom]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive.events.observer :as observer]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -133,6 +134,9 @@
    Uses hive.events.interceptor/execute for chain processing and
    hive.events.fx/get-fx for effect handler lookup.
 
+   Registered observers (hive.events.observer) are notified after the
+   effects are applied, and also for an event that has no handler.
+
    Throws ExceptionInfo if event is invalid or no handler registered."
   [event]
   (schemas/validate-event! event)
@@ -152,9 +156,12 @@
             elapsed-sec (/ (- (System/nanoTime) start-ns) 1e9)]
         (prom/observe-request-duration! (str "event-dispatch-" (name event-id)) elapsed-sec)
         (do-fx result)
+        (observer/notify! event-id result)
         result)
-      (throw (ex-info (str "No handler registered for event: " event-id)
-                      {:event event})))))
+      (do
+        (observer/notify! event-id {:coeffects {:event event}})
+        (throw (ex-info (str "No handler registered for event: " event-id)
+                        {:event event}))))))
 
 (defn dispatch-sync
   "Synchronous dispatch — same as dispatch for now.

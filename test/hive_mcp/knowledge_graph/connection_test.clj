@@ -223,9 +223,9 @@
       (is (string/starts-with? id "edge-")))))
 
 (deftest gen-edge-id-contains-timestamp-test
-  (testing "gen-edge-id contains timestamp in format yyyyMMdd'T'HHmmss"
+  (testing "gen-edge-id contains timestamp in format yyyyMMdd'T'HHmmssSSS"
     (let [id (conn/gen-edge-id)]
-      (is (re-matches #"edge-\d{8}T\d{6}-[a-f0-9]{6}" id)))))
+      (is (re-matches #"edge-\d{8}T\d{9}-[a-f0-9]{6}" id)))))
 
 (deftest gen-edge-id-unique-test
   (testing "gen-edge-id generates unique IDs"
@@ -235,10 +235,14 @@
 
 (deftest gen-edge-id-sortable-test
   (testing "gen-edge-id generates chronologically sortable IDs"
-    (let [id1 (conn/gen-edge-id)
-          _ (Thread/sleep 1)
-          id2 (conn/gen-edge-id)]
-      (is (<= (compare id1 id2) 0)))))
+    ;; 40 pairs: at second resolution the random suffix decided the order, so
+    ;; a single pair passed ~55% of the time. Each pair must now hold.
+    (dotimes [_ 40]
+      (let [id1 (conn/gen-edge-id)
+            _   (Thread/sleep 1)
+            id2 (conn/gen-edge-id)]
+        (is (neg? (compare id1 id2))
+            (str "IDs must sort by mint order: " id1 " then " id2))))))
 
 ;; =============================================================================
 ;; now Tests

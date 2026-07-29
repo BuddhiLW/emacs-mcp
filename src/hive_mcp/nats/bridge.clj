@@ -155,6 +155,24 @@
         subject (task-subject task-id event-type)]
     (eb/publish! backbone subject payload)))
 
+(defn wave-subject
+  "Build subject for a wave-scoped completion event.
+   E.g. hive.v1.wave.<run-id>.completed.<task-id>"
+  [run-id task-id]
+  (str "hive.v1.wave." (safe-token run-id "unknown")
+       ".completed." (safe-token task-id "unknown")))
+
+(defn publish-wave-event!
+  "Publish a wave-scoped completion event when the payload carries a :run-id.
+   Lands in the HIVE_WAVE stream (subjects hive.v1.wave.>) via core publish,
+   incrementing the wave-<run-id> counting consumer read by wave-watch.sh.
+   No-op when :run-id is absent (backwards compatible)."
+  [{:keys [run-id task-id] :as payload}]
+  (when run-id
+    (let [backbone (eb/get-backbone)
+          subject  (wave-subject run-id task-id)]
+      (eb/publish! backbone subject payload))))
+
 ;; =============================================================================
 ;; Publisher Side — Hivemind Shouts (M1)
 ;; =============================================================================

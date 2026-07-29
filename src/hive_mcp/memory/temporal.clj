@@ -251,7 +251,7 @@
   []
   (or
    (try
-     (when-let [check (requiring-resolve 'hive-knowledge.cartography.mem-guard/check)]
+     (when-let [check (requiring-resolve 'hive-knowledge.cache.mem-guard/check)]
        (:level (check nil nil)))
      (catch Throwable _ nil))
    (try

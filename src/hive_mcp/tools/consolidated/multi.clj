@@ -7,14 +7,13 @@
    - DSL dispatch: {dsl: [[verb, params], ...]} compiled to batch operations
 
    Plus async execution for long-running batches."
-  (:require [hive-mcp.tools.composite :as composite]
-            [hive-mcp.tools.result-bridge :as rb]
+  (:require [hive-mcp.tools.result-bridge :as rb]
             [hive-mcp.tools.core :refer [mcp-error]]
             [hive-mcp.dns.result :refer [rescue]]
             [clojure.string :as str]
-            [taoensso.timbre :as log]
             [hive-mcp.multi.registry :as multi-registry]
-            [hive-mcp.multi.registry.tools :as r-tools]))
+            [hive-mcp.multi.registry.tools :as r-tools]
+            [hive-mcp.agent.context :as ctx]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -26,19 +25,20 @@
   (r-tools/all-names))
 
 (defn get-tool-handler
-  "Resolve a consolidated tool handler by name.
+  "Resolve a consolidated tool handler by name; nil for a nil or unknown tool.
    Routes through `multi.registry/resolve-tool-handler` (DIP) — covers the
    :multi/core seed AND any addon-contributed tools, with a legacy
    flat-tool fallback for non-consolidated tools."
   [tool-name]
-  (multi-registry/resolve-tool-handler (name tool-name)))
+  (when tool-name
+    (multi-registry/resolve-tool-handler (name tool-name))))
 
 ;; ── Lazy Resolution Helpers ───────────────────────────────────────────────────
 
 (defn- resolve-or-err
   "Lazily resolve a fully-qualified symbol. Returns the fn or nil.
-   Logs the error category on failure."
-  [sym category]
+   The category argument documents the caller's failure taxonomy."
+  [sym _category]
   (rescue nil
           (requiring-resolve sym)))
 
@@ -107,6 +107,19 @@
     (mcp-error (pr-str {:error "Async module not loaded"
                         :hint "hive-mcp.tools.multi-async is not available"}))))
 
+(defn- thread-caller-directory
+  "Add the request directory to operations that do not carry their own scope."
+  [operations params]
+  (let [directory (ctx/resolve-caller-directory params)]
+    (mapv (fn [operation]
+            (let [operation (rb/keywordize-map operation)]
+              (cond-> operation
+                (and directory
+                     (nil? (:directory operation))
+                     (nil? (:_caller_cwd operation)))
+                (assoc :directory directory))))
+          operations)))
+
 (defn- dispatch-sync
   "Execute operations synchronously via batch engine."
   [normalized-ops {:keys [dry_run] :as params}]
@@ -140,7 +153,7 @@
     (mcp-error "operations array is empty. Provide at least one operation.")
 
     :else
-    (let [normalized-ops (mapv rb/keywordize-map operations)]
+    (let [normalized-ops (thread-caller-directory operations params)]
       (if async
         (dispatch-async normalized-ops params)
         (dispatch-sync normalized-ops params)))))
@@ -338,6 +351,7 @@
                      "Use {\"tool\": \"<name>\", \"command\": \"help\"} to list commands for a tool. "
                      "All additional params beyond these common ones are forwarded to the target tool. "
                      "Key tool-specific params: "
+                     "addon: addon_id, directory, emacs_features, timeout_ms; "
                      "kanban: status, new_status, task_id, title, include_descendants, plan_id, plan_path; "
                      "agent: type, cwd, spawn_mode, presets, task, model, provider, max_budget_usd, parent, kanban_task_id; "
                      "memory: duration, abstraction_level, scope, exclude_tags, limit, verbosity, feedback; "
@@ -345,7 +359,7 @@
                      "wave: tasks, validate, lint_level, wave_id, mode, model, seeds, ctx_refs, kg_node_ids; "
                      "session: commit_msg, task_ids, ctx_id, data, ttl_ms, scope; "
                      "magit: target, count, all, set_upstream, remote; "
-                     "emacs: code, buffer, file, line, text, level, function_name, variable_name, pattern.")
+                     "emacs: code, buffer, file, line, text, level, function_name, variable_name, pattern. DSL aliases: c=content, t=type, #=tags, d=directory, q=query, n=name, id=id, p=prompt, f=files.")
    :inputSchema {:type "object"
                  :properties {"tool"    {:type "string"
                                          :enum (vec (tool-names))
@@ -355,6 +369,15 @@
                                                            "Also accepts async commands without tool: 'collect', 'list-async', 'cancel-async'")}
                               "directory"  {:type "string"
                                             :description "Working directory for project-scoped operations"}
+                              "addon_id"   {:type "string"
+                                            :description "Addon ID for addon doctor (e.g. hive.emacs)"}
+                              "emacs_features" {:type "array"
+                                                :items {:type "string"}
+                                                :description "Expected Emacs features for addon doctor; overrides manifest hints"}
+                              "timeout_ms" {:type "integer"
+                                            :minimum 1
+                                            :maximum 30000
+                                            :description "Per-feature timeout for addon doctor"}
                               "agent_id"   {:type "string"
                                             :description "Agent identifier for attribution/routing"}
                               "id"         {:type "string"
@@ -403,6 +426,98 @@
                                                               "Example: [[\"m+\", {\"c\": \"note text\", \"t\": \"note\"}], "
                                                               "[\"k>\", {\"from\": \"$0\", \"to\": \"node-2\", \"rel\": \"implements\"}]]. "
                                                               "Mutually exclusive with 'operations'.")}
+                              ;; Non-scalar params forwarded to target tools
+                              "fields" {:type "array"
+                                        :items {:type "string"}
+                                        :description "[kanban/project list] Project each result to a subset of fields (e.g. ['id' 'title'])"}
+                              "ids" {:type "array"
+                                     :items {:type "string"}
+                                     :description "[memory batch-get/batch-reembed, kg summarize] Entry or node IDs"}
+                              "entry-ids" {:type "array"
+                                           :items {:type "string"}
+                                           :description "[memory migrate-scoped] Entry IDs"}
+                              "task_ids" {:type "array"
+                                          :items {:type "string"}
+                                          :description "[session/workflow] Kanban task IDs"}
+                              "add_tags" {:type "array"
+                                          :items {:type "string"}
+                                          :description "[kanban retag] Extra tags to add"}
+                              "remove_tags" {:type "array"
+                                             :items {:type "string"}
+                                             :description "[kanban retag] Tags to remove"}
+                              "exclude_tags" {:type "array"
+                                              :items {:type "string"}
+                                              :description "[memory query/search] Tags to exclude from results"}
+                              "agent_ids" {:type "array"
+                                           :items {:type "string"}
+                                           :description "[agent kill-batch] Agent IDs"}
+                              "agent-ids" {:type "array"
+                                           :items {:type "string"}
+                                           :description "[events enable/disable] Agent IDs to filter on"}
+                              "kg_node_ids" {:type "array"
+                                             :items {:type "string"}
+                                             :description "[agent/session/wave] KG node IDs for context resolution seeds"}
+                              "kg_depends_on" {:type "array"
+                                               :items {:type "string"}
+                                               :description "[memory add] Entry IDs this depends on (KG edge)"}
+                              "kg_implements" {:type "array"
+                                               :items {:type "string"}
+                                               :description "[memory add] Entry IDs this implements (KG edge)"}
+                              "kg_refines" {:type "array"
+                                            :items {:type "string"}
+                                            :description "[memory add] Entry IDs this refines (KG edge)"}
+                              "kg_supersedes" {:type "array"
+                                               :items {:type "string"}
+                                               :description "[memory add] Entry IDs this supersedes (KG edge)"}
+                              "presets" {:type "array"
+                                         :items {:type "string"}
+                                         :description "[agent/preset/workflow] Preset names"}
+                              "predicates" {:type "array"
+                                            :items {:type "string"}
+                                            :description "[workflow] Named predicates available at run time"}
+                              "participants" {:type "array"
+                                              :items {:type "string"}
+                                              :description "[agora] Ling slave-ids (min 2)"}
+                              "options" {:type "array"
+                                         :items {:type "string"}
+                                         :description "[hivemind ask] Available options"}
+                              "relations" {:type "array"
+                                           :items {:type "string"}
+                                           :description "[kg] Relation types to follow"}
+                              "exclude_relations" {:type "array"
+                                                   :items {:type "string"}
+                                                   :description "[kg] Relation types to exclude"}
+                              "seen" {:type "array"
+                                      :items {:type "string"}
+                                      :description "[kg] Already-visited node IDs for frontier"}
+                              "seeds" {:type "array"
+                                       :items {:type "string"}
+                                       :description "[kg connect] Node IDs (>=2) / [wave] domain topic seeds"}
+                              "diff_ids" {:type "array"
+                                          :items {:type "string"}
+                                          :description "[wave approve] Specific diff IDs to approve"}
+                              "tasks" {:type "array"
+                                       :items {:type "object"}
+                                       :description "[wave dispatch] Array of {file, task} objects"}
+                              "roles" {:type "array"
+                                       :items {:type "object"}
+                                       :description "[agora] Debate roles"}
+                              "debate_roles" {:type "array"
+                                              :items {:type "object"}
+                                              :description "[agora] Debate roles for stage 2"}
+                              "research_roles" {:type "array"
+                                                :items {:type "object"}
+                                                :description "[agora] Research roles for stage 1"}
+                              "inputs" {:type "array"
+                                        :description "[kg datalog] Additional Datalog inputs bound by the query's :in clause"}
+                              "ctx_refs" {:type "object"
+                                          :description "[agent/session/wave] Map of category->ctx-id for compressed context"}
+                              "agents" {:type "object"
+                                        :description "[agent spawn] Map of agent-name to Claude Agent SDK subagent definition"}
+                              "config" {:type "object"
+                                        :description "[agora] Optional {threshold, timeout-ms}"}
+                              "data" {:type "object"
+                                      :description "[hivemind] Additional event data / [session context-put] structured data to store"}
                               "async"      {:type "boolean"
                                             :description (str "When true, execute batch/DSL asynchronously. "
                                                               "Returns {batch_id: \"...\"} immediately. "

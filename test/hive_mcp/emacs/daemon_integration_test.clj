@@ -11,7 +11,8 @@
             [hive-mcp.emacs.daemon-store :as daemon-store]
             [hive-mcp.swarm.datascript.connection :as conn]
             [hive-test.isolation :as iso]
-            [hive-mcp.isolation-methods]))
+            [hive-mcp.isolation-methods]
+            [hive-mcp.test.stub.daemon-store :as daemon-stub]))
 
 ;;; =============================================================================
 ;;; Test Fixtures
@@ -25,6 +26,7 @@
 
 (use-fixtures :each
   (iso/with-isolations :swarm-ds)
+  daemon-stub/singleton-store-fixture
   heartbeat-stop-fixture)
 
 ;;; =============================================================================

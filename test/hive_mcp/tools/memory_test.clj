@@ -14,7 +14,8 @@
             [hive-mcp.tools.memory :as memory]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.format :as fmt]
-            [hive-mcp.tools.memory.duration :as dur]))
+            [hive-mcp.tools.memory.duration :as dur]
+            [hive-dsl.adt :as adt]))
 
 ;; ============================================================
 ;; Scope Module Tests
@@ -63,16 +64,28 @@
     (is (not (scope/matches-scope? {:tags ["scope:project:bar"]} "scope:project:foo")))))
 
 (deftest scope-derive-scope-filter-test
-  (testing "derive-scope-filter returns nil for 'all'"
-    (is (nil? (scope/derive-scope-filter "all" "my-project"))))
+  ;; derive-scope-filter answers a ScopeFilter ADT value, not a scope STRING:
+  ;; the raw string is parsed once at the IO boundary so downstream code
+  ;; dispatches on a closed variant set instead of re-parsing text.
+  (testing "'all' is its own variant, not an absent filter"
+    (let [f (scope/derive-scope-filter "all" "my-project")]
+      (is (= :scope/all (adt/adt-variant f)))))
 
-  (testing "derive-scope-filter returns scope when explicitly provided"
-    (is (= "scope:global" (scope/derive-scope-filter "scope:global" "my-project")))
-    (is (= "custom-scope" (scope/derive-scope-filter "custom-scope" "my-project"))))
+  (testing "'global' is its own variant"
+    (let [f (scope/derive-scope-filter "global" "my-project")]
+      (is (= :scope/global (adt/adt-variant f)))))
 
-  (testing "derive-scope-filter auto-generates from project-id when nil"
-    (is (= "scope:project:my-project" (scope/derive-scope-filter nil "my-project")))
-    (is (= "scope:global" (scope/derive-scope-filter nil "global")))))
+  (testing "an explicit scope becomes :scope/project carrying that scope"
+    (doseq [s ["scope:global" "custom-scope"]]
+      (let [f (scope/derive-scope-filter s "my-project")]
+        (is (= :scope/project (adt/adt-variant f)))
+        (is (= s (:project-id f))))))
+
+  (testing "an absent scope becomes :scope/auto carrying the project-id"
+    (doseq [p ["my-project" "global"]]
+      (let [f (scope/derive-scope-filter nil p)]
+        (is (= :scope/auto (adt/adt-variant f)))
+        (is (= p (:project-id f)))))))
 
 ;; ============================================================
 ;; Format Module Tests

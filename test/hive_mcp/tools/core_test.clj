@@ -9,7 +9,7 @@
             [clojure.data.json :as json]
             [hive-mcp.tools.core :as core]
             [hive-mcp.channel.piggyback :as piggyback]
-            [hive-mcp.emacs.client]))
+            [hive-mcp.test.stub.elisp :as elisp-stub]))
 
 ;; =============================================================================
 ;; Test Fixtures
@@ -213,58 +213,64 @@
 
 (deftest test-call-elisp-safe-success-default
   (testing "call-elisp-safe returns mcp-json wrapped result on success"
-    (with-redefs [hive-mcp.emacs.client/eval-elisp
-                  (fn [_elisp] {:success true :result {:status "ok"}})]
-      (let [response (core/call-elisp-safe "(some-elisp)")]
-        (is (= "text" (:type response)))
-        (let [parsed (json/read-str (:text response) :key-fn keyword)]
-          (is (= {:status "ok"} parsed)))))))
+    (elisp-stub/with-eval-elisp
+      (fn [_elisp] {:success true :result {:status "ok"}})
+      (fn []
+        (let [response (core/call-elisp-safe "(some-elisp)")]
+          (is (= "text" (:type response)))
+          (let [parsed (json/read-str (:text response) :key-fn keyword)]
+            (is (= {:status "ok"} parsed))))))))
 
 (deftest test-call-elisp-safe-error-default
   (testing "call-elisp-safe returns mcp-json with :error on failure"
-    (with-redefs [hive-mcp.emacs.client/eval-elisp
-                  (fn [_elisp] {:success false :error "Elisp error occurred"})]
-      (let [response (core/call-elisp-safe "(failing-elisp)")]
-        (is (= "text" (:type response)))
-        (let [parsed (json/read-str (:text response) :key-fn keyword)]
-          (is (= "Elisp error occurred" (:error parsed))))))))
+    (elisp-stub/with-eval-elisp
+      (fn [_elisp] {:success false :error "Elisp error occurred"})
+      (fn []
+        (let [response (core/call-elisp-safe "(failing-elisp)")]
+          (is (= "text" (:type response)))
+          (let [parsed (json/read-str (:text response) :key-fn keyword)]
+            (is (= "Elisp error occurred" (:error parsed)))))))))
 
 (deftest test-call-elisp-safe-custom-on-success
   (testing "call-elisp-safe uses custom :on-success handler"
-    (with-redefs [hive-mcp.emacs.client/eval-elisp
-                  (fn [_elisp] {:success true :result {:count 42}})]
-      (let [response (core/call-elisp-safe "(some-elisp)"
-                                           :on-success #(core/mcp-json {:transformed (:count %)}))]
-        (is (= "text" (:type response)))
-        (let [parsed (json/read-str (:text response) :key-fn keyword)]
-          (is (= 42 (:transformed parsed))))))))
+    (elisp-stub/with-eval-elisp
+      (fn [_elisp] {:success true :result {:count 42}})
+      (fn []
+        (let [response (core/call-elisp-safe "(some-elisp)"
+                                             :on-success #(core/mcp-json {:transformed (:count %)}))]
+          (is (= "text" (:type response)))
+          (let [parsed (json/read-str (:text response) :key-fn keyword)]
+            (is (= 42 (:transformed parsed)))))))))
 
 (deftest test-call-elisp-safe-custom-on-error
   (testing "call-elisp-safe uses custom :on-error handler"
-    (with-redefs [hive-mcp.emacs.client/eval-elisp
-                  (fn [_elisp] {:success false :error "custom error"})]
-      (let [response (core/call-elisp-safe "(failing-elisp)"
-                                           :on-error #(core/mcp-error (str "Custom: " %)))]
-        (is (= "text" (:type response)))
-        (is (= "Custom: custom error" (:text response)))
-        (is (true? (:isError response)))))))
+    (elisp-stub/with-eval-elisp
+      (fn [_elisp] {:success false :error "custom error"})
+      (fn []
+        (let [response (core/call-elisp-safe "(failing-elisp)"
+                                             :on-error #(core/mcp-error (str "Custom: " %)))]
+          (is (= "text" (:type response)))
+          (is (= "Custom: custom error" (:text response)))
+          (is (true? (:isError response))))))))
 
 (deftest test-call-elisp-safe-string-result
   (testing "call-elisp-safe handles string results correctly"
-    (with-redefs [hive-mcp.emacs.client/eval-elisp
-                  (fn [_elisp] {:success true :result "plain string result"})]
-      (let [response (core/call-elisp-safe "(string-returning-elisp)")]
-        (is (= "text" (:type response)))
-        (let [parsed (json/read-str (:text response) :key-fn keyword)]
-          (is (= "plain string result" parsed)))))))
+    (elisp-stub/with-eval-elisp
+      (fn [_elisp] {:success true :result "plain string result"})
+      (fn []
+        (let [response (core/call-elisp-safe "(string-returning-elisp)")]
+          (is (= "text" (:type response)))
+          (let [parsed (json/read-str (:text response) :key-fn keyword)]
+            (is (= "plain string result" parsed))))))))
 
 (deftest test-call-elisp-safe-nil-result
   (testing "call-elisp-safe handles nil result gracefully"
-    (with-redefs [hive-mcp.emacs.client/eval-elisp
-                  (fn [_elisp] {:success true :result nil})]
-      (let [response (core/call-elisp-safe "(nil-returning-elisp)")]
-        (is (= "text" (:type response)))
-        (is (= "null" (:text response)))))))
+    (elisp-stub/with-eval-elisp
+      (fn [_elisp] {:success true :result nil})
+      (fn []
+        (let [response (core/call-elisp-safe "(nil-returning-elisp)")]
+          (is (= "text" (:type response)))
+          (is (= "null" (:text response))))))))
 
 (deftest test-call-elisp-safe-macroexpand
   (testing "call-elisp-safe macro expands correctly"
@@ -281,14 +287,15 @@
       (is (= 'let* (first expanded))))))
 
 (deftest test-call-elisp-safe-elisp-code-passed-through
-  (testing "call-elisp-safe passes elisp code to eval-elisp"
+  (testing "call-elisp-safe passes elisp code to the transport"
     (let [captured-elisp (atom nil)]
-      (with-redefs [hive-mcp.emacs.client/eval-elisp
-                    (fn [elisp]
-                      (reset! captured-elisp elisp)
-                      {:success true :result :ok})]
-        (core/call-elisp-safe "(my-elisp-code)")
-        (is (= "(my-elisp-code)" @captured-elisp))))))
+      (elisp-stub/with-eval-elisp
+        (fn [elisp]
+          (reset! captured-elisp elisp)
+          {:success true :result :ok})
+        (fn []
+          (core/call-elisp-safe "(my-elisp-code)")
+          (is (= "(my-elisp-code)" @captured-elisp)))))))
 
 ;; =============================================================================
 ;; Test: with-validation Macro

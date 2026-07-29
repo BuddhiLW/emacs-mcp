@@ -26,6 +26,7 @@
             [hive-mcp.scheduler.dag-waves :as dag-waves]
             [hive-mcp.server.guards :as guards]
             [hive-test.isolation :as iso]
+            [hive-mcp.test.stub.terminal-addon :as stub-term]
             [hive-mcp.isolation-methods]))
 
 ;; =============================================================================
@@ -41,6 +42,7 @@
 
 (use-fixtures :each
   (iso/with-isolations :swarm-ds)
+  stub-term/with-terminal
   logic-and-redefs-fixture)
 
 ;; =============================================================================
@@ -54,15 +56,23 @@
     (json/read-str (:text result) :key-fn keyword)))
 
 (defn add-test-slave!
-  "Add a test slave to DataScript for testing."
-  [slave-id {:keys [depth status cwd project-id presets parent]
+  "Add a test slave to DataScript, shaped like a real spawn.
+
+   ling/spawn stamps :slave/alive? and :slave/last-active-at; agent_status
+   hides rows missing them as stale ghosts. A fixture that only calls
+   add-slave! builds a row no query returns, so stamp liveness here too.
+   Pass :stale? true to build a deliberately stale row."
+  [slave-id {:keys [depth status cwd project-id presets parent stale?]
              :or {depth 1 status :idle cwd "/tmp/test" project-id "test-project"}}]
   (ds-lings/add-slave! slave-id {:depth depth
                                  :status status
                                  :cwd cwd
                                  :project-id project-id
                                  :presets (or presets [])
-                                 :parent parent}))
+                                 :parent parent})
+  (when-not stale?
+    (ds-lings/update-slave! slave-id {:slave/alive? true
+                                      :slave/last-active-at (System/currentTimeMillis)})))
 
 ;; =============================================================================
 ;; CLI Handler Tests
@@ -156,13 +166,13 @@
   (testing "spawn requires valid type"
     (let [result (agent/handle-spawn {:type "invalid" :cwd "/tmp"})]
       (is (:isError result))
-      (is (re-find #"must be 'ling' or 'drone'" (:text result))))))
+      (is (re-find #"must be one of" (:text result))))))
 
 (deftest test-handle-spawn-missing-type
   (testing "spawn requires type parameter"
     (let [result (agent/handle-spawn {:cwd "/tmp"})]
       (is (:isError result))
-      (is (re-find #"must be 'ling' or 'drone'" (:text result))))))
+      (is (re-find #"must be one of" (:text result))))))
 
 (deftest test-handle-spawn-with-initial-task
   (testing "spawn with initial task dispatches after spawn"
@@ -347,15 +357,19 @@
           (is (contains? parsed :killed?)))))))
 
 (deftest test-handle-kill-exception-handling
-  (testing "kill handles exceptions gracefully"
+  (testing "an addon exception is reported in-band, not as a tool error"
     (add-test-slave! "ling-error" {:depth 1 :status :idle})
 
-    ;; Make emacsclient throw to trigger exception path
-    (with-redefs [ec/eval-elisp-with-timeout (fn [_elisp _timeout]
-                                               (throw (ex-info "Emacs crashed" {})))]
-      (let [result (agent/handle-kill {:agent_id "ling-error"})]
-        (is (:isError result))
-        (is (re-find #"Failed to kill agent" (:text result)))))))
+    ;; A terminal whose kill! throws drives the handler's failure path.
+    ;; terminal-addon-strategy rescues it to {:killed? false :reason
+    ;; :addon-exception}, so the tool answers with a structured failure rather
+    ;; than an MCP error.
+    (stub-term/register-terminal! :claude {:kill! "terminal crashed"})
+    (let [result (agent/handle-kill {:agent_id "ling-error"})
+          parsed (parse-response result)]
+      (is (not (:isError result)))
+      (is (false? (:killed? parsed)))
+      (is (= "addon-exception" (:reason parsed))))))
 
 ;; =============================================================================
 ;; Dispatch Handler Tests

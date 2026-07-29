@@ -29,13 +29,14 @@
 
 (defn- drain-memory-piggyback
   "Drain memory piggyback for a caller-id. Returns drain result or nil."
-  [caller-id]
-  (try
-    (require 'hive-mcp.channel.memory-piggyback)
-    ((resolve 'hive-mcp.channel.memory-piggyback/drain!) caller-id)
-    (catch Exception e
-      (log/debug "piggyback-tap: memory drain failed:" (.getMessage e))
-      nil)))
+  ([caller-id] (drain-memory-piggyback caller-id nil))
+  ([caller-id ctx]
+   (try
+     (require 'hive-mcp.channel.memory-piggyback)
+     ((resolve 'hive-mcp.channel.memory-piggyback/drain!) caller-id ctx)
+     (catch Exception e
+       (log/debug "piggyback-tap: memory drain failed:" (.getMessage e))
+       nil))))
 
 (defn- drain-catchup-piggyback
   "Drain catchup enrichment blocks. Returns map of tag->body or nil."
@@ -79,6 +80,7 @@
    Arguments:
    - agent-id:   The ling/drone identity (e.g. \"ling-xyz\")
    - project-id: Project scope string (e.g. \"hive-mcp\"), or nil for global
+   - ctx:        Drain ctx forwarded to the MEMORY channel, or nil for FIFO
 
    Channels (in render order):
      1. TOOLRESULT — async completion results
@@ -89,62 +91,63 @@
 
    Returns a string of concatenated delimited blocks, or nil if all channels empty.
    Designed to be appended to tool observation text in the agentic loop."
-  [agent-id project-id]
-  (try
-    (let [caller-id agent-id  ; for session-scoped channels (async, memory, catchup)
+  ([agent-id project-id] (drain-all! agent-id project-id nil))
+  ([agent-id project-id ctx]
+   (try
+     (let [caller-id agent-id  ; for session-scoped channels (async, memory, catchup)
 
-          ;; 1. Async results
-          async-drain (async-buf/drain! caller-id)
+           ;; 1. Async results
+           async-drain (async-buf/drain! caller-id)
 
-          ;; 2. Memory entries
-          memory-drain (drain-memory-piggyback caller-id)
+           ;; 2. Memory entries
+           memory-drain (drain-memory-piggyback caller-id ctx)
 
-          ;; 3. Conversation inbox (per-agent)
-          inbox-drain (try (conv-inbox/drain! agent-id)
-                           (catch Exception e
-                             (log/debug "piggyback-tap: inbox drain failed:"
-                                        (.getMessage e))
-                             nil))
+           ;; 3. Conversation inbox (per-agent)
+           inbox-drain (try (conv-inbox/drain! agent-id)
+                            (catch Exception e
+                              (log/debug "piggyback-tap: inbox drain failed:"
+                                         (.getMessage e))
+                              nil))
 
-          ;; 4. Catchup enrichment blocks
-          catchup-blocks (drain-catchup-piggyback caller-id)
+           ;; 4. Catchup enrichment blocks
+           catchup-blocks (drain-catchup-piggyback caller-id)
 
-          ;; 5. Hivemind (project-scoped cursor)
-          hm-caller (ctx-id/parse-caller-id agent-id)
-          hm-scope (ctx-id/parse-project-scope project-id)
-          hm-agent-id (ctx-id/make-piggyback-agent-id hm-caller hm-scope)
-          hm-project-id (ctx-id/project-scope-string hm-scope)
-          hivemind-msgs (drain-hivemind-piggyback hm-agent-id hm-project-id)
+           ;; 5. Hivemind (project-scoped cursor)
+           hm-caller (ctx-id/parse-caller-id agent-id)
+           hm-scope (ctx-id/parse-project-scope project-id)
+           hm-agent-id (ctx-id/make-piggyback-agent-id hm-caller hm-scope)
+           hm-project-id (ctx-id/project-scope-string hm-scope)
+           hivemind-msgs (drain-hivemind-piggyback hm-agent-id hm-project-id)
 
-          ;; Build concatenated blocks
-          blocks (cond-> []
-                   async-drain
-                   (conj (format-block "TOOLRESULT" (pr-str async-drain)))
+           ;; Build concatenated blocks
+           blocks (cond-> []
+                    async-drain
+                    (conj (format-block "TOOLRESULT" (pr-str async-drain)))
 
-                   memory-drain
-                   (conj (format-block "MEMORY" (pr-str memory-drain)))
+                    memory-drain
+                    (conj (format-block "MEMORY" (pr-str memory-drain)))
 
-                   inbox-drain
-                   (conj (format-block "INBOX" (pr-str inbox-drain)))
+                    inbox-drain
+                    (conj (format-block "INBOX" (pr-str inbox-drain)))
 
-                   (seq catchup-blocks)
-                   (into (for [[tag body] catchup-blocks]
-                           (format-block
-                            (clojure.string/upper-case (name tag))
-                            (if (string? body) body (pr-str body)))))
+                    (seq catchup-blocks)
+                    (into (for [[tag body] catchup-blocks]
+                            (format-block
+                             (clojure.string/upper-case (name tag))
+                             (if (string? body) body (pr-str body)))))
 
-                   (seq hivemind-msgs)
-                   (conj (format-block "HIVEMIND" (pr-str hivemind-msgs))))]
+                    (seq hivemind-msgs)
+                    (conj (format-block "HIVEMIND" (pr-str hivemind-msgs))))]
 
-      (when (seq blocks)
-        (let [result (apply str blocks)]
-          (log/debug "piggyback-tap: drained for" agent-id
-                     {:async? (some? async-drain)
-                      :memory? (some? memory-drain)
-                      :inbox? (some? inbox-drain)
-                      :catchup? (some? (seq catchup-blocks))
-                      :hivemind? (some? (seq hivemind-msgs))})
-          result)))
-    (catch Exception e
-      (log/warn "piggyback-tap: drain-all! failed:" (.getMessage e))
-      nil)))
+       (when (seq blocks)
+         (let [result (apply str blocks)]
+           (log/debug "piggyback-tap: drained for" agent-id
+                      {:async? (some? async-drain)
+                       :memory? (some? memory-drain)
+                       :inbox? (some? inbox-drain)
+                       :catchup? (some? (seq catchup-blocks))
+                       :hivemind? (some? (seq hivemind-msgs))})
+           result)))
+     (catch Exception e
+       (log/warn "piggyback-tap: drain-all! failed:" (.getMessage e))
+       nil))))

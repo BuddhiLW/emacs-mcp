@@ -4,16 +4,25 @@
    Coverage:
    - Validation: missing params, same old/new
    - Dry-run: returns preview without modifying
-   - Full rename: orchestrates Chroma + KG + EDN + config
+   - Full rename: orchestrates the memory store + KG + EDN + config
    - EDN update: appends old-project-id to :aliases, idempotent
    - Config re-registration: kg-scope gets updated
-   - Error handling: graceful on Chroma/KG failures"
+   - Error handling: graceful on store/KG failures
+
+   Entries and edges are seeded through the ports and asserted through the
+   ports; no backend is named."
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
             [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.edn :as edn]
             [hive-mcp.tools.memory.migration :as migration]
-            [hive-mcp.knowledge-graph.scope :as kg-scope]))
+            [hive-mcp.knowledge-graph.scope :as kg-scope]
+            [hive-mcp.knowledge-graph.edges :as kg-edges]
+            [hive-spi.memory.ports :as ports]
+            [hive-spi.memory.registry :as registry]
+            [hive-test.isolation :as iso]
+            [hive-mcp.isolation-methods]
+            [hive-mcp.test.stub.memory-store :as mem-stub]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -62,8 +71,32 @@
     (doseq [f (reverse (file-seq dir))]
       (.delete f))))
 
+(defn- seed-entries!
+  "Add ENTRIES to the registered memory store. Returns the store."
+  [entries]
+  (let [store (registry/get-store)]
+    (doseq [e entries] (ports/add-entry! store e))
+    store))
+
+(defn- seed-edges!
+  "Create N KG edges in SCOPE. Returns the edge ids."
+  [scope n]
+  (mapv (fn [i]
+          (kg-edges/add-edge! {:from (str scope "-from-" i)
+                               :to   (str scope "-to-" i)
+                               :relation :relates
+                               :scope scope}))
+        (range n)))
+
+(defn- stored-entry
+  "The entry the memory store currently holds for ID."
+  [id]
+  (ports/get-entry (registry/get-store) id))
+
 ;; Clean up kg-scope state between tests
 (use-fixtures :each
+  mem-stub/with-stub-store
+  (iso/with-isolations :kg-conn)
   (fn [test-fn]
     (kg-scope/clear-config-cache!)
     (try
@@ -105,138 +138,101 @@
 
 (deftest rename-dry-run-test
   (testing "dry-run returns preview without modifying anything"
-    (let [dir (create-temp-dir!)
-          _ (write-edn! dir {:project-id "old-project"
-                             :aliases []})
-          ;; Mock Chroma and KG for dry-run
-          call-log (atom [])]
+    (let [dir (create-temp-dir!)]
+      (write-edn! dir {:project-id "old-project" :aliases []})
+      (seed-entries! [{:id "e1" :type "note" :content "a" :project-id "old-project"}
+                      {:id "e2" :type "note" :content "b" :project-id "old-project"}
+                      {:id "e3" :type "note" :content "c" :project-id "old-project"}])
+      (seed-edges! "old-project" 2)
       (try
-        (with-redefs [hive-mcp.chroma.core/query-entries
-                      (fn [& _args]
-                        (swap! call-log conj :chroma-query)
-                        [{:id "e1"} {:id "e2"} {:id "e3"}])
+        (let [result (parse-mcp-result
+                      (migration/handle-rename-project
+                       {:old-project-id "old-project"
+                        :new-project-id "new-project"
+                        :directory dir
+                        :dry-run true}))]
+          (is (= "dry-run" (:status result)))
+          (is (= 3 (get-in result [:chroma :would-migrate])))
+          (is (= 2 (get-in result [:kg-edges :would-migrate])))
+          (is (true? (get-in result [:edn :exists])))
+          (is (= [] (get-in result [:edn :current-aliases])))
+          (is (true? (get-in result [:edn :would-add-alias])))
+          (is (= "old-project" (:old-project-id result)))
+          (is (= "new-project" (:new-project-id result)))
 
-                      hive-mcp.chroma.core/embedding-configured?
-                      (fn [] true)
+          (let [edn-after (read-edn dir)]
+            (is (= "old-project" (:project-id edn-after)))
+            (is (= [] (:aliases edn-after))))
 
-                      hive-mcp.knowledge-graph.edges/get-edges-by-scope
-                      (fn [scope]
-                        (swap! call-log conj [:kg-query scope])
-                        [{:id "edge1"} {:id "edge2"}])]
-
-          (let [result (parse-mcp-result
-                        (migration/handle-rename-project
-                         {:old-project-id "old-project"
-                          :new-project-id "new-project"
-                          :directory dir
-                          :dry-run true}))]
-            ;; Verify dry-run result structure
-            (is (= "dry-run" (:status result)))
-            (is (= 3 (get-in result [:chroma :would-migrate])))
-            (is (= 2 (get-in result [:kg-edges :would-migrate])))
-            (is (true? (get-in result [:edn :exists])))
-            (is (= [] (get-in result [:edn :current-aliases])))
-            (is (true? (get-in result [:edn :would-add-alias])))
-            (is (= "old-project" (:old-project-id result)))
-            (is (= "new-project" (:new-project-id result)))
-
-            ;; Verify .hive-project.edn was NOT modified
-            (let [edn-after (read-edn dir)]
-              (is (= "old-project" (:project-id edn-after)))
-              (is (= [] (:aliases edn-after))))))
+          (is (= "old-project" (:project-id (stored-entry "e1")))
+              "dry-run leaves the stored entries untouched"))
         (finally
           (cleanup-dir! dir))))))
 
 (deftest rename-dry-run-no-directory-test
   (testing "dry-run works without directory (edn section shows nil)"
-    (with-redefs [hive-mcp.chroma.core/query-entries
-                  (fn [& _args] [])
-
-                  hive-mcp.chroma.core/embedding-configured?
-                  (fn [] true)
-
-                  hive-mcp.knowledge-graph.edges/get-edges-by-scope
-                  (fn [_] [])]
-
-      (let [result (parse-mcp-result
-                    (migration/handle-rename-project
-                     {:old-project-id "old"
-                      :new-project-id "new"
-                      :dry-run true}))]
-        (is (= "dry-run" (:status result)))
-        (is (= 0 (get-in result [:chroma :would-migrate])))
-        (is (false? (get-in result [:edn :exists])))))))
+    (let [result (parse-mcp-result
+                  (migration/handle-rename-project
+                   {:old-project-id "old"
+                    :new-project-id "new"
+                    :dry-run true}))]
+      (is (= "dry-run" (:status result)))
+      (is (= 0 (get-in result [:chroma :would-migrate])))
+      (is (false? (get-in result [:edn :exists]))))))
 
 ;; ============================================================
 ;; Full Rename Tests
 ;; ============================================================
 
 (deftest rename-full-flow-test
-  (testing "full rename orchestrates Chroma + KG + EDN + config"
-    (let [dir (create-temp-dir!)
-          _ (write-edn! dir {:project-id "old-project"
-                             :aliases []
-                             :project-type :clojure-cli})
-          chroma-updates (atom [])
-          kg-migrate-calls (atom [])]
+  (testing "full rename orchestrates the memory store + KG + EDN + config"
+    (let [dir (create-temp-dir!)]
+      (write-edn! dir {:project-id "old-project"
+                       :aliases []
+                       :project-type :clojure-cli})
+      (seed-entries! [{:id "e1" :type "note" :content "a"
+                       :project-id "old-project"
+                       :tags ["scope:project:old-project" "note"]}
+                      {:id "e2" :type "convention" :content "b"
+                       :project-id "old-project"
+                       :tags ["scope:project:old-project" "convention"]}])
+      (seed-edges! "old-project" 3)
       (try
-        (with-redefs [hive-mcp.chroma.core/query-entries
-                      (fn [& {:keys [project-id]}]
-                        (when (= project-id "old-project")
-                          [{:id "e1" :tags ["scope:project:old-project" "note"]}
-                           {:id "e2" :tags ["scope:project:old-project" "convention"]}]))
+        (let [result (parse-mcp-result
+                      (migration/handle-rename-project
+                       {:old-project-id "old-project"
+                        :new-project-id "new-project"
+                        :directory dir}))]
+          (is (= "success" (:status result)))
+          (is (= "old-project" (:old-project-id result)))
+          (is (= "new-project" (:new-project-id result)))
 
-                      hive-mcp.chroma.core/embedding-configured?
-                      (fn [] true)
+          (is (= 2 (get-in result [:chroma :migrated])))
+          (is (= 2 (get-in result [:chroma :updated-scopes])))
 
-                      hive-mcp.chroma.core/update-entry!
-                      (fn [id updates]
-                        (swap! chroma-updates conj {:id id :updates updates}))
+          (let [e1 (stored-entry "e1")]
+            (is (= "new-project" (:project-id e1))
+                "the stored entry carries the new project-id")
+            (is (some #(= % "scope:project:new-project") (:tags e1))
+                "the scope tag is rewritten in place")
+            (is (not-any? #(= % "scope:project:old-project") (:tags e1))
+                "the old scope tag is gone"))
 
-                      hive-mcp.knowledge-graph.edges/migrate-edge-scopes!
-                      (fn [old-id new-id]
-                        (swap! kg-migrate-calls conj {:old old-id :new new-id})
-                        {:migrated 3})]
+          (is (= 3 (get-in result [:kg-edges :migrated])))
+          (is (= 3 (count (kg-edges/get-edges-by-scope "new-project")))
+              "the edges now answer under the new scope")
+          (is (empty? (kg-edges/get-edges-by-scope "old-project"))
+              "and no longer under the old one")
 
-          (let [result (parse-mcp-result
-                        (migration/handle-rename-project
-                         {:old-project-id "old-project"
-                          :new-project-id "new-project"
-                          :directory dir}))]
-            ;; Overall status
-            (is (= "success" (:status result)))
-            (is (= "old-project" (:old-project-id result)))
-            (is (= "new-project" (:new-project-id result)))
+          (is (true? (get-in result [:edn :updated])))
+          (is (= ["old-project"] (get-in result [:edn :aliases])))
 
-            ;; Chroma migration happened
-            (is (= 2 (get-in result [:chroma :migrated])))
-            (is (= 2 (get-in result [:chroma :updated-scopes])))
-            (is (= 2 (count @chroma-updates)))
+          (let [edn-after (read-edn dir)]
+            (is (= "new-project" (:project-id edn-after)))
+            (is (= ["old-project"] (:aliases edn-after)))
+            (is (= :clojure-cli (:project-type edn-after))))
 
-            ;; Verify Chroma updates have correct new project-id and scope tags
-            (let [update1 (first @chroma-updates)]
-              (is (= "e1" (:id update1)))
-              (is (= "new-project" (get-in update1 [:updates :project-id])))
-              (is (some #(= % "scope:project:new-project")
-                        (get-in update1 [:updates :tags]))))
-
-            ;; KG edge migration happened
-            (is (= 3 (get-in result [:kg-edges :migrated])))
-            (is (= 1 (count @kg-migrate-calls)))
-            (is (= {:old "old-project" :new "new-project"} (first @kg-migrate-calls)))
-
-            ;; EDN was updated
-            (is (true? (get-in result [:edn :updated])))
-            (is (= ["old-project"] (get-in result [:edn :aliases])))
-
-            ;; Verify actual .hive-project.edn file
-            (let [edn-after (read-edn dir)]
-              (is (= "new-project" (:project-id edn-after)))
-              (is (= ["old-project"] (:aliases edn-after)))
-              (is (= :clojure-cli (:project-type edn-after))))
-
-            ;; Config was registered
-            (is (true? (:config-registered result)))))
+          (is (true? (:config-registered result))))
         (finally
           (cleanup-dir! dir))))))
 

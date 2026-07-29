@@ -147,7 +147,11 @@
     "multi"     ;; meta-facade routes to excluded tools
     "emacs"})   ;; Emacs grid control — coordinator-only
 
-(defn- child-ling-excluded?
+(defn child-ling-excluded?
+  "True when TOOL's :name is a member of `child-excluded-tool-names`.
+
+   Exact-name membership — a prefix does not match and :deprecated is not
+   consulted."
   [{:keys [name]}]
   (contains? child-excluded-tool-names name))
 

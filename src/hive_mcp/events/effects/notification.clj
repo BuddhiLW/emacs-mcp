@@ -216,11 +216,17 @@
 
 (defn- handle-nats-publish
   "Execute a :nats-publish effect — publish to NATS for push-based collection.
-   Uses requiring-resolve to avoid hard dependency on NATS client."
+   Uses requiring-resolve to avoid hard dependency on NATS client.
+   When the payload carries a :run-id, ALSO publishes a wave-scoped completion
+   event (hive.v1.wave.<run-id>.completed.<task-id>) so the zero-token
+   wave-watch.sh counter advances. Both publishes are non-fatal."
   [payload]
   (try
     (when-let [publish-fn (requiring-resolve 'hive-mcp.nats.bridge/publish-drone-event!)]
       (publish-fn payload))
+    (when (:run-id payload)
+      (when-let [wave-fn (requiring-resolve 'hive-mcp.nats.bridge/publish-wave-event!)]
+        (wave-fn payload)))
     (catch Exception e
       (log/debug "[EVENT] NATS publish failed (non-fatal):" (.getMessage e)))))
 
