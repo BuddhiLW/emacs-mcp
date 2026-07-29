@@ -157,6 +157,12 @@
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
         io.github.hive-agi/hive-emacs {:git/tag "v0.4.6" :git/sha "bb042ee"}
 
+        ;; hive-schemas — pinned at the TOP level, not only in :test/:test-unit.
+        ;; hive-emacs pulls 0.1.6 transitively, and 0.1.6 exists on Gitea only
+        ;; (404 on Clojars and Central), so the default tree cannot resolve from
+        ;; a public runner. :use-top makes this pin win everywhere.
+        io.github.hive-agi/hive-schemas {:mvn/version "0.1.10"}
+
         ;; hive-proximum — temporal/bitemporal memory backend (IMemoryStore via IAddon).
         ;; Auto-discovered via its hive-addons manifest. Stub store until the
         ;; backend impl lands.
