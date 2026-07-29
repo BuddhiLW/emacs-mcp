@@ -1,0 +1,4 @@
+;; clj-kondo config exported by hive-spi.
+{:lint-as
+ {hive-spi.schema.typed-ann/defalias-schema clojure.core/def
+  hive-spi.schema.typed-ann/ann-op clojure.core/comment}}

@@ -1,0 +1,16 @@
+;; clj-kondo config exported by hive-mcp.
+{:lint-as
+ {hive-mcp.tools.memory.core/with-entry clojure.core/let}
+
+ :hooks
+ {:analyze-call
+  {hive-mcp.tools.core/with-coerced-params hive-mcp.hooks.tools/with-coerced-params
+   hive-mcp.dns.result/let-ok              hive-mcp.hooks.result/let-ok
+   hive-mcp.dns.result/try-effect          hive-mcp.hooks.result/try-effect
+   hive-mcp.dns.result/try-effect*         hive-mcp.hooks.result/try-effect*
+   hive-mcp.dns.result/rescue              hive-mcp.hooks.result/rescue
+   hive-mcp.dns.result/guard               hive-mcp.hooks.result/guard
+   hive-mcp.dns.result/rescue-log          hive-mcp.hooks.result/rescue-log
+   hive-mcp.dns.result/rescue-interrupt    hive-mcp.hooks.result/rescue-interrupt
+   hive-mcp.dns.result/ok->                hive-mcp.hooks.result/ok->
+   hive-mcp.dns.result/ok->>               hive-mcp.hooks.result/ok->>}}}
