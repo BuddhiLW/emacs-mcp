@@ -233,16 +233,18 @@
                   hive-mcp.knowledge-graph.migration/export-to-edn
                   (fn [] {:edges [] :disc [] :synthetic []
                           :counts {:edges 0 :disc 0 :synthetic 0}})]
-      ;; Note: target passed as string, cmd-switch does (keyword command) for target too
-      ;; but the result (:to) comes from the string passed in, not keywordized
-      (let [result (c-migration/handle-migration {:command "switch"
-                                                  :target "datalevin"
+      (let [target "datalevin"
+            result (c-migration/handle-migration {:command "switch"
+                                                  :target target
                                                   :dry-run true})]
         (is (map? result))
         (is (:dry-run result))
         (is (= :datascript (:from result)))
-        ;; cmd-switch returns target as-is (string) since it doesn't keywordize
-        (is (= "datalevin" (:to result)))))))
+        ;; :target is a declared keyword-param, so the MCP boundary hands
+        ;; cmd-switch a keyword (cmd-switch dispatches on it with `case`)
+        ;; and echoes that keyword back as :to.
+        (is (contains? c-migration/keyword-params :target))
+        (is (= (keyword target) (:to result)))))))
 
 ;; =============================================================================
 ;; Parameter Pass-Through Tests

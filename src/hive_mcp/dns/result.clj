@@ -24,6 +24,13 @@
 (def guard-fn      hive-dsl.result/guard-fn)
 (def ensure-result hive-dsl.result/ensure-result)
 
+;; Metadata key — `rescue`/`guard` attach error context under this key.
+(def error-key
+  "Metadata key carrying rescue/guard error context on a fallback value.
+   Shape: {:message string, :form string} (+ :latency-ms/:cause/:label when
+   the call site is a timed boundary). Read it with (get (meta v) error-key)."
+  :hive-dsl.result/error)
+
 ;; Macros — must re-define (def doesn't preserve macro metadata)
 (defmacro let-ok
   "Re-export of hive-dsl.result/let-ok. See canonical docstring."

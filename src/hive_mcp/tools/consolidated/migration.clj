@@ -7,8 +7,10 @@
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-(def ^:private keyword-params
-  "Params that must be coerced from string to keyword for case dispatch."
+(def keyword-params
+  "Params the MCP boundary must coerce from string to keyword before dispatch:
+   the underlying handlers dispatch on them with `case`, which never matches a
+   string. Downstream results therefore carry these params as keywords."
   #{:scope :target :adapter :latest})
 
 (defn- coerce-params

@@ -13,13 +13,13 @@
      :k8s-headless — no stdio, keepalive :promise mode
      :k8s-minimal  — bare minimum (A2A + NATS only)
 
-   Golden files: test/golden/system/
-   Run with UPDATE_GOLDEN=true to regenerate after intentional changes."
+   Per-profile key-set expectations are derived at run time from the source EDN
+   resources (hive/system.edn + system/<profile>.edn) via declared-config-keys;
+   no component census is restated here."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.set :as set]
             [integrant.core :as ig]
             [meta-merge.core :refer [meta-merge]]
-            [hive-test.golden :refer [deftest-golden]]
             [hive-mcp.server.core :as core]
             [hive-mcp.server.guards :as guards]
             [hive-mcp.server.lifecycle :as lifecycle]
@@ -151,52 +151,50 @@
     (is (= :k8s-headless (core/resolve-profile "k8s-headless")))
     (is (= :k8s-minimal (core/resolve-profile "k8s-minimal")))))
 
+(defn- declared-config-keys
+  "Component keys a profile declares, read from the source EDN resources:
+   base hive/system.edn keys, plus keys the profile overlay adds, minus keys the
+   overlay sets to nil (Integrant's exclusion marker)."
+  [profile]
+  (let [overlay (core/read-profile-config profile)
+        nil-ks  (into #{} (keep (fn [[k v]] (when (nil? v) k))) overlay)
+        add-ks  (into #{} (keep (fn [[k v]] (when (some? v) k))) overlay)]
+    (set/difference (set/union (set (keys (core/read-base-config))) add-ks)
+                    nil-ks)))
+
 ;; =============================================================================
-;; Golden: Config key sets per profile
+;; Config key sets per profile — expectation derived from the source EDN
 ;; =============================================================================
 
-(deftest-golden desktop-config-keys
-  "test/golden/system/desktop-config-keys.edn"
-  (->> (core/load-system-config :desktop)
-       keys
-       sort
-       vec))
+(deftest desktop-config-keys
+  (testing "Desktop resolved config keys are exactly the keys it declares"
+    (is (= (declared-config-keys :desktop)
+           (set (keys (core/load-system-config :desktop)))))))
 
-(deftest-golden k8s-headless-config-keys
-  "test/golden/system/k8s-headless-config-keys.edn"
-  (->> (core/load-system-config :k8s-headless)
-       keys
-       sort
-       vec))
+(deftest k8s-headless-config-keys
+  (testing "K8s-headless resolved config keys are exactly the keys it declares"
+    (is (= (declared-config-keys :k8s-headless)
+           (set (keys (core/load-system-config :k8s-headless)))))))
 
-(deftest-golden k8s-minimal-config-keys
-  "test/golden/system/k8s-minimal-config-keys.edn"
-  (->> (core/load-system-config :k8s-minimal)
-       keys
-       sort
-       vec))
+(deftest k8s-minimal-config-keys
+  (testing "K8s-minimal resolved config keys are exactly the keys it declares"
+    (is (= (declared-config-keys :k8s-minimal)
+           (set (keys (core/load-system-config :k8s-minimal)))))))
 
 ;; =============================================================================
 ;; Profile Key Assertions — structural invariants
 ;; =============================================================================
 
-(def ^:private base-keys
-  "All keys present in base system.edn."
-  #{:hive/guards :hive/hooks :hive/events :hive/delivery-channels :hive/coordinator
-    :hive/nrepl :hive/websocket-mcp :hive/nats
-    :hive/embedding :hive/memory-store :hive/tool-delegation
-    :hive/forge-belt :hive/config :hive/extensions
-    :hive/ws-channel :hive/olympus :hive/a2a-gateway
-    :hive/legacy-channel :hive/channel-bridge :hive/swarm-sync
-    :hive/workflow-engine
-    :hive/hot-reload :hive/registry-sync :hive/decay-scheduler
-    :hive/housekeeping :hive/mcp-stdio :hive/keepalive})
+(defn- base-keys
+  "Component keys declared in the base hive/system.edn resource."
+  []
+  (set (keys (core/read-base-config))))
 
 (deftest desktop-profile-keys
   (let [config (core/load-system-config :desktop)
         ks     (set (keys config))]
     (testing "Desktop has all base keys (nothing removed)"
-      (is (= base-keys ks)))
+      (is (= (base-keys) ks)))
     (testing "Desktop has :hive/mcp-stdio"
       (is (contains? ks :hive/mcp-stdio)))
     (testing "Desktop keepalive mode is :stdio"

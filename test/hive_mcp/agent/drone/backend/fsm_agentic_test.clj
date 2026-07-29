@@ -264,6 +264,13 @@
           mock-run-fn (fn [_data resources]
                         (reset! captured-resources resources)
                         {:status :completed :result "ok"})
+          ;; drone-loop owns the FSM resources contract: ask it which slot an
+          ;; LLMBackend lands in rather than restating the key here.
+          make-resources (requiring-resolve
+                          'hive-mcp.workflows.sub-fsms.drone-loop/make-production-resources)
+          sentinel (Object.)
+          backend-slot (some (fn [[k v]] (when (identical? v sentinel) k))
+                             (make-resources sentinel {}))
           backend-impl (fsm-backend/make-fsm-agentic-backend
                         {:llm-backend-factory mock-factory})]
       (with-redefs [fsm-backend/get-run-drone-loop (constantly mock-run-fn)]
@@ -274,11 +281,13 @@
                                 :sandbox {:allowed-files #{}
                                           :allowed-dirs #{}
                                           :blocked-tools #{}}})
+        (is (some? backend-slot)
+            "drone-loop resources contract must carry an LLMBackend slot")
         (is (= "custom-model" @factory-called)
             "Factory should be called with model")
         (is (= {:type :mock-llm :model "custom-model"}
-               (:llm-backend @captured-resources))
-            "Resources should contain factory result")))))
+               (get @captured-resources backend-slot))
+            "Resources should carry the factory result in drone-loop's backend slot")))))
 
 (deftest execute-drone-wires-tool-executor
   (testing "Tool executor from opts is wired into resources"

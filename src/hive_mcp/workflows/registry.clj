@@ -102,7 +102,7 @@
 ;; =============================================================================
 
 (defn register-handlers!
-  "Associate a handler-map with a workflow name.
+  "Associate a handler-map (and optionally a ref-map) with a workflow name.
 
    The handler-map maps keyword handler IDs to actual functions:
      {:start   handle-start
@@ -113,70 +113,94 @@
       :halt    handle-halt
       :error   handle-error}
 
+   The optional ref-map maps every NON-`:handler` keyword reference a spec
+   may carry — dispatch predicates, `:opts :subscriptions` handlers and the
+   `:opts :pre` / `:opts :post` hooks — to functions. Specs whose predicates
+   are inline `(fn ...)` forms need no ref-map.
+
    Must be called after scan-fsm-specs has populated the registry.
    If the workflow name doesn't exist in the registry, logs a warning."
-  [workflow-name handler-map]
-  (if (get @registry workflow-name)
-    (do
-      (swap! registry assoc-in [workflow-name :handler-map] handler-map)
-      (log/info "Registered handlers" {:workflow workflow-name
-                                       :handlers (keys handler-map)}))
-    (log/warn "Cannot register handlers — workflow not found in registry"
-              {:workflow workflow-name
-               :available (keys @registry)})))
+  ([workflow-name handler-map]
+   (register-handlers! workflow-name handler-map nil))
+  ([workflow-name handler-map ref-map]
+   (if (get @registry workflow-name)
+     (do
+       (swap! registry update workflow-name
+              (fn [entry]
+                (cond-> (assoc entry :handler-map handler-map)
+                  (seq ref-map) (assoc :ref-map ref-map))))
+       (log/info "Registered handlers" {:workflow workflow-name
+                                        :handlers (keys handler-map)
+                                        :refs     (count ref-map)}))
+     (log/warn "Cannot register handlers — workflow not found in registry"
+               {:workflow workflow-name
+                :available (keys @registry)}))))
 
 ;; =============================================================================
 ;; Compilation
 ;; =============================================================================
 
-(defn- sci-eval-if-form
-  "If v is a list (unevaluated fn form from EDN), compile it via SCI.
-   Otherwise return v unchanged (already a fn or other value)."
-  [sci-ctx v]
-  (if (list? v)
-    (sci/eval-form sci-ctx v)
-    v))
-
 (defn- compile-opts-fns
-  "Compile (fn ...) forms in :opts that were read as list data from EDN.
+  "Resolve every spec reference `fsm/compile` does NOT resolve itself.
 
-   fsm/compile handles dispatch predicates via SCI, but NOT opts like
-   :subscriptions handlers, :pre, and :post hooks. This function resolves
-   those before passing to fsm/compile.
+   fsm/compile resolves state `:handler` keywords from the handler-map and
+   SCI-compiles `(fn ...)` dispatch predicates. It leaves untouched:
+   - dispatch predicates written as keywords
+   - :opts :subscriptions {path {:handler ...}}
+   - :opts :pre / :opts :post hooks
 
-   Handles:
-   - :opts :subscriptions {path {:handler (fn ...)}} → eval handler fns
-   - :opts :pre (fn ...) → eval
-   - :opts :post (fn ...) → eval"
-  [spec]
-  (let [sci-ctx (sci/init {})]
-    (cond-> spec
+   Here `(fn ...)` list forms are SCI-compiled and keywords are looked up in
+   REF-MAP. Values already functions — and keywords absent from REF-MAP —
+   pass through unchanged."
+  [spec ref-map]
+  (let [sci-ctx (sci/init {})
+        resolve-val (fn [v]
+                      (cond
+                        (list? v)    (sci/eval-form sci-ctx v)
+                        (keyword? v) (get ref-map v v)
+                        :else        v))
+        resolve-dispatches (fn [dispatches]
+                             (mapv (fn [[state pred]]
+                                     [state (if (keyword? pred)
+                                              (get ref-map pred pred)
+                                              pred)])
+                                   dispatches))]
+    (cond-> (update spec :fsm
+                    (fn [states]
+                      (reduce-kv
+                       (fn [acc state-key state-def]
+                         (assoc acc state-key
+                                (cond-> state-def
+                                  (:dispatches state-def)
+                                  (update :dispatches resolve-dispatches))))
+                       {}
+                       states)))
       ;; Compile subscription handler fns
       (get-in spec [:opts :subscriptions])
       (update-in [:opts :subscriptions]
                  (fn [subs]
                    (reduce-kv
                     (fn [acc path sub]
-                      (assoc acc path
-                             (update sub :handler #(sci-eval-if-form sci-ctx %))))
+                      (assoc acc path (update sub :handler resolve-val)))
                     {}
                     subs)))
       ;; Compile :pre hook
-      (list? (get-in spec [:opts :pre]))
-      (update-in [:opts :pre] #(sci-eval-if-form sci-ctx %))
+      (contains? (:opts spec) :pre)
+      (update-in [:opts :pre] resolve-val)
       ;; Compile :post hook
-      (list? (get-in spec [:opts :post]))
-      (update-in [:opts :post] #(sci-eval-if-form sci-ctx %)))))
+      (contains? (:opts spec) :post)
+      (update-in [:opts :post] resolve-val))))
 
 (defn- compile-workflow
   "Compile a single workflow entry that has both :spec and :handler-map.
-   First compiles any (fn ...) forms in :opts via SCI, then delegates
-   to fsm/compile for handler resolution and dispatch predicate compilation.
+   First resolves the spec references fsm/compile ignores (keyword dispatch
+   predicates via :ref-map, and (fn ...) / keyword forms in :opts), then
+   delegates to fsm/compile for handler resolution.
    Returns the entry with :compiled added, or unchanged if missing either."
-  [{:keys [spec handler-map] :as entry}]
+  [{:keys [spec handler-map ref-map] :as entry}]
   (if (and spec handler-map)
     (try
-      (let [resolved-spec (compile-opts-fns spec)
+      (let [resolved-spec (compile-opts-fns spec ref-map)
             compiled (fsm/compile resolved-spec handler-map)]
         (assoc entry :compiled compiled))
       (catch Exception e
@@ -238,22 +262,22 @@
 
 (defn reload!
   "Re-scan specs from disk and re-compile all workflows with handlers.
-   Preserves existing handler-map registrations.
+   Preserves existing handler-map and ref-map registrations.
    Dev hot-reload friendly."
   []
   (let [old-handlers (reduce-kv
-                      (fn [acc wf-name {:keys [handler-map]}]
-                        (if handler-map
-                          (assoc acc wf-name handler-map)
+                      (fn [acc wf-name entry]
+                        (if (:handler-map entry)
+                          (assoc acc wf-name (select-keys entry [:handler-map :ref-map]))
                           acc))
                       {}
                       @registry)]
     ;; Reset with fresh scan
     (reset! registry (scan-fsm-specs))
     ;; Re-associate preserved handlers
-    (doseq [[wf-name hmap] old-handlers]
+    (doseq [[wf-name registered] old-handlers]
       (when (get @registry wf-name)
-        (swap! registry assoc-in [wf-name :handler-map] hmap)))
+        (swap! registry update wf-name merge registered)))
     ;; Recompile
     (compile-registry!)
     (log/info "Registry reloaded" {:workflows (keys @registry)
@@ -396,37 +420,19 @@
 ;; =============================================================================
 
 (defn register-saa-workflow!
-  "Register the saa-workflow handlers.
+  "Register the saa-workflow handlers and spec references.
    Requires hive-mcp.workflows.saa-workflow namespace to be loaded.
 
-   Maps EDN keyword handlers to saa-workflow implementation fns:
-     :start          -> handle-start
-     :catchup        -> handle-catchup
-     :silence        -> handle-silence
-     :silence-review -> handle-silence-review
-     :abstract       -> handle-abstract
-     :validate-plan  -> handle-validate-plan
-     :store-plan     -> handle-store-plan
-     :act-dispatch   -> handle-act-dispatch
-     :act-verify     -> handle-act-verify
-     :end            -> handle-end
-     :error          -> handle-error"
+   saa-workflow.edn is the only built-in spec whose dispatch predicates,
+   subscription handlers and :pre/:post hooks are keyword references, so the
+   ns' own `spec-ref-map` is registered alongside `handler-map`."
   []
   (require 'hive-mcp.workflows.saa-workflow)
   (let [ns' (find-ns 'hive-mcp.workflows.saa-workflow)]
     (register-handlers!
      :saa-workflow
-     {:start          (ns-resolve ns' 'handle-start)
-      :catchup        (ns-resolve ns' 'handle-catchup)
-      :silence        (ns-resolve ns' 'handle-silence)
-      :silence-review (ns-resolve ns' 'handle-silence-review)
-      :abstract       (ns-resolve ns' 'handle-abstract)
-      :validate-plan  (ns-resolve ns' 'handle-validate-plan)
-      :store-plan     (ns-resolve ns' 'handle-store-plan)
-      :act-dispatch   (ns-resolve ns' 'handle-act-dispatch)
-      :act-verify     (ns-resolve ns' 'handle-act-verify)
-      :end            (ns-resolve ns' 'handle-end)
-      :error          (ns-resolve ns' 'handle-error)})))
+     @(ns-resolve ns' 'handler-map)
+     @(ns-resolve ns' 'spec-ref-map))))
 
 ;; =============================================================================
 ;; Init (Boot Entry Point)

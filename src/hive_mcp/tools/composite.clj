@@ -61,6 +61,31 @@
           cli-fn (cli/make-cli-handler handlers)]
       (cli-fn params))))
 
+(defn subdomain-handler
+  "Wrap INNER as the handler for SUBDOMAIN-NAME: strips the \"<subdomain> \"
+   prefix off :command before calling INNER.
+
+   A subdomain dispatches on the whole command string — `code carto search`
+   reaches the subdomain owner as \"carto search\" — so the owner uses this to
+   hand its inner router just \"search\". A command without the prefix is
+   passed through unchanged."
+  [subdomain-name inner]
+  (fn [params]
+    (let [full   (str (:command params))
+          prefix (str subdomain-name " ")]
+      (inner (assoc params :command (if (str/starts-with? full prefix)
+                                      (subs full (count prefix))
+                                      full))))))
+
+(defn effective-handlers
+  "The handler tree TOOL-NAME dispatches on right now: CANONICAL-HANDLERS merged
+   with the commands addons have contributed under TOOL-NAME (addon wins).
+   Re-resolved on every call, so a contribution registered later is visible."
+  [tool-name canonical-handlers]
+  (if-let [addon-cmds (addon-commands->handlers tool-name)]
+    (merge canonical-handlers addon-cmds)
+    canonical-handlers))
+
 (defn build-merged-handler
   "Build a handler fn that merges core handlers with addon contributions.
    Addon handlers override core handlers with the same name (addon wins).
@@ -74,11 +99,9 @@
    (build-merged-handler tool-name canonical-handlers nil))
   ([tool-name canonical-handlers coerce-schema]
    (fn [params]
-     (let [addon-cmds (addon-commands->handlers tool-name)
-           merged (if addon-cmds
-                    (merge canonical-handlers addon-cmds)
-                    canonical-handlers)
-           cli-fn (cli/make-cli-handler merged coerce-schema)]
+     (let [cli-fn (cli/make-cli-handler
+                   (effective-handlers tool-name canonical-handlers)
+                   coerce-schema)]
        (cli-fn params)))))
 
 ;; =============================================================================

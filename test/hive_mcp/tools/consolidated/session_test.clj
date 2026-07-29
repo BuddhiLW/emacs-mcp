@@ -16,6 +16,7 @@
             [hive-mcp.tools.crystal :as crystal]
             [hive-mcp.tools.catchup :as catchup]
             [hive-mcp.channel.context-store :as ctx-store]
+            [hive-mcp.test.stub.extensions :as ext-stub]
             [hive-mcp.chroma.core :as chroma]))
 
 ;; =============================================================================
@@ -382,23 +383,46 @@
 
 (deftest test-context-reconstruct-with-refs
   (testing "context-reconstruct reconstructs from context-store refs"
-    ;; Store some data that looks like catchup output
+    ;; Reconstruction is the :cr/i extension's job (hive-knowledge implements it
+    ;; live). Register a RECORDING stub at that seam so the test drives the real
+    ;; branch and can also assert what session handed the collaborator.
     (let [ax-id (ctx-store/context-put!
                  [{:id "ax-1" :content "Rule 1"} {:id "ax-2" :content "Rule 2"}]
                  :tags #{"catchup" "axioms"})
           dec-id (ctx-store/context-put!
                   [{:id "dec-1" :content "Decision 1"}]
                   :tags #{"catchup" "decisions"})
-          result (session/handle-session {:command "context-reconstruct"
-                                          :ctx_refs {"axioms" ax-id
-                                                     "decisions" dec-id}
-                                          :scope "test-project"})]
-      (is (not (:isError result)))
-      (let [parsed (parse-response result)]
-        (is (string? (:reconstructed parsed)))
-        (is (pos? (:chars parsed)))
-        (is (= 2 (:refs-count parsed)))
-        (is (str/includes? (:reconstructed parsed) "Reconstructed Context"))))))
+          seen (atom nil)
+          rendered (atom nil)]
+      (ext-stub/with-extensions
+        {:cr/i (fn [ctx-refs kg-node-ids scope]
+                 (reset! seen {:ctx-refs ctx-refs :kg-node-ids kg-node-ids :scope scope})
+                 (reset! rendered
+                         (str "## Reconstructed Context (Compressed)\n\n"
+                              (str/join "\n"
+                                        (for [[category ctx-id] (sort-by key ctx-refs)]
+                                          (str "### " (name category) ": "
+                                               (count (:data (ctx-store/context-get ctx-id)))
+                                               " entries"))))))}
+        (fn []
+          (let [result (session/handle-session {:command "context-reconstruct"
+                                                :ctx_refs {"axioms" ax-id
+                                                           "decisions" dec-id}
+                                                :scope "test-project"})]
+            (is (not (:isError result)))
+            ;; refs reach the extension keywordized, with the scope forwarded
+            (is (= {:ctx-refs {:axioms ax-id :decisions dec-id}
+                    :kg-node-ids []
+                    :scope "test-project"}
+                   @seen))
+            (let [parsed (parse-response result)]
+              (is (string? (:reconstructed parsed)))
+              ;; the tool returns the extension's output verbatim, counted
+              (is (= @rendered (:reconstructed parsed)))
+              (is (= (count @rendered) (:chars parsed)))
+              (is (pos? (:chars parsed)))
+              (is (= 2 (:refs-count parsed)))
+              (is (str/includes? (:reconstructed parsed) "Reconstructed Context")))))))))
 
 (deftest test-context-reconstruct-empty-params
   (testing "context-reconstruct with no refs returns minimal context"

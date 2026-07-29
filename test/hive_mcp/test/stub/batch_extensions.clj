@@ -1,23 +1,33 @@
 (ns hive-mcp.test.stub.batch-extensions
   "Batch extension seams (:bx/*) for driver-free tests.
 
-   hive-mcp.batch delegates cycle detection and wave assignment to
-   `delegate-or-noop` extension keys. hive-mcp core ships no implementation —
-   on a cold run every op lands in wave 1 and cycles pass validation. The
-   registry is the seam; this ns installs implementations in it rather than
-   letting a test assert the absence of the collaborator.
+   hive-mcp.batch delegates $ref parsing/resolution, ref-dependency
+   validation, cycle detection and wave assignment to `delegate-or-noop`
+   extension keys. hive-mcp core ships no implementation — on a cold run
+   every $ref stays unresolved, every op lands in wave 1 and cycles pass
+   validation. The registry is the seam; this ns installs implementations in
+   it rather than letting a test assert the absence of the collaborator.
 
-   The implementations are hive.events.multi's, a real hive-mcp dependency
-   already on the :test-unit classpath — not a hand-rolled fake, so a test
-   using them is pinned to an independent implementation of the contract.
+   Provenance, per key — stated exactly, because a stub that drifts from the
+   provider it stands in for turns green into a lie:
+
+     :bx/h :bx/i  delegate to `hive.events.multi`, a committed hive-mcp
+                  dependency: an independent implementation, not a fake.
+     :bx/a-:bx/g  are a PORT of `hive-knowledge.agent.multi-batch` (the
+                  production provider, registered by hive-knowledge's
+                  init.clj). hive-knowledge is NOT in hive-mcp's committed
+                  deps.edn, so cold CI has no provider at all and a port is
+                  the only way to exercise the seam.
+
+   The port is CHECKED, not claimed: `hive-mcp.batch.ref-contract` states the
+   seam contract once (malli value objects + the shared case corpus) and
+   `hive-mcp.batch.ref-conformance-test` runs that corpus against every
+   provider on the classpath — this port always, the real hive-knowledge
+   provider whenever local deps put it there.
 
    API:
-     (install!)            register :bx/h and :bx/i, returns the key vector
-     with-batch-extensions clojure.test :each fixture (snapshot + restore)
-
-   Contracts mirrored from hive-mcp.batch:
-     :bx/h detect-cycles => vector of error strings, empty when acyclic
-     :bx/i assign-waves  => ops, each carrying an integer :wave"
+     (install!)            register :bx/a-:bx/i, returns the key vector
+     with-batch-extensions clojure.test :each fixture (snapshot + restore)"
   (:require [clojure.string :as str]
             [hive-mcp.extensions.registry :as ext]
             [hive.events.multi :as hem]
@@ -35,50 +45,82 @@
 (def ^:private ref-prefix "$ref:")
 
 (defn parse-ref
-  "\"$ref:<op-id>.<seg>.<seg>\" => {:op-id \"<op-id>\" :path [:seg :seg]}.
-   nil when S is not a $ref or carries no path."
+  "\"$ref:<op-id>.<seg>.<seg>\" => {:op-id \"<op-id>\" :path [\"<seg>\" \"<seg>\"]};
+   \"$ref:<op-id>\" => {:op-id \"<op-id>\" :path []}; nil when S is not a $ref.
+
+   Path segments stay STRINGS: keywordisation is :bx/c's job, on lookup."
   [s]
-  (when (and (string? s) (str/starts-with? s ref-prefix))
-    (let [[op-id & path] (str/split (subs s (count ref-prefix)) #"\.")]
-      (when (and (seq op-id) (seq path))
-        {:op-id op-id :path (mapv keyword path)}))))
+  (when (batch/ref? s)
+    (let [ref-body (subs s (count ref-prefix))
+          dot-idx  (str/index-of ref-body ".")]
+      (if dot-idx
+        {:op-id (subs ref-body 0 dot-idx)
+         :path  (str/split (subs ref-body (inc dot-idx)) #"\.")}
+        {:op-id ref-body
+         :path  []}))))
 
 (defn extract-result-data
-  "The payload of a handler result: an MCP text response's JSON body parsed
-   with keyword keys, or the result itself when it carries no such body."
+  "The payload of a handler result: the JSON body of an MCP text response
+   parsed with keyword keys, or the result itself when it carries no such
+   body or the body is not JSON. nil in, nil out."
   [handler-result]
-  (let [text (or (:text handler-result)
-                 (some :text (:content handler-result)))]
-    (if (string? text)
-      (try (json/read-str text :key-fn keyword)
-           (catch Exception _ handler-result))
+  (letfn [(parse [text fallback]
+            (if (string? text)
+              (try (json/read-str text :key-fn keyword)
+                   (catch Exception _ fallback))
+              fallback))]
+    (cond
+      (nil? handler-result)
+      nil
+
+      (and (map? handler-result)
+           (sequential? (:content handler-result)))
+      (if-let [item (first (filter #(= "text" (:type %)) (:content handler-result)))]
+        (parse (:text item) handler-result)
+        handler-result)
+
+      (and (map? handler-result)
+           (= "text" (:type handler-result)))
+      (parse (:text handler-result) handler-result)
+
+      :else
       handler-result)))
 
 (defn resolve-ref
-  "The value PARSED-REF designates in RESULTS-BY-ID, or batch/ref-not-found
-   when the source op produced no result."
+  "The value PARSED-REF designates in RESULTS-BY-ID: an empty path designates
+   the whole op-result, otherwise the string path segments are keywordised
+   and walked. batch/ref-not-found when the op-id is absent from
+   RESULTS-BY-ID; a present op whose path holds nil resolves to nil."
   [{:keys [op-id path]} results-by-id]
-  (if-let [op-result (get results-by-id op-id)]
-    (get-in op-result path)
+  (if (contains? results-by-id op-id)
+    (let [op-result (get results-by-id op-id)]
+      (if (empty? path)
+        op-result
+        (get-in op-result (mapv keyword path))))
     batch/ref-not-found))
 
 (defn resolve-refs-in-value
   "V with every $ref string it contains replaced by its resolved value. An
    unresolvable ref is left as the original string so the caller's broken-ref
-   classification still sees it."
+   classification still sees it. Maps keep their keys; sequentials become
+   vectors."
   [v results-by-id]
   (cond
     (batch/ref? v)
     (if-let [parsed (parse-ref v)]
       (let [resolved (resolve-ref parsed results-by-id)]
-        (if (identical? resolved batch/ref-not-found) v resolved))
+        (if (identical? batch/ref-not-found resolved) v resolved))
       v)
 
+    (string? v) v
+
     (map? v)
-    (into (empty v) (map (fn [[k x]] [k (resolve-refs-in-value x results-by-id)])) v)
+    (reduce-kv (fn [m k x] (assoc m k (resolve-refs-in-value x results-by-id)))
+               {}
+               v)
 
     (sequential? v)
-    (into (empty v) (map #(resolve-refs-in-value % results-by-id)) v)
+    (mapv #(resolve-refs-in-value % results-by-id) v)
 
     :else v))
 
@@ -94,28 +136,29 @@
 (defn collect-ref-op-ids
   "The set of op-ids OP's ref-walkable params reference."
   [op]
-  (let [ids   (volatile! #{})
-        walk! (fn walk! [v]
-                (cond
-                  (batch/ref? v)  (when-let [{:keys [op-id]} (parse-ref v)]
-                                    (vswap! ids conj op-id))
-                  (map? v)        (run! walk! (vals v))
-                  (sequential? v) (run! walk! v)
-                  :else nil))]
-    (doseq [[_ v] (pd/ref-walkable-entries op)] (walk! v))
-    @ids))
+  (letfn [(walk [v]
+            (cond
+              (batch/ref? v)  (if-let [{:keys [op-id]} (parse-ref v)] #{op-id} #{})
+              (map? v)        (reduce into #{} (map walk (vals v)))
+              (sequential? v) (reduce into #{} (map walk v))
+              :else           #{}))]
+    (reduce into #{} (map (fn [[_ v]] (walk v)) (pd/ref-walkable-entries op)))))
 
 (defn validate-ref-deps
-  "Error strings for refs naming an op that is not in OPS."
+  "Error strings for every $ref whose target op-id the referencing op does
+   not declare in :depends_on. A $ref is an ordering edge, not just a name:
+   an undeclared target may not have run when the ref is resolved."
   [ops]
-  (let [id-set (set (map :id ops))]
-    (into []
-          (mapcat (fn [op]
-                    (for [ref-id (collect-ref-op-ids op)
-                          :when  (not (contains? id-set ref-id))]
-                      (str "Operation '" (:id op)
-                           "' references non-existent operation '" ref-id "'"))))
-          ops)))
+  (into []
+        (mapcat (fn [{:keys [id depends_on] :as op}]
+                  (let [ref-ids (collect-ref-op-ids op)
+                        dep-set (set (or depends_on []))]
+                    (keep (fn [ref-id]
+                            (when-not (contains? dep-set ref-id)
+                              (str "Operation '" id "' has $ref to '" ref-id
+                                   "' but doesn't declare it in depends_on")))
+                          ref-ids))))
+        ops))
 
 (defn detect-cycles
   "Cycle errors for OPS, empty when acyclic. Non-cycle findings of

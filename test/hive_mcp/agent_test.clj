@@ -26,6 +26,23 @@
     "olympus" "emacs" "migration" "config"})
 
 ;; =============================================================================
+;; Fixtures
+;; =============================================================================
+
+(defn- fresh-tool-cache-fixture
+  "Re-discover the drone toolset around each test.
+
+   `drone-tools/full-toolset` memoizes into a process-global atom, so in a
+   whole-suite run another namespace can populate it while the tool registry
+   is mid-reset — leaving a truncated set cached. Arranging a fresh cache is
+   the test's job; without it these assertions read an accident of test order."
+  [f]
+  (drone-tools/invalidate-tool-cache!)
+  (try (f) (finally (drone-tools/invalidate-tool-cache!))))
+
+(use-fixtures :each fresh-tool-cache-fixture)
+
+;; =============================================================================
 ;; Pinning Tests - Tool Definitions
 ;; =============================================================================
 

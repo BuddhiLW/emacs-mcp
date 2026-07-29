@@ -73,13 +73,14 @@
   "Pure: derive the new tag vector for a status transition, MERGING onto the
    entry's `existing-tags`. Only the status tag is swapped and the priority
    tag reset to `priority`; every other tag — topical, agent attribution,
-   extra scope tags — is preserved. Result is distinct, canonical tags first."
+   extra scope tags — is preserved. The status tag is REPLACED, never
+   unioned: no token of `pred/status-tag-set` other than `new-status`
+   survives. Result is distinct, canonical tags first."
   [existing-tags new-status priority project-id]
-  (let [statuses #{"todo" "inprogress" "inreview" "done"}
-        kept     (->> (or existing-tags [])
-                      (filter string?)
-                      (remove statuses)
-                      (remove #(str/starts-with? % "priority-")))]
+  (let [kept (->> (or existing-tags [])
+                  (filter string?)
+                  (remove pred/status-tag-set)
+                  (remove #(str/starts-with? % "priority-")))]
     (->> (concat ["kanban" new-status (str "priority-" priority)
                   (scope/make-scope-tag project-id)]
                  kept)

@@ -1,7 +1,8 @@
 (ns hive-mcp.engine.health-test
   "Tests for ENGINE-L2.2 per-subsystem health-budget accounting."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [hive-mcp.engine.health :as h]))
+            [hive-mcp.engine.health :as h]
+            [hive-mcp.events.core :as events]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

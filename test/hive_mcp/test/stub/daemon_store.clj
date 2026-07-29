@@ -14,7 +14,8 @@
        (iso/with-isolations :swarm-ds)
        (stub/daemon-store-fixture #'store))"
   (:require [hive-mcp.emacs.daemon-ds :as daemon-ds]
-            [hive-mcp.swarm.datascript.connection :as conn]))
+            [hive-mcp.swarm.datascript.connection :as conn]
+            [hive-mcp.emacs.daemon-store :as daemon-store]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -33,3 +34,22 @@
   [var]
   (fn [f]
     (with-bindings* {var (->store)} f)))
+
+(defn singleton-store-fixture
+  "clojure.test fixture that installs a conn-sharing store as the daemon-store
+   SINGLETON for one test, restoring the previous store afterwards.
+
+   For suites driving the convenience API (daemon-store/register!, bind-ling!,
+   ...) instead of an explicit store argument: those resolve the repository
+   through `daemon-store/get-store`, whose lazily-created default owns a
+   private conn that outlives every isolation fixture. Swapping it via the
+   production `reset-store!` seam is what makes daemon state per-test.
+
+   Order it AFTER the :swarm-ds isolation fixture."
+  [f]
+  (let [previous (daemon-store/get-store)]
+    (daemon-store/reset-store! (->store))
+    (try
+      (f)
+      (finally
+        (daemon-store/reset-store! previous)))))

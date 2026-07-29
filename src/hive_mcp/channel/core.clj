@@ -111,15 +111,31 @@
   (when-let [{:keys [server]} @server-state]
     (t/client-count server)))
 
+(def envelope-keys
+  "Envelope keys `emit-event!` stamps onto every event it publishes.
+
+   Emitted events are JSON-serialised to WebSocket clients, so payload and
+   envelope keys are STRINGS. `:type` is additionally carried as a keyword
+   because `publish!` routes the internal pub on `(:type event)`.
+
+   Consumers (and tests) must read the envelope through this map rather than
+   restating the literal wire keys."
+  {:type "type"
+   :timestamp "timestamp"})
+
 ;; Convenience Functions
 
 (defn emit-event!
-  "Emit an event to all connected clients and local subscribers."
+  "Emit an event to all connected clients and local subscribers.
+
+   Payload keys of DATA are stringified; the envelope adds the keys of
+   `envelope-keys` — the event type name and an epoch-millis timestamp —
+   plus a keyword `:type` for internal pub routing."
   [event-type data]
-  (let [string-data (into {} (map (fn [[k v]] [(name k) v]) data))
+  (let [string-data (into {} (map (fn [[k v]] [(name k) v])) data)
         event (assoc string-data
-                     "type" (name event-type)
-                     "timestamp" (System/currentTimeMillis)
+                     (:type envelope-keys) (name event-type)
+                     (:timestamp envelope-keys) (System/currentTimeMillis)
                      :type event-type)]
     (publish! event)
     (broadcast! event)))

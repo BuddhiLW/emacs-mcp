@@ -15,6 +15,7 @@
             [hive-mcp.tools.consolidated.swarm :as swarm]
             [hive-mcp.tools.consolidated.project :as project]
             [hive-mcp.tools.consolidated.code :as code]
+            [hive-mcp.tools.composite :as composite]
             [hive-mcp.extensions.registry :as ext]))
 
 ;; =============================================================================
@@ -168,6 +169,24 @@
 ;; 5. Folded subdomain nesting (ergonomic re-wiring of gated roots)
 ;; =============================================================================
 
+(defn- with-code-subdomain
+  "Run F with SUBDOMAIN-NAME contributed to the `code` tool as an addon
+   subdomain wrapping INNER, then retract the contribution.
+
+   This is the seam a real addon uses (hive-carto contributes `carto` exactly
+   this way); core hive-mcp names no addon tool, so the contribution — not a
+   static entry in code/canonical-handlers — is what makes the subdomain
+   reachable."
+  [subdomain-name inner f]
+  (try
+    (ext/contribute-commands!
+     "code" ::test-addon
+     {subdomain-name {:handler     (composite/subdomain-handler subdomain-name inner)
+                      :description (str subdomain-name " (test contribution)")}})
+    (f)
+    (finally
+      (ext/retract-all-by-addon! ::test-addon))))
+
 (deftest folded-roots-nested-as-subdomains
   (testing "core folded roots are reachable as subdomains of their substrate"
     ;; preset → swarm (flat leaf map, lazy-resolved)
@@ -175,9 +194,21 @@
     ;; migrate-kanban + transcript → project
     (is (contains? project/canonical-handlers :migrate-kanban))
     (is (contains? project/canonical-handlers :transcript))
-    ;; analysis + codebase-map → code (addon-delegating)
-    (is (contains? code/canonical-handlers :analysis))
-    (is (contains? code/canonical-handlers :codebase-map))))
+    ;; analysis → code: a standalone addon tool folded in by core itself
+    (is (contains? code/canonical-handlers :analysis)))
+
+  (testing "further subdomains are addon-contributed, not core-named (OCP)"
+    ;; codebase-map used to be hardcoded in code/canonical-handlers; core now
+    ;; holds ZERO addon tool names, so subdomain reachability is a property of
+    ;; the EFFECTIVE tree the tool dispatches on — and absence is arranged by
+    ;; retraction, never inferred from a cold registry.
+    (let [sub        "stub-subdomain"
+          reachable? #(contains? (composite/effective-handlers "code" code/canonical-handlers)
+                                 (keyword sub))]
+      (is (not (reachable?)) "nothing contributed yet")
+      (with-code-subdomain sub (fn [_] {:type "text" :text "ok"})
+        (fn [] (is (reachable?) "contributed ⇒ reachable")))
+      (is (not (reachable?)) "retracted ⇒ gone"))))
 
 (deftest code-analysis-subdomain-strips-prefix-and-delegates
   (testing "`code analysis <cmd>` strips the prefix and delegates to the
@@ -192,12 +223,14 @@
 
 (deftest code-codebase-map-subdomain-strips-prefix-and-delegates
   (testing "`code codebase-map <cmd>` strips the prefix and delegates"
-    (with-redefs [ext/get-registered-tools
-                  (fn [] [{:name "codebase-map"
-                           :handler (fn [p] {:type "text" :text (str "CM:" (:command p))})}])]
-      (let [h (:handler code/tool-def)
-            r (h {:command "codebase-map ns" :namespace "x"})]
-        (is (= "CM:ns" (:text r)))))))
+    (with-code-subdomain
+      "codebase-map" (fn [p] {:type "text" :text (str "CM:" (:command p))})
+      (fn []
+        (let [h (:handler code/tool-def)
+              r (h {:command "codebase-map ns" :namespace "x"})]
+          ;; prefix "codebase-map " stripped → the subdomain sees just "ns"
+          (is (= "CM:ns" (:text r))))))))
+
 
 (deftest code-analysis-missing-addon-returns-error
   (testing "`code analysis ...` with no analysis addon loaded errors cleanly"

@@ -7,42 +7,67 @@
    - Factory functions (openai-compat-backend, auto-backend, openrouter-backend)
    - Backward compatibility"
   (:require [clojure.test :refer [deftest is testing]]
-            [clojure.string]
             [hive-mcp.agent.openrouter :as openrouter]
             [hive-mcp.agent.protocol :as proto]
-            [hive-mcp.config.core :as config]))
+            [hive-mcp.config.core :as config]
+            [hive-schemas.test :as hst]
+            [malli.core :as m]
+            [malli.error :as me]))
 
 ;; =============================================================================
 ;; Provider Registry
 ;; =============================================================================
 
 (deftest provider-registry-structure-test
-  (testing "All providers have required keys"
-    (doseq [[provider-key entry] openrouter/provider-registry]
-      (is (contains? entry :api-url)
-          (str provider-key " must have :api-url"))
-      (is (contains? entry :default-model)
-          (str provider-key " must have :default-model"))
-      (is (string? (:api-url entry))
-          (str provider-key " :api-url must be a string"))
-      (is (string? (:default-model entry))
-          (str provider-key " :default-model must be a string"))))
+  (testing "the shipped registry conforms to the source-owned schema"
+    (is (m/validate openrouter/ProviderRegistry openrouter/provider-registry)
+        (str "provider-registry violates ProviderEntry: "
+             (me/humanize (m/explain openrouter/ProviderRegistry
+                                     openrouter/provider-registry)))))
 
-  (testing "Expected providers are registered"
-    (let [providers (set (keys openrouter/provider-registry))]
-      (is (contains? providers :openrouter))
-      (is (contains? providers :venice))
-      (is (contains? providers :groq))
-      (is (contains? providers :together))
-      (is (contains? providers :fireworks))
-      (is (contains? providers :openai))
-      (is (contains? providers :ollama-compat)))))
+  (testing "every provider in the discovery order has a registry entry"
+    (doseq [p openrouter/provider-priority]
+      (is (contains? openrouter/provider-registry p)
+          (str p " is in provider-priority but has no registry entry")))))
+
+(hst/deftrifecta-predicate provider-entry-conformance
+  hive-mcp.agent.openrouter/valid-provider-entry?
+  {:schema openrouter/ProviderEntry})
 
 (deftest provider-registry-urls-test
-  (testing "Provider URLs end with /chat/completions"
-    (doseq [[k entry] openrouter/provider-registry]
-      (is (clojure.string/ends-with? (:api-url entry) "/chat/completions")
-          (str k " URL should end with /chat/completions")))))
+  (testing "an OpenAI-compat entry must carry a /chat/completions endpoint"
+    (let [venice (get openrouter/provider-registry :venice)]
+      (is (openrouter/valid-provider-entry? venice))
+      (is (not (openrouter/valid-provider-entry?
+                (assoc venice :api-url "https://api.venice.ai/api/v1/messages")))
+          "a URL that is not a chat-completions endpoint must be rejected")
+      (is (not (openrouter/valid-provider-entry? (dissoc venice :api-url)))
+          "an OpenAI-compat entry without :api-url must be rejected")))
+
+  (testing "a dispatch-routed entry is exempt — it has no chat-completions endpoint"
+    (let [anthropic (get openrouter/provider-registry :anthropic)]
+      (is (= :anthropic-oauth (:dispatch anthropic))
+          ":anthropic routes through the native Messages API, not OpenAI-compat")
+      (is (openrouter/valid-provider-entry? anthropic))
+      (is (not (contains? anthropic :api-url)))
+      (is (not (openrouter/valid-provider-entry? (assoc anthropic :dispatch nil)))
+          "without the dispatch marker the entry must fail the compat branch"))))
+
+(deftest dispatch-routed-provider-refuses-openai-compat-test
+  (testing "openai-compat-backend refuses a dispatch-routed provider"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not an OpenAI-compat provider"
+                          (openrouter/openai-compat-backend
+                           {:provider :anthropic :api-key "sk-test"}))))
+
+  (testing "an explicit :api-url still overrides it (relay escape hatch)"
+    (let [b (openrouter/openai-compat-backend
+             {:provider :anthropic
+              :api-url  "https://relay.test/v1/chat/completions"
+              :api-key  "sk-test"})]
+      (is (satisfies? proto/LLMBackend b))
+      (is (= "https://relay.test/v1/chat/completions" (:api-url b)))
+      (is (= "claude-sonnet-4-6" (proto/model-name b))
+          "the dispatch-routed entry still supplies its :default-model"))))
 
 (deftest provider-registry-secret-keys-test
   (testing "ollama-compat has nil secret-key (no auth needed)"

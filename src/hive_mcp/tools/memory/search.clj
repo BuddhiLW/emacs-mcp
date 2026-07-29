@@ -264,8 +264,9 @@
        (mapv format-search-result merged)))))
 
 (def ^:private default-exclude-tags
-  "Tags excluded from semantic search when the caller passes no exclude_tags."
-  [])
+  "Tags excluded from semantic search by default.
+   Carto (L1/L2 codebase-mapping snippets) drowns out high-level knowledge."
+  ["carto"])
 
 ;; =============================================================================
 ;; Composite search-store* (fork-join across store + ingest)
@@ -345,7 +346,8 @@
 (defn- search-semantic*
   "Pure search logic returning Result. Validates inputs and dispatches to the
    default IMemoryStore via search-store*.
-   exclude_tags defaults to none — pass a tag vector to exclude those tags.
+   exclude_tags defaults to `default-exclude-tags` — pass a tag vector to
+   replace that default with your own exclusion set.
    include_descendants defaults to true — pass false to restrict to current project."
   [{:keys [query limit type directory include_descendants scope exclude_tags]}]
   (let [directory (or directory (ctx/current-directory))

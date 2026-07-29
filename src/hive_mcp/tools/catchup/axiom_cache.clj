@@ -12,7 +12,8 @@
             [hive-mcp.dns.result :refer [rescue rescue-interrupt rescue-log]]
             [hive-mcp.tools.catchup.hierarchy :as hier]
             [clojure.tools.logging :as log]
-            [hive-mcp.vectordb.resilience :refer [with-resilience]])
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]
+            [hive-mcp.tools.catchup.scope-filter :as sf])
   (:import [java.util.concurrent Future TimeUnit TimeoutException]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -56,6 +57,21 @@
    outer catchup acceptance gate while letting the branch land."
   20000)
 
+(def ^:private axioms-legacy-budget-ms
+  "Wall-clock the legacy `type=convention` + tag `axiom` branch may add ON TOP
+   of the formal branch. The clock starts only once the formal branch has
+   resolved, so the legacy lane is charged for the time it costs beyond the
+   work catchup was already going to pay for — never for the shared cold-path
+   warm-up both lanes ran through in parallel. A legacy scan still stalling
+   after that grace is cancelled; the formal branch's rows are returned alone."
+  1500)
+
+(def ^:private legacy-axiom-tags
+  "Tags marking a pre-taxonomy axiom stored under `type=convention`. Such
+   entries are still axioms for catchup purposes and MUST be aggregated with
+   the formal `type=axiom` rows."
+  ["axiom"])
+
 (def ^:private axioms-cache-ttl-ms
   "Per-project TTL for query-axioms results. Axioms churn rarely; a 5-min
    cache eliminates repeated type-filter cold scans that blow through the
@@ -93,7 +109,16 @@
         []))))
 
 (defn- fetch-axioms-sync!
-  "Synchronous fetch with budget. Stores result in cache, returns it."
+  "Synchronous fetch with per-branch budget. Stores result in cache, returns it.
+
+   Two branches run in parallel on the :catchup pool and are aggregated: the
+   formal `type=axiom` scan and the legacy `type=convention` scan narrowed to
+   `legacy-axiom-tags`. Formal is deref'd against `axioms-formal-budget-ms`;
+   legacy is then deref'd against `axioms-legacy-budget-ms` counted FROM THAT
+   POINT, so it is charged only for the time it adds beyond formal. A branch
+   that blows its budget is cancelled and contributes [] while the other
+   branch's rows still land. The union is de-duplicated by :id, newest-first,
+   capped at 100."
   [project-id now]
   (let [store (mem-proto/get-store)
         formal-deadline (+ now axioms-formal-budget-ms)
@@ -109,13 +134,34 @@
                           (sort-by :created #(compare %2 %1))
                           (take 100)
                           vec)))
+        f-legacy (pool/with-catchup
+                   (rescue-interrupt "catchup/query-axioms:legacy" []
+                     (-> ((timed-query "axioms/legacy"
+                                       #(with-resilience
+                                          (mem-proto/query-entries
+                                            store
+                                            {:type "convention"
+                                             :limit 200
+                                             :output-fields hier/metadata-projection}))))
+                         (sf/filter-by-tags legacy-axiom-tags)
+                         (->> (sort-by :created #(compare %2 %1))
+                              (take 100)
+                              vec))))
         formal (deref-with-deadline f-formal formal-deadline "formal"
-                                    axioms-formal-budget-ms)]
+                                    axioms-formal-budget-ms)
+        legacy-deadline (+ (System/currentTimeMillis) axioms-legacy-budget-ms)
+        legacy (deref-with-deadline f-legacy legacy-deadline "legacy"
+                                    axioms-legacy-budget-ms)
+        result (->> (concat formal legacy)
+                    (sf/distinct-by :id)
+                    (sort-by :created #(compare %2 %1))
+                    (take 100)
+                    vec)]
     (swap! axioms-cache assoc project-id
-           {:result formal
+           {:result result
             :expires-at (+ now axioms-cache-ttl-ms)
             :stored-at now})
-    formal))
+    result))
 
 (defn- trigger-refresh!
   "Fire-and-forget background refresh — stale-while-revalidate.
@@ -131,7 +177,8 @@
         (swap! axioms-refreshing disj project-id)))))
 
 (defn query-axioms
-  "Query axiom entries via the formal `type=axiom` branch.
+  "Query axiom entries: the formal `type=axiom` rows unioned with the legacy
+   `type=convention` rows tagged `axiom`, de-duplicated by :id.
 
    Stale-while-revalidate cache: fresh hit returns immediately; stale hit
    returns immediately and triggers a background refresh so the next call

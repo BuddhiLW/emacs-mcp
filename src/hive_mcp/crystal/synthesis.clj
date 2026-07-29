@@ -100,14 +100,14 @@
 
 (defn- surface-rescue-error
   "If rescue/guard attached error metadata, surface :error into map for backward compat.
-   rescue and guard (hive-dsl.result) attach {:hive-dsl.result/error {:message ...}}.
+   The metadata key is owned by the Result DSL — see `result/error-key`.
 
    Also surfaces :latency-ms and :cause when present in the metadata (set by
    timed-rescue below) per HTTP-error convention 20260420172519-6dd91cc7 —
    downstream observability needs both to distinguish slow/transient failures
    from fatal ones."
   [m]
-  (if-let [err (:hive-dsl.result/error (meta m))]
+  (if-let [err (get (meta m) result/error-key)]
     (cond-> (assoc m :error (:message err))
       (:latency-ms err) (assoc :latency-ms (:latency-ms err))
       (:cause err)      (assoc :cause      (:cause err)))
@@ -123,8 +123,8 @@
       (recur (.getCause cur) cur))))
 
 (defn- timed-rescue*
-  "Run thunk; on Throwable, return `noop` with `:hive-dsl.result/error`
-   metadata carrying {:message :latency-ms :cause :label} so
+  "Run thunk; on Throwable, return `noop` carrying `result/error-key`
+   metadata with {:message :latency-ms :cause :label} so
    `surface-rescue-error` can project it onto the result map. Logs at
    WARN with `label` so HTTP/transport errors during wrap lifecycle are
    observable rather than silently noop'd.
@@ -148,10 +148,10 @@
                            (when (and cause (not= cause msg))
                              (str " (cause=" cause ")"))))
           (with-meta noop
-            {:hive-dsl.result/error {:message    msg
-                                     :label      label
-                                     :latency-ms latency
-                                     :cause      cause}}))))))
+            {result/error-key {:message    msg
+                               :label      label
+                               :latency-ms latency
+                               :cause      cause}}))))))
 
 ;; =============================================================================
 ;; Lifecycle Noop Defaults
@@ -172,6 +172,12 @@
       (do (future-cancel fut) (assoc default :error "timed-out"))
       (surface-rescue-error r))))
 
+(def lifecycle-stat-keys
+  "Result keys `run-lifecycle-ops!` always returns, in delegate order :ch/a … :ch/e.
+   The single source of truth for the lifecycle-stats key set — callers and
+   tests read it here instead of restating the list."
+  [:promotion-stats :decay-stats :xpoll-stats :memory-decay-stats :file-provenance-stats])
+
 ;; =============================================================================
 ;; Lifecycle Operations (effectful — runs at boundary)
 ;; =============================================================================
@@ -187,8 +193,7 @@
    (memory-decay) from leaking out as bare ex-info — the wrap boundary
    translates them, the pure decay/xpoll logic stays effect-free.
 
-   Returns map with keys:
-     :promotion-stats :decay-stats :xpoll-stats :memory-decay-stats :file-provenance-stats"
+   Returns a map whose key set is exactly `lifecycle-stat-keys`."
   [project-id directory & {:keys [harvested]}]
   (let [scope-arg [{:scope project-id :created-by "crystallize-session"}]
         run (fn [k label noop args]
@@ -203,19 +208,21 @@
         fe (run :ch/e "file-provenance" noop-e [{:directory directory
                                                  :project-id project-id
                                                  :harvested harvested}])
-        [ra rb rc rd re] (mapv timed-deref [fa fb fc fd fe]
-                               [noop-a noop-b noop-c noop-d noop-e])
+        results (mapv timed-deref [fa fb fc fd fe]
+                      [noop-a noop-b noop-c noop-d noop-e])
         ;; Per convention 20260420172519-6dd91cc7: surface :latency-ms and
         ;; :cause alongside :error so observability can distinguish slow
         ;; upstream from network/DNS flakes. Keys are present only on
         ;; failure paths (select-keys drops missing keys), preserving the
         ;; success-path key set asserted by golden tests.
-        err-keys [:error :latency-ms :cause]]
-    {:promotion-stats       (select-keys ra (into [:promoted :skipped :below :evaluated] err-keys))
-     :decay-stats           (select-keys rb (into [:decayed :pruned :fresh :evaluated] err-keys))
-     :xpoll-stats           (select-keys rc (into [:promoted :candidates :total-scanned] err-keys))
-     :memory-decay-stats    (select-keys rd (into [:decayed :expired :total-scanned] err-keys))
-     :file-provenance-stats (select-keys re (into [:files-captured :files-skipped :edges-created] err-keys))}))
+        err-keys [:error :latency-ms :cause]
+        stat-keys [[:promoted :skipped :below :evaluated]
+                   [:decayed :pruned :fresh :evaluated]
+                   [:promoted :candidates :total-scanned]
+                   [:decayed :expired :total-scanned]
+                   [:files-captured :files-skipped :edges-created]]]
+    (zipmap lifecycle-stat-keys
+            (mapv #(select-keys %1 (into %2 err-keys)) results stat-keys))))
 
 ;; =============================================================================
 ;; Scope grouping (pure — no IO)

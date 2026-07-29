@@ -9,7 +9,8 @@
             [clj-http.client :as http]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [malli.core :as m]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -51,8 +52,57 @@
                    :secret-key    nil
                    :default-model "devstral-small:24b"}})
 
-(def ^:private provider-priority
-  "Provider preference order for auto-discovery."
+(def ChatCompletionsUrl
+  "Malli schema for an OpenAI-compatible chat-completions endpoint URL."
+  [:and
+   [:string {:gen/fmap (fn [s]
+                         (let [host (str/replace (str s) #"[^a-zA-Z0-9]" "")]
+                           (str "https://api." (if (str/blank? host) "example" host)
+                                ".test/v1/chat/completions")))}]
+   [:fn {:error/message "must be a URL ending in /chat/completions"}
+    (fn [s] (and (string? s) (str/ends-with? s "/chat/completions")))]])
+
+(def ProviderEntry
+  "Malli schema for one `provider-registry` entry, dispatched on `:dispatch`.
+
+   :anthropic-oauth branch — native Anthropic Messages API. Carries NO
+     :api-url: it is not an OpenAI-compat chat-completions endpoint, and
+     `openai-compat-backend` refuses it.
+   default branch (no :dispatch) — OpenAI-compat provider: :api-url is
+     REQUIRED and must end in \"/chat/completions\"; :secret-key may be nil
+     (nil = no auth needed, e.g. :ollama-compat).
+
+   Both branches are open maps: config overrides may add keys such as
+   :available-models."
+  [:multi {:dispatch :dispatch}
+   [:anthropic-oauth
+    [:map
+     [:dispatch [:= :anthropic-oauth]]
+     [:secret-key :keyword]
+     [:default-model :string]
+     [:available-models {:optional true} [:sequential :string]]]]
+   [::m/default
+    [:map
+     [:api-url ChatCompletionsUrl]
+     [:secret-key [:maybe :keyword]]
+     [:default-model :string]
+     [:available-models {:optional true} [:sequential :string]]]]])
+
+(def ProviderRegistry
+  "Malli schema for the provider registry: provider keyword -> ProviderEntry."
+  [:map-of :keyword ProviderEntry])
+
+(defn valid-provider-entry?
+  "True when `entry` conforms to `ProviderEntry`."
+  [entry]
+  (m/validate ProviderEntry entry))
+
+(def provider-priority
+  "Provider preference order for auto-discovery.
+
+   Every keyword here MUST resolve to a `provider-registry` entry:
+   `available-providers` reads that entry's :secret-key, and a missing entry
+   reads as nil = no auth needed, silently promoting a phantom provider."
   [:openrouter :venice :groq :together :fireworks :openai :ollama-compat])
 
 (declare best-available-provider)
@@ -431,15 +481,25 @@
      :api-url    - explicit URL (overrides provider registry)
      :api-key    - explicit API key (overrides secret resolution)
      :model      - model string
-     :secret-key - config secret key for API key resolution"
+     :secret-key - config secret key for API key resolution
+
+   Throws when the named provider is dispatch-routed (`:dispatch` in its
+   registry entry, e.g. :anthropic) and no :api-url override is supplied —
+   such a provider has no chat-completions endpoint."
   [{:keys [provider api-url api-key model secret-key]}]
   (let [reg-entry      (get provider-registry provider)
+        dispatch       (:dispatch reg-entry)
         effective-url  (or api-url (:api-url reg-entry))
         effective-sk   (or secret-key (:secret-key reg-entry))
         effective-key  (or api-key
                            (when effective-sk (global-config/get-secret effective-sk)))
         effective-model (or model (:default-model reg-entry) "anthropic/claude-3-haiku")
         prov-name      (or (some-> provider name) "custom")]
+    (when (and dispatch (not api-url))
+      (throw (ex-info (str prov-name " is not an OpenAI-compat provider (dispatch: "
+                          (name dispatch) ")")
+                      {:provider provider :dispatch dispatch
+                       :fix "Route through the dispatch-specific client, or pass an explicit :api-url"})))
     (when-not effective-url
       (throw (ex-info "API URL required for custom provider"
                       {:provider provider})))

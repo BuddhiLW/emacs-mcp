@@ -129,6 +129,9 @@
 (deftest emit-event-adds-timestamp-test
   (testing "emit-event! adds timestamp"
     (let [received (promise)
+          ;; Envelope keys are owned by the source, never restated here.
+          ts-key (:timestamp ch/envelope-keys)
+          type-key (:type ch/envelope-keys)
           sub (ch/subscribe! :timestamped)]
       ;; Start async receiver first
       (async/go
@@ -142,8 +145,10 @@
       (let [result (deref received 1000 nil)]
         (is (some? result) "Should receive event")
         (when result
-          (is (number? (:timestamp result)))
-          (is (> (:timestamp result) 0))))
+          (is (number? (get result ts-key)))
+          (is (> (get result ts-key) 0))
+          (is (= "timestamped" (get result type-key)))
+          (is (= "test" (get result "data")))))
       (ch/unsubscribe! :timestamped sub))))
 
 ;; =============================================================================

@@ -443,13 +443,17 @@
         (is (str/includes? (:error (first wave-1-results)) "not found"))))))
 
 (deftest error-invalid-ref-no-depends-on-test
-  (testing "validate-ref-deps noop: $ref without depends_on passes validation"
+  (testing "$ref without depends_on → validation error, nothing executes"
     (let [result (multi/run-multi
                   [{:id "a" :tool "memory" :command "add" :content "hello"}
                    {:id "b" :tool "kg" :command "edge"
                     :from "$ref:a.data.id"}])]
-      ;; noop validate-ref-deps returns [] — validation passes, ops execute
-      (is (nil? (:errors result))))))
+      (is (false? (:success result)))
+      (is (some #(str/includes? % "doesn't declare it in depends_on")
+                (:errors result))
+          "a $ref is an ordering edge — the target must be a declared dependency")
+      (is (= 0 (get-in result [:summary :waves]))
+          "refused at compile time — no wave was scheduled"))))
 
 (deftest error-ref-to-nonexistent-op-test
   (testing "$ref to non-existent op ID → validation error"

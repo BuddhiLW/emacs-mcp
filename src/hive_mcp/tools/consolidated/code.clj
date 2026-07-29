@@ -13,8 +13,7 @@
    Addon-contributed subdomains appear dynamically at runtime."
   (:require [hive-mcp.tools.composite :as composite]
             [hive-mcp.tools.core :refer [mcp-error]]
-            [hive-mcp.extensions.registry :as ext]
-            [clojure.string :as str]))
+            [hive-mcp.extensions.registry :as ext]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -28,15 +27,10 @@
   (try (requiring-resolve sym) (catch Exception _ nil)))
 
 (defn- make-delegating-handler
-  "Strip subdomain prefix and delegate to inner handler."
+  "Strip subdomain prefix and delegate to inner handler.
+   The same wrapper an addon uses for a contributed subdomain."
   [subdomain-name inner-handler-fn]
-  (fn [params]
-    (let [full-cmd (str (:command params))
-          prefix (str subdomain-name " ")
-          sub-cmd (if (str/starts-with? full-cmd prefix)
-                    (subs full-cmd (count prefix))
-                    full-cmd)]
-      (inner-handler-fn (assoc params :command sub-cmd)))))
+  (composite/subdomain-handler subdomain-name inner-handler-fn))
 
 (defn- delegate-to-standalone
   "Return a handler that forwards params to a standalone addon tool's handler,

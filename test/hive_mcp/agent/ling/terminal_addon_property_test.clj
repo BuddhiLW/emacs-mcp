@@ -240,12 +240,24 @@
       (is (true? result)))))
 
 (deftest p8-strategy-happy-path-status
-  (testing "status delegates and returns merged map"
+  (testing "status returns the addon's answer verbatim on the happy path"
     (let [addon (mock-terminal-addon :id :happy)
           strat (tas/->terminal-addon-strategy addon)
-          result (strategy/strategy-status strat {:id "ling-1"} {:slave/status :busy})]
+          ctx {:id "ling-1"}
+          ds-status {:slave/status :busy}
+          result (strategy/strategy-status strat ctx ds-status)]
       (is (map? result))
-      (is (= :idle (:slave/status result))))))
+      ;; The adapter owns delegation, not merge policy — which of the addon's
+      ;; defaults and the DS snapshot wins is the ADDON's contract. Assert the
+      ;; adapter passes both through untouched instead of pinning the mock.
+      (is (= (terminal/terminal-status addon ctx ds-status) result)
+          "adapter returns exactly what the addon returned")
+      (is (= "ling-1" (:slave/id result))
+          "addon-supplied keys survive")
+      (is (= :busy (:slave/status ds-status))
+          "the ds-status argument is not mutated")
+      (is (not (:terminal-addon-error? result))
+          "the happy path must not tag an addon error"))))
 
 (deftest p8-strategy-happy-path-kill
   (testing "kill! delegates and returns success map"
