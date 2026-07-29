@@ -37,6 +37,14 @@
 ;; Keep the retry window tiny so timeout tests stay fast; production default is 2s.
 (def ^:const test-retry-wait-ms 20)
 
+(defn- settle!
+  "Blocks up to timeout-ms for future f, cancelling it if still pending.
+   Guarantees f is settled — done or cancelled — by the time this returns."
+  [f timeout-ms]
+  (when (= ::pending (deref f timeout-ms ::pending))
+    (future-cancel f))
+  nil)
+
 ;; =============================================================================
 ;; Test Fixtures
 ;; =============================================================================
@@ -83,15 +91,17 @@
                   readiness/ling-ready-poll-ms 10
                   readiness/ling-cli-ready? (constantly true)]
       ;; Schedule slave registration after ~30ms
-      (future
-        (Thread/sleep 30)
-        (ds-lings/add-slave! "delayed-ling" {:status :idle :depth 1 :cwd "/tmp"}))
-
-      (let [result (wait-for-ling-ready "delayed-ling" :claude)]
-        (is (:ready? result) "Should eventually find the slave")
-        (is (> (:attempts result) 1) "Should take more than one attempt")
-        (is (some? (:slave result)) "Should include slave data")
-        (is (= :cli-ready (:phase result)) "Should reach cli-ready phase")))))
+      (let [registrar (future
+                        (Thread/sleep 30)
+                        (ds-lings/add-slave! "delayed-ling" {:status :idle :depth 1 :cwd "/tmp"}))]
+        (try
+          (let [result (wait-for-ling-ready "delayed-ling" :claude)]
+            (is (:ready? result) "Should eventually find the slave")
+            (is (> (:attempts result) 1) "Should take more than one attempt")
+            (is (some? (:slave result)) "Should include slave data")
+            (is (= :cli-ready (:phase result)) "Should reach cli-ready phase"))
+          (finally
+            (settle! registrar 1000)))))))
 
 ;; =============================================================================
 ;; Phase 2: CLI Readiness Tests
@@ -154,16 +164,18 @@
                   readiness/ling-cli-ready? (constantly true)]
       ;; Registers at ~250ms: too late for the initial 150ms window,
       ;; but well inside the retry window that starts at ~450ms.
-      (future
-        (Thread/sleep 250)
-        (ds-lings/add-slave! "late-ling" {:status :idle :depth 1 :cwd "/tmp"}))
-
-      (let [result (wait-for-ling-ready "late-ling" :claude)]
-        (is (:ready? result) "Should become ready on the retry pass")
-        (is (= :cli-ready (:phase result)) "Should reach cli-ready phase")
-        (is (some? (:slave result)) "Should include slave data")
-        (is (>= (:elapsed-ms result) 400)
-            "Elapsed should include the timed-out window + retry wait")))))
+      (let [registrar (future
+                        (Thread/sleep 250)
+                        (ds-lings/add-slave! "late-ling" {:status :idle :depth 1 :cwd "/tmp"}))]
+        (try
+          (let [result (wait-for-ling-ready "late-ling" :claude)]
+            (is (:ready? result) "Should become ready on the retry pass")
+            (is (= :cli-ready (:phase result)) "Should reach cli-ready phase")
+            (is (some? (:slave result)) "Should include slave data")
+            (is (>= (:elapsed-ms result) 400)
+                "Elapsed should include the timed-out window + retry wait"))
+          (finally
+            (settle! registrar 1000)))))))
 
 ;; =============================================================================
 ;; Spawn-Mode Timeout Selection (added in 508a7e8)

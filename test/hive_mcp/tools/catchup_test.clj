@@ -9,11 +9,15 @@
       (is (= :ok (:status result)))
       (is (= {:entries [1]} (outcome/value-or result {})))))
   (testing "timeout"
-    (let [gate (promise)
-          result (#'catchup/safe-deref (future @gate) 10 "slow")]
-      (is (= :timeout (:status result)))
-      (is (false? (outcome/available? result)))
-      (is (= :fallback (outcome/value-or result :fallback)))))
+    (let [gate    (promise)
+          blocked (future @gate)]
+      (try
+        (let [result (#'catchup/safe-deref blocked 10 "slow")]
+          (is (= :timeout (:status result)))
+          (is (false? (outcome/available? result)))
+          (is (= :fallback (outcome/value-or result :fallback))))
+        (finally
+          (deliver gate ::released)))))
   (testing "error"
     (let [result (#'catchup/safe-deref
                   (future (throw (ex-info "boom" {})))
