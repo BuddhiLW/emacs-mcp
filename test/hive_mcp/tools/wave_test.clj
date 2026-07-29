@@ -17,7 +17,8 @@
             [hive-mcp.events.handlers :as handlers]
             [hive-test.isolation :as iso]
             [hive-mcp.tools.swarm.wave.execution :as execution]
-            hive-mcp.isolation-methods))
+            hive-mcp.isolation-methods
+            [clojure.java.io :as io]))
 
 ;; =============================================================================
 ;; Test Fixtures
@@ -297,11 +298,21 @@
             (.delete (java.io.File. dir))))))))
 
 (deftest ensure-parent-dirs-nil-file-test
-  (testing "handles tasks with nil file gracefully"
-    (let [tasks [{:file nil :task "task 1"}
-                 {:file "valid/path.clj" :task "task 2"}]]
-      ;; Should not throw
-      (is (zero? (wave/ensure-parent-dirs! tasks))))))
+  (testing "a nil :file is skipped; a real one still gets its parent created"
+    (let [root  (io/file (System/getProperty "java.io.tmpdir")
+                         (str "wave-parent-dirs-" (System/nanoTime)))
+          child (io/file root "nested" "path.clj")
+          tasks [{:file nil :task "task 1"}
+                 {:file (.getPath child) :task "task 2"}]]
+      (try
+        (is (= 1 (wave/ensure-parent-dirs! tasks))
+            "nil contributes nothing; only the one real file's parent is created")
+        (is (.isDirectory (.getParentFile child))
+            "the parent directory exists afterwards")
+        (is (zero? (wave/ensure-parent-dirs! tasks))
+            "second pass creates nothing — the parent is already there")
+        (finally
+          (doseq [f (reverse (file-seq root))] (.delete f)))))))
 
 (deftest ensure-parent-dirs-existing-dirs-test
   (testing "works idempotently with existing directories"

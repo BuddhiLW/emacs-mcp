@@ -188,11 +188,13 @@
 
 (defn gen-edge-id
   "Generate a unique edge ID with timestamp prefix.
-   Format: edge-yyyyMMddTHHmmss-XXXXXX
-   The timestamp prefix enables chronological sorting."
+   Format: edge-yyyyMMddTHHmmssSSS-XXXXXX
+   The timestamp orders IDs chronologically to the millisecond; the random
+   suffix only disambiguates edges minted within the same millisecond, and
+   two such edges have no defined order."
   []
   (let [now (java.time.LocalDateTime/now)
-        formatter (java.time.format.DateTimeFormatter/ofPattern "yyyyMMdd'T'HHmmss")
+        formatter (java.time.format.DateTimeFormatter/ofPattern "yyyyMMdd'T'HHmmssSSS")
         timestamp (.format now formatter)
         random-hex (format "%06x" (rand-int 0xFFFFFF))]
     (str "edge-" timestamp "-" random-hex)))

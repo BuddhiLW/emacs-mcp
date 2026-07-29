@@ -129,12 +129,17 @@
     (let [call-count (atom 0)]
       (with-redefs [readiness/vterm-ling-ready-timeout-ms 5000
                     readiness/ling-ready-poll-ms 10
-                    readiness/ling-cli-ready? (fn [_agent-id _mode]
-                                              ;; Ready after 3rd CLI check
-                                                (>= (swap! call-count inc) 3))]
+                    ;; Guarded by agent-id: with-redefs replaces the var root
+                    ;; process-wide, so a concurrent poll for another ling would
+                    ;; otherwise advance this counter.
+                    readiness/ling-cli-ready? (fn [agent-id _mode]
+                                                ;; Ready after 3rd CLI check
+                                                (and (= "slow-cli-ling" agent-id)
+                                                     (>= (swap! call-count inc) 3)))]
         (let [result (wait-for-ling-ready "slow-cli-ling" :claude)]
           (is (:ready? result) "Should eventually be ready")
           (is (= 3 (:attempts result)) "Should take 3 attempts")
+          (is (= 3 @call-count) "One CLI check per attempt, none from other agents")
           (is (= :cli-ready (:phase result))))))))
 
 ;; =============================================================================

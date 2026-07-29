@@ -22,17 +22,31 @@
 ;; =============================================================================
 
 (defn with-clean-service
-  "Fixture that resets service state before each test."
+  "Fixture that resets service state before each test and stubs the :ollama
+   provider factory with a MockEmbedder sized from the config's declared
+   dimension.
+
+   Contract: no test in this namespace performs network I/O. EmbeddingConfig
+   value objects stay real, so model->dimension coverage is unaffected — only
+   the provider behind a config is a double. Teardown restores the built-in
+   factories via registry/init! and drops the provider cache both ways, so a
+   real provider cached by another namespace can neither leak in nor out."
   [f]
   (let [original-global @@#'chroma-emb/embedding-provider]
     (try
       (service/reset-service!)
       (service/init!)
+      (registry/clear-cache!)
+      (registry/register-factory!
+       :ollama
+       (fn [config] (fixtures/->MockEmbedder (:dimension config))))
       ;; Set global fallback for backward compatibility tests
       (chroma/set-embedding-provider! (fixtures/->MockEmbedder 384))
       (f)
       (finally
         (service/reset-service!)
+        (registry/clear-cache!)
+        (registry/init!)
         (reset! @#'chroma-emb/embedding-provider original-global)))))
 
 (use-fixtures :each with-clean-service)
