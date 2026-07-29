@@ -17,7 +17,11 @@
                         hive-mcp.test.stub.log-capture/with-captured-logs
                         hooks.hive-mcp.test-stub/with-captured-logs
                         hive-mcp.tools.memory.lifecycle-test/with-decay-store
-                        hooks.hive-mcp.test-stub/with-decay-store}}
+                        hooks.hive-mcp.test-stub/with-decay-store
+                        ;; defines a record from a name arg — the generated
+                        ;; Nm / ->Nm symbols are invisible without a hook
+                        hive-mcp.test.stub.kg-store/def-stub-store
+                        hooks.hive-mcp.test-stub/def-stub-store}}
 
  :lint-as {;; multi_dsl_e2e_test when-resolved macro binds a single symbol like if-let
            hive-mcp.tools.multi-dsl-e2e-test/when-resolved clojure.core/if-let

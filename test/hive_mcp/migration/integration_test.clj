@@ -355,7 +355,7 @@
           result (kg-mig/sync-to-backend! :datalevin
                                           {:target-opts {:db-path *datalevin-dir*}})]
       (is (= expected-counts (:exported result)))
-      (is (:valid? (:validation result)))
+      (is (true? (:valid? (:validation result))))
 
       (is (= original-backend (kg-mig/detect-current-backend))
           "sync leaves the primary store untouched")

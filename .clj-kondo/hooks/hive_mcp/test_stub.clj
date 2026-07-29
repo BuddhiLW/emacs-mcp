@@ -1,10 +1,11 @@
 (ns hooks.hive-mcp.test-stub
-  "clj-kondo analyze-call hooks for the test stub binding macros.
+  "clj-kondo analyze-call hooks for the test stub macros.
 
    `with-captured-logs` binds a bare symbol (not a vector) and
    `with-decay-store` binds the symbol carried by its `:bind` option, so
-   neither can be modelled with :lint-as. Without these hooks every
-   reference to the bound symbol is reported as an unresolved symbol."
+   neither can be modelled with :lint-as. `def-stub-store` defines a record
+   from a name argument. Without these hooks every reference to the bound
+   symbol or the generated record symbols is an unresolved symbol."
   (:require [clj-kondo.hooks-api :as api]))
 
 (defn- let-node
@@ -51,3 +52,19 @@
     {:node (if (simple-symbol? sym)
              (let-node sym (meta bind) (cons opts body))
              (api/list-node (list* (api/token-node 'do) opts body)))}))
+
+(defn def-stub-store
+  "(def-stub-store Nm) => (defrecord Nm [delegate])
+
+   The real macro also implements IKGStore against the record's `delegate`
+   field; the expansion only has to define Nm / ->Nm / map->Nm so callers
+   of the generated constructors resolve."
+  [{:keys [node]}]
+  (let [[_ nm] (:children node)
+        loc    (meta nm)]
+    (when-not (simple-symbol? (api/sexpr nm))
+      (throw (ex-info "def-stub-store expects a record name symbol" {})))
+    {:node (api/list-node
+            [(with-meta (api/token-node 'defrecord) loc)
+             nm
+             (api/vector-node [(with-meta (api/token-node 'delegate) loc)])])}))
