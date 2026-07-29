@@ -159,20 +159,30 @@
 
 (deftest wave-start-event-handler-test
   (testing ":wave/start event produces correct effects"
-    (let [captured (atom nil)]
-      ;; Register test effect to capture channel-publish
-      (ev/reg-fx :channel-publish (fn [data] (reset! captured data)))
+    (let [captured (atom [])
+          prior    (ev/get-fx-handler :channel-publish)]
+      (try
+        ;; reg-fx is a GLOBAL registration and other tests' drones dispatch
+        ;; :wave/start concurrently, so collect every invocation and select
+        ;; this one by its own plan-id rather than reading a single slot.
+        (ev/reg-fx :channel-publish (fn [data] (swap! captured conj data)))
 
-      ;; Dispatch event
-      (ev/dispatch [:wave/start {:plan-id "plan-123"
-                                 :wave-id "wave-456"
-                                 :item-count 3}])
+        (ev/dispatch [:wave/start {:plan-id "plan-123"
+                                   :wave-id "wave-456"
+                                   :item-count 3}])
 
-      ;; Verify effects
-      (is (= :wave-started (:event @captured)))
-      (is (= "plan-123" (get-in @captured [:data :plan-id])))
-      (is (= "wave-456" (get-in @captured [:data :wave-id])))
-      (is (= 3 (get-in @captured [:data :item-count]))))))
+        (let [mine (first (filter #(= "plan-123" (get-in % [:data :plan-id]))
+                                  @captured))]
+          (is (some? mine)
+              ":wave/start must publish a channel-publish effect for this plan")
+          (is (= :wave-started (:event mine)))
+          (is (= "plan-123" (get-in mine [:data :plan-id])))
+          (is (= "wave-456" (get-in mine [:data :wave-id])))
+          (is (= 3 (get-in mine [:data :item-count]))))
+        (finally
+          (if prior
+            (ev/reg-fx :channel-publish prior)
+            (ev/unreg-fx :channel-publish)))))))
 
 (deftest wave-item-done-event-handler-test
   (testing ":wave/item-done event produces correct effects"
