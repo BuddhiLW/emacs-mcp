@@ -117,7 +117,9 @@
                                   (Thread/sleep 10)
                                   (swap! active dec))))
                             (catch Exception _ nil)))))]
-        (doseq [f futures] (deref f 10000 nil))
+        (doseq [f futures]
+          (when (= ::pending (deref f 10000 ::pending))
+            (future-cancel f)))
         ;; Peak concurrent should never exceed permits
         (<= @peak permits)))))
 
@@ -193,6 +195,8 @@
                               (Thread/sleep 50)
                               (swap! active dec)))
                           (catch Exception _ nil)))))]
-      (doseq [f futures] (deref f 10000 nil))
+      (doseq [f futures]
+        (when (= ::pending (deref f 10000 ::pending))
+          (future-cancel f)))
       ;; embed-gate has 2 permits
       (is (<= @peak 2) "Embedding concurrency must be bounded to 2"))))

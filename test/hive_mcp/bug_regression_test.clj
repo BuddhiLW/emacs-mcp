@@ -49,18 +49,18 @@
 
 (deftest ^:integration test-kanban-status-performance
   (testing "BUG #5: kanban-status should complete within reasonable time"
-    (let [start (System/currentTimeMillis)
-          ;; Use a timeout wrapper
-          result (deref
-                  (future (kanban/handle-kanban {:command "status"}))
-                  5000 ; 5 second timeout
-                  {:timeout true})]
-      (is (not (:timeout result))
-          "kanban-status should complete within 5 seconds")
-      (when-not (:timeout result)
-        (let [elapsed (- (System/currentTimeMillis) start)]
-          (is (< elapsed 5000)
-              (format "Should complete in <5s, took %dms" elapsed)))))))
+    (let [start  (System/currentTimeMillis)
+          f      (future (kanban/handle-kanban {:command "status"}))
+          result (deref f 5000 {:timeout true})]
+      (try
+        (is (not (:timeout result))
+            "kanban-status should complete within 5 seconds")
+        (when-not (:timeout result)
+          (let [elapsed (- (System/currentTimeMillis) start)]
+            (is (< elapsed 5000)
+                (format "Should complete in <5s, took %dms" elapsed))))
+        (finally
+          (future-cancel f))))))
 
 ;; =============================================================================
 ;; BUG #6: Swarm returns double-encoded JSON (LOW)
@@ -123,18 +123,17 @@
 
 (deftest ^:integration test-cider-eval-does-not-hang
   (testing "BUG #8: cider_eval_silent should not hang indefinitely"
-    ;; Use a timeout wrapper to detect hanging
-    (let [result (deref
-                  (future
-                    (try
-                      (cider/handle-cider-eval-silent {:code "(+ 1 1)"})
-                      (catch Exception e
-                        {:error (.getMessage e)})))
-                  10000 ; 10 second timeout - should be plenty
-                  {:timeout true :error "Evaluation hung for 10+ seconds"})]
-      ;; Should either succeed or fail fast, never hang
-      (is (not (:timeout result))
-          "cider_eval_silent should complete within 10 seconds, not hang"))))
+    (let [f      (future
+                   (try
+                     (cider/handle-cider-eval-silent {:code "(+ 1 1)"})
+                     (catch Exception e
+                       {:error (.getMessage e)})))
+          result (deref f 10000 {:timeout true :error "Evaluation hung for 10+ seconds"})]
+      (try
+        (is (not (:timeout result))
+            "cider_eval_silent should complete within 10 seconds, not hang")
+        (finally
+          (future-cancel f))))))
 
 ;; =============================================================================
 ;; BUG #9: claude-context search hangs (HIGH) - OPEN
