@@ -5,7 +5,8 @@
                                            bclear! register-sweepable!]]
             [hive-dsl.context.identity :as ctx-id]
             [hive-mcp.server.guards :as guards]
-            [hive-mcp.channel.drain-rank :as rank]))
+            [hive-mcp.channel.drain-rank :as rank]
+            [hive-mcp.channel.drain-telemetry :as telemetry]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -25,13 +26,21 @@
 (register-sweepable! buffers :piggyback-buffers)
 
 (defn- format-entry
-  "Convert a catchup entry to compact piggyback format."
+  "Convert a catchup entry to compact piggyback format.
+
+   :A and :F carry the stored access count and the net helpful-minus-unhelpful
+   feedback forward so `drain-rank/score` can read them without a store hit.
+   Both are omitted when the source entry has neither."
   [entry]
-  (cond-> {:id (:id entry)
-           :T (or (:type entry) "note")
-           :C (or (:content entry) (:preview entry) "")}
-    (:severity entry) (assoc :S (:severity entry))
-    (seq (:tags entry)) (assoc :tags (vec (:tags entry)))))
+  (let [access (:access-count entry)
+        net (- (or (:helpful-count entry) 0) (or (:unhelpful-count entry) 0))]
+    (cond-> {:id (:id entry)
+             :T (or (:type entry) "note")
+             :C (or (:content entry) (:preview entry) "")}
+      (:severity entry) (assoc :S (:severity entry))
+      (seq (:tags entry)) (assoc :tags (vec (:tags entry)))
+      (and access (pos? access)) (assoc :A access)
+      (not (zero? net)) (assoc :F net))))
 
 (defn enqueue!
   "Enqueue entries into the memory piggyback buffer.
@@ -86,8 +95,11 @@
    The 2-arity takes a drain ctx. A non-empty (:tokens ctx) selects the batch
    two-lane via drain-rank/select-batch, rewrites the undrained tail of the
    buffer into that order, and ages every offered-but-not-taken entry under
-   :offers. ctx nil, or ctx without :tokens, is FIFO — identical to the
-   1-arity in both the returned batch and the buffer written back."
+   :offers. ctx :pins and :floor-cap are forwarded to the ranker. ctx nil, or
+   ctx without :tokens, is FIFO — identical to the 1-arity in both the returned
+   batch and the buffer written back.
+
+   Every drain folds its offered / delivered ids into `drain-telemetry`."
   ([caller-id] (drain! caller-id nil))
   ([caller-id ctx]
    (let [buffer-key (ctx-id/caller-id-key (ctx-id/parse-caller-id caller-id))
@@ -101,6 +113,8 @@
              ranked (when (seq pending)
                       (rank/select-batch pending {:tokens tokens
                                                   :offers offers
+                                                  :pins (:pins ctx)
+                                                  :floor-cap (:floor-cap ctx)
                                                   :char-budget drain-char-budget}))
              entries* (if ranked
                         (into (subvec (vec entries) 0 (min cursor total))
@@ -138,6 +152,11 @@
                                    (or offers {})
                                    pending)
                            offers)]
+         (telemetry/record!
+          {:seq-num new-seq
+           :delivered-ids (into [] (keep :id) batch)
+           :offered-ids (when ranked
+                          (into [] (comp (keep :id) (remove taken-ids)) pending))})
          (bput! buffers buffer-key
                 (cond-> (if is-done
                           {:entries []

@@ -19,7 +19,8 @@
             [taoensso.timbre :as log]
             [clojure.walk :as walk]
             [clojure.string :as str]
-            [hive-mcp.channel.task-signal :as task-signal]))
+            [hive-mcp.channel.task-signal :as task-signal]
+            [hive-mcp.channel.activation :as activation]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -216,7 +217,9 @@
 (defn wrap-handler-piggybacks
   "Unified piggyback wrapper — drains all 4 channels in a single pass.
    Task cues harvested from the request args steer the MEMORY drain that rides
-   this response; they are empty unless task-signal/enabled?."
+   this response; they are empty unless task-signal/enabled?. The cues then feed
+   `activation/drain-ctx`, which an activation provider may extend with pinned
+   entry ids — absent a provider the ctx is the cues alone."
   ([handler] (wrap-handler-piggybacks handler nil))
   ([handler tool-name]
    (fn [args]
@@ -224,7 +227,11 @@
            content (handler args)
            caller-id (or (:_caller_id args) "coordinator")
            async-drain (async-buf/drain! caller-id)
-           memory-drain (drain-memory-piggyback caller-id {:tokens task-tokens})
+           memory-drain (drain-memory-piggyback
+                         caller-id
+                         (activation/drain-ctx {:tool-name tool-name
+                                                :cues task-tokens
+                                                :caller-id caller-id}))
            catchup-blocks (when-let [drain-fn (ext/get-extension :cu/piggyback-drain)]
                             (try (drain-fn caller-id)
                                  (catch Exception e

@@ -55,9 +55,13 @@
   (testing "an over-long command is never tokenised"
     (is (= #{} (ts/task-tokens "bash" {:command (apply str (repeat 500 \a))})))))
 
-(deftest cue-harvesting-is-off-by-default
-  (testing "enabled? is false with no override"
+(deftest cue-harvesting-is-on-by-default
+  (testing "enabled? is true with no override — the drain is two-lane unless opted out"
     (binding [ts/*enabled?* nil]
+      (is (true? (boolean (ts/enabled?))))))
+
+  (testing "an explicit false binding still disables it"
+    (binding [ts/*enabled?* false]
       (is (false? (boolean (ts/enabled?))))))
 
   (testing "cues yields nothing while disabled, and real tokens once enabled"
@@ -90,12 +94,65 @@
     (is (> (rank/score (entry 1 :note ["carto"]) #{"carto"} 0)
            (rank/score (entry 1 :note ["carto"]) #{"unrelated"} 0))))
 
-  (testing "prior offers age an entry upward"
-    (is (> (rank/score (entry 1 :note ["x"]) #{} 10)
-           (rank/score (entry 1 :note ["x"]) #{} 0))))
-
   (testing "nil tokens score without throwing"
     (is (number? (rank/score (entry 1 :note ["x"]) nil 0)))))
+
+(deftest offers-decay-an-entry-instead-of-ageing-it-upward
+  (testing "an entry offered and never taken SINKS — the anti-shelf inversion"
+    (is (< (rank/score (entry 1 :note ["x"]) #{} 10)
+           (rank/score (entry 1 :note ["x"]) #{} 0))))
+
+  (testing "the decay is capped, so a fresh cue hit still outranks a stale entry"
+    (let [stale (rank/score (entry 1 :note ["x"]) #{} 1000)
+          fresh-hit (rank/score (entry 1 :note ["x"]) #{"x"} 0)]
+      (is (= (- rank/max-offer-decay) stale))
+      (is (> fresh-hit stale))))
+
+  (testing "decay is monotone up to the cap"
+    (is (> (rank/score (entry 1 :note ["x"]) #{} 1)
+           (rank/score (entry 1 :note ["x"]) #{} 2)))))
+
+(deftest access-and-feedback-lift-an-entry
+  (let [plain (entry 1 :note ["x"])]
+    (testing "a read entry outranks an unread one"
+      (is (> (rank/score (assoc plain :A 3) #{} 0) (rank/score plain #{} 0))))
+
+    (testing "access credit saturates — 3 and 30 reads score the same"
+      (is (= (rank/score (assoc plain :A 3) #{} 0)
+             (rank/score (assoc plain :A 30) #{} 0))))
+
+    (testing "helpful lifts, unhelpful sinks, and the clamp bounds both"
+      (is (> (rank/score (assoc plain :F 1) #{} 0) (rank/score plain #{} 0)))
+      (is (< (rank/score (assoc plain :F -1) #{} 0) (rank/score plain #{} 0)))
+      (is (= (rank/score (assoc plain :F 1) #{} 0)
+             (rank/score (assoc plain :F 99) #{} 0))))
+
+    (testing "an entry carrying neither key scores as never read, never rated"
+      (is (= (rank/score plain #{} 0)
+             (rank/score (assoc plain :A 0 :F 0) #{} 0))))))
+
+(deftest pins-promote-into-the-floor-lane
+  (let [pending (into [] (for [i (range 6)] (entry i :note [(str "t" i)])))]
+    (testing "a pinned id leads the order even with no cue hit of its own"
+      (let [{:keys [ordered]} (rank/select-batch pending {:tokens #{"t5"} :pins #{"e3"}})]
+        (is (= "e3" (:id (first ordered))))
+        (is (= (count pending) (count ordered)))))
+
+    (testing "lane reports :floor for a pinned entry, :pool without pins"
+      (is (= :floor (rank/lane (entry 3 :note []) #{"e3"})))
+      (is (= :pool (rank/lane (entry 3 :note []) #{"other"})))
+      (is (= :pool (rank/lane (entry 3 :note [])))))))
+
+(deftest floor-cap-demotes-overflow-and-never-drops
+  (let [pending (into [] (for [i (range 12)] (entry i :axiom [(str "t" i)])))
+        {:keys [ordered]} (rank/select-batch pending {:tokens #{"t11"} :floor-cap 4})]
+    (testing "only :floor-cap entries hold the floor; the rest are demoted"
+      (is (= ["e0" "e1" "e2" "e3"] (vec (take 4 (map :id ordered))))))
+
+    (testing "demoted entries are RANKED, not dropped — the cued one leads the pool"
+      (is (= "e11" (:id (nth ordered 4))))
+      (is (= (count pending) (count ordered)))
+      (is (= (set (map :id pending)) (set (map :id ordered)))))))
 
 (deftest select-batch-fills-the-floor-lane-first
   (let [pending (into [] (for [i (range 10)]
