@@ -75,6 +75,12 @@
              (update last-result :content str piggyback-text)))
     results))
 
+(defn- drain-fn-for
+  "Resolve the piggyback drain for a batch: opts' :drain-fn, else tap/drain-all!.
+   The result is called as (f agent-id project-id ctx) and returns text or nil."
+  [{:keys [drain-fn]}]
+  (or drain-fn tap/drain-all!))
+
 (defn execute-tool-calls
   "Execute a batch of tool calls, respecting allowlist and permissions.
    After execution, drains all piggyback channels (hivemind, memory, async,
@@ -83,7 +89,8 @@
    Task cues harvested from this batch steer the MEMORY drain; they are empty
    unless task-signal/enabled?. The cues feed `activation/drain-ctx`, so this
    lane carries the same pins and floor-cap as the MCP tool lane. `:tool-name`
-   is the single call's name when the batch holds exactly one, else nil."
+   is the single call's name when the batch holds exactly one, else nil.
+   opts may carry `:drain-fn` to supply the piggyback drain; see drain-fn-for."
   ([agent-id tool-calls permissions]
    (execute-tool-calls agent-id tool-calls permissions nil))
   ([agent-id tool-calls permissions {:keys [tool-allowlist task-type project-id] :as opts}]
@@ -114,5 +121,5 @@
                        :cues cues
                        :caller-id agent-id})
            ;; Drain piggyback channels — bridges hivemind shouts to agentic loop
-           piggyback-text (tap/drain-all! agent-id project-id drain-ctx)]
+           piggyback-text ((drain-fn-for opts) agent-id project-id drain-ctx)]
        (append-piggyback-to-results all-results piggyback-text)))))

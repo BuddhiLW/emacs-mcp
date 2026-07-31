@@ -172,11 +172,12 @@
       (is (not (.contains (:content (first results)) "TOOL REJECTED"))))))
 
 (defn- capture-drain-ctx
-  "Run execute-tool-calls with drain-all! stubbed, returning the ctx it received."
+  "Run execute-tool-calls with a stub drain, returning the ctx it received."
   [calls]
   (let [seen (atom ::none)]
-    (with-redefs [tap/drain-all! (fn [_agent-id _project-id ctx] (reset! seen ctx) nil)]
-      (executor/execute-tool-calls "drone-1" calls #{:auto-approve}))
+    (executor/execute-tool-calls
+     "drone-1" calls #{:auto-approve}
+     {:drain-fn (fn [_agent-id _project-id ctx] (reset! seen ctx) nil)})
     @seen))
 
 (deftest agent-lane-consults-the-activation-provider
@@ -216,3 +217,11 @@
       (is (nil? (:pins ctx)))
       (is (nil? (:floor-cap ctx)))
       (is (contains? ctx :tokens)))))
+
+(deftest the-drain-defaults-to-the-piggyback-tap
+  (testing "opts without :drain-fn resolve to the real tap"
+    (is (identical? tap/drain-all! (#'executor/drain-fn-for nil))
+        "a stub-only suite would pass even if the default were wired to nothing")
+    (is (identical? tap/drain-all! (#'executor/drain-fn-for {})))
+    (let [stub (fn [_ _ _] nil)]
+      (is (identical? stub (#'executor/drain-fn-for {:drain-fn stub}))))))
