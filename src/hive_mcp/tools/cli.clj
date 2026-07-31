@@ -117,6 +117,31 @@
 ;; CLI Handler Factory (n-depth dispatch)
 ;; =============================================================================
 
+(defn- delegating-subdomains
+  "Subdomain keys whose node carries :_handler — they hand the REST of the
+   command to another dispatcher, so their subcommand names are opaque to this
+   tree. An unknown root token is most often one of theirs, unqualified."
+  [handlers]
+  (->> handlers
+       (keep (fn [[k v]] (when (and (map? v) (contains? v :_handler)) k)))
+       (sort-by name)
+       vec))
+
+(defn- unknown-command-error
+  "Loud error for a command this tree cannot resolve. Names the valid roots and,
+   when the tool has delegating subdomains, spells out the qualified form —
+   `carto scan` reads as `scan` in a subdomain's own help, and the bare token
+   arriving here is the single most common dispatch mistake."
+  [command handlers]
+  (let [subs (delegating-subdomains handlers)
+        cmd  (normalize-command command)]
+    (mcp-error (str "Unknown command: " command
+                    ". Valid: " (keys handlers)
+                    (when (and cmd (not (str/blank? cmd)) (seq subs))
+                      (str ". If '" cmd "' is a SUBCOMMAND, qualify it with its "
+                           "subdomain: "
+                           (str/join " | " (map #(str (name %) " " cmd) subs))))))))
+
 (defn make-cli-handler
   "Create a CLI-style handler that dispatches on :command param.
 
@@ -127,6 +152,9 @@
    Optional coerce-schema: map of {field-key [type-spec]} for MCP boundary coercion.
    When provided, string params are coerced to declared types before dispatch.
    See hive-dsl.coerce/coerce-map for type-spec syntax.
+
+   An unresolvable command names the valid roots AND the qualified form under
+   each delegating subdomain, so a bare `scan` points at `carto scan`.
 
    Returns: fn that dispatches to appropriate handler"
   ([handlers] (make-cli-handler handlers nil))
@@ -139,8 +167,7 @@
          (cond
            ;; No command or empty → error
            (nil? path)
-           (mcp-error (str "Unknown command: " command
-                           ". Valid: " (keys handlers)))
+           (unknown-command-error command handlers)
 
            ;; Help at root level
            (= [:help] path)
@@ -157,8 +184,7 @@
                      (handler (:ok coerced))
                      (mcp-error (str "Parameter error: " (:message coerced)))))
                  (handler params))
-               (mcp-error (str "Unknown command: " command
-                               ". Valid: " (keys handlers)))))))))))
+               (unknown-command-error command handlers)))))))))
 
 ;; =============================================================================
 ;; Batch Handler Factory (generic batch middleware)
