@@ -9,7 +9,8 @@
             [hive-dsl.result :as r]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]
-            [hive-mcp.channel.task-signal :as task-signal]))
+            [hive-mcp.channel.task-signal :as task-signal]
+            [hive-mcp.channel.activation :as activation]))
 
 #_{:clj-kondo/ignore [:deprecated-var]}
 (def ^:dynamic ^:deprecated *current-agent-id* ctx/*current-agent-id*)
@@ -80,7 +81,9 @@
    catchup) and appends to the last tool result — ensures headless/OpenRouter
    lings receive hivemind shouts that would otherwise be lost.
    Task cues harvested from this batch steer the MEMORY drain; they are empty
-   unless task-signal/enabled?."
+   unless task-signal/enabled?. The cues feed `activation/drain-ctx`, so this
+   lane carries the same pins and floor-cap as the MCP tool lane. `:tool-name`
+   is the single call's name when the batch holds exactly one, else nil."
   ([agent-id tool-calls permissions]
    (execute-tool-calls agent-id tool-calls permissions nil))
   ([agent-id tool-calls permissions {:keys [tool-allowlist task-type project-id] :as opts}]
@@ -101,11 +104,15 @@
                                                     {:success false :error "Rejected by human"}))))
                           allowed)
            all-results (into (vec rejected) executed)
-           drain-ctx {:tokens (into #{}
-                                    (comp (mapcat (fn [{:keys [name arguments]}]
-                                                    (task-signal/cues name arguments)))
-                                          (take task-signal/max-tokens))
-                                    allowed)}
+           cues (into #{}
+                     (comp (mapcat (fn [{:keys [name arguments]}]
+                                     (task-signal/cues name arguments)))
+                           (take task-signal/max-tokens))
+                     allowed)
+           drain-ctx (activation/drain-ctx
+                      {:tool-name (when (= 1 (count allowed)) (:name (first allowed)))
+                       :cues cues
+                       :caller-id agent-id})
            ;; Drain piggyback channels — bridges hivemind shouts to agentic loop
            piggyback-text (tap/drain-all! agent-id project-id drain-ctx)]
        (append-piggyback-to-results all-results piggyback-text)))))
