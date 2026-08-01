@@ -1,7 +1,7 @@
 (ns hive-mcp.tools.consolidated.roster
   "Pure-data roster of consolidated tool name → fully-qualified handler symbol.
 
-   Single source of truth for the 21 'leaf' consolidated tools. NOT loaded
+   Single source of truth for the 20 'leaf' consolidated tools. NOT loaded
    eagerly: callers (multi.core-seed, consolidated.multi) `requiring-resolve`
    each symbol at boot time, lazily triggering ns load on demand. This breaks
    the static-require chain that previously coupled consolidated.multi to
@@ -27,7 +27,6 @@
     ["kg"             hive-mcp.tools.consolidated.kg/handle-kg]
     ["hivemind"       hive-mcp.tools.consolidated.hivemind/handle-hivemind]
     ["magit"          hive-mcp.tools.consolidated.magit/handle-magit]
-    ["cider"          hive-mcp.tools.consolidated.cider/handle-cider]
     ["kanban"         hive-mcp.tools.consolidated.kanban/handle-kanban]
     ["preset"         hive-mcp.tools.consolidated.preset/handle-preset]
     ["olympus"        hive-mcp.tools.consolidated.olympus/handle-olympus]

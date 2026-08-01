@@ -1,16 +1,16 @@
 (ns hive-mcp.tools.consolidated.code
-  "Consolidated code intelligence tool — core: cider + clojure (basic-tools-mcp).
+  "Consolidated code intelligence tool — core: clojure (basic-tools-mcp).
 
    Addons extend via contribute-commands! \"code\" at runtime.
    hive-mcp core has ZERO knowledge of addon tool names (OCP).
 
    Core subdomains:
-     code cider eval          — REPL evaluation
-     code cider doc           — docstring lookup
      code clojure check       — delimiter checking
      code clojure format      — cljfmt formatting
 
-   Addon-contributed subdomains appear dynamically at runtime."
+   Addon-contributed subdomains appear dynamically at runtime (e.g. the
+   hive.emacs addon owns the whole :cider subtree — REPL eval, introspection,
+   session lifecycle)."
   (:require [hive-mcp.tools.composite :as composite]
             [hive-mcp.tools.core :refer [mcp-error]]
             [hive-mcp.extensions.registry :as ext]))
@@ -58,10 +58,9 @@
 
 (def canonical-handlers
   "Core handler tree. Addons extend at runtime via contribute-commands! \"code\".
-   Subdomain handler trees resolved lazily via composite/lazy-resolve-handlers
-   to drop the static `c-cider` :require coupling (DIP)."
-  {:cider    (composite/lazy-resolve-handlers 'hive-mcp.tools.consolidated.cider/handlers)
-   :clojure  {:_handler (make-delegating-handler "clojure" handle-clojure)}
+   The :cider subtree is NOT core: the hive.emacs addon contributes it
+   (addon-wins whole-subtree replacement)."
+  {:clojure  {:_handler (make-delegating-handler "clojure" handle-clojure)}
    ;; Folded standalone addon tool re-exposed as an ergonomic subdomain:
    ;;   `code analysis <cmd>`  → lsp-mcp analysis tool
    ;; Routes on :command, so prefix-strip then delegate to the standalone
@@ -80,37 +79,13 @@
 (def tool-def
   {:name "code"
    :consolidated true
-   :description "Code intelligence: cider (REPL eval/doc/info/complete), clojure (check/repair/format/eval/wrap), analysis (lsp-mcp). Addons extend dynamically. Use command='help' to list all."
+   :description "Code intelligence: clojure (check/repair/format/eval/wrap), analysis (lsp-mcp). CIDER/REPL operations come from the hive.emacs addon. Addons extend dynamically. Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command"   {:type "string"
-                                           :description "Code operation. Core: 'cider eval', 'clojure check'. Folded subdomain: 'analysis <cmd>'. Addon subdomains appear at runtime (live when the addon is loaded). Use command='help' to list all."}
-                              ;; Cider params
-                              "code"      {:type "string"
-                                           :description "Clojure code to evaluate"}
-                              "symbol"    {:type "string"
-                                           :description "Symbol name for doc/info lookup"}
-                              "prefix"    {:type "string"
-                                           :description "Prefix for completion"}
-                              "pattern"   {:type "string"
-                                           :description "Regex pattern for apropos search"}
-                              "mode"      {:type "string"
-                                           :enum ["silent" "explicit"]
-                                           :description "Eval mode: 'silent' (default) or 'explicit'"}
-                              "session_name" {:type "string"
-                                              :description "Named session to target: eval/eval-session, kill-session, and doc/info/complete/apropos (introspects inside that session's REPL; a cljel session resolves symbols in Emacs). Omit to use the current connection."}
+                                           :description "Code operation. Core: 'clojure check'. Folded subdomain: 'analysis <cmd>'. Addon subdomains appear at runtime (live when the addon is loaded): 'cider eval' etc. Use command='help' to list all."}
+                              ;; Generic params (shared by core + addon-contributed commands)
                               "name"      {:type "string"
                                            :description "Session name or form name"}
-                              "port"      {:type "integer"
-                                           :description "nREPL port for connect"}
-                              "host"      {:type "string"
-                                           :description "nREPL host for connect (default: localhost)"}
-                              "timeout"   {:type "integer"
-                                           :description "Eval timeout in seconds (default: 60)"}
-                              "project_dir" {:type "string"
-                                             :description "Project directory for spawn"}
-                              "repl_type" {:type "string"
-                                           :enum ["clj" "cljs" "cljel"]
-                                           :description "REPL type: clj (default), cljs, or cljel"}
                               ;; Clojure params
                               "file_path" {:type "string"
                                            :description "Path to Clojure file"}

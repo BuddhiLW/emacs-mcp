@@ -32,7 +32,6 @@
             [hive-mcp.tools.consolidated.workflow :as c-workflow]
             [hive-mcp.tools.consolidated.kg :as c-kg]
             [hive-mcp.tools.consolidated.migration :as c-migration]
-            [hive-mcp.tools.consolidated.cider :as c-cider]
             [hive-mcp.tools.consolidated.magit :as c-magit]
             [hive-mcp.tools.events.core :as c-events]
             [hive-mcp.tools.composite :as composite]
