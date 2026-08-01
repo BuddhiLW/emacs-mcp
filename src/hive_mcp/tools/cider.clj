@@ -68,6 +68,12 @@
   ([category elisp timeout-ms]
    (result->mcp (try-result category #(elisp->result elisp timeout-ms)))))
 
+(defn- session-arg
+  "Normalize a session_name param for the elisp boundary: blank becomes nil.
+   Elisp treats \"\" as a present session name, so blanks must not survive."
+  [session-name]
+  (when-not (str/blank? session-name) session-name))
+
 ;;; =============================================================================
 ;;; Auto-Connect Fallback Helpers (Result-returning)
 ;;; =============================================================================
@@ -267,33 +273,41 @@
                 (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-status)))
 
 (defn handle-cider-doc
-  "Get documentation for a Clojure symbol via CIDER."
-  [{:keys [symbol]}]
-  (log/info "cider-doc" {:symbol symbol})
+  "Get documentation for a Clojure symbol via CIDER.
+   SESSION_NAME scopes the lookup to that named session's REPL."
+  [{:keys [symbol session_name]}]
+  (log/info "cider-doc" {:symbol symbol :session session_name})
   (handle-elisp :cider/doc-failed
-                (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-doc symbol)))
+                (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-doc
+                                          symbol (session-arg session_name))))
 
 (defn handle-cider-apropos
-  "Search for symbols matching a pattern via CIDER."
-  [{:keys [pattern search_docs]}]
-  (log/info "cider-apropos" {:pattern pattern :search_docs search_docs})
+  "Search for symbols matching a pattern via CIDER.
+   SESSION_NAME scopes the search to that named session's REPL."
+  [{:keys [pattern search_docs session_name]}]
+  (log/info "cider-apropos" {:pattern pattern :search_docs search_docs :session session_name})
   (handle-elisp :cider/apropos-failed
                 (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-apropos
-                                          pattern (boolean search_docs))))
+                                          pattern (boolean search_docs)
+                                          (session-arg session_name))))
 
 (defn handle-cider-info
-  "Get full semantic info for a symbol via CIDER."
-  [{:keys [symbol]}]
-  (log/info "cider-info" {:symbol symbol})
+  "Get full semantic info for a symbol via CIDER.
+   SESSION_NAME scopes the lookup to that named session's REPL."
+  [{:keys [symbol session_name]}]
+  (log/info "cider-info" {:symbol symbol :session session_name})
   (handle-elisp :cider/info-failed
-                (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-info symbol)))
+                (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-info
+                                          symbol (session-arg session_name))))
 
 (defn handle-cider-complete
-  "Get completions for a prefix via CIDER."
-  [{:keys [prefix]}]
-  (log/info "cider-complete" {:prefix prefix})
+  "Get completions for a prefix via CIDER.
+   SESSION_NAME scopes the completion to that named session's REPL."
+  [{:keys [prefix session_name]}]
+  (log/info "cider-complete" {:prefix prefix :session session_name})
   (handle-elisp :cider/complete-failed
-                (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-complete prefix)))
+                (el/require-and-call-json 'hive-mcp-cider 'hive-mcp-cider-complete
+                                          prefix (session-arg session_name))))
 
 ;;; =============================================================================
 ;;; Multi-Session Handlers

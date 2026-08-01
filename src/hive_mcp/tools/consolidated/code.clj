@@ -97,7 +97,7 @@
                                            :enum ["silent" "explicit"]
                                            :description "Eval mode: 'silent' (default) or 'explicit'"}
                               "session_name" {:type "string"
-                                              :description "Session name for eval-session/kill-session"}
+                                              :description "Named session to target: eval/eval-session, kill-session, and doc/info/complete/apropos (introspects inside that session's REPL; a cljel session resolves symbols in Emacs). Omit to use the current connection."}
                               "name"      {:type "string"
                                            :description "Session name or form name"}
                               "port"      {:type "integer"

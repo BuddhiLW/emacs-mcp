@@ -67,7 +67,7 @@
                               "name" {:type "string"
                                       :description "Session name for spawn/connect"}
                               "session_name" {:type "string"
-                                              :description "Session name for eval-session/kill-session. When provided with eval command, routes to session eval."}
+                                              :description "Named session to target. eval/eval-session route the code there; kill-session kills it; doc/info/complete/apropos introspect inside that session's REPL (a cljel session resolves symbols in Emacs, not in the Clojure host). Omit to use the current connection."}
                               "project_dir" {:type "string"
                                              :description "Project directory. For spawn: nREPL root. For eval: routes the call to that project's nREPL session (spawning auto-<hash> if none). Defaults to the caller's cwd."}
                               "agent_id" {:type "string"
