@@ -76,6 +76,14 @@ RUN curl -fsSL "https://raw.githubusercontent.com/technomancy/leiningen/${LEIN_V
 # Trust common git hosts so SSH-backed clojure :git/url deps don't fail on host-key prompt
 RUN mkdir -p /etc/ssh && ssh-keyscan -H github.com gitlab.com bitbucket.org >> /etc/ssh/ssh_known_hosts 2>/dev/null
 
+# Non-interactive git for every child process (clojure -Spath / lein classpath /
+# clojure-lsp dep resolve). An uncached/private :git/url dep must fail fast, not
+# block on a credential, host-key, or passphrase prompt. GIT_TERMINAL_PROMPT=0
+# disables HTTPS credential prompts; BatchMode=yes + accept-new keep SSH silent;
+# ConnectTimeout bounds an unreachable-host handshake.
+ENV GIT_TERMINAL_PROMPT=0
+ENV GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+
 # Install clojure-lsp standalone JAR
 ARG CLOJURE_LSP_VERSION=2025.11.28-12.47.43
 RUN curl -L "https://github.com/clojure-lsp/clojure-lsp/releases/download/${CLOJURE_LSP_VERSION}/clojure-lsp-standalone.jar" \
