@@ -17,6 +17,14 @@ HEARTBEAT_INTERVAL=${LSP_HEARTBEAT_INTERVAL_SECONDS:-5}
 [[ "$PROJECT_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || PROJECT_TIMEOUT=300
 [[ "$HEARTBEAT_INTERVAL" =~ ^[1-9][0-9]*$ ]] || HEARTBEAT_INTERVAL=5
 
+# Non-interactive git so an uncached/private :git/url dep resolved during
+# `clojure -Spath` fails fast instead of blocking on a credential, host-key, or
+# passphrase prompt. GIT_TERMINAL_PROMPT=0 kills HTTPS credential prompts;
+# BatchMode=yes disables SSH password/passphrase prompts; accept-new trusts an
+# unseen host key without asking; ConnectTimeout bounds an unreachable handshake.
+export GIT_TERMINAL_PROMPT=${GIT_TERMINAL_PROMPT:-0}
+export GIT_SSH_COMMAND=${GIT_SSH_COMMAND:-"ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"}
+
 enabled() {
     case "${1,,}" in
         1|true|yes|on) return 0 ;;
