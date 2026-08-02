@@ -215,12 +215,18 @@
                          (assoc :layer-paths (mapv str (:layer-paths svc-cfg))))
                 result (rescue nil (compose (host-ctor) opts))]
             (if-let [ok (:ok result)]
-              (let [report (:report ok)]
+              (let [report (:report ok)
+                    failed (remove :success? (:mounted report))]
                 (log/info "Mount-compose loaded addons"
                           {:order   (:order report)
                            :ok?     (:ok? report)
                            :skipped (:skipped report)
                            :dropped (:dropped ok)})
+                (doseq [f failed]
+                  (log/warn "Mount-compose: addon failed to mount"
+                            {:addon/id (:addon/id f)
+                             :phase    (:phase f)
+                             :errors   (:errors f)}))
                 ok)
               (do (log/warn "Mount-compose failed — falling back to legacy loader"
                             {:error result})
