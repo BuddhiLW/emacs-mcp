@@ -1,6 +1,6 @@
 (ns hive-mcp.chroma.maintenance
   "Cleanup, repair, and expiration management for Chroma entries."
-  (:require [clojure-chroma-client.api :as chroma]
+  (:require [hive-mcp.chroma.client :as chroma]
             [hive-mcp.chroma.connection :as conn]
             [hive-mcp.chroma.crud :as crud]
             [hive-mcp.chroma.embeddings :as emb]
