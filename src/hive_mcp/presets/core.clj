@@ -28,7 +28,7 @@
   (:require [hive-mcp.chroma.core :as chroma]
             [hive-mcp.dns.result :as result]
             [hive-weave.safe :as ws]
-            [clojure-chroma-client.api :as chroma-api]
+            [hive-mcp.chroma.client :as chroma-api]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [taoensso.timbre :as log]))

@@ -1,6 +1,6 @@
 (ns hive-mcp.chroma.search
   "Semantic search operations for Chroma memory entries."
-  (:require [clojure-chroma-client.api :as chroma]
+  (:require [hive-mcp.chroma.client :as chroma]
             [hive-mcp.chroma.connection :as conn]
             [hive-mcp.chroma.embeddings :as emb]
             [hive-mcp.chroma.gate :as gate]
