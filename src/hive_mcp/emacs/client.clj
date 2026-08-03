@@ -6,7 +6,8 @@
    preserves backward compatibility for 28 direct callers in hive-mcp core.
 
    Dynamic vars kept for backward compat; real vars live in hive-emacs.client."
-  (:require [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
+  (:require [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]
+            [hive-spi.editor.services :as svc]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -142,28 +143,39 @@
         :else false))))
 
 (defn- resolve-emacs-fn
-  "Resolve a function from hive-emacs.client. Returns nil if not available."
-  [sym]
-  (rescue nil (requiring-resolve sym)))
+  "Resolve an editor capability from the hive-spi service registry, or nil
+   when no editor addon has published one.
+
+   Evaluation IS a capability — it needs a live editor — so unlike elisp
+   source construction it belongs behind the registry, and an unmounted addon
+   legitimately means \"no editor\". The seam is the SPI, not the addon: this
+   host names no hive-emacs namespace, so any vessel publishing the same
+   capability keys serves these call sites."
+  [cap]
+  (rescue nil (svc/capability cap)))
 
 (defn eval-elisp-with-timeout
-  "Execute elisp code with a timeout.
-   Delegates to hive-emacs.client/eval-elisp-with-timeout.
+  "Execute elisp code with a timeout, through the registered editor service.
    Returns a map with :success, :result or :error keys.
    On timeout, returns {:success false :error \"...\" :timed-out true}
-   On circuit-open, returns {:success false :error \"...\" :circuit-open true}"
+   On circuit-open, returns {:success false :error \"...\" :circuit-open true}
+
+   A timeout above *max-timeout-ms* routes to the ceiling-raising capability
+   (long CIDER evals): the adapter owns its own cap, so the host asks for the
+   exception rather than rebinding the adapter's var. Falls back to the plain
+   capability when the adapter publishes no ceiling verb.
+
+   No editor service registered -> an explicit failure result."
   ([code] (eval-elisp-with-timeout code *default-timeout-ms*))
   ([code timeout-ms]
-   (if-let [f (resolve-emacs-fn 'hive-emacs.client/eval-elisp-with-timeout)]
-     ;; Rebind hive-emacs *max-timeout-ms* when caller needs more than 30s
-     ;; (e.g. CIDER eval with long-running expressions).
-     (if-let [max-var (when (> (or timeout-ms 0) *max-timeout-ms*)
-                         (resolve-emacs-fn 'hive-emacs.client/*max-timeout-ms*))]
-       (with-bindings {max-var timeout-ms}
-         (f code timeout-ms))
-       (f code timeout-ms))
-     {:success false
-      :error "hive-emacs not on classpath — Emacs integration unavailable"})))
+   (let [over-cap? (> (or timeout-ms 0) *max-timeout-ms*)
+         f (or (when over-cap? (resolve-emacs-fn :eval-elisp-raising-ceiling))
+               (resolve-emacs-fn :eval-elisp-with-timeout))]
+     (if f
+       (f code timeout-ms)
+       {:success false
+        :error "No editor service registered — Emacs integration unavailable"
+        :capability :eval-elisp-with-timeout}))))
 
 (defn eval-elisp
   "Execute elisp code in running Emacs and return the result.
