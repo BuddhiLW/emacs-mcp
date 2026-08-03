@@ -181,6 +181,7 @@
         integrant/integrant {:mvn/version "1.0.1"}
         ;; meta-merge for deep-merging profile EDN over base system.edn
         meta-merge/meta-merge {:mvn/version "1.0.0"}
+        io.github.hive-agi/hive-elisp {:mvn/version "0.1.0"}
 }
 
  :aliases
