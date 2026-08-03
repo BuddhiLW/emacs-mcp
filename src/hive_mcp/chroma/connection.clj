@@ -1,7 +1,6 @@
 (ns hive-mcp.chroma.connection
   "Chroma connection configuration, collection management, and health status."
-  (:require [clojure-chroma-client.api :as chroma]
-            [clojure-chroma-client.config :as chroma-config]
+  (:require [hive-mcp.chroma.client :as chroma]
             [hive-mcp.chroma.embeddings :as emb]
             [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]))
 
@@ -25,7 +24,7 @@
   "Configure Chroma connection settings."
   [opts]
   (swap! config merge opts)
-  (chroma-config/configure (select-keys opts [:host :port :api-version :tenant :database]))
+  (chroma/configure (select-keys opts [:host :port :api-version :tenant :database]))
   (log/info "Chroma configured:" (select-keys @config [:host :port :collection-name])))
 
 (defonce ^:private collection-cache (atom nil))

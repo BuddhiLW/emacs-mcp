@@ -7,7 +7,10 @@
   (:require [clojure.test :refer :all]
             [hive-mcp.agent.executor :as executor]
             [hive-mcp.agent.context :as ctx]
-            [hive-mcp.agent.registry :as registry]))
+            [hive-mcp.agent.registry :as registry]
+            [hive-mcp.channel.piggyback-tap :as tap]
+            [hive-mcp.channel.activation :as act]
+            [hive-mcp.extensions.registry :as ext]))
 
 ;; =============================================================================
 ;; Test Fixtures
@@ -167,3 +170,58 @@
           results (executor/execute-tool-calls "drone-1" calls #{:auto-approve} nil)]
       (is (= 1 (count results)))
       (is (not (.contains (:content (first results)) "TOOL REJECTED"))))))
+
+(defn- capture-drain-ctx
+  "Run execute-tool-calls with a stub drain, returning the ctx it received."
+  [calls]
+  (let [seen (atom ::none)]
+    (executor/execute-tool-calls
+     "drone-1" calls #{:auto-approve}
+     {:drain-fn (fn [_agent-id _project-id ctx] (reset! seen ctx) nil)})
+    @seen))
+
+(deftest agent-lane-consults-the-activation-provider
+  (testing "a registered provider's pins reach the agentic-loop drain"
+    (setup-test-tools!)
+    (try
+      (ext/register! act/extension-key
+                     (fn [{:keys [tool-name]}]
+                       (when (= "test_allowed_tool" tool-name)
+                         {:pins #{"pin-1"} :tokens #{"activated"}})))
+      (let [ctx (capture-drain-ctx [{:id "c1" :name "test_allowed_tool" :arguments {}}])]
+        (is (= #{"pin-1"} (:pins ctx))
+            "executor must build ctx through activation/drain-ctx, not a bare {:tokens ...}")
+        (is (contains? (:tokens ctx) "activated")
+            "provider tokens union onto the harvested cues"))
+      (finally (ext/deregister! act/extension-key)))))
+
+(deftest agent-lane-names-its-tool-only-when-unambiguous
+  (testing "a single-call batch names its tool; a multi-call batch reports nil"
+    (setup-test-tools!)
+    (let [seen (atom [])]
+      (try
+        (ext/register! act/extension-key
+                       (fn [{:keys [tool-name]}] (swap! seen conj tool-name) nil))
+        (capture-drain-ctx [{:id "c1" :name "test_allowed_tool" :arguments {}}])
+        (capture-drain-ctx [{:id "c1" :name "test_allowed_tool" :arguments {}}
+                            {:id "c2" :name "test_another_allowed" :arguments {}}])
+        (is (= ["test_allowed_tool" nil] @seen)
+            "fabricating one tool-name for a batch would lie to every rule keyed on it")
+        (finally (ext/deregister! act/extension-key))))))
+
+(deftest agent-lane-degrades-to-cues-without-a-provider
+  (testing "no provider means the ctx is the cues alone — activation never breaks the drain"
+    (setup-test-tools!)
+    (ext/deregister! act/extension-key)
+    (let [ctx (capture-drain-ctx [{:id "c1" :name "test_allowed_tool" :arguments {}}])]
+      (is (nil? (:pins ctx)))
+      (is (nil? (:floor-cap ctx)))
+      (is (contains? ctx :tokens)))))
+
+(deftest the-drain-defaults-to-the-piggyback-tap
+  (testing "opts without :drain-fn resolve to the real tap"
+    (is (identical? tap/drain-all! (#'executor/drain-fn-for nil))
+        "a stub-only suite would pass even if the default were wired to nothing")
+    (is (identical? tap/drain-all! (#'executor/drain-fn-for {})))
+    (let [stub (fn [_ _ _] nil)]
+      (is (identical? stub (#'executor/drain-fn-for {:drain-fn stub}))))))

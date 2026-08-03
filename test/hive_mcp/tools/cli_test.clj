@@ -268,6 +268,33 @@
       (is (map? (cli-handler {:command nil})))
       (is (map? (cli-handler {:command "!@#$%"}))))))
 
+(deftest unknown-command-suggests-the-subdomain-qualified-form
+  (let [handlers    {:cider   {:eval (fn [_] :eval)}
+                     :clojure {:_handler (fn [_] :clojure)}
+                     :carto   {:_handler (fn [_] :carto)}}
+        cli-handler (cli/make-cli-handler handlers)]
+
+    (testing "a bare subcommand names the qualified form under each delegating subdomain"
+      (let [text (:text (cli-handler {:command "scan"}))]
+        (is (str/includes? text "carto scan"))
+        (is (str/includes? text "clojure scan"))))
+
+    (testing "subdomains WITHOUT :_handler are not offered — their subcommands
+              are already visible in this tree, so an unknown token is not theirs"
+      (is (not (str/includes? (:text (cli-handler {:command "scan"})) "cider scan"))))
+
+    (testing "a tree with no delegating subdomain adds no suggestion"
+      (let [flat (cli/make-cli-handler {:status (fn [_] :status)})
+            text (:text (flat {:command "scan"}))]
+        (is (str/includes? text "Unknown command"))
+        (is (not (str/includes? text "SUBCOMMAND")))))
+
+    (testing "a nil/blank command still errors without a bogus suggestion"
+      (doseq [c [nil ""]]
+        (let [r (cli-handler {:command c})]
+          (is (:isError r))
+          (is (not (str/includes? (:text r) "SUBCOMMAND"))))))))
+
 ;; =============================================================================
 ;; Help command generation tests
 ;; =============================================================================

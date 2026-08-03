@@ -209,3 +209,52 @@
           other-descendants (set (tree/get-descendants tree "other-project"))]
       ;; No overlap
       (is (empty? (clojure.set/intersection hive-descendants other-descendants))))))
+
+;; =============================================================================
+;; Duplicate project-id election (git worktrees)
+;; =============================================================================
+
+(def ^:private dedupe-by-project-id #'tree/dedupe-by-project-id)
+
+(defn- disc [path pid linked?]
+  {:path path :config {:project-id pid} :linked-worktree? linked?})
+
+(def ^:private carto-forest
+  [(disc "/w/hive-carto" "hive-carto" false)
+   (disc "/w/hive-carto-base" "hive-carto" true)
+   (disc "/w/hive-carto-wt" "hive-carto" true)
+   (disc "/w/hive-mcp" "hive-mcp" false)])
+
+(deftest test-dedupe-elects-primary-checkout
+  (testing "The primary checkout wins over linked worktrees sharing its id"
+    (let [{:keys [kept shadowed]} (dedupe-by-project-id carto-forest)]
+      (is (= #{"/w/hive-carto" "/w/hive-mcp"} (set (map :path kept))))
+      (is (= #{"/w/hive-carto-base" "/w/hive-carto-wt"} (set (map :path shadowed))))))
+  (testing "Every discovery is either kept or shadowed — none is dropped"
+    (let [{:keys [kept shadowed]} (dedupe-by-project-id carto-forest)]
+      (is (= (count carto-forest) (+ (count kept) (count shadowed)))))))
+
+(deftest test-dedupe-is-order-independent
+  (testing "Discovery order does not decide the winner"
+    (is (= 1 (count (distinct (for [_ (range 50)]
+                                (->> (shuffle carto-forest)
+                                     dedupe-by-project-id
+                                     :kept
+                                     (map :path)
+                                     sort
+                                     vec)))))))) 
+
+(deftest test-dedupe-total-when-no-primary
+  (testing "All-linked duplicates still elect one deterministic winner"
+    (let [only-linked [(disc "/w/bbb" "p" true) (disc "/w/a" "p" true)]
+          {:keys [kept shadowed]} (dedupe-by-project-id only-linked)]
+      (is (= ["/w/a"] (map :path kept)))
+      (is (= ["/w/bbb"] (map :path shadowed))))))
+
+(deftest test-dedupe-passes-through-idless-discoveries
+  (testing "A config with no :project-id is never shadowed against another"
+    (let [idless [{:path "/w/x" :config {} :linked-worktree? false}
+                  {:path "/w/y" :config {} :linked-worktree? false}]
+          {:keys [kept shadowed]} (dedupe-by-project-id idless)]
+      (is (= 2 (count kept)))
+      (is (empty? shadowed)))))

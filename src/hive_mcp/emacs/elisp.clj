@@ -1,18 +1,15 @@
 (ns hive-mcp.emacs.elisp
-  "Delegation shim — routes to hive-emacs.elisp.
+  "Alias layer over hive-spi.editor.elisp — pure elisp SOURCE construction.
 
-   Implementation extracted to the hive-emacs project. This shim aliases
-   every public from hive-emacs.elisp via runtime intern so existing
-   hive-mcp callers keep working unchanged.
+   Nothing about building an elisp string needs an editor, so nothing here
+   touches the addon or its lifecycle. Routing elisp EVALUATION is a separate
+   question that belongs to hive-spi.editor.services; construction never did.
 
-   Phase 2 will refactor consumers to use the extension registry;
-   Phase 3 will delete this shim.
-
-   Decision 20260429230453-7e7627cc."
-  (:require [hive-emacs.elisp]))
+   Aliases rather than re-implements: 100+ call sites use `el/...` unchanged."
+  (:require [hive-spi.editor.elisp]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-(doseq [[sym v] (ns-publics 'hive-emacs.elisp)]
+(doseq [[sym v] (ns-publics 'hive-spi.editor.elisp)]
   (intern *ns* (with-meta sym (meta v)) (deref v)))

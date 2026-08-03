@@ -129,12 +129,21 @@
          (not (str/starts-with? name "."))
          (not (contains? skip-dirs name)))))
 
+(defn- linked-worktree?
+  "True when `dir` is a LINKED git worktree — its `.git` entry is a FILE
+   holding `gitdir: ...`. The primary checkout carries a `.git` DIRECTORY."
+  [^java.io.File dir]
+  (let [git (io/file dir ".git")]
+    (and (.exists git) (not (.isDirectory git)))))
+
 (defn- scan-dir-shallow
   "Scan a single directory for .hive-project.edn. Non-recursive.
-   Returns {:path ... :config ...} or nil."
+   Returns {:path ... :config ... :linked-worktree? bool} or nil."
   [^java.io.File dir]
   (when-let [config (read-hive-project-edn dir)]
-    {:path (.getAbsolutePath dir) :config config}))
+    {:path (.getAbsolutePath dir)
+     :config config
+     :linked-worktree? (linked-worktree? dir)}))
 
 (defn- scan-subtree
   "Recursively scan a subtree for .hive-project.edn files.
@@ -147,6 +156,28 @@
                           (filter scannable-child?)
                           (mapcat #(scan-subtree % max-depth (inc current-depth)))))]
       (if result (cons result children) children))))
+
+(defn- discovery-rank
+  "Sort key electing the winner among discoveries sharing one :project-id.
+   Primary checkouts before linked worktrees, then shortest path, then
+   lexicographic. Total and deterministic."
+  [{:keys [path linked-worktree?]}]
+  [(if linked-worktree? 1 0) (count (str path)) (str path)])
+
+(defn- dedupe-by-project-id
+  "Elect one discovery per :project-id.
+   Returns {:kept [...] :shadowed [...]}; `shadowed` names every discovery a
+   duplicate id displaced so the caller can report it instead of losing it.
+   Discoveries carrying no :project-id pass through untouched. Pure."
+  [discovered]
+  (let [elect (fn [[pid ds]]
+                (if (nil? pid)
+                  {:kept (vec ds) :shadowed []}
+                  (let [[win & lose] (sort-by discovery-rank ds)]
+                    {:kept [win] :shadowed (vec lose)})))
+        parts (map elect (group-by #(get-in % [:config :project-id]) discovered))]
+    {:kept     (vec (mapcat :kept parts))
+     :shadowed (vec (mapcat :shadowed parts))}))
 
 (defn- discover-hive-projects
   "Discover .hive-project.edn files from root-path using parallel scanning.
@@ -169,8 +200,13 @@
                             {:concurrency default-concurrency :timeout-ms 60000 :fallback []}
                             (fn [child] (vec (scan-subtree child max-depth 1)))
                             children)]
-        (cond-> (vec (mapcat identity child-results))
-          root-result (conj root-result))))))
+        (let [all (cond-> (vec (mapcat identity child-results))
+                    root-result (conj root-result))
+              {:keys [kept shadowed]} (dedupe-by-project-id all)]
+          (doseq [{:keys [path config]} shadowed]
+            (log/warn "Duplicate project-id; ignoring shadowed checkout"
+                      {:project-id (:project-id config) :shadowed-path path}))
+          kept)))))
 
 ;; =============================================================================
 ;; Project Entity Building

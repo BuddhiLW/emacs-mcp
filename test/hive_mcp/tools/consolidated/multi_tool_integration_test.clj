@@ -13,7 +13,7 @@
 
    Then per-tool integration tests for tools lacking dedicated test files:
    - memory, kg, hivemind, kanban, preset, wave, magit, emacs, analysis,
-     agora, cider, olympus, project, session, config, workflow, migration, agent"
+     agora, olympus, project, session, config, workflow, migration, agent"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.string :as str]
             [clojure.data.json :as json]
@@ -31,7 +31,6 @@
             [hive-mcp.tools.consolidated.emacs :as emacs]
             [hive-mcp.tools.composite :as composite]
             [hive-mcp.tools.consolidated.agora :as agora]
-            [hive-mcp.tools.consolidated.cider :as cider]
             [hive-mcp.tools.consolidated.olympus :as olympus]
             [hive-mcp.tools.consolidated.project :as project]
             ;; Previously untested consolidated tools
@@ -292,7 +291,6 @@
    :emacs     emacs/tool-def
    ;; :analysis — composite tool, tested separately
    :agora     agora/tool-def
-   :cider     cider/tool-def
    :olympus   olympus/tool-def
    :project   project/tool-def
    :session   session/tool-def
@@ -369,7 +367,6 @@
              :emacs     {:tools-var #'emacs/tools}
              ;; :analysis — composite tool, no static tools var
              :agora     {:tools-var #'agora/tools}
-             :cider     {:tools-var #'cider/tools}
              :olympus   {:tools-var #'olympus/tools}
              :project   {:tools-var #'project/tools}
              :session   {:tools-var #'session/tools}
@@ -401,7 +398,6 @@
              :emacs     emacs/handlers
              ;; :analysis — composite tool, handlers built dynamically
              :agora     agora/handlers
-             :cider     cider/handlers
              :olympus   olympus/handlers
              :project   project/handlers
              :session   session/handlers
@@ -459,7 +455,6 @@
              :emacs     emacs/handle-emacs
              :analysis  (composite/build-composite-handler "analysis")
              :agora     agora/handle-agora
-             :cider     cider/handle-cider
              :olympus   olympus/handle-olympus
              :project   project/handle-project
              :session   session/handle-session
@@ -491,7 +486,6 @@
              :emacs     emacs/handle-emacs
              :analysis  (composite/build-composite-handler "analysis")
              :agora     agora/handle-agora
-             :cider     cider/handle-cider
              :olympus   olympus/handle-olympus
              :project   project/handle-project
              :session   session/handle-session
@@ -907,47 +901,6 @@
       (is (= #{"propose" "counter" "approve" "no-change" "defer"} (set enum))))))
 
 ;; =============================================================================
-;; Part 16: CIDER Consolidated Tool Integration Tests
-;; =============================================================================
-
-(deftest test-cider-handlers-completeness
-  (testing "cider handlers has canonical + deprecated commands"
-    ;; Canonical
-    (is (contains? cider/handlers :eval))
-    (is (contains? cider/handlers :doc))
-    (is (contains? cider/handlers :info))
-    (is (contains? cider/handlers :complete))
-    (is (contains? cider/handlers :apropos))
-    (is (contains? cider/handlers :status))
-    (is (contains? cider/handlers :spawn))
-    (is (contains? cider/handlers :sessions))
-    (is (contains? cider/handlers :kill-session))
-    ;; Deprecated aliases
-    (is (contains? cider/handlers :eval-explicit))
-    (is (contains? cider/handlers :eval-session))))
-
-(deftest test-cider-canonical-handlers-no-deprecated
-  (testing "cider canonical-handlers does not contain deprecated aliases"
-    (is (not (contains? cider/canonical-handlers :eval-explicit)))
-    (is (not (contains? cider/canonical-handlers :eval-session)))))
-
-(deftest test-cider-tool-def-schema-params
-  (testing "cider tool-def schema has key params"
-    (let [props (get-in cider/tool-def [:inputSchema :properties])]
-      (is (contains? props "code"))
-      (is (contains? props "mode"))
-      (is (contains? props "symbol"))
-      (is (contains? props "prefix"))
-      (is (contains? props "pattern"))
-      (is (contains? props "session_name"))
-      (is (contains? props "agent_id")))))
-
-(deftest test-cider-mode-enum
-  (testing "cider eval mode enum is correct"
-    (let [enum (get-in cider/tool-def [:inputSchema :properties "mode" :enum])]
-      (is (= #{"silent" "explicit"} (set enum))))))
-
-;; =============================================================================
 ;; Part 17: Olympus Consolidated Tool Integration Tests
 ;; =============================================================================
 
@@ -1266,7 +1219,6 @@
       (is (contains? enum "emacs"))
       (is (contains? enum "analysis"))
       (is (contains? enum "agora"))
-      (is (contains? enum "cider"))
       (is (contains? enum "olympus"))
       (is (contains? enum "project"))
       (is (contains? enum "session"))

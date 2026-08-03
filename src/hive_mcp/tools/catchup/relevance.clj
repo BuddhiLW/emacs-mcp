@@ -43,27 +43,31 @@
     (or (contains? noise-tag-exact s)
         (some #(.startsWith ^String s ^String %) noise-tag-prefixes))))
 
-(defn- expand-hyphen-tokens
-  "Split hyphenated tags into their constituent tokens so cross-project
-   sibling matches still register. Tag `hive-knowledge` => #{\"hive-knowledge\"
-   \"hive\" \"knowledge\"}. Single-token tags pass through unchanged."
+(defn- expand-compound-tokens
+  "Split a compound tag into its constituent tokens on -, _ and . so cross
+   project sibling matches still register. Tag `hive-knowledge` =>
+   #{\"hive-knowledge\" \"hive\" \"knowledge\"}. Single-token tags pass
+   through unchanged."
   [tag]
   (let [s (str tag)
-        parts (->> (str/split s #"-")
+        parts (->> (str/split s #"[-_.]+")
                    (remove str/blank?)
                    set)]
     (conj parts s)))
 
 (defn topic-tags
   "Extract topic-bearing tags from a tag collection. Drops noise prefixes
-   and meta-markers, then expands hyphenated tags into their tokens so
-   loose matches across sibling projects (`hive-knowledge` ↔ `hive`)
-   still score. Result: a flat string set of domain vocabulary."
+   and meta-markers, then expands compound tags into their tokens so
+   loose matches across sibling projects (`hive-knowledge` <-> `hive`)
+   still score. Result: a flat string set of domain vocabulary.
+
+   Case is preserved: callers matching against case-folded vocabularies
+   (`drain-rank`) pass already-lowercased tags in."
   [tags]
   (->> (or tags [])
        (mapv str)
        (remove noise-tag?)
-       (mapcat expand-hyphen-tokens)
+       (mapcat expand-compound-tokens)
        (into #{})))
 
 ;; ---------------------------------------------------------------------------

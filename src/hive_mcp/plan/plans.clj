@@ -45,7 +45,7 @@
   (:require [hive-mcp.chroma.core :as chroma]
             [hive-mcp.dns.result :as result]
             [hive-weave.safe :as ws]
-            [clojure-chroma-client.api :as chroma-api]
+            [hive-mcp.chroma.client :as chroma-api]
             [clojure.string :as str]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>

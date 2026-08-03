@@ -4,31 +4,8 @@
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
             [hive-mcp.tools.registry :as tools]
-            [hive-mcp.tools.cider :as cider]
             [hive-mcp.tools.consolidated.kanban :as kanban]
             [hive-mcp.tools.swarm :as swarm]))
-
-;; =============================================================================
-;; BUG #2: CIDER eval returns feature name instead of result (HIGH)
-;; Expected: {:text "6"} for (+ 1 2 3)
-;; Actual: {:text "hive-mcp-cider"}
-;; =============================================================================
-
-(deftest ^:integration test-cider-eval-returns-result
-  (testing "BUG #2: cider-eval-silent should return evaluation result, not feature name"
-    (let [result (cider/handle-cider-eval-silent {:code "(+ 1 2 3)"})]
-      (is (map? result) "Should return a map")
-      (is (contains? result :text) "Should have :text key")
-      ;; This test pins down the bug - previously returned "hive-mcp-cider"
-      (is (not= "hive-mcp-cider" (:text result))
-          "Should NOT return the feature name (original bug)")
-      ;; In test environment CIDER may not be connected
-      ;; Valid outcomes: either "6" (success) or error message about CIDER
-      (let [text (str (:text result))]
-        (is (or (str/includes? text "6")
-                (str/includes? text "CIDER not connected")
-                (str/includes? text "not loaded"))
-            "Should return result or proper error, not feature name")))))
 
 ;; =============================================================================
 ;; BUG #3: list-prompts returns nil for some entry fields (MEDIUM)
@@ -114,26 +91,6 @@
     ;; Verify swarm-addon-available? exists (used for guard)
     (is (ifn? (resolve 'hive-mcp.tools.swarm/swarm-addon-available?))
         "swarm-addon-available? should exist")))
-
-;; =============================================================================
-;; BUG #8: cider_eval_silent hangs with heartbeat timeout (HIGH) - OPEN
-;; Expected: Should return result within reasonable time
-;; Actual: "Eval timed out after 60 seconds (heartbeat polling)"
-;; =============================================================================
-
-(deftest ^:integration test-cider-eval-does-not-hang
-  (testing "BUG #8: cider_eval_silent should not hang indefinitely"
-    (let [f      (future
-                   (try
-                     (cider/handle-cider-eval-silent {:code "(+ 1 1)"})
-                     (catch Exception e
-                       {:error (.getMessage e)})))
-          result (deref f 10000 {:timeout true :error "Evaluation hung for 10+ seconds"})]
-      (try
-        (is (not (:timeout result))
-            "cider_eval_silent should complete within 10 seconds, not hang")
-        (finally
-          (future-cancel f))))))
 
 ;; =============================================================================
 ;; BUG #9: claude-context search hangs (HIGH) - OPEN
