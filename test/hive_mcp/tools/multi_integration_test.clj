@@ -153,8 +153,8 @@
 ;; =============================================================================
 
 (deftest get-tool-handler-all-registered-test
-  (testing "get-tool-handler resolves all 18 registered tools"
-    (doseq [tool-name ["agent" "memory" "kg" "hivemind" "magit" "cider"
+  (testing "get-tool-handler resolves all 17 registered tools"
+    (doseq [tool-name ["agent" "memory" "kg" "hivemind" "magit"
                        "kanban" "preset" "olympus" "agora" "analysis"
                        "project" "session" "emacs" "wave" "migration"
                        "config" "workflow"]]
@@ -769,10 +769,10 @@
 ;; =============================================================================
 
 (deftest multi-help-lists-all-tools-test
-  (testing "Multi help text lists all 18 tool names"
+  (testing "Multi help text lists all 17 tool names"
     (let [result (c-multi/handle-multi {})]
       (is (not (:isError result)))
-      (doseq [tool ["agent" "memory" "kg" "hivemind" "magit" "cider"
+      (doseq [tool ["agent" "memory" "kg" "hivemind" "magit"
                     "kanban" "preset" "olympus" "agora" "analysis"
                     "project" "session" "emacs" "wave" "migration"
                     "config" "workflow"]]

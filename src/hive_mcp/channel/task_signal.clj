@@ -175,21 +175,21 @@
   "Overrides the env check when bound to true or false. nil defers to the env."
   nil)
 
-(def ^:private truthy-env
-  #{"1" "true" "yes" "on"})
+(def ^:private falsey-env
+  #{"0" "false" "no" "off"})
 
 (defn enabled?
   "True when task-cue harvesting is on.
 
-   Defaults to FALSE: with no override and no HIVE_TWO_LANE_DRAIN env var set to
-   one of 1/true/yes/on, `cues` yields the empty set and the memory drain stays
-   FIFO. Binding `*enabled?*` takes precedence over the env."
+   Defaults to TRUE. Set HIVE_TWO_LANE_DRAIN to one of 0/false/no/off to fall
+   back to the plain FIFO drain; any other value, including unset, leaves the
+   two-lane drain active. Binding `*enabled?*` takes precedence over the env."
   []
   (if (some? *enabled?*)
     (boolean *enabled?*)
-    (contains? truthy-env
-               (some-> (System/getenv "HIVE_TWO_LANE_DRAIN")
-                       str/trim str/lower-case))))
+    (not (contains? falsey-env
+                    (some-> (System/getenv "HIVE_TWO_LANE_DRAIN")
+                            str/trim str/lower-case)))))
 
 (defn cues
   "`task-tokens` for one tool call, or the empty set when `enabled?` is false.

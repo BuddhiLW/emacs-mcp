@@ -36,7 +36,7 @@ jobs:
       - name: Setup Clojure
         uses: DeLaGuardo/setup-clojure@13.2
         with:
-          cli: 'latest'
+          cli: '1.12.5.1664'
           clj-kondo: '2026.07.24'
 
       - name: Lint with clj-kondo
@@ -67,7 +67,7 @@ jobs:
       - name: Setup Clojure
         uses: DeLaGuardo/setup-clojure@13.2
         with:
-          cli: 'latest'
+          cli: '1.12.5.1664'
 
       - name: Cache Maven deps
         uses: actions/cache@v4
@@ -108,7 +108,7 @@ jobs:
       - name: Setup Clojure
         uses: DeLaGuardo/setup-clojure@13.2
         with:
-          cli: 'latest'
+          cli: '1.12.5.1664'
 
       - name: Cache Maven deps
         uses: actions/cache@v4

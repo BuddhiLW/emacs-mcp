@@ -27,9 +27,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: DeLaGuardo/setup-clojure@13.0
+      - uses: DeLaGuardo/setup-clojure@13.2
         with:
-          cli: latest
+          cli: '1.12.5.1664'
 
       - name: Deploy
         env:

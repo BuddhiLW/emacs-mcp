@@ -40,7 +40,8 @@
 
 (defn- capture-local!
   "Subscribe to an event-type and drain everything published while the
-   thunk runs. Returns [result events-seen]."
+   thunk runs. Returns [result events-seen]. The drain pump is settled
+   before returning."
   [event-type thunk]
   (let [ch (channel/subscribe! event-type)
         acc (atom [])
@@ -60,6 +61,8 @@
         [r @acc])
       (finally
         (reset! stop? true)
+        (when (= ::pending (deref pump 500 ::pending))
+          (future-cancel pump))
         (try (clojure.core.async/close! ch) (catch Exception _ nil))))))
 
 ;; =============================================================================
