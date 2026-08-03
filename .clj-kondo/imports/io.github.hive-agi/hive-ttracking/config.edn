@@ -1,0 +1,3 @@
+;; clj-kondo config exported by hive-ttracking.
+{:lint-as {hive-ttracking.bench/defbench clojure.test/deftest
+           hive-ttracking.core/defbench  clojure.test/deftest}}

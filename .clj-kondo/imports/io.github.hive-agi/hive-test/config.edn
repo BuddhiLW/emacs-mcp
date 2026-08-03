@@ -1,0 +1,31 @@
+;; clj-kondo config exported by hive-test.
+;; Consumers pick it up with:
+;;   clj-kondo --lint "$(clojure -Spath)" --dependencies --parallel --copy-configs
+;;
+;; Every generator macro below is (name & body)-shaped, so clojure.test/deftest
+;; models it. Do NOT map them to defn — their second arg is not an arg-vector.
+{:lint-as {hive-test.trifecta/deftrifecta                 clojure.test/deftest
+           hive-test.trifecta/deftest-facets              clojure.test/deftest
+           hive-test.golden/deftest-golden                clojure.test/deftest
+           hive-test.golden/deftest-golden-fn             clojure.test/deftest
+           hive-test.mutation/deftest-mutation-witness    clojure.test/deftest
+           hive-test.mutation/deftest-mutations           clojure.test/deftest
+           hive-test.bench/defbench                       clojure.test/deftest
+           hive-test.stateful/defcheck                    clojure.test/deftest
+           hive-test.properties/defprops-monad            clojure.test/deftest
+           hive-test.properties/defprop-total             clojure.test/deftest
+           hive-test.properties/defprop-roundtrip         clojure.test/deftest
+           hive-test.properties/defprop-idempotent        clojure.test/deftest
+           hive-test.properties/defprop-invariant         clojure.test/deftest
+           hive-test.properties/defprop-metamorphic       clojure.test/deftest
+           hive-test.properties/defprop-commutative       clojure.test/deftest
+           hive-test.properties/defprop-complement        clojure.test/deftest
+           hive-test.properties/defprop-fsm-terminates    clojure.test/deftest
+           hive-test.linearizability/defprop-concurrent-safe  clojure.test/deftest
+           hive-test.linearizability/defprop-sequential-equiv clojure.test/deftest
+           clojure.test.check.clojure-test/defspec clojure.test/deftest}
+
+ :hooks
+ {:analyze-call
+  {hive-test.sandbox/with-sandbox    hive-test.hooks.macros/with-sandbox
+   hive-test.mutation/with-mutation  hive-test.hooks.macros/with-mutation}}}
