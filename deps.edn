@@ -155,7 +155,7 @@
         io.github.hive-agi/hive-weave {:mvn/version "0.3.1"}
 
         ;; hive-emacs — Emacs vessel addon (IEditor, daemon, CIDER/Magit/Projectile)
-        io.github.hive-agi/hive-emacs {:mvn/version "0.5.2"}
+        io.github.hive-agi/hive-emacs {:mvn/version "0.5.3"}
 
         ;; hive-schemas — pinned at the TOP level, not only in :test/:test-unit.
         ;; hive-emacs pulls 0.1.6 transitively, and 0.1.6 exists on Gitea only
