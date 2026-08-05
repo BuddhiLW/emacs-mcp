@@ -1,0 +1,3 @@
+;; clj-kondo config exported by hive-system.
+{:lint-as {hive-system.crypto.macros/let-aead clojure.core/let
+           hive-system.secrets.core/with-secret clojure.core/let}}

@@ -1,0 +1,2 @@
+;; clj-kondo config exported by hive-weave.
+{:lint-as {hive-weave.async/bound-go-loop clojure.core/loop}}

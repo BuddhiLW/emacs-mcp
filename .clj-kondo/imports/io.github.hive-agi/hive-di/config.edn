@@ -1,0 +1,6 @@
+;; clj-kondo config exported by hive-di.
+{:hooks
+ {:analyze-call
+  {hive-di.core/defconfig          hive-di.hooks.macros/defconfig
+   hive-di.addon/defmanifest       hive-di.hooks.macros/defmanifest
+   hive-di.testing/defconfig-tests hive-di.hooks.macros/defconfig-tests}}}

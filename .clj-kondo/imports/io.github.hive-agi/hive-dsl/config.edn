@@ -1,0 +1,27 @@
+;; clj-kondo config exported by hive-dsl.
+;; Consumers pick it up with:
+;;   clj-kondo --lint "$(clojure -Spath)" --dependencies --parallel --copy-configs
+{:lint-as {hive-dsl.batch/with-batch        clojure.core/with-open
+           hive-dsl.resource/with-resource  clojure.core/with-open
+           hive-dsl.lifecycle/with-lifecycle clojure.core/with-open
+           hive-dsl.typed.adt/defadt-alias  clojure.core/def}
+
+ :hooks
+ {:analyze-call
+  {hive-dsl.adt/defadt                    hive-dsl.hooks.defadt/defadt
+   hive-dsl.adt/adt-case                  hive-dsl.hooks.macros/adt-case
+   hive-dsl.result/let-ok                 hive-dsl.hooks.result/let-ok
+   hive-dsl.result/ok->                   hive-dsl.hooks.macros/ok->
+   hive-dsl.result/ok->>                  hive-dsl.hooks.macros/ok->>
+   hive-dsl.result/guard                  hive-dsl.hooks.result/guard
+   hive-dsl.result/rescue                 hive-dsl.hooks.result/rescue
+   hive-dsl.result/rescue-log             hive-dsl.hooks.result/rescue-log
+   hive-dsl.result/rescue-interrupt       hive-dsl.hooks.result/rescue-interrupt
+   hive-dsl.result/try-effect             hive-dsl.hooks.result/try-effect
+   hive-dsl.result/try-effect*            hive-dsl.hooks.result/try-effect*
+   hive-dsl.result/try-effect-throwable*  hive-dsl.hooks.result/try-effect*
+   hive-dsl.resource/with-scope           hive-dsl.hooks.macros/with-scope
+   hive-dsl.lifecycle/with-lifecycle-scope hive-dsl.hooks.macros/with-scope
+   hive-dsl.managed-channel/with-go-loop  hive-dsl.hooks.macros/with-go-loop
+   hive-dsl.gate/with-gate                hive-dsl.hooks.macros/expr-then-body
+   hive-dsl.gate/with-gate-result         hive-dsl.hooks.macros/expr-then-body}}}
