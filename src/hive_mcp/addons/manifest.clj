@@ -26,10 +26,10 @@
          (log/error \"Invalid manifest\" (:errors result))))
 
    See also:
-   - hive-mcp.addons.protocol — IAddon protocol definition"
+   - hive-addon.protocol — IAddon protocol definition"
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [hive-mcp.addons.protocol :as proto]
+            [hive-addon.protocol :as proto]
             [hive-mcp.addons.runtime-ports :as runtime-ports]
             [hive-mcp.dns.result :as r]
             [malli.core :as m]

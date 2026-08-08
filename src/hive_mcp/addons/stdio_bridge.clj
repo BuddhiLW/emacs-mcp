@@ -10,7 +10,7 @@
      (bridge/list-remote-tools (bridge/get-bridge :bridge/echo))
      (bridge/call-tool (bridge/get-bridge :bridge/echo) \"echo\" {\"message\" \"hi\"})
      (bridge/unregister-bridge! :bridge/echo)"
-  (:require [hive-mcp.addons.protocol :as proto]
+  (:require [hive-addon.protocol :as proto]
             [hive-mcp.addons.mcp-bridge :as bridge]
             [hive-mcp.dns.result :as r]
             [clojure.data.json :as json]

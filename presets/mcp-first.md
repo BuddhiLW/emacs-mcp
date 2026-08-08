@@ -43,16 +43,18 @@ mcp__claude-context__index_codebase - Index before searching
 - "Find authentication logic" → `search_code(query: "authentication login flow")`
 - "Where is error handling?" → `search_code(query: "error handling exception catching")`
 
-### 3. Carto (`mcp__hive__code`) - Clojure File Edits
+### 3. Structural Editing (`mcp__hive__code`) - Clojure File Edits
 
-For ANY edit to `.clj` / `.cljs` / `.cljc` files, the carto write path is mandatory — raw `Edit`/`Write`/`file_write` skip lint, REPL refresh, and ns-tracking.
+When a structural-editing addon is mounted, `mcp__hive__code` is the mandatory write path for
+`.clj` / `.cljs` / `.cljc` — raw `Edit`/`Write`/`file_write` skip lint, REPL refresh, and
+ns-tracking. Check with `mcp__hive__addon list`; without such an addon, use `mcp__hive__file_write`.
 
 **First move on a fresh ling, BEFORE any code edit:**
 ```
 ToolSearch(query: "select:mcp__hive__code")
 ```
 
-| Task                   | Carto tool                              |
+| Task                   | Tool                                    |
 |------------------------|-----------------------------------------|
 | Replace top-level form | `mcp__hive__code` `write-form`          |
 | Insert before/after    | `mcp__hive__code` `insert-form`         |
