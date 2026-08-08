@@ -37,10 +37,24 @@
 
 (defn- resolve-and-call
   "Resolve sym via requiring-resolve; call f with the resolved fn.
-   Returns result or fallback on failure."
+
+   Three outcomes, each distinguishable in the RETURNED map:
+     success       -> the callee's own result
+     call threw    -> fallback + {:failed true :error msg}
+     unresolvable  -> {:skipped true :reason ...}
+
+   `rescue` parks the cause in metadata, which every consumer of this map
+   drops; the merge is what keeps a throwing sweep from reading as a clean one.
+
+   The resolve is itself guarded: requiring-resolve THROWS (not nil) when the
+   namespace cannot be loaded, and an unguarded throw here aborts the whole
+   sweep -- every later task included."
   [sym call-fn fallback]
-  (if-let [f (requiring-resolve sym)]
-    (result/rescue fallback (call-fn f))
+  (if-let [f (result/rescue nil (requiring-resolve sym))]
+    (let [r (result/rescue fallback (call-fn f))]
+      (if-let [err (:hive-dsl.result/error (meta r))]
+        (merge (when (map? r) r) {:failed true :error (:message err)})
+        r))
     {:skipped true :reason (str (name sym) " not available")}))
 
 ;; =============================================================================

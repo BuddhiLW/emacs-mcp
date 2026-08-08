@@ -131,9 +131,13 @@
 
    Returns:
    {:total-evicted N
+    :errors        N          ;; per-atom sweeps that threw
     :per-atom      [{:atom-id :name :evicted :remaining :error}...]
     :duration-ms   T
     :atom-count    N}
+
+   :errors is part of the headline because :total-evicted alone cannot
+   distinguish an all-failed sweep from a sweep with nothing to evict.
 
    Safe to call even when no atoms are registered -- returns empty stats."
   []
@@ -141,11 +145,16 @@
         registry  @*registry
         per-atom  (mapv (fn [[id spec]] (sweep-one id spec)) registry)
         total     (reduce + 0 (map :evicted per-atom))
+        errors    (count (filter :error per-atom))
         elapsed   (- (System/currentTimeMillis) start-ms)]
     (when (pos? total)
       (log/info "[gc] Sweep completed: evicted" total "entries from"
                 (count per-atom) "atoms in" elapsed "ms"))
+    (when (pos? errors)
+      (log/warn "[gc] Sweep had" errors "of" (count per-atom)
+                "bounded atoms fail to evict -- capacity is NOT being enforced on them"))
     {:total-evicted total
+     :errors        errors
      :per-atom      per-atom
      :duration-ms   elapsed
      :atom-count    (count registry)}))
