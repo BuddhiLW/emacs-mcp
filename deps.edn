@@ -270,11 +270,20 @@
               ;; SoftMaxHeapSize makes G1 treat 12g as a soft ceiling and
               ;; uncommit toward it, returning RSS to the OS between peaks;
               ;; -Xmx16g stays the hard cap. ParallelRefProc speeds SoftRef
-              ;; clearing; ExplicitGCInvokesConcurrent keeps our diag System/gc
-              ;; calls concurrent instead of full STW.
+              ;; clearing.
+              ;;
+              ;; ExplicitGCInvokesConcurrent is DELIBERATELY OFF. It is not a
+              ;; diagnostics-only knob: scheduler.housekeeping's 5-minute sweep
+              ;; calls (.gc runtime) as THE RSS-containment mechanism, and a
+              ;; concurrent cycle never uncommits — so the flag silently defeats
+              ;; the "return RSS to the OS" intent of this whole block.
+              ;; Measured 2026-08-08, allocate -> drop -> (.gc) probe:
+              ;;   +ExplicitGCInvokesConcurrent  committed 780MB -> 1700MB (grew)
+              ;;   -ExplicitGCInvokesConcurrent  committed 780MB ->  256MB
+              ;; Cost: that sweep's GC becomes a full STW pause (~1s at this heap).
               "-XX:SoftMaxHeapSize=12g"
               "-XX:+ParallelRefProcEnabled"
-              "-XX:+ExplicitGCInvokesConcurrent"]}
+              "-XX:-ExplicitGCInvokesConcurrent"]}
 
   :nrepl
   {:extra-paths ["dev" "test"]
@@ -322,11 +331,15 @@
               ;; SoftMaxHeapSize makes G1 treat 12g as a soft ceiling and
               ;; uncommit toward it, returning RSS to the OS between peaks;
               ;; -Xmx16g stays the hard cap. ParallelRefProc speeds SoftRef
-              ;; clearing; ExplicitGCInvokesConcurrent keeps our diag System/gc
-              ;; calls concurrent instead of full STW.
+              ;; clearing.
+              ;;
+              ;; ExplicitGCInvokesConcurrent is DELIBERATELY OFF — see the
+              ;; :prod alias above. housekeeping's (.gc runtime) sweep cannot
+              ;; uncommit while it is on; measured 780MB -> 1700MB (grew) with
+              ;; it, 780MB -> 256MB without.
               "-XX:SoftMaxHeapSize=12g"
               "-XX:+ParallelRefProcEnabled"
-              "-XX:+ExplicitGCInvokesConcurrent"]
+              "-XX:-ExplicitGCInvokesConcurrent"]
    :main-opts ["-m" "nrepl.cmdline"
                "--port" "7910"
                "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"]}
