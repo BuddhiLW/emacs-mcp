@@ -415,9 +415,8 @@
   ;;        clj -T:build print-version   ; computed 0.{minor}.{patch}
   ;;        clj -T:build deploy          ; jar -> Clojars (needs CLOJARS_* env)
   :build
-  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.9"}
-          slipset/deps-deploy {:mvn/version "0.2.2"}}
-   :ns-default build}
+  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.0"}}
+   :ns-default hive-build.api}
 
   ;; Sibling :local/root overrides go in a gitignored local.deps.edn, merged
   ;; by the launcher via `clj -Sdeps` at startup. Use the top-level :deps key.
