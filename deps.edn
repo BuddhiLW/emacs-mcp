@@ -411,7 +411,7 @@
   :test-backends
   {:extra-paths ["test-backends"]}
 
-  ;; Build via tools.build (see build.clj): uberjar (server) + source jar /
+  ;; Build via hive-build: uberjar (server) + source jar /
   ;; Clojars deploy. deps-deploy pushes the library jar; version autobumps.
   ;; Usage: clj -T:build uber            ; runnable server uberjar
   ;;        clj -T:build uber :profile k8s-headless
