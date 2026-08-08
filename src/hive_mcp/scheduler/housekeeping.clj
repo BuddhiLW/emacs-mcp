@@ -99,18 +99,33 @@
          'hive-mcp.swarm.datascript.coordination.cleanup/sweep-ledger-cold!
          #(%) {:tasks 0 :waves 0 :claim-history 0})
 
-        ;; 6. JVM GC hint — nudge G1GC to collect old gen.
-        ;; G1GC with MaxGCPauseMillis=200 avoids full GC cycles, so old gen
-        ;; fills with long-lived garbage. Periodic hint prevents 97%+ old gen.
+        ;; 6. JVM GC hint — nudge G1GC to collect old gen AND return committed
+        ;; heap to the OS.
+        ;;
+        ;; Reports COMMITTED, not just used. `.totalMemory` IS committed, so the
+        ;; old (total - free) metric measured live-set only: it happily logged
+        ;; "freed 1452 MB" while committed sat at 3576 MB against 622 MB used.
+        ;; RSS is driven by committed, so used-only instrumentation hides
+        ;; exactly the ratchet this task exists to prevent.
+        ;;
+        ;; Requires -XX:-ExplicitGCInvokesConcurrent (see deps.edn :jvm-opts):
+        ;; a concurrent explicit GC never uncommits.
         gc-hint-result
         (try
-          (let [runtime (Runtime/getRuntime)
-                before-mb (/ (- (.totalMemory runtime) (.freeMemory runtime)) 1048576.0)]
-            (.gc runtime)
-            (let [after-mb (/ (- (.totalMemory runtime) (.freeMemory runtime)) 1048576.0)
-                  freed-mb (- before-mb after-mb)]
-              {:freed-mb (Math/round freed-mb) :before-mb (Math/round before-mb)}))
-          (catch Exception _ {:freed-mb 0}))
+          (let [heap-bean (java.lang.management.ManagementFactory/getMemoryMXBean)
+                usage     (fn [] (.getHeapMemoryUsage heap-bean))
+                mb        (fn [^long b] (Math/round (/ b 1048576.0)))
+                before    (usage)
+                before-committed (.getCommitted before)
+                before-used      (.getUsed before)]
+            (.gc (Runtime/getRuntime))
+            (let [after (usage)]
+              {:freed-mb           (mb (- before-used (.getUsed after)))
+               :before-mb          (mb before-used)
+               :committed-mb       (mb (.getCommitted after))
+               :committed-freed-mb (mb (- before-committed (.getCommitted after)))
+               :used-mb            (mb (.getUsed after))}))
+          (catch Exception _ {:freed-mb 0 :committed-freed-mb 0}))
 
         elapsed-ms (- (System/currentTimeMillis) start-ms)
         result {:callbacks callback-result
@@ -135,6 +150,16 @@
     (when (> (get gc-hint-result :freed-mb 0) 50)
       (log/info "Housekeeping: GC hint freed" (:freed-mb gc-hint-result) "MB"
                 "(before:" (:before-mb gc-hint-result) "MB)"))
+
+    ;; A large committed/used gap that survives an explicit GC means committed
+    ;; heap is NOT being returned — the ratchet. Warn rather than stay silent.
+    (let [{:keys [committed-mb used-mb]} gc-hint-result]
+      (when (and committed-mb used-mb (pos? used-mb)
+                 (> committed-mb (* 2 used-mb))
+                 (> (- committed-mb used-mb) 1024))
+        (log/warn "Housekeeping: committed heap not returning to the OS —"
+                  "committed" committed-mb "MB vs used" used-mb "MB."
+                  "Check -XX:-ExplicitGCInvokesConcurrent is set.")))
 
     ;; Update state
     (swap! scheduler-state assoc
