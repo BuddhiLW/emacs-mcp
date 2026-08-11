@@ -69,7 +69,23 @@ claude
 # Ask: "Help me setup hive-mcp"
 ```
 
-**Option B: Manual**
+**Option B: Batteries-included, fully FOSS**
+
+One command brings up the open-source stack — Chroma for memory, Ollama for embeddings,
+optional LSP sidecar — waits until each is genuinely reachable, then starts the nREPL:
+
+```bash
+git clone https://github.com/hive-agi/hive-mcp.git && cd hive-mcp
+bin/hive-mcp-foss
+
+claude mcp add hive -- "$PWD/bin/hive-mcp-foss"
+```
+
+No private registry, no VPN, no credential store. See
+[FOSS Quickstart](https://github.com/hive-agi/hive-mcp/wiki/FOSS-Quickstart) for the knobs
+(`HIVE_TELEMETRY=1`, `HIVE_NATS=1`, remote Chroma/Ollama hosts).
+
+**Option C: Manual**
 
 ```bash
 export HIVE_MCP_DIR="$HOME/hive-mcp"
@@ -91,7 +107,7 @@ claude mcp list | grep -q "hive" && echo "OK" || echo "FAILED"
 
 ```bash
 ollama pull nomic-embed-text      # Local embeddings
-docker compose up -d              # Chroma vector DB
+docker compose up -d chroma       # Chroma vector DB
 ```
 
 ### Prerequisites
@@ -108,7 +124,38 @@ docker compose up -d              # Chroma vector DB
 
 ---
 
-## 20 Consolidated Tools
+## What hive-mcp Is
+
+hive-mcp is a **host**: a runtime that other things mount into. It is not a library you
+depend on, and it is not the thing you type into.
+
+Three words circulate for systems in this space, and they aren't synonyms:
+
+- **Harness** — the scaffolding that drives a model: prompt loop, tool dispatch, context
+  management. Claude Code is a harness. hive-mcp is a harness *for the agents it spawns* —
+  lings and drones get their loop, presets, budget and context from it — but it is not the
+  harness you talk to.
+- **MCP server** — the wire protocol. True, but that's transport, not architecture.
+- **Host** — the runtime addons mount into and are amalgamated by. This is the load-bearing one.
+
+In one sentence: **hive-mcp is an addon host that doubles as an agent harness.** Your MCP
+client talks to it; addons supply the capabilities; it runs the sub-agents.
+
+The rule that shapes everything else:
+
+> hive-mcp is **CLOSED for modification, OPEN for extension via IAddon.**
+
+Core owns protocols, registries, orchestrators, the server, memory CRUD, KG edges, swarm
+coordination, the session ritual — and a **working noop default for every extension point**.
+Everything else is an addon. That boundary is what makes the FOSS stack a complete system
+rather than a demo, and what keeps the open core clean as the product layer grows.
+
+---
+
+## The Tool Surface
+
+Tools are grouped into **domain roots**, each a namespace with subcommands (`memory add`,
+`kg traverse`, `agent spawn`). Core ships these roots:
 
 | Tool | Purpose |
 |---|---|
@@ -131,25 +178,44 @@ docker compose up -d              # Chroma vector DB
 | `agora` | Multi-agent deliberation and debates |
 | `config` | Runtime configuration management |
 | `migration` | KG/memory backup, restore, backend switching |
-| `multi` | Meta-facade — batch operations |
+| `multi` | Meta-facade — batches any of the above into one call |
 
-Each tool is a consolidated namespace with subcommands (e.g., `memory add`, `memory query`, `kg traverse`).
+Several of these (`cider`, `lsp`, `analysis`, `olympus`, `agora`) arrive from addons rather
+than core. That's the point: **anything an addon registers that doesn't collide with a core
+domain name becomes a new top-level tool root automatically** — no core edit, no allowlist
+entry, no release. A config-driven visibility gate (`[:tool-roots :visible]`) can shrink the
+advertised surface without breaking callers; hidden tools stay dispatchable by name, they
+just leave `tools/list`.
 
 ---
 
 ## Architecture
 
 ```
-Claude ──MCP──► hive-mcp (Clojure)
-                    │
-                    ├── Memory (Chroma vectors + scoped entries)
-                    ├── Knowledge Graph (DataScript, Datalevin, or Datahike)
-                    ├── Swarm (lings + drones + hivemind)
-                    ├── Workflows for AIs (building blocks for repeatable behavior)
-                    └── Extension Registry (requiring-resolve stubs)
-                            │
-                            └──► [optional] your extensions (e.g., plug openclaw, langchain, whatever etc)
+┌──────────────────────────────────────────────────────────┐
+│      Claude Code / any MCP client   (your harness)       │
+└─────────────────────────┬────────────────────────────────┘
+                          │ MCP protocol
+┌─────────────────────────▼────────────────────────────────┐
+│  hive-mcp — THE HOST (AGPL-3.0)                          │
+│                                                          │
+│   Memory  ──►  Chroma vectors + scoped entries           │
+│   KG      ──►  DataScript / Datalevin / Datahike         │
+│   Swarm   ──►  lings + drones + hivemind                 │
+│   Session ──►  catchup / wrap rituals                    │
+│                                                          │
+│   protocols · registries · orchestrators · noop defaults │
+└─────────────────────────┬────────────────────────────────┘
+                          │ IAddon — addon → core, never the reverse
+      ┌───────────────────┼───────────────────┐
+      ▼                   ▼                   ▼
+  :addon              :library             :addon
+  (user-facing        (backend: vector     (user-facing
+   tools)              store, terminal)     tools)
 ```
+
+Dependencies and knowledge flow **addon → core**. A `requiring-resolve` of a concrete addon
+namespace from core is the smell that says the boundary broke.
 
 ---
 
@@ -158,9 +224,12 @@ Claude ──MCP──► hive-mcp (Clojure)
 hive-mcp uses a plugin architecture based on the **IAddon protocol** with automatic classpath discovery. Creating a new addon takes one command:
 
 ```bash
-clojure -Sdeps '{:deps {io.github.hive-agi/hive-mcp {:git/tag "vX.Y.Z" :git/sha "..."}}}' \
+clojure -Sdeps '{:deps {io.github.hive-agi/hive-mcp {:mvn/version "0.19.0"}}}' \
   -Tnew create :template hive-agi/addon :name com.example/my-addon
 ```
+
+hive-mcp publishes to Clojars, so the released coordinate is all you need — no `:git/sha`
+pinning. Latest version: see the [releases page](https://github.com/hive-agi/hive-mcp/releases).
 
 This generates a complete project with:
 - **IAddon protocol implementation** (defrecord with 8 lifecycle methods)
@@ -176,50 +245,79 @@ This generates a complete project with:
 | **MCP Bridge** | Proxy to external MCP servers via stdio/sse |
 | **External** | Non-MCP integrations (REST APIs, CLI tools) |
 
+Manifests also carry `:addon/kind` — `:addon` for anything contributing user-facing tools,
+`:library` for pure backends (vector store, terminal, instrumentation).
+
 ### How It Works
 
 Addons are discovered via `META-INF/hive-addons/*.edn` manifest files on the classpath (same pattern as Java's `ServiceLoader`). Manifests declare dependencies, and addons are loaded in topological order. No changes to hive-mcp core code needed.
 
-See the [Creating Addons](https://github.com/hive-agi/hive-mcp/wiki/Creating-Addons) wiki guide and [ADR-0007](https://github.com/hive-agi/hive-mcp/wiki/ADR-0007-hive-addons-architecture) for architecture details.
+Behaviour reaches core code paths through **generic extension keys**. Core defines the seam
+and applies whatever is registered; it never learns that a given addon exists:
+
+```clojure
+;; in core — addon-agnostic, the only legitimate kind of core change
+(ext/get-extension :catchup/wrap)
+
+;; in the addon's IAddon/hooks — registered at initialize!, removed at shutdown!
+{:catchup/wrap my-addon.catchup/wrap-fn}
+```
+
+### Depending on the host without depending on the host
+
+An addon **must not** `:require` any `hive-mcp.*` namespace — the host is a runtime, not a
+dependency. What it needs is expressed as a port:
+
+- **Contracts to implement** → `hive-addon` (for `IAddon`) and `hive-contracts`
+- **Host services at runtime** → soft resolution (`requiring-resolve`) behind a var-map, so
+  the addon loads and degrades gracefully when the host is absent
+
+A load-time require on the host is the violation; a soft runtime resolve is not. One hard
+require makes a published addon unloadable from a plain Maven fetch.
+
+See [The Core Engine](https://github.com/hive-agi/hive-mcp/wiki/Core-Engine),
+[Creating Addons](https://github.com/hive-agi/hive-mcp/wiki/Creating-Addons) and
+[ADR-0007](https://github.com/hive-agi/hive-mcp/wiki/ADR-0007-hive-addons-architecture).
 
 ---
 
-## Carto Store (Cartography Snippets)
+## Agents and Skills
 
-Cartography snippets (code-chunked embeddings for `carto_callers` / `carto_definition` / `carto_callees`) live in a dedicated vector store — separate from the general `:memory-store` — so recall tuning stays independent.
+Two ways to package reusable agent behaviour, both **plain markdown you can drop in, copy
+between machines, or publish for others** — no code, no rebuild, no host restart.
 
-Default config (already wired in `docker-compose.yml` as service `qdrant-carto`):
+| | **Agent definitions** | **Presets** |
+|---|---|---|
+| Answers | *Who is this agent?* | *How should it work?* |
+| Format | Markdown + YAML frontmatter | Plain markdown |
+| Carries | Identity, tool allowlist, model, hooks | Methodology, constraints, output format |
+| Lives in | `.claude/agents/*.md` | `presets/*.md`, custom dirs, or the memory store |
+| Composes by | Priority override — highest source wins | Concatenation — stack as many as you need |
 
-```clojure
-{:services
- {:qdrant-carto {:mode :local
-                 :host "localhost"
-                 :port 6333
-                 :collection "carto-snippets"
-                 :embedding {:provider :ollama
-                             :model "nomic-embed-code"}}
-  :carto-store  {:backend :qdrant-carto}}}
+**An agent definition is a role; a preset is a skill.** One definition per agent, as many
+presets as the job needs.
+
+```markdown
+---
+name: reviewer
+description: Reviews diffs for correctness and contract violations
+tools: ["memory", "git", "fs"]
+---
+You review changes. Lead with the defect, not the summary.
 ```
 
-**User override example** (`~/.config/hive-mcp/config.edn`):
+Definitions resolve from four sources — `:user` (`~/.claude/agents/`) overrides `:project`
+(`.claude/agents/`) overrides `:plugin` (addon-contributed) overrides `:built-in` — so you
+can shadow any of them without editing them. Installing is a file copy; sharing is a
+`git clone` into `~/.claude/agents/`, or an addon that contributes definitions for a whole team.
 
-```clojure
-{:services
- {:qdrant-carto {:host "qdrant.internal"
-                 :port 6333
-                 :collection "my-carto"
-                 :embedding {:provider :ollama
-                             :model "nomic-embed-code"}}
-  :carto-store  {:backend :qdrant-carto}}}
-```
+**38 presets ship built-in** across methodology (`tdd`, `solid`, `ddd`, `clarity`), roles
+(`reviewer`, `debugger`, `security-auditor`, `researcher`) and coordination
+(`task-coordinator`, `wave-coordinator`, `hivemind`). The `preset` tool handles the whole
+lifecycle — `list`, `get`, `add`, `delete`, and **semantic `search`**, so you can find one
+by describing the job rather than knowing its name.
 
-If `:carto-store` is omitted, `hive-mcp.config.resolve/resolve-carto-store` logs a warning and falls back to `:memory-store` — the system keeps booting, but cartography writes land in the shared store. Production deployments should declare `:carto-store` explicitly.
-
-Bring up the dedicated instance:
-
-```bash
-docker compose up -d qdrant-carto
-```
+See [Agents and Skills](https://github.com/hive-agi/hive-mcp/wiki/Agents-and-Skills).
 
 ---
 
@@ -229,10 +327,30 @@ See [`CLAUDE.md`](CLAUDE.md) for project conventions, tool patterns, and memory 
 
 ## Documentation
 
-| Resource | Description |
+The **[Wiki](https://github.com/hive-agi/hive-mcp/wiki)** is the current, maintained
+documentation. Start with these four:
+
+| Guide | Description |
 |---|---|
-| **[Wiki](https://github.com/hive-agi/hive-mcp/wiki)** | Complete guides |
+| **[FOSS Quickstart](https://github.com/hive-agi/hive-mcp/wiki/FOSS-Quickstart)** | Batteries-included open-source stack, one command |
+| **[The Core Engine](https://github.com/hive-agi/hive-mcp/wiki/Core-Engine)** | What hive-mcp is: host, harness, and the OCP boundary |
+| **[Agents and Skills](https://github.com/hive-agi/hive-mcp/wiki/Agents-and-Skills)** | Drop-in agent definitions and presets |
+| **[Creating Addons](https://github.com/hive-agi/hive-mcp/wiki/Creating-Addons)** | Scaffold and publish your own addon |
+
+Everything else:
+
+| Guide | Description |
+|---|---|
 | [Installation](https://github.com/hive-agi/hive-mcp/wiki/Installation) | Detailed setup |
+| [Infrastructure Setup](https://github.com/hive-agi/hive-mcp/wiki/Infrastructure-Setup) | Docker, Ollama, Chroma |
+| [Ecosystem](https://github.com/hive-agi/hive-mcp/wiki/Ecosystem) | Architecture and open-source strategy |
+| [Interfaces and Protocols](https://github.com/hive-agi/hive-mcp/wiki/Interfaces-and-Protocols) | All ~49 protocols with signatures |
+| [ADR-0007](https://github.com/hive-agi/hive-mcp/wiki/ADR-0007-hive-addons-architecture) | Why the addon architecture looks like this |
+| [Addon Classpath Discovery](https://github.com/hive-agi/hive-mcp/wiki/Addon-Classpath-Discovery) | How manifests are found and loaded |
+| [Tools Reference](https://github.com/hive-agi/hive-mcp/wiki/Tools-Reference) | Tool surface and DSL verbs |
+| [Presets](https://github.com/hive-agi/hive-mcp/wiki/Presets) | System prompts for ling/drone specialization |
+| [Session Continuity](https://github.com/hive-agi/hive-mcp/wiki/Session-Continuity) | catchup and wrap |
+| [Emacs Configuration](https://github.com/hive-agi/hive-mcp/wiki/Emacs-Configuration) | Optional Emacs surface |
 | [Troubleshooting](https://github.com/hive-agi/hive-mcp/wiki/Troubleshooting) | Common issues |
 
 ---

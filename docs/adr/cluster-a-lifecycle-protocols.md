@@ -19,7 +19,7 @@ Interface-Agnostic Box decision (20260202004516-45e16b85). Concrete findings:
   onto the headless addon as a private fn with its own
   `ScheduledExecutorService`, reading the headless-private `process-registry`.
   There is no generic "sweep" abstraction the core can schedule; every future
-  sweepable resource (carto caches, idle sessions, dead LSP sidecars) would
+  sweepable resource (addon caches, idle sessions, dead LSP sidecars) would
   copy this pattern.
 - `src/hive_mcp/agent/ling/spawn.clj:299-333` — `kill!` already uses
   `requiring-resolve` for the NATS bridge and swarm-event-bridge (good), but
@@ -70,7 +70,7 @@ orchestrators (a JVM shutdown hook and a sweep coordinator).
   │              │              │          │              │
   hive-agent  hive-knowledge  hive-nats  hive-qdrant  lsp-mcp
    (lings,     (KG stores,    (NATS      (vector     (sidecar
-    headless,   carto cache   client     store        process)
+    headless,   index cache   client     store        process)
     terminal)   sweep)        close)     close)
 ```
 

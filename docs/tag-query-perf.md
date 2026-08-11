@@ -1,10 +1,10 @@
-# carto tag-query perf investigation
+# tag-query perf investigation
 
 ## Symptom
 
 ```clj
 (let [q (requiring-resolve 'hive-mcp.vectordb.facade/query-entries)
-      r (q {:tags ["carto" "ns:hive-mcp.tools.consolidated.session"]
+      r (q {:tags ["session-summary" "ns:hive-mcp.tools.consolidated.session"]
             :limit 200 :project-id "hive-mcp"})]
   (count r)) ;; => 185 entries, 30-35s per call
 ```
@@ -32,7 +32,7 @@ stored under `metadata.content`). The `:documents` projection holds the
 `memory-to-document` string, which is `Type:\nTags:\nContent: <content>` —
 i.e. the same content plus a ~20-byte preamble.
 
-For the carto namespace that stores full session dumps, each row's
+For a namespace that stores full session dumps, each row's
 `metadata.content` can be tens of KB, so fetching both `documents` and
 `metadatas` roughly *doubles* payload size and JSON-parse time over the wire
 on every read. For a 185-row hit set that is where most of the 30s goes.

@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+#
+# hive-mcp-foss — batteries-included launcher for the fully FOSS stack.
+#
+# Brings up the open-source services hive-mcp needs, waits until each is
+# actually reachable, then execs the nREPL the MCP client attaches to.
+# Every backend here ships in this repo's docker-compose.yml; nothing
+# requires a private registry, a VPN, or a credential store.
+#
+#   Chroma    :8000   vector store for memory + semantic search  (default backend)
+#   Ollama    :11434  local embeddings + local models (installed separately)
+#   NATS      :4222   event bus — OPT-IN; :services :nats :enabled is false by default
+#
+# Usage:
+#   bin/hive-mcp-foss                  # start the default stack, then nREPL
+#   HIVE_NATS=1 bin/hive-mcp-foss      # + NATS (also set :nats :enabled true in config.edn)
+#   HIVE_TELEMETRY=1 bin/hive-mcp-foss # + Prometheus/Grafana/Loki
+#   HIVE_SKIP_COMPOSE=1 ...            # services already running elsewhere
+#
+# Knobs (all optional, all defaulted):
+#   CHROMA_HOST/CHROMA_PORT   default localhost:8000
+#   NATS_HOST/NATS_PORT       default localhost:4222
+#   OLLAMA_HOST               default http://localhost:11434
+#   HIVE_NREPL_PORT           default 7910 (the :nrepl alias default)
+#   WAIT_TIMEOUT              seconds to wait per service, default 90
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+CHROMA_HOST="${CHROMA_HOST:-localhost}"
+CHROMA_PORT="${CHROMA_PORT:-8000}"
+NATS_HOST="${NATS_HOST:-localhost}"
+NATS_PORT="${NATS_PORT:-4222}"
+OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
+HIVE_NREPL_PORT="${HIVE_NREPL_PORT:-7910}"
+WAIT_TIMEOUT="${WAIT_TIMEOUT:-90}"
+
+export CHROMA_HOST CHROMA_PORT NATS_HOST NATS_PORT OLLAMA_HOST HIVE_NREPL_PORT
+
+log()  { printf 'hive-mcp: %s\n' "$*"; }
+warn() { printf 'hive-mcp: WARNING %s\n' "$*" >&2; }
+die()  { printf 'hive-mcp: ERROR %s\n' "$*" >&2; exit 1; }
+
+# --- preflight: required binaries ------------------------------------------
+
+command -v clojure >/dev/null 2>&1 || die "clojure CLI not found — https://clojure.org/guides/install_clojure"
+
+# --- services --------------------------------------------------------------
+
+# The FOSS profile names its services explicitly rather than running a bare
+# `up -d`: compose files in this repo also carry services backed by private
+# addons, and those must not start here.
+FOSS_SERVICES=(chroma lsp-sidecar)
+[ "${HIVE_NATS:-0}" = "1" ] && FOSS_SERVICES+=(nats)
+
+start_services() {
+  if [ "${HIVE_SKIP_COMPOSE:-0}" = "1" ]; then
+    log "HIVE_SKIP_COMPOSE=1 — assuming services are already up"
+    return 0
+  fi
+  if ! command -v docker >/dev/null 2>&1; then
+    warn "docker not found — skipping service startup; set HIVE_SKIP_COMPOSE=1 to silence"
+    return 0
+  fi
+
+  log "starting FOSS services: ${FOSS_SERVICES[*]}"
+  docker compose up -d "${FOSS_SERVICES[@]}"
+
+  if [ "${HIVE_TELEMETRY:-0}" = "1" ]; then
+    log "starting telemetry profile (Prometheus, Grafana, Loki, promtail)"
+    docker compose --profile telemetry up -d
+  fi
+}
+
+# --- readiness probes ------------------------------------------------------
+#
+# Each probe is a plain TCP connect plus, where the service exposes one, an
+# HTTP health endpoint. Compose reports a container as running well before
+# its process accepts connections, so `up -d` returning is not readiness.
+
+tcp_open() {
+  timeout 2 bash -c "</dev/tcp/$1/$2" 2>/dev/null
+}
+
+wait_for() {
+  local label="$1" host="$2" port="$3"
+  local start=$SECONDS delay=1
+
+  if tcp_open "$host" "$port"; then
+    log "$label ready at $host:$port"
+    return 0
+  fi
+
+  log "waiting for $label at $host:$port (timeout ${WAIT_TIMEOUT}s)"
+  while (( SECONDS - start < WAIT_TIMEOUT )); do
+    if tcp_open "$host" "$port"; then
+      log "$label ready at $host:$port (${SECONDS}s)"
+      return 0
+    fi
+    sleep "$delay"
+    (( delay < 8 )) && delay=$(( delay * 2 ))
+  done
+
+  warn "$label not reachable at $host:$port after ${WAIT_TIMEOUT}s"
+  return 1
+}
+
+# --- Ollama ----------------------------------------------------------------
+#
+# Embeddings degrade rather than fail: without Ollama, memory still stores and
+# retrieves by tag/type, only semantic search goes dark. So a missing Ollama
+# warns and continues instead of blocking the boot.
+
+check_ollama() {
+  local host="${OLLAMA_HOST#*://}"
+  host="${host%%/*}"
+  local h="${host%%:*}" p="${host##*:}"
+  [ "$h" = "$p" ] && p=11434
+
+  if tcp_open "$h" "$p"; then
+    log "Ollama ready at $OLLAMA_HOST"
+    return 0
+  fi
+  warn "Ollama unreachable at $OLLAMA_HOST — semantic search will be disabled"
+  warn "  install: https://ollama.com  then: ollama pull nomic-embed-text"
+  return 1
+}
+
+# --- boot ------------------------------------------------------------------
+
+start_services
+wait_for "Chroma" "$CHROMA_HOST" "$CHROMA_PORT" || true
+[ "${HIVE_NATS:-0}" = "1" ] && { wait_for "NATS" "$NATS_HOST" "$NATS_PORT" || true; }
+check_ollama || true
+
+log "starting nREPL on :$HIVE_NREPL_PORT"
+log "register with your MCP client, e.g.:"
+log "  claude mcp add hive -- $REPO_ROOT/bin/hive-mcp-foss"
+
+# The :nrepl alias pins --port in its :main-opts; nrepl.cmdline takes the LAST
+# --port it is given, so appending here is what makes HIVE_NREPL_PORT effective.
+exec clojure -M:dev:nrepl --port "$HIVE_NREPL_PORT"

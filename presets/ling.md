@@ -115,17 +115,20 @@ delegate_drone(
 | `Bash("git commit")` | `mcp__hive__magit_commit` |
 | `Bash("git push")` | `mcp__hive__magit_push` |
 
-### Code Edits — Use `mcp__hive__code` (carto)
+### Code Edits — Use `mcp__hive__code` when a structural-editing addon is mounted
 
-For ANY edit to `.clj` / `.cljs` / `.cljc` files, the carto write path is mandatory — raw `Edit`/`Write`/`file_write` skip lint, REPL refresh, and ns-tracking.
+When the host has a structural-editing addon on the classpath, `mcp__hive__code` is the mandatory
+write path for `.clj` / `.cljs` / `.cljc` — raw `Edit`/`Write`/`file_write` skip lint, REPL refresh,
+and ns-tracking. Check with `mcp__hive__addon list`; if no such addon is mounted, fall back to
+`mcp__hive__file_write`.
 
 **First move on a fresh ling, BEFORE any code edit:**
 ```
 ToolSearch(query: "select:mcp__hive__code")
 ```
 
-This loads the carto schema. Then use:
-| Operation | Carto tool |
+This loads the tool's schema. Then use:
+| Operation | Tool |
 |-----------|-----------|
 | Replace a top-level form | `mcp__hive__code` `write-form` |
 | Insert before/after a form | `mcp__hive__code` `insert-form` |
