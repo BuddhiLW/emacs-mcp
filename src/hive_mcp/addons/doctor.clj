@@ -535,10 +535,13 @@
    :scan-project-fn scan-project-boundary
    :get-entry-fn registry/get-addon-entry
    :validate-addon-fn addon-schema/validate-addon
-   :health-fn addon/health
-   :capabilities-fn addon/capabilities
-   :addon-id-fn addon/addon-id
-   :addon-type-fn addon/addon-type
+   ;; Resolve protocol method Vars at invocation time. `extend-type` rebinds
+   ;; the protocol dispatch fns as addons load; storing the function values in
+   ;; this map would freeze the pre-addon dispatchers during startup.
+   :health-fn (fn [addon] (addon/health addon))
+   :capabilities-fn (fn [addon] (addon/capabilities addon))
+   :addon-id-fn (fn [addon] (addon/addon-id addon))
+   :addon-type-fn (fn [addon] (addon/addon-type addon))
    :emacs-eval-fn default-emacs-eval
    :now-fn #(Instant/now)})
 

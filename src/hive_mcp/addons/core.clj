@@ -8,7 +8,7 @@
    - list-addons / active-addon-tools / addons-with-capability
    - registry-status / reset-registry!"
   (:require [clojure.set]
-            [hive-mcp.addons.protocol :as proto]
+            [hive-addon.protocol :as proto]
             [hive-mcp.dns.result :as r]
             [hive-mcp.extensions.registry :as ext]
             [taoensso.timbre :as log]))

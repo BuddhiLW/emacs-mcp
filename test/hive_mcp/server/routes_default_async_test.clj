@@ -44,6 +44,24 @@
       (wrapped {:command "search" :async true})
       (is (true? (:async @cap))))))
 
+(deftest async-capable-tools-declare-async-in-their-schema
+  (testing "the middleware honours async:false, but an UNDECLARED boolean false is
+            stripped in transit — so honouring it below the schema boundary (as the
+            tests above do) proves nothing about the wire. The property must be
+            declared for the opt-out to arrive at all."
+    (let [tool  (routes/make-tool cmem/tool-def)
+          props (:properties (:inputSchema tool))]
+      (is (seq (:default-async-commands cmem/tool-def))
+          "guard: this tool is async-capable, so the opt-out must be advertised")
+      (is (contains? props "async"))
+      (is (= "boolean" (:type (get props "async")))))))
+
+(deftest tools-without-default-async-do-not-advertise-async
+  (testing "the property is injected only where the middleware can act on it"
+    (let [tool  (routes/make-tool (dissoc cmem/tool-def :default-async-commands))
+          props (:properties (:inputSchema tool))]
+      (is (not (contains? props "async"))))))
+
 (deftest leaves-read-commands-synchronous
   (testing "read commands (not in set) pass through without :async key"
     (let [[h cap] (capture-handler)

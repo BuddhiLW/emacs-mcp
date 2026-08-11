@@ -35,7 +35,7 @@
 
      ;; Register as addon — tools auto-discovered
      (register-addon! (->HaystackBridge (atom nil)))"
-  (:require [hive-mcp.addons.protocol :as proto]
+  (:require [hive-addon.protocol :as proto]
             [hive-mcp.addons.core :as addon]
             [hive-mcp.dns.result :as r]
             [clojure.string :as str]

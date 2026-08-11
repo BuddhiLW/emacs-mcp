@@ -295,6 +295,61 @@
           (is (:isError r))
           (is (not (str/includes? (:text r) "SUBCOMMAND"))))))))
 
+(deftest unknown-command-suggests-metadata-marked-opaque-roots
+  (testing "a contributed subdomain (bare fn + ::opaque-roots metadata) is
+            offered alongside the core :_handler ones"
+    (let [handlers (with-meta {:clojure {:_handler (fn [_] :clojure)}
+                               :carto   (fn [_] :carto)}
+                     {:hive-mcp.tools.cli/opaque-roots #{:carto}})
+          text     (:text ((cli/make-cli-handler handlers) {:command "scan"}))]
+      (is (str/includes? text "carto scan") "the regression this fixes")
+      (is (str/includes? text "clojure scan"))))
+
+  (testing "the stuttering carto_* form names exactly one subdomain"
+    (let [handlers (with-meta {:clojure  {:_handler (fn [_] :clojure)}
+                               :analysis {:_handler (fn [_] :analysis)}
+                               :carto    (fn [_] :carto)}
+                     {:hive-mcp.tools.cli/opaque-roots #{:carto}})
+          text     (:text ((cli/make-cli-handler handlers)
+                           {:command "carto_definition"}))]
+      (is (str/includes? text "carto carto_definition"))
+      (is (not (str/includes? text "clojure carto_definition")))
+      (is (not (str/includes? text "analysis carto_definition")))))
+
+  (testing "an unmarked leaf fn is still never offered as a subdomain"
+    (let [text (:text ((cli/make-cli-handler {:status (fn [_] :status)})
+                       {:command "scan"}))]
+      (is (not (str/includes? text "SUBCOMMAND"))))))
+
+(deftest unknown-command-names-exact-owners-when-enumerable
+  (testing "a subcommand this tree CAN see is named precisely, never guessed"
+    (let [handlers {:kanban  {:list (fn [_] :k)}
+                    :session {:list (fn [_] :s)}
+                    :carto   {:_handler (fn [_] :c)}}
+          text     (:text ((cli/make-cli-handler handlers) {:command "list"}))]
+      (is (str/includes? text "kanban list"))
+      (is (str/includes? text "session list"))
+      (is (not (str/includes? text "carto list"))
+          "an opaque root is not offered once a real owner is known"))))
+
+(deftest unknown-command-suggests-nearest-name
+  (testing "a near miss gets an edit-distance suggestion"
+    (let [handlers {:status (fn [_] :s) :spawn (fn [_] :p)}
+          text     (:text ((cli/make-cli-handler handlers) {:command "staus"}))]
+      (is (str/includes? text "Did you mean"))
+      (is (str/includes? text "status"))))
+
+  (testing "a far miss gets none"
+    (let [handlers {:status (fn [_] :s)}
+          text     (:text ((cli/make-cli-handler handlers) {:command "zzzzzz"}))]
+      (is (not (str/includes? text "Did you mean")))))
+
+  (testing "a nested path is suggested by its full form"
+    (let [handlers {:status {:list (fn [_] :l)}}
+          text     (:text ((cli/make-cli-handler handlers)
+                           {:command "status lst"}))]
+      (is (str/includes? text "status list")))))
+
 ;; =============================================================================
 ;; Help command generation tests
 ;; =============================================================================

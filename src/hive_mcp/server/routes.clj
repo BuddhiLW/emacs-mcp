@@ -72,14 +72,32 @@
   :args (s/cat :tool-def ::tool-def)
   :ret ::tool-response)
 
+(def ^:private async-opt-out-property
+  "Schema property advertising the :async escape hatch.
+
+   An UNDECLARED boolean false is stripped in transit by the MCP client, so a
+   tool whose middleware honours `async:false` must DECLARE the property or the
+   opt-out never reaches the handler."
+  {"async" {:type "boolean"
+            :description (str "Set false to force synchronous execution and get the "
+                              "full result in-band (default: this tool's commands may "
+                              "queue and return {:queued true :task-id ...}). "
+                              "Set true to force queueing.")}})
+
 (defn make-tool
   "Convert a tool definition with :handler to SDK format.
-   Wraps handler with the standard middleware chain."
+   Wraps handler with the standard middleware chain.
+
+   A tool declaring :default-async-commands automatically advertises the
+   `async` property; a tool that declares its own `async` keeps it."
   [{:keys [name description inputSchema handler deprecated default-async-commands]}]
   (let [schema-ext (ext/get-schema-extensions name)
-        merged-schema (if schema-ext
-                        (update inputSchema :properties merge schema-ext)
-                        inputSchema)]
+        merged-schema (cond-> inputSchema
+                        schema-ext
+                        (update :properties merge schema-ext)
+
+                        (seq default-async-commands)
+                        (update :properties #(merge async-opt-out-property %)))]
     (cond-> {:name name
              :description description
              :inputSchema merged-schema

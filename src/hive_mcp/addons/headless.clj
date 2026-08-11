@@ -11,10 +11,10 @@
    addon-contributed backend and an in-tree one identically.
 
    See also:
-   - hive-mcp.addons.protocol             -- IAddon base protocol
+   - hive-addon.protocol                  -- IAddon base protocol
    - hive-mcp.addons.headless-caps        -- Optional capability protocols (ISP)
    - hive-mcp.agent.ling.strategy         -- ILingStrategy (arities mirrored)"
-  (:require [hive-mcp.addons.protocol :as proto]
+  (:require [hive-addon.protocol :as proto]
             [hive-spi.addon.headless :as headless]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
