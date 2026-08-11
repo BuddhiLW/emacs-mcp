@@ -421,12 +421,16 @@
   :test-backends
   {:extra-paths ["test-backends"]}
 
-  ;; Build via hive-build: uberjar (server) + source jar /
-  ;; Clojars deploy. deps-deploy pushes the library jar; version autobumps.
-  ;; Usage: clj -T:build uber            ; runnable server uberjar
-  ;;        clj -T:build uber :profile k8s-headless
-  ;;        clj -T:build print-version   ; computed 0.{minor}.{patch}
-  ;;        clj -T:build deploy          ; jar -> Clojars (needs CLOJARS_* env)
+  ;; Build via hive-build (io.github.hive-agi/hive-build), the same release
+  ;; path every other hive library uses. Version = the repo's VERSION file;
+  ;; coordinates and :publish come from version.edn.
+  ;; Tasks: clean jar jar-aot install bump verify-license kondo deploy
+  ;; Usage: clj -T:build jar              ; source jar
+  ;;        clj -T:build jar-aot          ; AOT jar, metadata elided
+  ;;        clj -T:build bump :level :patch
+  ;;        clj -T:build deploy           ; jar -> Clojars (needs CLOJARS_* env)
+  ;; There is NO `uber` task here and never has been in this repo; the
+  ;; Dockerfile still calls one. See the note in Dockerfile.
   :build
   {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.0"}}
    :ns-default hive-build.api}

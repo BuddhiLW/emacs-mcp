@@ -58,7 +58,11 @@ RUN clj -P -M:mcp:${ADDON_PROFILE}:build
 COPY src/ src/
 COPY resources/ resources/
 
-# Build the uberjar via tools.build (see build.clj).
+# BROKEN: there is no `uber` task. It was dropped from the local build.clj
+# in 3b1dc57 and hive-build.api never had one, so this line has been failing
+# since then — no workflow builds this image, which is why it went unseen.
+# hive-store keeps its own build.clj precisely to retain an `uber`; the fix
+# is to add one to hive-build and consume it here.
 # The profile alias is passed so addon deps are included in the classpath
 # during AOT compilation and bundled into the uber jar.
 RUN clj -T:build uber :profile ${ADDON_PROFILE}
