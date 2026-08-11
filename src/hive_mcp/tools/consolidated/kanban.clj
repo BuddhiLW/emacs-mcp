@@ -120,7 +120,7 @@
 (def tool-def
   {:name "kanban"
    :consolidated true
-   :description "Kanban task management: list (all/filtered tasks), get (single task/entry by id — unified across the kanban store AND the default memory store, since they are separate backends; surfaces full fields + KG edges; on miss returns semantic-search suggestions), create (new task), update (change status/modify task), delete (hard-remove task by id; no archival, no completion — use for duplicates/cancellations), retag (scope-move via project_id + optional ±tags; preserves entry id + KG edges, no re-embed), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks, supports plan_id or plan_path), plan-schema (the plan-memory EDN contract: JSON-schema + example + how-to, so a type=plan memory can be authored without reading source), batch-update (bulk status changes; per-op :command respected — pass :command \"delete\" inside an op to mix delete in), batch-delete (sweep many task_ids; mirror of batch-update), batch-retag (sweep many scope-moves). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all. HCR: a list shows its own scope + ANCESTORS (parent tasks, always — 'child sees parent'); include_descendants=true (default) also aggregates DESCENDANT (child) project tasks; scope=\"all\" lifts the project filter entirely for a cross-workspace whole-board view. List filters: query (substring), tags (extra required tags), tag_match (any|all), created_after / updated_after (ISO-8601), limit / offset (pagination), fields (projection)."
+   :description "Kanban task management: list (all/filtered tasks), get (single task/entry by id — unified across the kanban store AND the default memory store, since they are separate backends; surfaces full fields + KG edges; on miss returns semantic-search suggestions), create (new task), update (move status via new_status and/or edit title/description/priority in place; both in one call move first, then edit), delete (hard-remove task by id; no archival, no completion — use for duplicates/cancellations), retag (scope-move via project_id + optional ±tags; preserves entry id + KG edges, no re-embed), status (board overview + milestones), sync (backends), plan-to-kanban (convert plan to tasks, supports plan_id or plan_path), plan-schema (the plan-memory EDN contract: JSON-schema + example + how-to, so a type=plan memory can be authored without reading source), batch-update (bulk status changes; per-op :command respected — pass :command \"delete\" inside an op to mix delete in), batch-delete (sweep many task_ids; mirror of batch-update), batch-retag (sweep many scope-moves). Aliases (deprecated): move→update, roadmap→status, my-tasks→list. Use command='help' to list all. HCR: a list shows its own scope + ANCESTORS (parent tasks, always — 'child sees parent'); include_descendants=true (default) also aggregates DESCENDANT (child) project tasks; scope=\"all\" lifts the project filter entirely for a cross-workspace whole-board view. List filters: query (substring), tags (extra required tags), tag_match (any|all), created_after / updated_after (ISO-8601), limit / offset (pagination), fields (projection)."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :enum ["list" "get" "create" "move" "status" "update" "delete" "retag" "roadmap" "my-tasks" "sync" "plan-to-kanban" "plan-schema" "batch-update" "batch-delete" "batch-create" "batch-retag" "help"]
@@ -129,9 +129,9 @@
                                         :enum ["todo" "inprogress" "inreview" "done"]
                                         :description "Filter by task status"}
                               "title" {:type "string"
-                                       :description "Task title for create"}
+                                       :description "[create|update] Task title. On update a non-blank value replaces the current title in place — entry id, KG edges, status and scope are preserved."}
                               "description" {:type "string"
-                                             :description "Task description"}
+                                             :description "[create|update] Task description. On update a non-blank value replaces the current description in place."}
                               "task_id" {:type "string"
                                          :description "Task ID to get/move/update/retag/delete"}
                               "id" {:type "string"
@@ -161,7 +161,9 @@
                                                                  "add_tags"       {:type "array" :items {:type "string"}}
                                                                  "remove_tags"    {:type "array" :items {:type "string"}}
                                                                  "title"          {:type "string"}
-                                                                 "description"    {:type "string"}}}
+                                                                 "description"    {:type "string"}
+                                                                 "priority"       {:type "string"
+                                                                                   :enum ["high" "medium" "low"]}}}
                                             :description "Array of operations for batch-update / batch-delete / batch-create / batch-retag. Each op may specify :command to mix verbs in one batch; otherwise the wrapper's default applies."}
                               "directory" {:type "string"
                                            :description "Working directory for project scope (auto-detected if not provided)"}
@@ -181,7 +183,7 @@
                                            :description "[list] Tag match semantics for `tags` (default 'all')"}
                               "priority" {:type "string"
                                           :enum ["high" "medium" "low"]
-                                          :description "[list] Filter by exact priority"}
+                                          :description "[list] Filter by exact priority. [create|update] Set the task priority — an update rewrites the `priority-*` tag together with the content field, so `list` and `get` cannot disagree."}
                               "created_after" {:type "string"
                                                :description "[list] ISO-8601 timestamp; only entries with content :created >= this"}
                               "updated_after" {:type "string"
