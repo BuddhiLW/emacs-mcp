@@ -31,6 +31,12 @@ jobs:
         with:
           cli: '1.12.5.1664'
 
+      # Gate BEFORE the deploy, as every other hive repo does: a published
+      # pom is immutable on Clojars, so a red suite must never be able to
+      # ship a version that cannot be withdrawn.
+      - name: Test
+        run: clojure -M:test-unit
+
       - name: Deploy
         env:
           CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
@@ -42,8 +48,17 @@ jobs:
           VER=$(tr -d '[:space:]' < VERSION)
           git fetch --tags
           if git rev-parse --verify "refs/tags/v$VER" >/dev/null 2>&1; then
-            test "$(git rev-list -n 1 "v$VER")" = "$GITHUB_SHA"
-          else
-            git tag "v$VER" "$GITHUB_SHA"
-            git push origin "refs/tags/v$VER"
+            TAGGED=$(git rev-list -n 1 "v$VER")
+            if [ "$TAGGED" = "$GITHUB_SHA" ]; then
+              echo "v$VER already points at this commit — nothing to do."
+              exit 0
+            fi
+            echo "::error::VERSION is still $VER, but v$VER points at $TAGGED,"
+            echo "::error::not at this commit. Source landed on main without a"
+            echo "::error::version bump, so Deploy was a no-op against an"
+            echo "::error::immutable coordinate and these changes are NOT"
+            echo "::error::published. Bump VERSION in a PR to release them."
+            exit 1
           fi
+          git tag "v$VER" "$GITHUB_SHA"
+          git push origin "refs/tags/v$VER"
