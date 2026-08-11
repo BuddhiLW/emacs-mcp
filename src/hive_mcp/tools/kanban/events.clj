@@ -83,6 +83,41 @@
                                 :payload {:tags       new-tags
                                           :project-id new-project-id}}})))
 
+(defn edit-fx
+  "Pure handler. Given coeffects (entry) and an event, return the effect map
+   describing a content edit — title, description, priority. Status, scope
+   and KG edges are untouched. Returns nil for missing/non-kanban entries.
+
+   Effect map invariants:
+     * `:kanban/facade-update` is ALWAYS present (the soft commit), and
+       carries `:tags` ONLY when the priority moved — see
+       `kt/edit-transition` for why the tag must travel with the content.
+     * `:kanban/temporal-record` op = `:kanban-edit`, emitted only when a
+       field actually changed, so a no-op edit leaves no audit noise.
+     * No completion hooks, no movement tracking, no delete effect"
+  [{:keys [:kanban/entry]} [_ {:keys [task-id title description priority]}]]
+  (when (and entry (pred/kanban-entry? entry))
+    (let [{:keys [changed new-content new-tags
+                  old-title new-title old-priority new-priority]}
+          (kt/edit-transition entry {:title       title
+                                     :description description
+                                     :priority    priority})
+          project-id (kt/extract-project-id-from-tags entry)]
+      (cond-> {:kanban/facade-update
+               {:task-id task-id
+                :payload (cond-> {:content new-content}
+                           new-tags (assoc :tags new-tags))}}
+        (seq changed)
+        (assoc :kanban/temporal-record
+               {:entry-id   task-id
+                :op         :kanban-edit
+                :data       {:changed      (vec (sort (map name changed)))
+                             :old-title    old-title
+                             :new-title    new-title
+                             :old-priority old-priority
+                             :new-priority new-priority}
+                :project-id project-id})))))
+
 (defn- result-from-fx
   "Lift a possibly-nil effect map into a Result."
   [fx-map task-id]
@@ -105,7 +140,11 @@
   (router/reg-event-fx
    :kanban/retag
    [(cofx/inject-cofx :kanban/entry)]
-   retag-fx))
+   retag-fx)
+  (router/reg-event-fx
+   :kanban/edit
+   [(cofx/inject-cofx :kanban/entry)]
+   edit-fx))
 
 (defonce ^:private initialized? (atom false))
 
@@ -172,3 +211,48 @@
     :else
     (let [ctx (router/dispatch-sync [:kanban/retag event-payload])]
       (result-from-fx (:effects ctx) task-id))))
+
+(defn dispatch-edit!
+  "Public boundary entry point. Synchronously dispatch a `:kanban/edit` event
+   and return a Result wrapping the effect map. Effects run before this returns.
+
+   `event-payload` shape:
+     {:task-id ..     — required
+      :title ..       — optional, non-blank string to replace the title
+      :description .. — optional, non-blank string to replace the description
+      :priority ..    — optional, one of high|medium|low
+      :directory ..}  — optional, threaded for cofx context
+
+   A field that is absent, nil, or blank leaves the current value standing;
+   at least one of the three must be present.
+
+   Returns:
+     (r/ok effect-map)                      on success
+     (r/err :kanban/invalid-task-id ...)    when task-id missing/blank
+     (r/err :kanban/nothing-to-edit ...)    when no editable field was given
+     (r/err :kanban/invalid-priority ...)   when priority is outside the enum
+     (r/err :kanban/invalid-task ...)       when entry missing or non-kanban"
+  [{:keys [task-id title description priority] :as event-payload}]
+  (init!)
+  (let [given?     (fn [v] (and (string? v) (not (clojure.string/blank? v))))
+        priorities #{"high" "medium" "low"}]
+    (cond
+      (or (nil? task-id)
+          (and (string? task-id) (clojure.string/blank? task-id)))
+      (r/err :kanban/invalid-task-id
+             {:message "Edit requires :task-id"
+              :given   task-id})
+
+      (not (some given? [title description priority]))
+      (r/err :kanban/nothing-to-edit
+             {:message "Edit requires at least one of :title, :description, :priority"
+              :task-id task-id})
+
+      (and (given? priority) (not (priorities priority)))
+      (r/err :kanban/invalid-priority
+             {:message "Priority must be one of high, medium, low"
+              :given   priority})
+
+      :else
+      (let [ctx (router/dispatch-sync [:kanban/edit event-payload])]
+        (result-from-fx (:effects ctx) task-id)))))

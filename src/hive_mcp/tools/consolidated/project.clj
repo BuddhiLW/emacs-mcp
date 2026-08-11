@@ -146,8 +146,8 @@
                               "project_id" {:type "string"
                                             :description "Project ID to query tree for / [kanban list] exact-match project filter / [kanban retag] alias for new_project_id"}
                               ;; Kanban params
-                              "title" {:type "string" :description "[kanban create] Task title"}
-                              "description" {:type "string" :description "[kanban create] Task description"}
+                              "title" {:type "string" :description "[kanban create|update] Task title. On update a non-blank value replaces the current title in place — entry id, KG edges, status and scope are preserved."}
+                              "description" {:type "string" :description "[kanban create|update] Task description. On update a non-blank value replaces the current description in place."}
                               "task_id" {:type "string" :description "[kanban get|update|delete|retag] Task ID"}
                               "id" {:type "string" :description "[kanban get] Alias for task_id — entry id to fetch from either store"}
                               "new_status" {:type "string"
@@ -179,7 +179,7 @@
                                            :description "[kanban list] Tag match semantics for `tags` (default 'all')"}
                               "priority" {:type "string"
                                           :enum ["high" "medium" "low"]
-                                          :description "[kanban list] Filter by exact priority"}
+                                          :description "[kanban list] Filter by exact priority / [kanban create|update] Set the task priority. An update rewrites the `priority-*` tag together with the content field, so `list` and `get` cannot disagree."}
                               "created_after" {:type "string"
                                                :description "[kanban list] ISO-8601 timestamp; only entries with content :created >= this"}
                               "updated_after" {:type "string"

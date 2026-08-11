@@ -217,6 +217,39 @@
       (mcp-error (or (:message result)
                      (str "Move failed: " (:error result)))))))
 
+(defn- edit*
+  "Edit a kanban task's title/description/priority via the event bus.
+   Like `move*`, the slim view is derived from the committed effect payload
+   rather than a read-back, because some vector backends are eventual here."
+  [{:keys [task_id id title description priority directory]}]
+  (let [task-id (or task_id id)
+        result  (kanban-events/dispatch-edit!
+                 {:task-id     task-id
+                  :title       title
+                  :description description
+                  :priority    priority
+                  :directory   directory})]
+    (if (r/ok? result)
+      (let [{:keys [content tags]} (get-in result [:ok :kanban/facade-update :payload])]
+        (mcp-json (kt/task->slim {:id task-id :content content :tags tags})))
+      (mcp-error (or (:message result)
+                     (str "Edit failed: " (:error result)))))))
+
+(defn- update*
+  "Route a `kanban update` call to a status move, a content edit, or both.
+
+   `new_status`/`status` moves; `title`/`description`/`priority` edit. When
+   both are given the move commits first, so the edit's coeffect reads the
+   already-moved entry and the returned slim view carries both changes."
+  [{:keys [new_status status title description priority] :as params}]
+  (let [given? (fn [v] (and (string? v) (not (str/blank? v))))
+        move?  (some given? [new_status status])
+        edit?  (some given? [title description priority])]
+    (cond
+      (and move? edit?) (do (move* params) (edit* params))
+      edit?             (edit* params)
+      :else             (move* params))))
+
 (defn- retag*
   "Retag a kanban entry: scope-move (project_id) + optional ±tags.
    Tags-only mutation — preserves entry id, content, KG edges, qdrant point.
@@ -373,11 +406,15 @@
   (safe-call :kanban/list-failed #(with-store (list-slim* params))))
 
 (defn handle-mem-kanban-move
-  "Move task to new status via the kanban event bus.
+  "Update a task via the kanban event bus: status move, content edit, or both.
    Moving to `done` is a SOFT transition: status retagged, entry preserved,
-   KG edges intact. Use `handle-mem-kanban-delete` for hard removal."
+   KG edges intact. Use `handle-mem-kanban-delete` for hard removal.
+
+   `title`/`description`/`priority` edit the entry's content in place. A
+   priority edit rewrites the `priority-*` tag too, so `list :priority` and
+   `get` cannot disagree."
   [params]
-  (safe-call :kanban/move-failed #(with-store (move* params))))
+  (safe-call :kanban/move-failed #(with-store (update* params))))
 
 (defn handle-mem-kanban-retag
   "Retag a kanban entry: scope-move (project_id) + optional ±tags.
