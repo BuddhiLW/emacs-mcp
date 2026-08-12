@@ -27,12 +27,16 @@
    Effect map invariants:
      * `:kanban/facade-update` is ALWAYS present (the soft commit)
      * `:kanban/notify-done` and `:kanban/archive-external` ONLY for `done`
+     * both carry the POST-transition entry: the archive is a record of the
+       COMPLETED task, so it must not be handed the coeffect snapshot whose
+       tags and content still say `todo`
      * No effect deletes from the store"
   [{:keys [:kanban/entry :kanban/project-id]} [_ {:keys [task-id new-status]}]]
   (when (and entry (pred/kanban-entry? entry))
     (let [{:keys [old-status new-status new-content new-tags title]}
           (kt/transition entry new-status project-id)
-          done? (pred/done? new-status)
+          done?     (pred/done? new-status)
+          moved-entry (assoc entry :tags new-tags :content new-content)
           base {:kanban/track-movement {:task-id task-id :title title
                                         :from old-status :to new-status
                                         :project-id project-id}
@@ -45,8 +49,8 @@
                                          :payload {:content new-content
                                                    :tags    new-tags}}}]
       (cond-> base
-        done? (assoc :kanban/notify-done      {:entry entry :task-id task-id}
-                     :kanban/archive-external {:entry entry :task-id task-id})))))
+        done? (assoc :kanban/notify-done      {:entry moved-entry :task-id task-id}
+                     :kanban/archive-external {:entry moved-entry :task-id task-id})))))
 
 (defn retag-fx
   "Pure handler. Given coeffects (entry) and an event, return the effect map
