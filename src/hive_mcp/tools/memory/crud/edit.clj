@@ -65,21 +65,56 @@
                   (assoc :updated (mem-proto/iso-timestamp)))]
     [updates content-changed?]))
 
+(defn- store-holding
+  "Resolve the registered store that actually holds `id`, plus the entry it
+   holds. The :default slot is probed first, then every other registered slot
+   (:kanban, :carto, …), so an edit reaches an entry wherever it lives —
+   matching the unified READ that `kanban get` already performs.
+
+   Returns [store existing], or nil when no registered store has the id."
+  [id]
+  (let [default (mem-proto/get-store)
+        others  (->> (mem-proto/registered-stores)
+                     (remove (fn [[k _]] (= k :default)))
+                     (map val))]
+    (or (when-let [e (mem-proto/get-entry default id)]
+          [default e])
+        (some (fn [s]
+                (when-let [e (try (mem-proto/get-entry s id)
+                                  (catch Throwable _ nil))]
+                  [s e]))
+              others))))
+
+(defn- updated-entry
+  "Normalize the store-dependent return of `IMemoryStore/update-entry!`.
+
+   Milvus/Chroma answer with the updated entry MAP; the qdrant store backing
+   the :kanban slot answers with the entry ID STRING. Both are successes.
+   Returns the updated entry map, or nil when the store signalled failure —
+   an opaque value that is neither a clean map nor the entry's own id."
+  [store id updated]
+  (cond
+    (and (map? updated) (not (:error updated))) updated
+    (and (string? updated) (= updated id))      (mem-proto/get-entry store id)
+    :else                                       nil))
+
 (defn- apply-edit!
-  "Apply a single edit. Returns a result map describing the outcome, or nil
-   when the entry is not found. Does not build MCP-shaped responses — leaves
-   that to the caller so batch ops can aggregate cleanly."
-  [store {:keys [id reason] :as params}]
-  (when-let [existing (mem-proto/get-entry store id)]
+  "Apply a single edit to whichever registered store holds the entry. Returns a
+   result map describing the outcome, or nil when no store has the id. Does not
+   build MCP-shaped responses — leaves that to the caller so batch ops can
+   aggregate cleanly."
+  [{:keys [id reason] :as params}]
+  (when-let [[store existing] (store-holding id)]
     (let [[updates content-changed?] (build-updates existing params)]
       (if (empty? updates)
         {:id id :noop true :existing existing}
-        (let [updated (mem-proto/update-entry! store id updates)]
-          (when-not (and (map? updated) (not (:error updated)))
+        (let [raw     (mem-proto/update-entry! store id updates)
+              updated (updated-entry store id raw)]
+          (when-not updated
             (throw (ex-info (str "Memory store update failed for " id)
                             {:type :memory-update-failed
                              :id id
-                             :result-type (some-> updated class str)})))
+                             :result-type (some-> raw class str)})))
           (log/info "Memory edit:" id
                     "fields:" (vec (keys updates))
                     (when content-changed? "[re-embed]")
@@ -111,8 +146,7 @@
     (try
       (validate-type! type)
       (with-store
-        (let [store  (mem-proto/get-store)
-              result (apply-edit! store params)]
+        (let [result (apply-edit! params)]
           (cond
             (nil? result)
             (mcp-json {:error "Entry not found" :id id})
@@ -133,10 +167,10 @@
           (throw e))))))
 
 (defn- batch-op-result
-  [store op]
+  [op]
   (try
     (validate-type! (:type op))
-    (if-let [r (apply-edit! store op)]
+    (if-let [r (apply-edit! op)]
       (cond
         (:noop r)
         {:id (:id op) :status :noop}
@@ -184,7 +218,6 @@
 
     :else
     (with-store
-      (let [store   (mem-proto/get-store)
-            results (mapv #(batch-op-result store %) operations)
+      (let [results (mapv batch-op-result operations)
             summary (tally-statuses results)]
         (mcp-json (assoc summary :results results))))))

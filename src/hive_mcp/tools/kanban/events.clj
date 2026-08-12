@@ -50,8 +50,8 @@
 
 (defn retag-fx
   "Pure handler. Given coeffects (entry) and an event, return the effect map
-   describing a scope retag. Tags-only mutation — preserves entry id,
-   content, KG edges. Returns nil for missing/non-kanban entries.
+   describing a retag. Tags-only mutation — preserves entry id, content,
+   KG edges. Returns nil for missing/non-kanban entries.
 
    Effect map invariants:
      * `:kanban/facade-update` carries {:tags new-tags :project-id new-pid}
@@ -60,28 +60,66 @@
        field, not on tags, so a tags-only retag leaves the entry invisible
        on its new board (lived 2026-06-10, funeraria-db EPIC).
      * `:kanban/temporal-record` op = `:kanban-retag` for audit
-     * `:kanban/track-movement` records old→new scope as a movement
+     * `:kanban/track-movement` records old→new scope as a movement, and is
+       emitted ONLY when the scope actually changed — a ±tags edit with no
+       project move is not a movement.
      * No completion hooks, no delete effect"
   [{:keys [:kanban/entry]} [_ {:keys [task-id new-project-id add-tags remove-tags]}]]
   (when (and entry (pred/kanban-entry? entry))
     (let [{:keys [old-project-id new-project-id old-tags new-tags title]}
           (kt/retag-transition entry new-project-id
-                               {:add-tags add-tags :remove-tags remove-tags})]
-      {:kanban/track-movement {:task-id    task-id
-                               :title      title
-                               :from       (str "scope:" old-project-id)
-                               :to         (str "scope:" new-project-id)
-                               :project-id new-project-id}
-       :kanban/temporal-record {:entry-id   task-id
-                                :op         :kanban-retag
-                                :data       {:old-project-id old-project-id
-                                             :new-project-id new-project-id
-                                             :old-tags       old-tags
-                                             :new-tags       new-tags}
-                                :project-id new-project-id}
-       :kanban/facade-update   {:task-id task-id
-                                :payload {:tags       new-tags
-                                          :project-id new-project-id}}})))
+                               {:add-tags add-tags :remove-tags remove-tags})
+          moved? (not= old-project-id new-project-id)]
+      (cond-> {:kanban/temporal-record {:entry-id   task-id
+                                        :op         :kanban-retag
+                                        :data       {:old-project-id old-project-id
+                                                     :new-project-id new-project-id
+                                                     :old-tags       old-tags
+                                                     :new-tags       new-tags}
+                                        :project-id new-project-id}
+               :kanban/facade-update   {:task-id task-id
+                                        :payload {:tags       new-tags
+                                                  :project-id new-project-id}}}
+        moved? (assoc :kanban/track-movement {:task-id    task-id
+                                              :title      title
+                                              :from       (str "scope:" old-project-id)
+                                              :to         (str "scope:" new-project-id)
+                                              :project-id new-project-id})))))
+
+(defn edit-fx
+  "Pure handler. Given coeffects (entry) and an event, return the effect map
+   describing a content edit — title, description, priority. Status, scope
+   and KG edges are untouched. Returns nil for missing/non-kanban entries.
+
+   Effect map invariants:
+     * `:kanban/facade-update` is ALWAYS present (the soft commit), and
+       carries `:tags` ONLY when the priority moved — see
+       `kt/edit-transition` for why the tag must travel with the content.
+     * `:kanban/temporal-record` op = `:kanban-edit`, emitted only when a
+       field actually changed, so a no-op edit leaves no audit noise.
+     * No completion hooks, no movement tracking, no delete effect"
+  [{:keys [:kanban/entry]} [_ {:keys [task-id title description priority]}]]
+  (when (and entry (pred/kanban-entry? entry))
+    (let [{:keys [changed new-content new-tags
+                  old-title new-title old-priority new-priority]}
+          (kt/edit-transition entry {:title       title
+                                     :description description
+                                     :priority    priority})
+          project-id (kt/extract-project-id-from-tags entry)]
+      (cond-> {:kanban/facade-update
+               {:task-id task-id
+                :payload (cond-> {:content new-content}
+                           new-tags (assoc :tags new-tags))}}
+        (seq changed)
+        (assoc :kanban/temporal-record
+               {:entry-id   task-id
+                :op         :kanban-edit
+                :data       {:changed      (vec (sort (map name changed)))
+                             :old-title    old-title
+                             :new-title    new-title
+                             :old-priority old-priority
+                             :new-priority new-priority}
+                :project-id project-id})))))
 
 (defn- result-from-fx
   "Lift a possibly-nil effect map into a Result."
@@ -105,7 +143,11 @@
   (router/reg-event-fx
    :kanban/retag
    [(cofx/inject-cofx :kanban/entry)]
-   retag-fx))
+   retag-fx)
+  (router/reg-event-fx
+   :kanban/edit
+   [(cofx/inject-cofx :kanban/entry)]
+   edit-fx))
 
 (defonce ^:private initialized? (atom false))
 
@@ -144,17 +186,19 @@
 
    `event-payload` shape:
      {:task-id ..             — required
-      :new-project-id ..      — required, target scope
+      :new-project-id ..      — optional, target scope; omit for a tags-only edit
       :add-tags    [..]       — optional extra tags
       :remove-tags [..]       — optional tag drops
       :directory   ..}        — optional, threaded for cofx context
 
+   At least one mutation must be requested: a scope move, or a ±tags delta.
+
    Returns:
      (r/ok effect-map)                       on success
      (r/err :kanban/invalid-task-id ...)     when task-id missing/blank
-     (r/err :kanban/invalid-project-id ...)  when new-project-id missing/blank
+     (r/err :kanban/retag-noop ...)          when neither scope nor tags change
      (r/err :kanban/invalid-task ...)        when entry missing or non-kanban"
-  [{:keys [task-id new-project-id] :as event-payload}]
+  [{:keys [task-id new-project-id add-tags remove-tags] :as event-payload}]
   (init!)
   (cond
     (or (nil? task-id)
@@ -163,12 +207,60 @@
            {:message "Retag requires :task-id"
             :given   task-id})
 
-    (or (nil? new-project-id)
-        (and (string? new-project-id) (clojure.string/blank? new-project-id)))
-    (r/err :kanban/invalid-project-id
-           {:message "Retag requires :new-project-id"
-            :given   new-project-id})
+    (and (clojure.string/blank? (str new-project-id))
+         (empty? add-tags)
+         (empty? remove-tags))
+    (r/err :kanban/retag-noop
+           {:message "Retag requires :new-project-id (scope move) or :add-tags/:remove-tags (tag edit)"
+            :given   {:new-project-id new-project-id
+                      :add-tags       add-tags
+                      :remove-tags    remove-tags}})
 
     :else
     (let [ctx (router/dispatch-sync [:kanban/retag event-payload])]
       (result-from-fx (:effects ctx) task-id))))
+
+(defn dispatch-edit!
+  "Public boundary entry point. Synchronously dispatch a `:kanban/edit` event
+   and return a Result wrapping the effect map. Effects run before this returns.
+
+   `event-payload` shape:
+     {:task-id ..     — required
+      :title ..       — optional, non-blank string to replace the title
+      :description .. — optional, non-blank string to replace the description
+      :priority ..    — optional, one of high|medium|low
+      :directory ..}  — optional, threaded for cofx context
+
+   A field that is absent, nil, or blank leaves the current value standing;
+   at least one of the three must be present.
+
+   Returns:
+     (r/ok effect-map)                      on success
+     (r/err :kanban/invalid-task-id ...)    when task-id missing/blank
+     (r/err :kanban/nothing-to-edit ...)    when no editable field was given
+     (r/err :kanban/invalid-priority ...)   when priority is outside the enum
+     (r/err :kanban/invalid-task ...)       when entry missing or non-kanban"
+  [{:keys [task-id title description priority] :as event-payload}]
+  (init!)
+  (let [given?     (fn [v] (and (string? v) (not (clojure.string/blank? v))))
+        priorities #{"high" "medium" "low"}]
+    (cond
+      (or (nil? task-id)
+          (and (string? task-id) (clojure.string/blank? task-id)))
+      (r/err :kanban/invalid-task-id
+             {:message "Edit requires :task-id"
+              :given   task-id})
+
+      (not (some given? [title description priority]))
+      (r/err :kanban/nothing-to-edit
+             {:message "Edit requires at least one of :title, :description, :priority"
+              :task-id task-id})
+
+      (and (given? priority) (not (priorities priority)))
+      (r/err :kanban/invalid-priority
+             {:message "Priority must be one of high, medium, low"
+              :given   priority})
+
+      :else
+      (let [ctx (router/dispatch-sync [:kanban/edit event-payload])]
+        (result-from-fx (:effects ctx) task-id)))))
