@@ -51,6 +51,11 @@
    authored entries the hierarchy + global-pierce branches would drop."
   100)
 
+(def ^:private bundle-priority-principles-limit
+  "Fetch cap for the catchup-priority principle branch. Sized to exceed the
+   tagged population, not the display budget. [[20260817224345-1057fc80]]"
+  500)
+
 (def ^:private bundle-sessions-fresh-limit 25)
 
 (def ^:private bundle-recent-wraps-limit
@@ -107,6 +112,14 @@
   (if-let [tt @tt-timed-query-var]
     (tt label qfn)
     (timed-query-inline label qfn)))
+
+(defn- warn-if-saturated
+  "Return `rows`, logging a :warn when `(count rows)` equals `limit`."
+  [label limit rows]
+  (when (and (seq rows) (= (count rows) limit))
+    (log/warn "catchup bundle" label "returned exactly its limit of" limit
+              "- results are TRUNCATED; entries beyond the cap never reach catchup"))
+  rows)
 
 ;; =============================================================================
 ;; Per-type fork-joined queries
@@ -200,7 +213,8 @@
 
 (defn query-all-scoped
   "Single-shot scoped pull: chunked-parallel hierarchy query + global-pierce +
-   global-axioms + global-principles, merged + deduped. Returns
+   global-axioms + global-principles + priority-principles, merged + deduped.
+   Returns
 
      {:by-type {\"axiom\" [...] \"decision\" [...] ...}
       :all     [<merged entries, newest-first>]}
@@ -245,6 +259,16 @@
                                              :limit bundle-principles-limit
                                              :output-fields hier/metadata-projection})))
                           []]
+                         [:principles-priority
+                          (timed-query "principles-priority"
+                                       #(with-resilience
+                                          (mem-proto/query-entries
+                                            store
+                                            {:type "principle"
+                                             :tags ["catchup-priority"]
+                                             :limit bundle-priority-principles-limit
+                                             :output-fields hier/metadata-projection})))
+                          []]
                          [:sessions-fresh
                           (timed-query "sessions-fresh"
                                        #(with-resilience
@@ -279,15 +303,21 @@
                                             :limit bundle-global-limit
                                             :output-fields hier/metadata-projection})))
                          []]))
-          {:keys [hierarchy global axioms-global principles-global sessions-fresh recent-wraps-global]}
+          {:keys [hierarchy global axioms-global principles-global principles-priority
+                  sessions-fresh recent-wraps-global]}
           (apply wpar/fork-join {:budget-ms scoped-branch-budget-ms} tasks)
           full-scope-tags (sf/compute-full-scope-tags project-id)
           all-visible-ids (set (or hierarchy-ids ["global"]))
           scoped (sf/scope-filter-entries (or hierarchy []) full-scope-tags all-visible-ids)
           pierced (when in-project?
                     (sf/scope-pierce-entries (or global []) project-id))
-          axioms-all (or axioms-global [])
-          principles-all (or principles-global [])
+          axioms-all (warn-if-saturated "axioms-global" bundle-axioms-limit
+                                        (or axioms-global []))
+          principles-all (warn-if-saturated "principles-global" bundle-principles-limit
+                                            (or principles-global []))
+          principles-priority-all (warn-if-saturated "principles-priority"
+                                                     bundle-priority-principles-limit
+                                                     (or principles-priority []))
           ;; Sessions and wraps are project-scoped — their dedicated branches
           ;; query without project filter to dodge the per-descendant fairness
           ;; cap (see sessions_freshness_regression_test). The result MUST
@@ -297,7 +327,9 @@
           ;; strictly top-down — never include siblings.
           sessions-fresh-all (sf/scope-filter-entries (or sessions-fresh []) full-scope-tags all-visible-ids)
           recent-wraps-all   (sf/scope-filter-entries (or recent-wraps-global []) full-scope-tags all-visible-ids)
-          merged (sf/distinct-by :id (concat scoped pierced axioms-all principles-all sessions-fresh-all recent-wraps-all))
+          merged (sf/distinct-by :id (concat scoped pierced axioms-all
+                                             principles-priority-all principles-all
+                                             sessions-fresh-all recent-wraps-all))
           sorted (sf/newest-first merged)]
       {:by-type (group-by #(some-> (:type %) name) sorted)
        :all     sorted})))
