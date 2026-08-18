@@ -54,11 +54,17 @@
 (defn build-composite-handler
   "Build a handler fn that dispatches to contributed addon handlers only.
    Re-resolves contributions on each call so hot-reload picks up changes.
-   Use build-merged-handler when core handlers exist."
+   Use build-merged-handler when core handlers exist.
+
+   Every root is contributed, so all of them are recorded under
+   ::cli/opaque-roots in the tree's metadata."
   [tool-name]
   (fn [params]
-    (let [handlers (or (addon-commands->handlers tool-name) {})
-          cli-fn (cli/make-cli-handler handlers)]
+    (let [addon-cmds (or (addon-commands->handlers tool-name) {})
+          handlers   (vary-meta addon-cmds
+                                update ::cli/opaque-roots (fnil into #{})
+                                (keys addon-cmds))
+          cli-fn     (cli/make-cli-handler handlers)]
       (cli-fn params))))
 
 (defn subdomain-handler
@@ -80,10 +86,16 @@
 (defn effective-handlers
   "The handler tree TOOL-NAME dispatches on right now: CANONICAL-HANDLERS merged
    with the commands addons have contributed under TOOL-NAME (addon wins).
-   Re-resolved on every call, so a contribution registered later is visible."
+   Re-resolved on every call, so a contribution registered later is visible.
+
+   Contributed root keys are recorded under ::cli/opaque-roots in the returned
+   map's METADATA: a contributed handler receives the whole :command and routes
+   the remainder itself, so this tree cannot enumerate what lives beneath it.
+   The map value itself is identical to the plain merge."
   [tool-name canonical-handlers]
   (if-let [addon-cmds (addon-commands->handlers tool-name)]
-    (merge canonical-handlers addon-cmds)
+    (vary-meta (merge canonical-handlers addon-cmds)
+               update ::cli/opaque-roots (fnil into #{}) (keys addon-cmds))
     canonical-handlers))
 
 (defn build-merged-handler

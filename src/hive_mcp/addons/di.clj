@@ -26,7 +26,7 @@
      (di/run-addon-pipeline! (make-addon) {:store-atom addon-instance})
 
    See also:
-   - hive-mcp.addons.protocol — IAddon protocol definition
+   - hive-addon.protocol — IAddon protocol definition
    - hive-mcp.addons.core     — Addon registry (register!, init!, shutdown!)
    - hive-mcp.extensions.registry — Opaque extension fn/schema/tool registry"
   (:require [clojure.set :as set]
@@ -219,7 +219,7 @@
    Resolved once per pipeline run."
   {:register!   'hive-mcp.addons.core/register-addon!
    :init!       'hive-mcp.addons.core/init-addon!
-   :addon-id-fn 'hive-mcp.addons.protocol/addon-id})
+   :addon-id-fn 'hive-addon.protocol/addon-id})
 
 (defn- step-resolve-core-deps
   "Resolve core addon registration dependencies (register!, init!, addon-id)."

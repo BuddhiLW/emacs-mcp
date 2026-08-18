@@ -118,29 +118,114 @@
 ;; =============================================================================
 
 (defn- delegating-subdomains
-  "Subdomain keys whose node carries :_handler — they hand the REST of the
-   command to another dispatcher, so their subcommand names are opaque to this
-   tree. An unknown root token is most often one of theirs, unqualified."
+  "Root keys whose subcommands this tree CANNOT enumerate — they hand the REST
+   of the command to another dispatcher.
+
+   Two sources, unioned:
+     - a node carrying :_handler (core-folded subdomains)
+     - a key listed under ::opaque-roots in the tree's metadata (addon
+       contributions, marked by hive-mcp.tools.composite)
+
+   A plain leaf fn with no metadata marker is NOT delegating. Returns a vector
+   sorted by name."
   [handlers]
-  (->> handlers
-       (keep (fn [[k v]] (when (and (map? v) (contains? v :_handler)) k)))
-       (sort-by name)
-       vec))
+  (let [marked (set (::opaque-roots (meta handlers)))]
+    (->> handlers
+         (keep (fn [[k v]]
+                 (when (or (and (map? v) (contains? v :_handler))
+                           (contains? marked k))
+                   k)))
+         (sort-by name)
+         vec)))
+
+(def ^:private max-subdomain-hints
+  "Upper bound on the last-resort subdomain list — the stage that can only say
+   'one of these routes its own subcommands'. The `code` tool has 5."
+  6)
+
+(defn- qualification-hints
+  "Root keys to offer as CMD's qualifying subdomain, most precise first.
+
+   Cascade — the first non-empty stage wins:
+     1. roots whose ENUMERABLE subtree registers CMD exactly (all of them)
+     2. opaque roots whose name is CMD's leading segment under separator
+        folding (`carto_definition` -> `carto`)
+     3. every opaque root, capped at `max-subdomain-hints`
+
+   Returns {:roots [kw ...] :exact? bool}; :roots is empty when the tree offers
+   nothing. :exact? is true only for stage 1."
+  [cmd handlers]
+  (let [opaque  (delegating-subdomains handlers)
+        cmd-low (str/lower-case cmd)
+        owners  (->> (collect-command-paths handlers [])
+                     (filter #(and (> (count %) 1)
+                                   (= cmd-low
+                                      (str/lower-case
+                                       (str/join " " (map name (rest %)))))))
+                     (map first)
+                     distinct
+                     (sort-by name)
+                     vec)
+        lead    (first (remove str/blank? (str/split cmd-low #"[-_\s]+")))
+        by-lead (when (and lead (not= lead cmd-low))
+                  (vec (filter #(= lead (str/lower-case (name %))) opaque)))]
+    (cond
+      (seq owners)  {:roots owners  :exact? true}
+      (seq by-lead) {:roots by-lead :exact? false}
+      :else         {:roots (vec (take max-subdomain-hints opaque))
+                     :exact? false})))
+
+(defn- nearest-commands
+  "Command paths in HANDLERS within Levenshtein distance
+   `(max 1 (quot (count cmd) 3))` of CMD, closest first, at most 3.
+   Returns a vector of space-joined path strings; empty when nothing is close."
+  [cmd handlers]
+  (letfn [(dist [a b]
+            (let [m (count a) n (count b)]
+              (loop [i 0 row (vec (range (inc n)))]
+                (if (= i m)
+                  (peek row)
+                  (recur (inc i)
+                         (loop [j 0 prev (inc i) acc [(inc i)]]
+                           (if (= j n)
+                             acc
+                             (let [c (min (inc prev)
+                                          (inc (nth row (inc j)))
+                                          (+ (nth row j)
+                                             (if (= (nth a i) (nth b j)) 0 1)))]
+                               (recur (inc j) c (conj acc c))))))))))]
+    (let [budget  (max 1 (quot (count cmd) 3))
+          cmd-low (str/lower-case cmd)]
+      (->> (collect-command-paths handlers [])
+           (map #(str/join " " (map name %)))
+           (map (fn [s] [s (dist cmd-low (str/lower-case s))]))
+           (filter #(<= (long (second %)) (long budget)))
+           (sort-by second)
+           (take 3)
+           (mapv first)))))
 
 (defn- unknown-command-error
-  "Loud error for a command this tree cannot resolve. Names the valid roots and,
-   when the tool has delegating subdomains, spells out the qualified form —
-   `carto scan` reads as `scan` in a subdomain's own help, and the bare token
-   arriving here is the single most common dispatch mistake."
+  "Loud error for a command this tree cannot resolve. Names the valid roots;
+   names the subdomains that could own the token — exactly, when this tree can
+   enumerate them, otherwise the roots that route their own subcommands; and
+   names the nearest known commands by edit distance."
   [command handlers]
-  (let [subs (delegating-subdomains handlers)
-        cmd  (normalize-command command)]
+  (let [raw   (normalize-command command)
+        cmd   (when (and raw (not (str/blank? raw))) (str/trim raw))
+        hints (when cmd (qualification-hints cmd handlers))
+        roots (:roots hints)
+        near  (when cmd (nearest-commands cmd handlers))]
     (mcp-error (str "Unknown command: " command
-                    ". Valid: " (keys handlers)
-                    (when (and cmd (not (str/blank? cmd)) (seq subs))
-                      (str ". If '" cmd "' is a SUBCOMMAND, qualify it with its "
-                           "subdomain: "
-                           (str/join " | " (map #(str (name %) " " cmd) subs))))))))
+                    ". Valid: " (str/join ", " (sort (map name (keys handlers))))
+                    (when (seq roots)
+                      (str (if (:exact? hints)
+                             (str ". '" cmd "' is a SUBCOMMAND — qualify it: ")
+                             (str ". If '" cmd "' is a SUBCOMMAND, qualify it with "
+                                  "its subdomain — one of these routes its own "
+                                  "subcommands: "))
+                           (str/join " | " (map #(str (name %) " " cmd) roots))))
+                    (when (seq near)
+                      (str ". Did you mean: " (str/join ", " near) "?"))))))
 
 (defn make-cli-handler
   "Create a CLI-style handler that dispatches on :command param.
@@ -153,8 +238,10 @@
    When provided, string params are coerced to declared types before dispatch.
    See hive-dsl.coerce/coerce-map for type-spec syntax.
 
-   An unresolvable command names the valid roots AND the qualified form under
-   each delegating subdomain, so a bare `scan` points at `carto scan`.
+   An unresolvable command names the valid roots, the subdomains that could own
+   the token, and the nearest known commands by edit distance. Roots addons
+   contributed are treated as opaque via the ::opaque-roots key in `handlers`
+   metadata (written by hive-mcp.tools.composite).
 
    Returns: fn that dispatches to appropriate handler"
   ([handlers] (make-cli-handler handlers nil))

@@ -233,9 +233,9 @@
                 com.clojure-goes-fast/jvm-alloc-rate-meter {:mvn/version "0.1.4"}
                 com.clojure-goes-fast/clj-async-profiler {:mvn/version "1.6.2"}}
    ;; Heap cap + G1GC tuning, string dedup, bounded core.async pool, Netty
-   ;; access, Proximum HNSW SIMD. -Xmx16g hard cap; SoftMaxHeapSize=12g soft-caps
+   ;; access, Proximum HNSW SIMD. -Xmx6g hard cap; SoftMaxHeapSize=4g soft-caps
    ;; the peak; ratio flags + periodic GC return idle RSS to the OS.
-   :jvm-opts ["-Xmx16g"
+   :jvm-opts ["-Xmx6g"
               "-Xms2g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
@@ -264,14 +264,23 @@
               ;; not ephemeral dev REPLs, which would collide on the singleton
               ;; recording and write junk .jfr files.
               ;; --- RSS containment ---
-              ;; SoftMaxHeapSize makes G1 treat 12g as a soft ceiling and
+              ;; SoftMaxHeapSize makes G1 treat 4g as a soft ceiling and
               ;; uncommit toward it, returning RSS to the OS between peaks;
-              ;; -Xmx16g stays the hard cap. ParallelRefProc speeds SoftRef
-              ;; clearing; ExplicitGCInvokesConcurrent keeps our diag System/gc
-              ;; calls concurrent instead of full STW.
-              "-XX:SoftMaxHeapSize=12g"
+              ;; -Xmx6g stays the hard cap. ParallelRefProc speeds SoftRef
+              ;; clearing.
+              ;;
+              ;; ExplicitGCInvokesConcurrent is DELIBERATELY OFF. It is not a
+              ;; diagnostics-only knob: scheduler.housekeeping's 5-minute sweep
+              ;; calls (.gc runtime) as THE RSS-containment mechanism, and a
+              ;; concurrent cycle never uncommits — so the flag silently defeats
+              ;; the "return RSS to the OS" intent of this whole block.
+              ;; Measured 2026-08-08, allocate -> drop -> (.gc) probe:
+              ;;   +ExplicitGCInvokesConcurrent  committed 780MB -> 1700MB (grew)
+              ;;   -ExplicitGCInvokesConcurrent  committed 780MB ->  256MB
+              ;; Cost: that sweep's GC becomes a full STW pause (~1s at this heap).
+              "-XX:SoftMaxHeapSize=4g"
               "-XX:+ParallelRefProcEnabled"
-              "-XX:+ExplicitGCInvokesConcurrent"]}
+              "-XX:-ExplicitGCInvokesConcurrent"]}
 
   :nrepl
   {:extra-paths ["dev" "test"]
@@ -285,9 +294,9 @@
                 com.clojure-goes-fast/jvm-alloc-rate-meter {:mvn/version "0.1.4"}
                 com.clojure-goes-fast/clj-async-profiler {:mvn/version "1.6.2"}}
    ;; Heap cap + G1GC tuning, string dedup, bounded core.async pool, Netty
-   ;; access, Proximum HNSW SIMD. -Xmx16g hard cap; SoftMaxHeapSize=12g soft-caps
+   ;; access, Proximum HNSW SIMD. -Xmx6g hard cap; SoftMaxHeapSize=4g soft-caps
    ;; the peak; ratio flags + periodic GC return idle RSS to the OS.
-   :jvm-opts ["-Xmx16g"
+   :jvm-opts ["-Xmx6g"
               "-Xms2g"
               "-XX:+UseG1GC"
               "-XX:MaxGCPauseMillis=200"
@@ -316,14 +325,18 @@
               ;; not ephemeral dev REPLs, which would collide on the singleton
               ;; recording and write junk .jfr files.
               ;; --- RSS containment ---
-              ;; SoftMaxHeapSize makes G1 treat 12g as a soft ceiling and
+              ;; SoftMaxHeapSize makes G1 treat 4g as a soft ceiling and
               ;; uncommit toward it, returning RSS to the OS between peaks;
-              ;; -Xmx16g stays the hard cap. ParallelRefProc speeds SoftRef
-              ;; clearing; ExplicitGCInvokesConcurrent keeps our diag System/gc
-              ;; calls concurrent instead of full STW.
-              "-XX:SoftMaxHeapSize=12g"
+              ;; -Xmx6g stays the hard cap. ParallelRefProc speeds SoftRef
+              ;; clearing.
+              ;;
+              ;; ExplicitGCInvokesConcurrent is DELIBERATELY OFF — see the
+              ;; :prod alias above. housekeeping's (.gc runtime) sweep cannot
+              ;; uncommit while it is on; measured 780MB -> 1700MB (grew) with
+              ;; it, 780MB -> 256MB without.
+              "-XX:SoftMaxHeapSize=4g"
               "-XX:+ParallelRefProcEnabled"
-              "-XX:+ExplicitGCInvokesConcurrent"]
+              "-XX:-ExplicitGCInvokesConcurrent"]
    :main-opts ["-m" "nrepl.cmdline"
                "--port" "7910"
                "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"]}
@@ -408,16 +421,15 @@
   :test-backends
   {:extra-paths ["test-backends"]}
 
-  ;; Build via tools.build (see build.clj): uberjar (server) + source jar /
+  ;; Build via hive-build: uberjar (server) + source jar /
   ;; Clojars deploy. deps-deploy pushes the library jar; version autobumps.
   ;; Usage: clj -T:build uber            ; runnable server uberjar
   ;;        clj -T:build uber :profile k8s-headless
   ;;        clj -T:build print-version   ; computed 0.{minor}.{patch}
   ;;        clj -T:build deploy          ; jar -> Clojars (needs CLOJARS_* env)
   :build
-  {:deps {io.github.clojure/tools.build {:mvn/version "0.10.9"}
-          slipset/deps-deploy {:mvn/version "0.2.2"}}
-   :ns-default build}
+  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.0"}}
+   :ns-default hive-build.api}
 
   ;; Sibling :local/root overrides go in a gitignored local.deps.edn, merged
   ;; by the launcher via `clj -Sdeps` at startup. Use the top-level :deps key.

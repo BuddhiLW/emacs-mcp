@@ -210,6 +210,22 @@
         (fn [] (is (reachable?) "contributed ⇒ reachable")))
       (is (not (reachable?)) "retracted ⇒ gone"))))
 
+(deftest contributed-subdomain-is-marked-opaque
+  (testing "a contributed root lands in ::cli/opaque-roots metadata while the
+            map value keeps its bare-fn shape (metadata only, no dispatch change)"
+    (with-code-subdomain
+      "stub-subdomain" (fn [_] {:type "text" :text "ok"})
+      (fn []
+        (let [tree (composite/effective-handlers "code" code/canonical-handlers)]
+          (is (contains? (:hive-mcp.tools.cli/opaque-roots (meta tree))
+                         :stub-subdomain))
+          (is (fn? (:stub-subdomain tree)))
+          (is (map? (:clojure tree)))))))
+
+  (testing "with nothing contributed the tree is the canonical map untouched"
+    (is (= code/canonical-handlers
+           (composite/effective-handlers "code" code/canonical-handlers)))))
+
 (deftest code-analysis-subdomain-strips-prefix-and-delegates
   (testing "`code analysis <cmd>` strips the prefix and delegates to the
             standalone analysis handler with the inner command"

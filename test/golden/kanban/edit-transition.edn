@@ -1,0 +1,109 @@
+{:all-three
+ {:old-title "original title",
+  :new-title "t",
+  :old-priority "medium",
+  :new-priority "low",
+  :changed #{:description :title :priority},
+  :new-content
+  {:task-type "kanban",
+   :title "t",
+   :description "d",
+   :status "todo",
+   :priority "low"},
+  :new-tags
+  ["priority-low"
+   "kanban"
+   "todo"
+   "scope:project:hive"
+   "epic:adapter"]},
+ :blank-is-ignored
+ {:old-title "original title",
+  :new-title "original title",
+  :old-priority "medium",
+  :new-priority "medium",
+  :changed #{},
+  :new-content
+  {:task-type "kanban",
+   :title "original title",
+   :description "original description",
+   :status "todo",
+   :priority "medium"},
+  :new-tags nil},
+ :description-only
+ {:old-title "original title",
+  :new-title "original title",
+  :old-priority "medium",
+  :new-priority "medium",
+  :changed #{:description},
+  :new-content
+  {:task-type "kanban",
+   :title "original title",
+   :description "new description",
+   :status "todo",
+   :priority "medium"},
+  :new-tags nil},
+ :nil-is-ignored
+ {:old-title "original title",
+  :new-title "original title",
+  :old-priority "medium",
+  :new-priority "medium",
+  :changed #{},
+  :new-content
+  {:task-type "kanban",
+   :title "original title",
+   :description "original description",
+   :status "todo",
+   :priority "medium"},
+  :new-tags nil},
+ :no-op-same-values
+ {:old-title "original title",
+  :new-title "original title",
+  :old-priority "medium",
+  :new-priority "medium",
+  :changed #{},
+  :new-content
+  {:task-type "kanban",
+   :title "original title",
+   :description "original description",
+   :status "todo",
+   :priority "medium"},
+  :new-tags nil},
+ :priority-only
+ {:old-title "original title",
+  :new-title "original title",
+  :old-priority "medium",
+  :new-priority "high",
+  :changed #{:priority},
+  :new-content
+  {:task-type "kanban",
+   :title "original title",
+   :description "original description",
+   :status "todo",
+   :priority "high"},
+  :new-tags
+  ["priority-high"
+   "kanban"
+   "todo"
+   "scope:project:hive"
+   "epic:adapter"]},
+ :string-keyed-content
+ {:old-title "from json",
+  :new-title "replaced",
+  :old-priority "low",
+  :new-priority "low",
+  :changed #{:title},
+  :new-content {"priority" "low", :title "replaced"},
+  :new-tags nil},
+ :title-only
+ {:old-title "original title",
+  :new-title "new title",
+  :old-priority "medium",
+  :new-priority "medium",
+  :changed #{:title},
+  :new-content
+  {:task-type "kanban",
+   :title "new title",
+   :description "original description",
+   :status "todo",
+   :priority "medium"},
+  :new-tags nil}}

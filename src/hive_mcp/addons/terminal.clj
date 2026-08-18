@@ -17,12 +17,12 @@
      backends transparently via the TerminalAddonStrategy adapter.
 
    See also:
-   - hive-mcp.addons.protocol       -- IAddon base protocol
+   - hive-addon.protocol            -- IAddon base protocol
    - hive-mcp.addons.mcp-bridge     -- IMcpBridge companion (analogous pattern)
    - hive-mcp.agent.ling.strategy   -- ILingStrategy (method signatures mirrored)
    - hive-mcp.agent.ling.terminal-addon-strategy -- Adapter (Layer 2 bridge)
    - hive-mcp.agent.ling.terminal-registry       -- Registry (dispatch lookup)"
-  (:require [hive-mcp.addons.protocol :as proto]))
+  (:require [hive-addon.protocol :as proto]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

@@ -278,7 +278,12 @@
       (is (not (str/includes? result "\"todo\""))))))
 
 ;; =============================================================================
-;; 5. Update Tests
+;; 5. Update Tests — ELISP BRIDGE ONLY
+;;
+;; These assert on the string `kanban-update-elisp` builds for the Emacs API.
+;; They do NOT exercise the MCP `kanban update` path, so their green says
+;; nothing about whether a title/description/priority edit reaches the store.
+;; That contract lives in hive-mcp.tools.kanban.edit-trifecta-test.
 ;; =============================================================================
 
 (deftest test-update-generates-valid-elisp

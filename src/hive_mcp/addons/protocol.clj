@@ -5,7 +5,11 @@
    or an unrelated project — can DIP-load addons without those addons compile-
    depending on hive-mcp. This namespace keeps every historical qualified name
    (hive-mcp.addons.protocol/IAddon, /addon-id, /capabilities, …) resolving for
-   the ~30 monorepo implementors and hive-mcp internals.
+   downstream callers.
+
+   Host internals must require hive-addon.protocol directly. The protocol value
+   is rebound when addons use extend-type, so a plain `def` re-export can become
+   stale after this namespace loads.
 
    The protocol and method vars below are plain `def` ALIASES of the hive-addon
    originals. Do NOT turn them back into `defprotocol` — a second `defprotocol`
