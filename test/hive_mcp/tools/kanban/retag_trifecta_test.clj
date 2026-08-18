@@ -136,6 +136,43 @@
              {:kanban/entry {:content {:task-type "memo"}}}
              [:kanban/retag {:task-id "x" :new-project-id "probe"}]))))
 
+(deftest retag-without-project-id-keeps-scope
+  (testing "a tags-only edit preserves the entry's existing scope"
+    (let [r (kt/retag-transition fixture-entry nil {:add-tags ["epic:kanban-fix"]})]
+      (is (= "hive" (:new-project-id r))
+          "no move requested -> new-project-id falls back to the current scope")
+      (is (= ["scope:project:hive"]
+             (filterv #(.startsWith (str %) "scope:project:") (:new-tags r)))
+          "exactly one scope tag, unchanged")
+      (is (contains? (set (:new-tags r)) "epic:kanban-fix")
+          "the added tag lands")
+      (is (= "todo" (:status r)))
+      (is (= "medium" (:priority r)) "priority untouched by a tag edit")))
+
+  (testing "blank string is treated as no move, not as a scope named \"\""
+    (let [r (kt/retag-transition fixture-entry "" {:remove-tags ["priority-medium"]})]
+      (is (= "hive" (:new-project-id r)))
+      (is (= ["scope:project:hive"]
+             (filterv #(.startsWith (str %) "scope:project:") (:new-tags r))))
+      (is (not (contains? (set (:new-tags r)) "priority-medium"))
+          "the removal still applies"))))
+
+(deftest retag-tags-only-emits-no-movement
+  (testing "no scope change -> no movement record, but still a facade update"
+    (let [fx (fx-for nil :add-tags ["epic:kanban-fix"])]
+      (is (some? fx))
+      (is (contains? fx :kanban/facade-update) "the tag write still happens")
+      (is (not (contains? fx :kanban/track-movement))
+          "a tag edit is not a movement — recording one would be a false audit")
+      (is (= :kanban-retag (get-in fx [:kanban/temporal-record :op]))
+          "still audited as a retag")
+      (is (= "hive" (get-in fx [:kanban/facade-update :payload :project-id]))
+          "project-id stays put so the entry remains visible on its board")))
+
+  (testing "a real scope move still records movement"
+    (let [fx (fx-for "probe")]
+      (is (contains? fx :kanban/track-movement)))))
+
 ;; =============================================================================
 ;; 3. Properties
 ;; =============================================================================

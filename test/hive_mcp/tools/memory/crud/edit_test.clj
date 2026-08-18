@@ -1,5 +1,5 @@
 (ns hive-mcp.tools.memory.crud.edit-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is testing]]
             [hive-mcp.protocols.memory :as proto]
             [hive-mcp.tools.memory.crud.edit :as edit]
             [hive-mcp.tools.memory.duration :as duration]))
@@ -61,3 +61,47 @@
                      (:text response)))
         (is (not (re-find #"ClassCastException|Associative"
                           (:text response))))))))
+
+(deftest edit-accepts-id-string-return
+  (testing "a store that answers update-entry! with the entry id is a SUCCESS"
+    ;; The qdrant store backing the :kanban slot returns the id string, while
+    ;; milvus/chroma return the updated entry map. Both are successes; only an
+    ;; opaque value is a failure.
+    (let [existing {:id "m-1" :type "note" :content "before"}
+          store    (edit-store existing (fn [id _] id))]
+      (with-redefs [proto/store-set?  (constantly true)
+                    proto/get-store   (constantly store)
+                    proto/iso-timestamp (constantly "new-time")]
+        (let [response (edit/handle-edit {:id "m-1" :content "after"})]
+          (is (re-find #"\"edit_applied\":true" (:text response))
+              "id-string return must not be reported as a failure")
+          (is (not (re-find #"Memory store update failed" (:text response)))))))))
+
+(deftest edit-reaches-a-non-default-store
+  (testing "an entry living in a non-default slot (:kanban) is editable"
+    ;; Reads are unified across stores; writes must be too, or `memory edit`
+    ;; answers 'Entry not found' for an id that `kanban get` resolves.
+    (let [kanban-entry {:id "k-1" :type "note" :content "task"}
+          seen         (atom nil)
+          empty-store  (edit-store {:id "other"} (fn [id _] id))
+          kanban-store (edit-store kanban-entry
+                                   (fn [id fields] (reset! seen [id fields]) id))]
+      (with-redefs [proto/store-set?       (constantly true)
+                    proto/get-store        (constantly empty-store)
+                    proto/registered-stores (constantly {:default empty-store
+                                                         :kanban  kanban-store})
+                    proto/iso-timestamp    (constantly "new-time")]
+        (let [response (edit/handle-edit {:id "k-1" :tags ["a" "b"]})]
+          (is (some? @seen) "the write reached the store that holds the entry")
+          (is (= "k-1" (first @seen)))
+          (is (= ["a" "b"] (:tags (second @seen))))
+          (is (not (re-find #"Entry not found" (:text response)))))))))
+
+(deftest edit-still-reports-missing-entry
+  (testing "an id no registered store holds is still Entry not found"
+    (let [store (edit-store {:id "present"} (fn [id _] id))]
+      (with-redefs [proto/store-set?       (constantly true)
+                    proto/get-store        (constantly store)
+                    proto/registered-stores (constantly {:default store})]
+        (let [response (edit/handle-edit {:id "absent" :tags ["x"]})]
+          (is (re-find #"Entry not found" (:text response))))))))

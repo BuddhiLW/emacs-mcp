@@ -98,27 +98,35 @@
        (.startsWith ^String (str tag) "scope:project:")))
 
 (defn retag-transition
-  "Pure: derive the tag-only mutation for a scope retag.
+  "Pure: derive the tag-only mutation for a retag.
 
-   Strips every existing `scope:project:*` tag, splices the new scope,
-   then applies optional `±tags` deltas. Preserves status, priority,
-   content — only tags change.
+   With a non-blank `new-project-id` this is a SCOPE MOVE: every existing
+   `scope:project:*` tag is stripped and the new scope spliced in.
+   With a blank/nil `new-project-id` the entry keeps its current scope and
+   only the `±tags` deltas apply, so a pure tag edit needs no project move.
+
+   Preserves status, priority, content — only tags change.
 
    Returns {:old-project-id .. :new-project-id .. :old-tags .. :new-tags ..
-            :status .. :priority .. :title ..}."
+            :status .. :priority .. :title ..}. When no move is requested
+   `:new-project-id` equals `:old-project-id`."
   [entry new-project-id {:keys [add-tags remove-tags]}]
   (let [old-tags    (vec (or (:tags entry) []))
         old-pid     (extract-project-id-from-tags entry)
         status      (current-status entry)
         priority    (current-priority entry)
         title       (current-title entry)
-        without-scope (filterv (complement scope-project-tag?) old-tags)
-        with-new      (conj without-scope (scope/make-scope-tag new-project-id))
-        with-add      (into with-new (filter string? (or add-tags [])))
+        move?       (not (str/blank? (str new-project-id)))
+        target-pid  (if move? new-project-id old-pid)
+        base        (if move?
+                      (conj (filterv (complement scope-project-tag?) old-tags)
+                            (scope/make-scope-tag new-project-id))
+                      old-tags)
+        with-add      (into base (filter string? (or add-tags [])))
         remove-set    (set (or remove-tags []))
         new-tags      (vec (distinct (remove #(contains? remove-set %) with-add)))]
     {:old-project-id old-pid
-     :new-project-id new-project-id
+     :new-project-id target-pid
      :old-tags       old-tags
      :new-tags       new-tags
      :status         status

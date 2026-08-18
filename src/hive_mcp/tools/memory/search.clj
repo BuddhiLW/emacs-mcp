@@ -265,8 +265,12 @@
 
 (def ^:private default-exclude-tags
   "Tags excluded from semantic search by default.
-   Carto (L1/L2 codebase-mapping snippets) drowns out high-level knowledge."
-  ["carto"])
+   Carto (L1/L2 codebase-mapping snippets) drowns out high-level knowledge,
+   and so does an ingested corpus: one RFC series is hundreds of thousands of
+   spec fragments competing with every axiom and decision in the store. The
+   document-level entries an ingest also writes are tagged ingestion-document
+   and stay visible — they are few and high-signal."
+  ["carto" "ingestion-chunk"])
 
 ;; =============================================================================
 ;; Composite search-store* (fork-join across store + ingest)

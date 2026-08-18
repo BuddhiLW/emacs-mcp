@@ -60,6 +60,32 @@
               :kanban/project-id "hive-mcp"}
              [:kanban/move {:task-id "x" :new-status "done"}]))))
 
+(deftest archive-receives-the-completed-entry-not-the-snapshot
+  (testing "the archived record must say done, not the pre-transition todo"
+    ;; The done-archive (hive-knowledge, via the :da/archive! IAddon extension)
+    ;; is a PERMANENT record of completed work. It was being handed the coeffect
+    ;; entry, whose tags and content still carried the open status.
+    (let [entry {:id      "20260101000000-deadbeef"
+                 :tags    ["kanban" "todo" "priority-high" "scope:project:hive"]
+                 :content {:task-type "kanban" :title "x"
+                           :status "todo" :priority "high"}}
+          fx    (events/move-fx
+                 {:kanban/entry entry :kanban/project-id "hive"}
+                 [:kanban/move {:task-id "20260101000000-deadbeef"
+                                :new-status "done"}])
+          arch  (get-in fx [:kanban/archive-external :entry])]
+      (is (some? arch))
+      (is (contains? (set (:tags arch)) "done")
+          "archived tags carry the DONE status")
+      (is (not (contains? (set (:tags arch)) "todo"))
+          "the stale open-status tag must not reach the archive")
+      (is (= "done" (get-in arch [:content :status]))
+          "archived content status is done")
+      (is (contains? (set (:tags arch)) "priority-high")
+          "priority survives into the permanent record")
+      (is (= (get-in fx [:kanban/facade-update :payload :tags]) (:tags arch))
+          "archive and the store commit agree on the tags"))))
+
 ;; --- properties ---
 
 (def gen-status (gen/elements (vec kp/valid-statuses)))
