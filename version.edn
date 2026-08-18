@@ -1,5 +1,5 @@
 {:lib      io.github.hive-agi/hive-mcp
- :minor    19
+ :minor    20
  :license  {:name "AGPL-3.0-or-later" :url "https://www.gnu.org/licenses/agpl-3.0.txt"}
  :scm-url  "https://github.com/hive-agi/hive-mcp"
  :src-dirs ["src" "resources"] :publish  :clojars}
