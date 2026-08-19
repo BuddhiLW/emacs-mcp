@@ -488,6 +488,41 @@
                          (log/info "Decay scheduler started:" result)
                          (log/info "Decay scheduler not started:" (:reason result))))))))
 
+(defn run-recall-canary!
+  "Run the golden recall canary once, at boot, before agents ask anything.
+
+   Returns the verdict map (or nil when the canary ns is absent). Non-fatal by
+   construction: a faulting canary must not stop the server from starting, or
+   an operator loses the very tool that would tell them what is wrong. The
+   fault is on the boot log at ERROR and on the scheduler tick thereafter.
+
+   Configure via config.edn :services :recall-canary {:enabled true}."
+  []
+  (result/rescue
+   nil
+   (let [enabled? (not (false? (global-config/get-config-value [:services :recall-canary :enabled])))]
+     (if-not enabled?
+       (log/info "Recall canary disabled by config")
+       (when-let [run! (requiring-resolve 'hive-mcp.recall.canary.live/run!)]
+         (let [verdict (run!)]
+           (if (:ok? verdict)
+             (log/info "Recall canary OK at boot:" (select-keys verdict [:ran :passed :skipped]))
+             (log/error "RECALL CANARY FAULT AT BOOT — retrieval answers cannot be"
+                        "trusted until this clears:" (:faults verdict)))
+           verdict))))))
+
+(defn run-recall-canary-async!
+  "Run the boot canary on a daemon thread.
+
+   Off-thread because the canary talks to the embedder and the store, and a
+   slow provider must not lengthen boot; daemon because a canary must never
+   hold the JVM open. Loudness is unaffected — the verdict lands on the log
+   either way. Returns the Thread."
+  []
+  (doto (Thread. ^Runnable (fn [] (run-recall-canary!)) "recall-canary-boot")
+    (.setDaemon true)
+    (.start)))
+
 (defn stop-decay-scheduler!
   "Stop the periodic decay scheduler. Called during shutdown."
   []

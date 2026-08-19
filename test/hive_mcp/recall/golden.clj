@@ -45,7 +45,8 @@
    nothing. `:similarity` MUST make the suite go red."
   (:require [clojure.set :as set]
             [clojure.string :as str]
-            [hive-mcp.protocols.memory :as mem-proto]))
+            [hive-mcp.protocols.memory :as mem-proto]
+            [hive-mcp.recall.canary :as canary]))
 
 ;; =============================================================================
 ;; The corpus
@@ -128,75 +129,17 @@
 ;; The fault taxonomy — the thing that was missing
 ;; =============================================================================
 
-(defn recall-fault
-  "Nil when recall is healthy; otherwise a FAULT MAP naming what broke.
+(def recall-fault
+  "Alias of `hive-mcp.recall.canary/recall-fault`.
 
-   Never throws, and never returns a bare boolean — a failing `is` must print
-   the diagnosis, not `false`.
+   The taxonomy moved to src so the RUNTIME canary and this suite cannot drift
+   into two definitions of the same fault. Historical
+   `hive-mcp.recall.golden/recall-fault` call sites keep resolving here."
+  canary/recall-fault)
 
-   Arguments (map):
-     :label        — human name of the case, echoed into the fault
-     :populated?   — was the store known to hold entries at query time?
-     :results      — what the pipeline returned (seq of maps with :id)
-     :must-contain — ids that MUST be present (the anchors)
-
-   Faults:
-     :recall/empty-from-populated-store
-         Zero rows out of a store we KNOW is populated. This is the shape the
-         2026-07-12 outage wore. It is never a legitimate answer to a query
-         whose anchor is in the corpus.
-
-     :recall/anchor-missing
-         Rows came back, but not the one that must be there. This is the
-         'confident and wrong' shape — the dangerous one, because a caller
-         cannot tell it from success.
-
-   `:populated? false` yields nil: an empty store returning nothing is honest."
-  [{:keys [label populated? results must-contain]}]
-  (let [results (vec results)
-        got     (set (keep :id results))
-        want    (set must-contain)
-        missing (set/difference want got)]
-    (cond
-      (not populated?)
-      nil
-
-      (empty? results)
-      {:fault        :recall/empty-from-populated-store
-       :label        label
-       :diagnosis    (str "a populated store returned zero rows. This is a SYSTEM "
-                          "FAULT, not a query outcome — the query encoder, the "
-                          "index, or the ranking unit disagree.")
-       :expected-ids (vec want)}
-
-      (seq missing)
-      {:fault        :recall/anchor-missing
-       :label        label
-       :diagnosis    (str "the store returned " (count results) " confident rows "
-                          "but not the anchor. Indistinguishable from success at "
-                          "the call site — this is why the outage was silent.")
-       :missing-ids  (vec missing)
-       :returned-ids (mapv :id results)}
-
-      :else nil)))
-
-(defn rank-fault
-  "Nil when `results` are ordered nearest-first; otherwise a fault map.
-
-   The pipeline's contract is DISTANCE — lower is nearer — end to end. A run
-   whose distances ascend is either sorted backwards or is carrying a
-   similarity in a field the whole pipeline reads as a distance
-   (MEM-P0-EMBED-LANE). Rows with no :distance are ignored: tag/KG enrichment
-   hits legitimately have none."
-  [{:keys [label results]}]
-  (let [ds (keep :distance results)]
-    (when (and (seq ds) (not (apply <= ds)))
-      {:fault     :recall/rank-inverted
-       :label     label
-       :diagnosis (str "results are not ordered nearest-first. Either the sort "
-                       "reversed, or a similarity (higher = better) is being "
-                       "carried in the :distance field (lower = better).")
-       :distances (vec ds)})))
+(def rank-fault
+  "Alias of `hive-mcp.recall.canary/rank-fault`. See `recall-fault`."
+  canary/rank-fault)
 
 ;; =============================================================================
 ;; The golden store — with a bug switch

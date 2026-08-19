@@ -77,6 +77,25 @@
       (is (true? (get-in result [:grounding-stats :skipped]))
           "grounding-stats should show skipped"))))
 
+(deftest test-run-decay-cycle-includes-recall-canary
+  (testing "the tick reads retrieval BACK, not just ages it"
+    (let [result (decay/run-decay-cycle! {:memory-limit 1
+                                          :edge-limit 1
+                                          :disc-enabled false
+                                          :grounding-enabled false
+                                          :canary-enabled true})]
+      (is (contains? result :canary-stats) "cycle must report a canary pass")
+      (is (map? (:canary-stats result))))))
+
+(deftest test-run-decay-cycle-canary-disabled
+  (testing "canary pass skipped when :canary-enabled false"
+    (let [result (decay/run-decay-cycle! {:memory-limit 1
+                                          :edge-limit 1
+                                          :disc-enabled false
+                                          :grounding-enabled false
+                                          :canary-enabled false})]
+      (is (true? (get-in result [:canary-stats :skipped]))))))
+
 (deftest test-scheduler-config-exposes-grounding-knobs
   (testing "status :config carries the grounding knobs with code-side defaults"
     (let [cfg (:config (decay/status))]

@@ -84,13 +84,29 @@
     (emit-grounding-event! stats)
     stats))
 
+(defn- run-canary-pass!
+  "Read back what retrieval returns and report faults.
+
+   Read-only, and the only pass on the tick that can declare the system
+   UNTRUSTWORTHY rather than merely aged: it queries through the agent-visible
+   search seam and asserts the anchor comes back, ordered, unsuperseded.
+   A missing canary ns degrades to {:skipped true}, never to a silent pass."
+  [opts]
+  (resolve-and-call
+   'hive-mcp.recall.canary.live/run!
+   #(% opts)
+   {:ok? false
+    :faults [{:fault :recall/canary-crashed
+              :diagnosis "the canary pass threw; treat as untrusted retrieval"}]
+    :skipped []}))
+
 (defn run-decay-cycle!
-  "Run a complete decay cycle: memory + edges + discs + grounding."
+  "Run a complete decay cycle: memory + edges + discs + grounding + recall canary."
   ([] (run-decay-cycle! {}))
   ([{:keys [directory project-id memory-limit edge-limit disc-enabled
-            grounding-enabled grounding-limit]
+            grounding-enabled grounding-limit canary-enabled canary-scope]
      :or {memory-limit 50 edge-limit 100 disc-enabled true
-          grounding-enabled true grounding-limit 50}}]
+          grounding-enabled true grounding-limit 50 canary-enabled true}}]
    (let [start-ms (System/currentTimeMillis)
          cycle-num (-> (swap! scheduler-state update :cycle-count inc)
                        :cycle-count)
@@ -123,11 +139,17 @@
                                                  :limit grounding-limit})
                            {:skipped true :reason "grounding-disabled"})
 
+         ;; 5. Recall canary — the tick's only READ-BACK check
+         canary-stats (if canary-enabled
+                        (run-canary-pass! {:scope (or canary-scope resolved-project-id)})
+                        {:skipped true :reason "canary-disabled"})
+
          elapsed-ms (- (System/currentTimeMillis) start-ms)
          result {:memory-stats memory-stats
                  :edge-stats edge-stats
                  :disc-stats disc-stats
                  :grounding-stats grounding-stats
+                 :canary-stats canary-stats
                  :cycle-number cycle-num
                  :duration-ms elapsed-ms
                  :timestamp (java.time.Instant/now)}]
@@ -145,7 +167,9 @@
                 :edges-pruned (or (:pruned edge-stats) 0)
                 :discs-updated (or (:updated disc-stats) 0)
                 :grounding-processed (or (:processed grounding-stats) 0)
-                :grounding-persistence-lost (or (:persistence-lost grounding-stats) 0)})
+                :grounding-persistence-lost (or (:persistence-lost grounding-stats) 0)
+                :canary-ok? (:ok? canary-stats)
+                :canary-faults (count (:faults canary-stats))})
      result)))
 
 ;; =============================================================================
