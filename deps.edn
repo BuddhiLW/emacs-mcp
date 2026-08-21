@@ -21,7 +21,7 @@
         nrepl/nrepl {:mvn/version "1.7.0"}
 
         ;; Aleph for robust async TCP/networking (replaces custom sockets)
-        aleph/aleph {:mvn/version "0.9.7"}
+        aleph/aleph {:mvn/version "0.9.10"}
         manifold/manifold {:mvn/version "0.5.0"}
 
         ;; Logic programming for swarm hivemind coordination
@@ -31,7 +31,7 @@
         clj-time/clj-time {:mvn/version "0.15.2"}
 
         ;; Datascript for in-memory graph storage (GraphStore backend)
-        datascript/datascript {:mvn/version "1.7.8"}
+        datascript/datascript {:mvn/version "1.8.1"}
         ;; me.tonsky namespace for datascript/datahike: provided by local 0.3.118 jar.
         ;; org.replikativ namespace for Datahike: provided by addon (0.4.119).
         ;; Different group IDs → both on classpath, non-overlapping namespaces.
@@ -46,13 +46,13 @@
 
         ;; sci pinned to latest ecosystem-wide. Requires overarch consumed as
         ;; source (hive-overarch), not its AOT uberjar which bundles older sci.
-        org.babashka/sci {:mvn/version "0.13.53"}
+        org.babashka/sci {:mvn/version "0.15.58"}
 
         ;; Proximum — pure-JVM HNSW vector index backing the vector-store slots.
         ;; SIMD via Java Vector API (needs --add-modules jdk.incubator.vector).
         ;; Late-bound via requiring-resolve so a missing jar surfaces as
         ;; :slot/factory-failed, not a JVM crash.
-        org.replikativ/proximum {:mvn/version "0.1.24"}
+        org.replikativ/proximum {:mvn/version "0.1.35"}
 
         ;; Logging - SLF4J with Logback backend
         ;; clojure.tools.logging provides the Clojure facade
@@ -86,7 +86,7 @@
 
         ;; clj-kondo for code analysis (call graphs, linting)
         ;; Exclude log4j-slf4j2-impl to avoid conflict with slf4j-timbre
-        clj-kondo/clj-kondo {:mvn/version "2026.01.19"
+        clj-kondo/clj-kondo {:mvn/version "2026.08.04"
                              :exclusions [org.apache.logging.log4j/log4j-slf4j2-impl]}
 
         ;; hive-events - re-frame inspired event system for JVM
@@ -100,7 +100,7 @@
 
         ;; Prometheus metrics - iapetos wrapper; hotspot collector adds
         ;; JVM metrics (memory, GC, threads).
-        clj-commons/iapetos {:mvn/version "0.1.14"}
+        clj-commons/iapetos {:mvn/version "0.1.15"}
         io.prometheus/simpleclient_hotspot {:mvn/version "0.16.0"}
 
         ;; NATS client for push-based drone notifications
@@ -116,14 +116,14 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL, error taxonomy
         io.github.hive-agi/hive-dsl
-        {:mvn/version "0.5.9"}
+        {:mvn/version "0.5.14"}
 
         ;; hive-spi — pure SPI contract leaf (protocols + schemas + ADTs).
         ;; Required at compile time by core namespaces. Pinned to the published
         ;; git tag (== master head) so CI and the Clojars jar build resolve it
         ;; without a sibling checkout; sibling co-dev goes through a gitignored
         ;; local.deps.edn :local/root override.
-        io.github.hive-agi/hive-spi {:mvn/version "0.1.17"}
+        io.github.hive-agi/hive-spi {:mvn/version "0.1.20"}
 
         ;; NO CONCRETE BACKEND BELONGS HERE. hive-milvus / hive-qdrant /
         ;; clj-qdrant depend on hive-mcp for their addon surface, so declaring
@@ -147,7 +147,7 @@
 
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
-        io.github.hive-agi/hive-di {:mvn/version "0.3.2"}
+        io.github.hive-agi/hive-di {:mvn/version "0.4.2"}
 
         ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj;
         ;; hive-weave.retry/with-recovery used by knowledge-graph/store/datahike.clj
@@ -158,12 +158,12 @@
         ;; Transitive callers can pull 0.1.6, which exists on Gitea only (404 on
         ;; Clojars and Central), so the default tree cannot resolve from a public
         ;; runner. :use-top makes this pin win everywhere.
-        io.github.hive-agi/hive-schemas {:mvn/version "0.1.11"}
+        io.github.hive-agi/hive-schemas {:mvn/version "0.1.13"}
 
         ;; hive-proximum — temporal/bitemporal memory backend (IMemoryStore via IAddon).
         ;; Auto-discovered via its hive-addons manifest. Stub store until the
         ;; backend impl lands.
-        io.github.hive-agi/hive-proximum {:mvn/version "0.1.8"}
+        io.github.hive-agi/hive-proximum {:mvn/version "0.1.11"}
 
         ;; hive-ttracking — telemetry/timing (timed-query, track*, bench*).
         ;; Consumed by catchup.clj and siblings (bundle/hydration/hierarchy).
@@ -171,7 +171,7 @@
 
         ;; hive-system — system-level abstractions (IProcess, INetwork,
         ;; process liveness, secrets, shell, redaction).
-        io.github.hive-agi/hive-system {:mvn/version "0.2.11"}
+        io.github.hive-agi/hive-system {:mvn/version "0.3.4"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
@@ -185,7 +185,7 @@
   {:exec-fn hive-mcp.server.core/start!
    :exec-args {}
    :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}
-                cider/cider-nrepl {:mvn/version "0.58.0"}}
+                cider/cider-nrepl {:mvn/version "0.62.2"}}
    ;; Heap cap, G1GC tuning, string dedup for prompt/response data,
    ;; bounded core.async pool, Netty access, aggressive GC return-to-OS
    :jvm-opts ["-Xmx8g"
@@ -224,14 +224,14 @@
   :dev
   {:extra-paths ["dev" "test"]
    :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}
-                cider/cider-nrepl {:mvn/version "0.58.0"}
-                refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}
+                cider/cider-nrepl {:mvn/version "0.62.2"}
+                refactor-nrepl/refactor-nrepl {:mvn/version "3.14.0"}
                 ;; --- Heap/RAM diagnostics (clojure-goes-fast). Toggleable via
                 ;; hive-mcp.diag.heap; needs -Djdk.attach.allowAttachSelf=true
                 ;; (clj-memory-meter self-attach) + DebugNonSafepoints (profiler).
-                com.clojure-goes-fast/clj-memory-meter {:mvn/version "0.4.0"}
+                com.clojure-goes-fast/clj-memory-meter {:mvn/version "0.5.0"}
                 com.clojure-goes-fast/jvm-alloc-rate-meter {:mvn/version "0.1.4"}
-                com.clojure-goes-fast/clj-async-profiler {:mvn/version "1.6.2"}}
+                com.clojure-goes-fast/clj-async-profiler {:mvn/version "1.8.0"}}
    ;; Heap cap + G1GC tuning, string dedup, bounded core.async pool, Netty
    ;; access, Proximum HNSW SIMD. -Xmx6g hard cap; SoftMaxHeapSize=4g soft-caps
    ;; the peak; ratio flags + periodic GC return idle RSS to the OS.
@@ -285,14 +285,14 @@
   :nrepl
   {:extra-paths ["dev" "test"]
    :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}
-                cider/cider-nrepl {:mvn/version "0.58.0"}
-                refactor-nrepl/refactor-nrepl {:mvn/version "3.11.0"}
+                cider/cider-nrepl {:mvn/version "0.62.2"}
+                refactor-nrepl/refactor-nrepl {:mvn/version "3.14.0"}
                 ;; --- Heap/RAM diagnostics (clojure-goes-fast). Toggleable via
                 ;; hive-mcp.diag.heap; needs -Djdk.attach.allowAttachSelf=true
                 ;; (clj-memory-meter self-attach) + DebugNonSafepoints (profiler).
-                com.clojure-goes-fast/clj-memory-meter {:mvn/version "0.4.0"}
+                com.clojure-goes-fast/clj-memory-meter {:mvn/version "0.5.0"}
                 com.clojure-goes-fast/jvm-alloc-rate-meter {:mvn/version "0.1.4"}
-                com.clojure-goes-fast/clj-async-profiler {:mvn/version "1.6.2"}}
+                com.clojure-goes-fast/clj-async-profiler {:mvn/version "1.8.0"}}
    ;; Heap cap + G1GC tuning, string dedup, bounded core.async pool, Netty
    ;; access, Proximum HNSW SIMD. -Xmx6g hard cap; SoftMaxHeapSize=4g soft-caps
    ;; the peak; ratio flags + periodic GC return idle RSS to the OS.
@@ -358,13 +358,13 @@
                 ;; Generative testing for spec validation
                 org.clojure/test.check {:mvn/version "1.1.1"}
                 ;; Trifecta macro: golden + property + mutation facets
-                io.github.hive-agi/hive-test {:mvn/version "0.3.11"}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.12"}
                 ;; hive-schemas.test — a malli schema drives hive-test property +
                 ;; mutation facets with no hand-written generator, oracle, or
                 ;; mutant. Must come from the JAR, not :local/root — the macros
                 ;; live in src/synth, which ships but is not on the project's
                 ;; :paths.
-                io.github.hive-agi/hive-schemas {:mvn/version "0.1.11"}}
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.13"}}
                 ;; hive-spi now lives in :deps (core nses require it) — no
                 ;; :test-alias override needed.
    ;; Backend drivers are NOT here — the default cold-CI test path is
@@ -386,13 +386,13 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.11"}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.12"}
                 ;; Must match :test. The runner LOADS every test namespace before
                 ;; it filters by selector, so a test ns requiring hive-schemas.test
                 ;; aborts this whole alias — all 405 namespaces — if the dep is
                 ;; only declared on :test. This is the CI alias; it is the one that
                 ;; must not be able to fail at load.
-                io.github.hive-agi/hive-schemas {:mvn/version "0.1.11"}}
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.13"}}
    :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
    :exec-fn cognitect.test-runner.api/test
@@ -404,10 +404,10 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.1"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.11"}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.12"}
                 ;; Same reason as :test-unit — this alias also puts test/ on the
                 ;; path, so it loads every test ns before selecting :integration.
-                io.github.hive-agi/hive-schemas {:mvn/version "0.1.11"}}
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.13"}}
    :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
@@ -428,7 +428,7 @@
   ;;        clj -T:build print-version   ; computed 0.{minor}.{patch}
   ;;        clj -T:build deploy          ; jar -> Clojars (needs CLOJARS_* env)
   :build
-  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.0"}}
+  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.8"}}
    :ns-default hive-build.api}
 
   ;; Sibling :local/root overrides go in a gitignored local.deps.edn, merged
