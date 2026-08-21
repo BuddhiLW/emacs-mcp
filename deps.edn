@@ -59,8 +59,8 @@
         ;; logback-classic is the SLF4J implementation
         ;; logstash-encoder provides JSON output for Loki/ELK ingestion
         org.clojure/tools.logging {:mvn/version "1.3.1"}
-        ch.qos.logback/logback-classic {:mvn/version "1.5.18"}
-        net.logstash.logback/logstash-logback-encoder {:mvn/version "8.1"}
+        ch.qos.logback/logback-classic {:mvn/version "1.6.3"}
+        net.logstash.logback/logstash-logback-encoder {:mvn/version "9.0"}
         ;; Keep Timbre for gradual migration (existing code uses it)
         ;; It will log to its own backend, not SLF4J
         com.taoensso/timbre {:mvn/version "6.8.0"}
