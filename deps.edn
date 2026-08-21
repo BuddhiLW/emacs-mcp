@@ -116,7 +116,7 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL, error taxonomy
         io.github.hive-agi/hive-dsl
-        {:mvn/version "0.5.14"}
+        {:mvn/version "0.5.15"}
 
         ;; hive-spi — pure SPI contract leaf (protocols + schemas + ADTs).
         ;; Required at compile time by core namespaces. Pinned to the published
@@ -147,7 +147,7 @@
 
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
-        io.github.hive-agi/hive-di {:mvn/version "0.4.2"}
+        io.github.hive-agi/hive-di {:mvn/version "0.4.3"}
 
         ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj;
         ;; hive-weave.retry/with-recovery used by knowledge-graph/store/datahike.clj
@@ -158,12 +158,12 @@
         ;; Transitive callers can pull 0.1.6, which exists on Gitea only (404 on
         ;; Clojars and Central), so the default tree cannot resolve from a public
         ;; runner. :use-top makes this pin win everywhere.
-        io.github.hive-agi/hive-schemas {:mvn/version "0.1.13"}
+        io.github.hive-agi/hive-schemas {:mvn/version "0.1.14"}
 
         ;; hive-proximum — temporal/bitemporal memory backend (IMemoryStore via IAddon).
         ;; Auto-discovered via its hive-addons manifest. Stub store until the
         ;; backend impl lands.
-        io.github.hive-agi/hive-proximum {:mvn/version "0.1.11"}
+        io.github.hive-agi/hive-proximum {:mvn/version "0.1.12"}
 
         ;; hive-ttracking — telemetry/timing (timed-query, track*, bench*).
         ;; Consumed by catchup.clj and siblings (bundle/hydration/hierarchy).
@@ -171,7 +171,7 @@
 
         ;; hive-system — system-level abstractions (IProcess, INetwork,
         ;; process liveness, secrets, shell, redaction).
-        io.github.hive-agi/hive-system {:mvn/version "0.3.4"}
+        io.github.hive-agi/hive-system {:mvn/version "0.3.5"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
@@ -364,7 +364,7 @@
                 ;; mutant. Must come from the JAR, not :local/root — the macros
                 ;; live in src/synth, which ships but is not on the project's
                 ;; :paths.
-                io.github.hive-agi/hive-schemas {:mvn/version "0.1.13"}}
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.14"}}
                 ;; hive-spi now lives in :deps (core nses require it) — no
                 ;; :test-alias override needed.
    ;; Backend drivers are NOT here — the default cold-CI test path is
@@ -392,7 +392,7 @@
                 ;; aborts this whole alias — all 405 namespaces — if the dep is
                 ;; only declared on :test. This is the CI alias; it is the one that
                 ;; must not be able to fail at load.
-                io.github.hive-agi/hive-schemas {:mvn/version "0.1.13"}}
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.14"}}
    :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
    :exec-fn cognitect.test-runner.api/test
@@ -407,7 +407,7 @@
                 io.github.hive-agi/hive-test {:mvn/version "0.3.12"}
                 ;; Same reason as :test-unit — this alias also puts test/ on the
                 ;; path, so it loads every test ns before selecting :integration.
-                io.github.hive-agi/hive-schemas {:mvn/version "0.1.13"}}
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.14"}}
    :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
@@ -428,7 +428,7 @@
   ;;        clj -T:build print-version   ; computed 0.{minor}.{patch}
   ;;        clj -T:build deploy          ; jar -> Clojars (needs CLOJARS_* env)
   :build
-  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.8"}}
+  {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.9"}}
    :ns-default hive-build.api}
 
   ;; Sibling :local/root overrides go in a gitignored local.deps.edn, merged
