@@ -38,7 +38,8 @@
             [hive-mcp.extensions.registry :as ext]
             [clojure.string :as str]
             [taoensso.timbre :as log]
-            [hive-mcp.tools.consolidated.migrate-kanban :as c-migrate-kanban]))
+            [hive-mcp.tools.consolidated.migrate-kanban :as c-migrate-kanban]
+            [hive-mcp.tools.consolidated.hot :as c-hot]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -126,6 +127,7 @@
                                   c-web/tools
                                   c-events/tools
                                   c-multi/tools
+                                  c-hot/tools
                                   c-migrate-kanban/tools))
         domain-names   (into #{} (map :name) domain-roots)
         cfg-absorbed   (config-absorbed-names)
