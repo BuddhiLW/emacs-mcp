@@ -32,7 +32,9 @@
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.recall.golden :as g]
             [hive-mcp.server.init :as init]
-            [hive-mcp.tools.memory.search :as search]))
+            [hive-mcp.tools.memory.search :as search]
+            [hive-mcp.recall.canary :as canary]
+            [hive-mcp.recall.canary.live :as canary-live]))
 
 ;; =============================================================================
 ;; Bootstrap — the real config, the real providers. Read-only.
@@ -92,21 +94,29 @@
 ;; =============================================================================
 
 (deftest ^:integration live-lexical-anchor
-  (testing "'SIGSEGV crash JDK 25 bug use Java 21' must retrieve
-            20260511194834-344a3bc0 from the LIVE store. This is the exact query
-            that failed on 2026-07-12 and the exact entry it failed to find."
+  (testing "the canary's OWN anchor must come back from the live store.
+
+            This tier used to assert a hand-picked production id. That id was
+            deleted out from under it and the assertion became unfalsifiable —
+            a canary whose anchor someone else owns is not a canary. It now
+            reads the fixture the canary itself writes and re-finds by tag."
     (live-embeddings!)
-    (if-let [_store (live-store)]
-      (let [resp (search/handle-search-semantic
-                  {:query g/anchor-query :limit 10 :scope "global"})
-            body (when-not (:isError resp)
-                   (json/read-str (:text resp) :key-fn keyword))]
-        (is (not (:isError resp))
-            (str "live memory search errored: " (:text resp)))
-        (is (nil? (g/recall-fault {:label        "case-1/LIVE"
-                                   :populated?   true
-                                   :results      (:results body)
-                                   :must-contain [g/anchor-id]}))))
+    (if-let [store (live-store)]
+      (let [ids (canary-live/ensure-fixtures! store)]
+        (is (:anchor ids)
+            "the canary could not find OR create its anchor fixture — the store
+             refused a write, so recall cannot be measured against it")
+        (when (:anchor ids)
+          (let [resp (search/handle-search-semantic
+                      {:query canary/anchor-query :limit 10 :scope "global"})
+                body (when-not (:isError resp)
+                       (json/read-str (:text resp) :key-fn keyword))]
+            (is (not (:isError resp))
+                (str "live memory search errored: " (:text resp)))
+            (is (nil? (canary/recall-fault {:label        "case-1/LIVE"
+                                            :populated?   true
+                                            :results      (:results body)
+                                            :must-contain [(:anchor ids)]}))))))
       (is (nil? (backend-absent-fault))))))
 
 (deftest ^:integration live-results-are-ordered-nearest-first

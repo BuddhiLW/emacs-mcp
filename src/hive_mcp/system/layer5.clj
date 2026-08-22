@@ -61,6 +61,11 @@
   (log/info ":hive/decay-scheduler init — starting decay scheduler" config)
   (result/rescue nil
     (init/start-decay-scheduler!))
+  ;; The recall canary's boot arm rides here because this key initializes after
+  ;; the memory addon has registered its store — the canary needs a store to
+  ;; read back from. Off-thread; a fault lands on the log at ERROR.
+  (result/rescue nil
+    (init/run-recall-canary-async!))
   {:status :running})
 
 (defmethod ig/halt-key! :hive/decay-scheduler
