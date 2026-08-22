@@ -116,11 +116,20 @@
 (defn- reload-opts
   "Options handed to the bridge.
 
-   :resolve-config must match what the original mount used, or a remounted addon
-   silently receives raw manifest config instead of the config.edn-merged config
-   it was first initialized with."
+   :resolve-config MUST sit under :mount-opts \u2014 that is the key the bridge
+   threads into boundary/mount!. Passing it at the top level is silently
+   ignored: mount! then falls back to port/resolve-config-default, which returns
+   the bare manifest :addon/config with NO config.edn merge and NO
+   :runtime/ports. The addon still constructs, still initializes, still reports
+   :success? true \u2014 and comes back DEGRADED, having lost the host adapters it
+   needs to contribute its own MCP commands. Measured: remounting hive.carto
+   that way left it :active with runtime-ports :configured [] and dropped the
+   `code carto \u2026` subdomain entirely.
+
+   manifest/prepare-config is what the original mount used; anything less hands
+   a remounted addon a thinner config than its first mount received."
   []
-  {:resolve-config manifest/prepare-config})
+  {:mount-opts {:resolve-config manifest/prepare-config}})
 
 (defn- prepared
   "Resolve specs + host + plan and make sure hive-hot is initialized correctly.
