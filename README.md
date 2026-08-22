@@ -1,8 +1,16 @@
 # hive-mcp
 
+<!-- hive-badges -->
+
+[![Clojars Project](https://img.shields.io/clojars/v/io.github.hive-agi/hive-mcp.svg)](https://clojars.org/io.github.hive-agi/hive-mcp)
+[![cljdoc](https://cljdoc.org/badge/io.github.hive-agi/hive-mcp)](https://cljdoc.org/d/io.github.hive-agi/hive-mcp/CURRENT)
+[![CI](https://github.com/hive-agi/hive-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/hive-agi/hive-mcp/actions/workflows/ci.yml)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](https://www.gnu.org/licenses/agpl-3.0.txt)
+
+<!-- /hive-badges -->
+
 **Your AI finally remembers.**
 
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io)
 
 ---
