@@ -20,7 +20,8 @@
             [clojure.walk :as walk]
             [clojure.string :as str]
             [hive-mcp.channel.task-signal :as task-signal]
-            [hive-mcp.channel.activation :as activation]))
+            [hive-mcp.channel.activation :as activation]
+            [hive-spi.guard.ports :as gp]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -207,7 +208,7 @@
    brick every tool on the server."
   [handler tool-name]
   (fn [args]
-    (let [decision (when-let [decide (ext/get-extension :guard/decide)]
+    (let [decision (when-let [decide (ext/get-extension gp/decide-ext-key)]
                      (try
                        (decide :mcp {:tool tool-name
                                      :input args
