@@ -61,7 +61,11 @@
    :edit              mem/handle-mcp-memory-edit
    :batch-edit        mem/handle-mcp-memory-batch-edit
    :reembed           mem/handle-mcp-memory-reembed
-   :batch-reembed     mem/handle-mcp-memory-batch-reembed})
+   :batch-reembed     mem/handle-mcp-memory-batch-reembed
+   ;; Human review queue for write-gated types. Deliberately NOT in
+   ;; write-commands: a reviewer wants the verdict applied and reported in the
+   ;; same turn, not queued behind an async task.
+   :review            mem/handle-mcp-memory-review})
 
 (defn- make-single-command-batch
   "Wrap make-batch-handler for batch ops targeting one command."
@@ -115,13 +119,18 @@
   {:name "memory"
    :consolidated true
    :default-async-commands write-commands
-   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, migrate-scoped, import, decay, xpoll, rename, edit, reembed, batch-add, batch-edit, batch-feedback, batch-get, batch-reembed. Use 'query' only for structured filters (type/tags/scope/duration); use 'search' for natural-language semantic retrieval. Use 'help' command to list all.\n\nEdit: 'edit' mutates an entry in place (id preserved → KG edges preserved). Params: id (required), type, content, tags, duration, abstraction_level, reason. Content change triggers re-embed. 'batch-edit' takes operations:[...] and optional dry-run:true for validation preview.\n\nReembed: 'reembed' re-vectorizes an entry without rewriting content (id required). Use after embedding-model swaps, vector-index rebuilds, or stale-vector recovery. Preserves id, content, tags, edges, duration, abstraction-level, project-id. 'batch-reembed' takes ids:[...] for sequential per-op processing.\n\nWrites default to async: they return {:queued true :task-id ...} immediately and deliver the real result via ---TOOLRESULT--- on the caller's next tool call. Pass async:false to force sync. Reads (query/metadata/get/search/expiring/batch-get) stay synchronous by default; pass async:true to queue them."
+   :description "Consolidated memory operations. Commands: add, query, metadata, get, search, duration, promote, demote, log_access, feedback, helpfulness, tags, cleanup, expiring, expire, migrate, migrate-scoped, import, decay, xpoll, rename, edit, review, reembed, batch-add, batch-edit, batch-feedback, batch-get, batch-reembed. Use 'query' only for structured filters (type/tags/scope/duration); use 'search' for natural-language semantic retrieval. Use 'help' command to list all.\n\nAxiom gate: `type: \"axiom\"` is NOT written directly — it is a NOMINATION. The entry is parked as type `axiom-candidate`, tagged `axiom-pending`, and listed for human review at the next catchup; the add response carries `queued_for_review`. Nominate freely, but write the entry so a reviewer can judge it: state the invariant and why breaking it is a category error rather than a footgun. Only a human resolves it, via 'review'.\n\nReview: 'review' with NO id lists the pending queue. 'review' with id + verdict=\"approve\" lands the originally requested type (axiom); verdict=\"reject\" lands `as` (default principle). Both strip the pending tags and stamp an audit trail. Reviewing is a human decision — do not call approve on your own nomination unless the user asked you to.\n\nEdit: 'edit' mutates an entry in place (id preserved → KG edges preserved). Params: id (required), type, content, tags, duration, abstraction_level, reason. Content change triggers re-embed. 'batch-edit' takes operations:[...] and optional dry-run:true for validation preview.\n\nReembed: 'reembed' re-vectorizes an entry without rewriting content (id required). Use after embedding-model swaps, vector-index rebuilds, or stale-vector recovery. Preserves id, content, tags, edges, duration, abstraction-level, project-id. 'batch-reembed' takes ids:[...] for sequential per-op processing.\n\nWrites default to async: they return {:queued true :task-id ...} immediately and deliver the real result via ---TOOLRESULT--- on the caller's next tool call. Pass async:false to force sync. Reads (query/metadata/get/search/expiring/batch-get) stay synchronous by default; pass async:true to queue them."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
                                          :description "Command to execute. Memory commands are flat (add, query, etc.). Subdomains: 'kg edge', 'kg traverse', 'migration backup', 'ingest file', 'enrich enrich'. Use command='help' to list all."}
                               "type" {:type "string"
                                       :description (str "[add/query] Type of memory entry. "
                                                         (type-registry/mcp-type-hint))}
+                              "verdict" {:type "string"
+                                         :enum ["approve" "reject"]
+                                         :description "[review] approve lands the originally requested (gated) type; reject lands `as`. Required when review is given an id."}
+                              "as" {:type "string"
+                                    :description "[review] Type a REJECTED candidate lands as (default: principle). Ignored on approve."}
                               "content" {:type "string"
                                          :description "[add] Content of the memory entry"}
                               "tags" {:type "array"

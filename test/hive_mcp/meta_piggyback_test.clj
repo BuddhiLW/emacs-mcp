@@ -41,31 +41,36 @@
 
 (deftest test-get-messages-per-agent-cursors
   (testing "Each agent has independent cursor - messages aren't repeated"
-    ;; Add a message
+    ;; Both readers are coordinator lanes: since the audience filter landed
+    ;; (hive-mcp.channel.audience) an arbitrary ling id receives nothing at
+    ;; all, so probing the CURSOR through one would measure routing instead.
+    ;; Routing itself is covered by hive-mcp.channel.audience-test.
     (hivemind/shout! "worker" :progress {:message "first"})
 
     ;; Agent A reads
-    (let [read-a1 (piggyback/get-messages "agent-A")]
+    (let [read-a1 (piggyback/get-messages "coordinator-A")]
       (is (seq read-a1) "Agent A should get messages"))
 
     ;; Agent A reads again - should be empty (already read)
-    (let [read-a2 (piggyback/get-messages "agent-A")]
+    (let [read-a2 (piggyback/get-messages "coordinator-A")]
       (is (nil? read-a2) "Agent A should get nil on second read"))
 
     ;; Agent B reads - should still see the message (own cursor)
-    (let [read-b1 (piggyback/get-messages "agent-B")]
+    (let [read-b1 (piggyback/get-messages "coordinator-B")]
       (is (seq read-b1) "Agent B should get messages (independent cursor)"))))
 
 (deftest test-fifo-ordering
   (testing "Messages are returned in FIFO order"
-    ;; Add messages with small delays to ensure ordering
+    ;; Add messages with small delays to ensure ordering.
+    ;; Three DIFFERENT agents, so the progress digest has nothing to collapse
+    ;; and ordering is what is under test.
     (hivemind/shout! "a" :started {:message "first"})
     (Thread/sleep 10)
     (hivemind/shout! "b" :progress {:message "second"})
     (Thread/sleep 10)
     (hivemind/shout! "c" :completed {:message "third"})
 
-    (let [messages (piggyback/get-messages "reader")]
+    (let [messages (piggyback/get-messages "coordinator-reader")]
       (is (= 3 (count messages)) "Should have 3 messages")
       (is (= "first" (:m (nth messages 0))) "First message correct")
       (is (= "second" (:m (nth messages 1))) "Second message correct")
@@ -79,8 +84,9 @@
     (let [history (piggyback/fetch-history)]
       (is (seq history) "History should have messages"))
 
-    ;; get-messages should still return the message
-    (let [messages (piggyback/get-messages "reader")]
+    ;; get-messages should still return the message. Reader is a coordinator
+    ;; lane so the audience filter is not what is under test here.
+    (let [messages (piggyback/get-messages "coordinator-reader")]
       (is (seq messages) "Messages should still be available"))))
 
 ;; =============================================================================

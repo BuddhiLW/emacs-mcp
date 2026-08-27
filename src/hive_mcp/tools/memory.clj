@@ -13,6 +13,7 @@
      * lifecycle.clj: duration, promote, demote, cleanup, expiring
      * analytics.clj: access tracking, feedback
      * migration.clj: project migration, JSON import
+     * review.clj: human review queue for write-gated types (axiom gate)
 
    Supporting modules:
    - core.clj: with-store, with-entry macros (error handling)
@@ -24,6 +25,7 @@
             [hive-mcp.tools.memory.lifecycle :as lifecycle]
             [hive-mcp.tools.memory.analytics :as analytics]
             [hive-mcp.tools.memory.migration :as migration]
+            [hive-mcp.tools.memory.review :as review]
             [hive-mcp.memory.type-registry :as type-registry]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -50,6 +52,12 @@
 (def handle-mcp-memory-batch-edit
   "Batch memory edit. Sequential per-op; summary + per-op results."
   crud/handle-batch-edit)
+
+(def handle-mcp-memory-review
+  "List or resolve the human review queue for write-gated types.
+   No id => list pending. id + verdict => approve (lands the requested type)
+   or reject (lands :as, default principle)."
+  review/handle-review)
 
 (def handle-mcp-memory-reembed
   "Re-embed a memory entry by id without rewriting content."

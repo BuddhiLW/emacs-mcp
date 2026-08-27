@@ -39,6 +39,7 @@
 (def canonical-handlers
   {:spawn       spawn/handle-spawn
    :status      status/handle-status
+   :digest      status/handle-digest
    :kill        kill/handle-kill
    :kill-batch  kill/handle-kill-batch
    :interrupt   lifecycle/handle-interrupt
@@ -79,10 +80,10 @@
 (def tool-def
   {:name "agent"
    :consolidated true
-   :description "Unified agent operations: spawn (create ling/drone), status (query agents), kill (terminate), kill-batch (terminate multiple agents in one call), batch-spawn (spawn multiple agents at once via operations array), dispatch (send task), interrupt (interrupt current query of agent-sdk ling), claims (file ownership), list (deprecated alias for status), collect (get task result), broadcast (prompt all), cleanup (remove orphan agents after Emacs restart). Type: 'ling' (Claude Code instance) or 'drone' (OpenRouter leaf worker). Nested: dag (start/stop/status DAGWave scheduler). Use command='help' to list all."
+   :description "Unified agent operations: spawn (create ling/drone), status (query agents), digest (compact per-agent progress roster — turn, last event, idle time — the PULL view now that shouts reach only the spawner; pass agent_id for just your own children, verbose for rendered text), kill (terminate), kill-batch (terminate multiple agents in one call), batch-spawn (spawn multiple agents at once via operations array), dispatch (send task — also the way to STEER a running agent), interrupt (interrupt current query of agent-sdk ling), claims (file ownership), list (deprecated alias for status), collect (get task result), broadcast (prompt all), cleanup (remove orphan agents after Emacs restart). Type: 'ling' (Claude Code instance) or 'drone' (OpenRouter leaf worker). Nested: dag (start/stop/status DAGWave scheduler). Use command='help' to list all."
    :inputSchema {:type "object"
                  :properties {"command" {:type "string"
-                                         :enum ["spawn" "status" "kill" "kill-batch" "batch-spawn" "dispatch" "interrupt" "claims" "list" "collect" "broadcast" "cleanup" "dag start" "dag stop" "dag status" "help"]
+                                         :enum ["spawn" "status" "digest" "kill" "kill-batch" "batch-spawn" "dispatch" "interrupt" "claims" "list" "collect" "broadcast" "cleanup" "dag start" "dag stop" "dag status" "help"]
                                          :description "Agent operation to perform"}
                               ;; spawn params
                               "type" {:type "string"

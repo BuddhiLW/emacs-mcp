@@ -310,8 +310,16 @@
                      :tags tags-with-scope :project-id project-id}))
       (catch Exception e (log/debug "[memory] Channel publish failed for entry" entry-id (.getMessage e))))
     (if created
-      (mcp-json (cond-> (fmt/entry->json-alist created)
-                  (seq edge-ids) (assoc :kg_edges_created edge-ids)))
+      ;; The gate notice is DERIVED from the entry's own tags, so the response
+      ;; cannot disagree with what was stored.
+      (let [requested (type-registry/requested-type-of tags-with-scope)]
+        (mcp-json (cond-> (fmt/entry->json-alist created)
+                    (seq edge-ids) (assoc :kg_edges_created edge-ids)
+                    requested
+                    (assoc :queued_for_review
+                           {:requested_type requested
+                            :parked_as      type
+                            :reason         (:reason (type-registry/gate-of requested))}))))
       (mcp-error (str "Entry indexed as " entry-id " but retrieval failed. Check memory store connectivity.")))))
 
 (defn- do-add!
@@ -410,9 +418,18 @@
       (mcp-error (str "Invalid abstraction_level: " abstraction_level))
 
       :else
-      (let [;; Canonicalize + auto-register the (possibly novel) type with sane
+      (let [;; Write gate: a request for a human-gated type (:axiom) is PARKED
+            ;; as the gate's queue type and tagged pending, never honoured
+            ;; outright and never dropped. Ungated types pass through untouched.
+            {eff-type :type :keys [queued? gate requested]}
+            (type-registry/resolve-write-type type)
+
+            args (cond-> args
+                   queued? (update :tags type-registry/queued-tags gate requested))
+
+            ;; Canonicalize + auto-register the (possibly novel) type with sane
             ;; defaults, so unknown-but-safe types persist and stay consistent.
-            args (assoc args :type (type-registry/ensure-type! type))
+            args (assoc args :type (type-registry/ensure-type! eff-type))
             timeout-sentinel ::timeout
             result (wpool/await!
                     (pool/memory-pool)

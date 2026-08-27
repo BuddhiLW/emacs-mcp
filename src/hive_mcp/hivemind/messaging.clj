@@ -27,18 +27,23 @@
 (defn- all-hivemind-messages
   "Return all hivemind messages for piggyback module.
    Projection mirrors buffer-backbone-event! normalization so dual-path dedup
-   keys remain shape-aligned (both paths carry :task and :shout-id when set)."
+   keys remain shape-aligned (both paths carry :task and :shout-id when set).
+   :parent-id / :broadcast? ride along — hive-mcp.channel.audience routes on
+   them, and a projection that dropped them would silently broadcast."
   []
   (mapcat (fn [[_agent-id entry]]
             (let [{:keys [messages]} (:data entry)]
-              (for [{:keys [event-type message task timestamp project-id shout-id]} messages]
+              (for [{:keys [event-type message task timestamp project-id shout-id
+                            parent-id broadcast?]} messages]
                 (cond-> {:agent-id _agent-id
                          :event-type event-type
                          :message (or message task "")
                          :timestamp timestamp
                          :project-id (or project-id "global")}
                   shout-id (assoc :shout-id shout-id)
-                  task (assoc :task task)))))
+                  task (assoc :task task)
+                  parent-id (assoc :parent-id parent-id)
+                  broadcast? (assoc :broadcast? true)))))
           @(:atom state/agent-registry)))
 
 (piggyback/register-message-source! all-hivemind-messages)
@@ -160,27 +165,39 @@
                        (:project-id vessel-ctx)
                        (when directory (mem-scope/get-current-project-id directory))
                        "global")
+        ;; Spawner identity — the reader whose context this shout enters.
+        ;; hive-mcp.channel.audience routes on it; absent it, the shout is
+        ;; root-level and reaches coordinator readers only. Explicit wins so a
+        ;; caller with no DataScript row can still address its reader.
+        parent-id (or (:parent-id data) (:slave/parent resolved-slave))
+        broadcast? (boolean (:broadcast? data))
         ;; Cap message/task at canonical ingestion. One bad shout can otherwise
         ;; pollute the per-agent 10-message ring AND every backbone subscriber.
         capped-message (cap-message (:message data))
         capped-task (cap-message (:task data))
+        payload-data (dissoc data :task :message :directory :project-id
+                             :parent-id :broadcast?)
         message (cond-> {:event-type event-type
                          :timestamp now
                          :project-id project-id
                          :shout-id shout-id
-                         :data (dissoc data :task :message :directory :project-id)}
+                         :data payload-data}
                   capped-task (assoc :task capped-task)
-                  capped-message (assoc :message capped-message))
+                  capped-message (assoc :message capped-message)
+                  parent-id (assoc :parent-id parent-id)
+                  broadcast? (assoc :broadcast? true))
         ;; Backbone payload — flat, self-contained, no internal references
         ;; shout-id enables cross-path dedup (atom + backbone deliver same shout)
-        backbone-payload {:agent-id agent-id
-                          :event-type event-type
-                          :timestamp now
-                          :project-id project-id
-                          :shout-id shout-id
-                          :message capped-message
-                          :task capped-task
-                          :data (dissoc data :task :message :directory :project-id)}]
+        backbone-payload (cond-> {:agent-id agent-id
+                                  :event-type event-type
+                                  :timestamp now
+                                  :project-id project-id
+                                  :shout-id shout-id
+                                  :message capped-message
+                                  :task capped-task
+                                  :data payload-data}
+                           parent-id (assoc :parent-id parent-id)
+                           broadcast? (assoc :broadcast? true))]
     ;; 1. Local state — always (bounded-atom for piggyback reads)
     (let [current (or (bget state/agent-registry agent-id) {:messages [] :last-seen nil})
           messages (or (:messages current) [])

@@ -223,6 +223,7 @@
               kanban-summary (outcome/value-or (safe-deref f-kanban query-timeout-ms "kanban-summary") {:counts {}, :recent-todos []})
 
               axioms               (:axioms (outcome/value-or bundle {}) [])
+              axiom-candidates     (:axiom-candidates (outcome/value-or bundle {}) [])
               principles           (:principles (outcome/value-or bundle {}) [])
               priority-principles  (:priority-principles (outcome/value-or bundle {}) [])
               priority-conventions (:priority-conventions (outcome/value-or bundle {}) [])
@@ -235,6 +236,9 @@
 
               ;; Convert to metadata (pure, fast)
               axioms-meta (mapv fmt/entry->axiom-meta axioms)
+              ;; Review queue. Deliberately absent from piggyback-raw below —
+              ;; a nomination is not law and must never drain as if it were.
+              axiom-candidates-meta (mapv fmt/entry->review-meta axiom-candidates)
               principles-meta (mapv #(fmt/entry->catchup-meta % 80) principles)
               priority-principles-meta (mapv #(fmt/entry->catchup-meta % 80) priority-principles)
               priority-meta (mapv fmt/entry->priority-meta priority-conventions)
@@ -386,7 +390,7 @@
                                              context-refs))]
 
           (fmt/build-catchup-response
-           {:scopes scopes, :project-name project-name, :principles-meta principles-meta, :priority-principles-meta priority-principles-meta, :recent-wraps recent-wraps, :context-refs context-refs, :axioms-meta axioms-meta, :memory-status (outcome/summary bundle), :priority-meta priority-meta, :carto-status carto-status, :expiring-meta expiring-meta, :git-info git-info, :sessions-meta sessions-meta, :snippets-meta snippets-meta, :decisions-meta decisions-base, :conventions-meta conventions-base, :project-id project-id, :kanban-summary kanban-summary}))
+           {:scopes scopes, :axiom-candidates-meta axiom-candidates-meta, :project-name project-name, :principles-meta principles-meta, :priority-principles-meta priority-principles-meta, :recent-wraps recent-wraps, :context-refs context-refs, :axioms-meta axioms-meta, :memory-status (outcome/summary bundle), :priority-meta priority-meta, :carto-status carto-status, :expiring-meta expiring-meta, :git-info git-info, :sessions-meta sessions-meta, :snippets-meta snippets-meta, :decisions-meta decisions-base, :conventions-meta conventions-base, :project-id project-id, :kanban-summary kanban-summary}))
         (catch Exception e
           (fmt/catchup-error e))))))
 

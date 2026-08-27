@@ -141,6 +141,20 @@
              (not (and (string? role) (str/blank? role))))
     role))
 
+(defn- default-ling-budget
+  "Per-ling USD cap applied when a caller supplies none.
+
+   Read from hive-mcp.agent.hooks.budget at call time rather than copied, so
+   there is one definition of the default. nil only if that ns cannot be
+   resolved, in which case no guardrail is registered and the ling runs
+   uncapped — the pre-existing behaviour, now the exception rather than the
+   rule."
+  []
+  (try
+    (some-> (requiring-resolve 'hive-mcp.agent.hooks.budget/default-max-budget-usd)
+            deref)
+    (catch Throwable _ nil)))
+
 (defn- spawn-ling-for-task
   "Attempt to spawn a ling for a single DAG task. Returns Result.
    Threads the task :role (when present) into create-ling! via the
@@ -149,8 +163,11 @@
    When :prefer-lightweight? is true (default), uses :headless spawn mode
    which routes to TransparentAgenticLoop (~2MB vs ~280MB ProcessBuilder).
    Threads :run-id (when present) into create-ling! so the ling's headless
-   completion publishes on hive.v1.wave.<run-id>.completed.<task-id>."
-  [task-id title role {:keys [cwd presets project-id prefer-lightweight? run-id]
+   completion publishes on hive.v1.wave.<run-id>.completed.<task-id>.
+   Threads :max-budget-usd so each dispatched ling carries a spend guardrail:
+   this scheduler auto-advances waves on completion, so an uncapped ling here
+   is an unbounded spend loop with no operator in it."
+  [task-id title role {:keys [cwd presets project-id prefer-lightweight? run-id max-budget-usd]
                        :or {prefer-lightweight? true}}]
   (let [safe-title (-> (or title "task")
                        str/lower-case
@@ -167,6 +184,8 @@
                                                     :task title}
                                              run-id
                                              (assoc :run-id run-id)
+                                             (and max-budget-usd (pos? max-budget-usd))
+                                             (assoc :max-budget-usd max-budget-usd)
                                              prefer-lightweight?
                                              (assoc :spawn-mode :headless)
                                              role*
@@ -331,17 +350,27 @@
 ;; =============================================================================
 
 (defn start-dag!
-  "Initialize and start the DAG scheduler for a plan."
+  "Initialize and start the DAG scheduler for a plan.
+
+   Every dispatched ling gets a per-ling USD cap: `:max-budget-usd` from opts,
+   else `default-ling-budget`. This scheduler auto-advances waves when lings
+   complete and nothing calls `stop-dag!` on failure, so an uncapped run is an
+   unbounded spend loop with no operator in it. Pass an explicit
+   `:max-budget-usd` to widen or narrow it; pass 0 only if you have another
+   guardrail."
   [plan-id opts]
   (when (:active @dag-state)
     (throw (ex-info "DAG already active. Call stop-dag! first."
                     {:current-plan (:plan-id @dag-state)})))
 
-  (let [{:keys [max-slots cwd presets project-id run-id]
+  (let [{:keys [max-slots cwd presets project-id run-id max-budget-usd]
          :or {max-slots 5
               presets ["ling"]}} opts
         effective-project-id (or project-id
-                                 (when cwd (scope/get-current-project-id cwd)))]
+                                 (when cwd (scope/get-current-project-id cwd)))
+        effective-budget     (if (some? max-budget-usd)
+                               max-budget-usd
+                               (default-ling-budget))]
 
     ;; Initialize state
     (reset! dag-state
@@ -355,7 +384,8 @@
              :opts       {:cwd cwd
                           :presets presets
                           :project-id effective-project-id
-                          :run-id run-id}})
+                          :run-id run-id
+                          :max-budget-usd effective-budget}})
 
     ;; Start event listener for completion detection
     (start-event-listener!)
@@ -363,7 +393,8 @@
     ;; Shout start
     (hivemind/shout! "coordinator" :started
                      {:task (str "DAGWaves scheduler for plan " plan-id)
-                      :message (str "Max slots: " max-slots " project: " effective-project-id)})
+                      :message (str "Max slots: " max-slots " project: " effective-project-id
+                                    " budget/ling: " (or effective-budget "UNCAPPED"))})
 
     ;; Find and dispatch first wave
     (let [ready (find-ready-tasks cwd #{} {} #{})
@@ -372,11 +403,13 @@
 
       (log/info "DAGWaves started. Plan:" plan-id
                 "Ready tasks:" (count ready)
-                "Dispatched:" (or (:dispatched-count result) 0))
+                "Dispatched:" (or (:dispatched-count result) 0)
+                "Budget/ling:" (or effective-budget "UNCAPPED"))
 
       {:started true
        :plan-id plan-id
        :max-slots max-slots
+       :max-budget-usd effective-budget
        :ready-count (count ready)
        :initial-dispatch result})))
 

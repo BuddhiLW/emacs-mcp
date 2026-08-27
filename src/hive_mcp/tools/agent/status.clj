@@ -4,7 +4,9 @@
             [hive-mcp.tools.agent.helpers :as helpers]
             [hive-mcp.agent.type-registry :as agent-type-registry]
             [hive-mcp.swarm.datascript.queries :as queries]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.swarm.digest :as digest]
+            [hive-mcp.hivemind.state :as hm-state]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -41,3 +43,30 @@
       (catch Exception e
         (log/error "Failed to get agent status" {:error (ex-message e)})
         (mcp-error (str "Failed to get status: " (ex-message e)))))))
+
+(defn handle-digest
+  "Compact per-agent status rows projected from the hivemind shout ring.
+
+   The PULL side of the audience change. Shouts now reach only their spawner
+   and a per-turn burst collapses to one rollup, so the running picture is no
+   longer pushed into everybody's context — this is where you ask for it.
+
+   Params:
+     :agent_id — restrict to that agent's OWN children
+     :verbose  — also return the rendered one-line-per-agent text
+
+   Rows: {:a agent :e last-event :m last-message :t task :turn n
+          :parent spawner :idle-s seconds :shouts ring-depth}, freshest first."
+  [{:keys [agent_id verbose]}]
+  (try
+    (let [registry @(:atom hm-state/agent-registry)
+          rows (digest/roster (System/currentTimeMillis) registry
+                              {:only-children-of agent_id})]
+      (mcp-json
+       (cond-> {:agents rows
+                :count (count rows)
+                :active (count (filter #(< (:idle-s %) 60) rows))}
+         verbose (assoc :rendered (digest/render rows)))))
+    (catch Exception e
+      (log/warn "agent digest failed:" (.getMessage e))
+      (mcp-error (str "Digest failed: " (.getMessage e))))))

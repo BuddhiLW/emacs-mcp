@@ -17,6 +17,7 @@
      :decisions
      :recent-wraps
      :axioms
+     :axiom-candidates
      :principles
      :priority-principles
      :priority-conventions

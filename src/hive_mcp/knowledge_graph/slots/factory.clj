@@ -22,7 +22,8 @@
             [taoensso.timbre :as log]
             [hive-mcp.knowledge-graph.schema :as schema]
             [hive-mcp.knowledge-graph.store.datalevin-config :as dlc]
-            [hive-mcp.knowledge-graph.store.datahike-config :as dhc]))
+            [hive-mcp.knowledge-graph.store.datahike-config :as dhc]
+            [hive-mcp.config.core :as config]))
 
 ;; -----------------------------------------------------------------------------
 ;; Resolution helpers
@@ -57,15 +58,26 @@
 (defn- datahike-opts
   "Host-owned injection for the domain-agnostic datahike sibling. :store-name +
    raw :store-id reproduce the legacy store-id UUID via the sibling make-config.
-   Caller opts win."
+   Caller opts win.
+
+   :keep-history? and :value-caps are forwarded ONLY when config.edn declares
+   them under [:services :datahike ...]. Absent keys are not passed at all, so
+   the sibling stays on Datahike's own defaults and an existing store keeps its
+   creation-time settings."
   [opts]
-  (let [cfg (let [res (dhc/resolve-DatahikeKGConfig)] (if (r/ok? res) (:ok res) {}))]
+  (let [cfg    (let [res (dhc/resolve-DatahikeKGConfig)] (if (r/ok? res) (:ok res) {}))
+        global (r/rescue {} (config/get-global-config))
+        declared (get-in global [:services :datahike])
+        policy (cond-> {}
+                 (some? (:keep-history? declared)) (assoc :keep-history? (:keep-history? declared))
+                 (some? (:value-caps declared))    (assoc :value-caps (:value-caps declared)))]
     (merge {:db-path             (:db-path cfg)
             :backend             (:backend cfg)
             :id                  (:store-id cfg)
             :store-name          "hive-mcp-kg"
             :index               :datahike.index/persistent-set
             :core-norms-resource "hive_mcp/norms/kg"}
+           policy
            opts)))
 
 ;; -----------------------------------------------------------------------------
