@@ -123,7 +123,7 @@
         ;; git tag (== master head) so CI and the Clojars jar build resolve it
         ;; without a sibling checkout; sibling co-dev goes through a gitignored
         ;; local.deps.edn :local/root override.
-        io.github.hive-agi/hive-spi {:mvn/version "0.1.20"}
+        io.github.hive-agi/hive-spi {:mvn/version "0.2.0"}
 
         ;; NO CONCRETE BACKEND BELONGS HERE. hive-milvus / hive-qdrant /
         ;; clj-qdrant depend on hive-mcp for their addon surface, so declaring
