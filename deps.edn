@@ -137,7 +137,7 @@
         ;; hive-help — required directly by hive-mcp.embeddings.routing. It used
         ;; to arrive transitively through hive-milvus; once the backend left
         ;; :deps that route vanished, so the real dependency is declared here.
-        io.github.hive-agi/hive-help {:mvn/version "0.1.1"}
+        io.github.hive-agi/hive-help {:mvn/version "0.1.0"}
 
         ;; hive-addon — standalone IAddon contract (leaf lib) + plug/mount/compose.
         ;; hive-mcp.addons.protocol re-exports it via def-aliases so the ~30
