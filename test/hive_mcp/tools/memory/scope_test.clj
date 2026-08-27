@@ -594,3 +594,40 @@
           (is (scope/matches-hierarchy-scopes?
                {:tags ["scope:project:emacs-mcp"]} tags)
               "Step 3: old alias-tagged entries are found"))))))
+
+;; =============================================================================
+;; retag-scope — a migration must ENSURE the destination tag, not just swap it
+;; =============================================================================
+
+(deftest retag-scope-moves-an-entry-that-carried-the-old-tag
+  (is (= ["keep" "scope:project:new"]
+         (scope/retag-scope ["keep" "scope:project:old"]
+                            "scope:project:old" "scope:project:new"))))
+
+(deftest retag-scope-adds-the-tag-when-the-entry-carried-none
+  (testing "the whole point: :project-id moves but matches-scope? reads TAGS"
+    (let [tagged (scope/retag-scope ["ingestion" "source:abc"]
+                                    "scope:project:old" "scope:project:new")]
+      (is (= ["ingestion" "source:abc" "scope:project:new"] tagged))
+      (is (scope/matches-scope? {:tags tagged} "new")
+          "an entry with no scope tag was previously left invisible to every scoped query"))))
+
+(deftest retag-scope-is-idempotent
+  (testing "re-running a migration does not accumulate duplicate scope tags"
+    (let [once  (scope/retag-scope ["a" "scope:project:old"]
+                                   "scope:project:old" "scope:project:new")
+          twice (scope/retag-scope once "scope:project:old" "scope:project:new")]
+      (is (= once twice))
+      (is (= 1 (count (filter #(= "scope:project:new" %) twice)))))))
+
+(deftest retag-scope-does-not-disturb-unrelated-tags
+  (is (= ["kind:principle" "source:abc" "scope:global" "scope:project:new"]
+         (scope/retag-scope ["kind:principle" "source:abc" "scope:global"]
+                            "scope:project:old" "scope:project:new"))
+      "only the old and new scope tags are touched"))
+
+(deftest retag-scope-handles-an-entry-with-no-tags-at-all
+  (is (= ["scope:project:new"]
+         (scope/retag-scope nil "scope:project:old" "scope:project:new")))
+  (is (= ["scope:project:new"]
+         (scope/retag-scope [] "scope:project:old" "scope:project:new"))))

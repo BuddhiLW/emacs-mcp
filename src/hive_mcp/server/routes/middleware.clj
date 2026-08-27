@@ -5,8 +5,8 @@
    threading in build-middleware-chain.
 
    Execution order (request flows inward):
-   handler → nats-notify → retry → async → [default-async] → normalize
-   → compress → piggybacks → context → response
+   handler → nats-notify → retry → async → [default-async] → guard
+   → normalize → compress → piggybacks → context → response
 
    DDD: Application Service layer — request processing pipeline."
   (:require [hive-mcp.server.routes.identity :as id]
@@ -20,7 +20,8 @@
             [clojure.walk :as walk]
             [clojure.string :as str]
             [hive-mcp.channel.task-signal :as task-signal]
-            [hive-mcp.channel.activation :as activation]))
+            [hive-mcp.channel.activation :as activation]
+            [hive-spi.guard.ports :as gp]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -178,6 +179,56 @@
           :text (pr-str {:queued true :task-id task-id :tool tool-name})}])
       (handler args))))
 
+(defn- guard-refusal
+  "Render `decision` as the content array for a refused call."
+  [tool-name decision]
+  [{:type "text"
+    :isError true
+    :text (str "REFUSED by the hive guard — " tool-name "\n\n"
+               (:guard/reason decision)
+               (when-let [cites (seq (:guard/citations decision))]
+                 (str "\n\nStated by: " (str/join ", " cites)))
+               (when-let [rid (:guard/rule-id decision)]
+                 (str "\nRule: " rid)))}])
+
+(defn wrap-handler-guard
+  "Gate the call through the `:guard/decide` seam before the handler runs.
+
+   The vendor-independent FLOOR: every client speaks MCP, so a rule enforced
+   here holds under clients that have no hook system of their own.
+
+   Soft seam — core does not depend on the guard addon. With no
+   `:guard/decide` extension registered the call proceeds untouched.
+
+     :deny — short-circuits; the refusal is returned and the tool never runs.
+     :warn — the tool runs and the advisory is appended to its content.
+     else  — proceeds.
+
+   A seam that THROWS is logged and the call proceeds: a broken guard must not
+   brick every tool on the server."
+  [handler tool-name]
+  (fn [args]
+    (let [decision (when-let [decide (ext/get-extension gp/decide-ext-key)]
+                     (try
+                       (decide :mcp {:tool tool-name
+                                     :input args
+                                     :agent-id (id/extract-agent-id args nil)
+                                     :cwd (id/extract-directory args)})
+                       (catch Exception e
+                         (log/error e "guard: seam threw; call NOT judged"
+                                    {:tool tool-name})
+                         nil)))]
+      (case (:guard/verdict decision)
+        :deny (do (log/warn "guard: refused a tool call"
+                            {:tool tool-name :rule (:guard/rule-id decision)})
+                  (guard-refusal tool-name decision))
+        :warn (conj (vec (id/normalize-content (handler args)))
+                    {:type "text"
+                     :text (str "GUARD WARNING — " (:guard/reason decision)
+                                (when-let [rid (:guard/rule-id decision)]
+                                  (str " [" rid "]")))})
+        (handler args)))))
+
 
 ;; =============================================================================
 ;; Piggyback Draining
@@ -267,8 +318,12 @@
 ;; =============================================================================
 
 (defn build-middleware-chain
-  "Compose the 8-layer middleware chain around a raw tool handler.
-   Testable in isolation — no tool definition machinery needed."
+  "Compose the 9-layer middleware chain around a raw tool handler.
+   Testable in isolation — no tool definition machinery needed.
+
+   The guard sits INSIDE context (so it judges keywordized args with identity
+   already resolved) and OUTSIDE async (so a denied call is never spawned as a
+   future)."
   [handler tool-name default-async-commands]
   (-> handler
       (wrap-handler-nats-notify tool-name)
@@ -276,6 +331,7 @@
       (wrap-handler-async tool-name)
       (cond-> (seq default-async-commands)
         (wrap-handler-default-async-for-commands default-async-commands))
+      (wrap-handler-guard tool-name)
       wrap-handler-normalize
       wrap-handler-compress
       (wrap-handler-piggybacks tool-name)
