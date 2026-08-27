@@ -36,6 +36,27 @@
   []
   (not= "0" (System/getenv "HIVE_BOOT_TIMING")))
 
+(def ^:private host-protocol-namespaces
+  "Host protocols an addon may `reify`, loaded before any constructor namespace.
+
+   An addon names `hive-mcp.addons.protocol/IAddon` by qualified symbol and
+   cannot `:require` it — the host is not a dependency of its own addons.
+   `reify` resolves that symbol while the constructor namespace COMPILES, long
+   before any runtime guard in the constructor runs, so the protocol must
+   already be in the image or the addon dies with `Syntax error compiling
+   reify*` and is silently skipped."
+  '[hive-mcp.addons.protocol
+    hive-mcp.addons.terminal
+    hive-mcp.protocols.vessel])
+
+(defn- preload-host-protocols!
+  "Load every namespace in `host-protocol-namespaces`. Returns the ones that
+   failed, which is never expected to be non-empty."
+  []
+  (into []
+        (remove (fn [ns-sym] (rescue false (do (require ns-sym) true))))
+        host-protocol-namespaces))
+
 ;; =============================================================================
 ;; Extension Manifests (removed — addons self-register via init!)
 ;; =============================================================================
@@ -241,6 +262,8 @@
    Called once at startup. Thread-safe, idempotent.
 
    Strategy:
+   0. Load the host protocols an addon may reify — before anything loads an
+      addon constructor namespace
    1. Scan classpath for addon manifests (META-INF/hive-addons/*.edn)
    1.5 Gated MQ-ADOPT delegate: load-extensions-via-mount! — when it runs,
        manifest addons are mounted by hive-addon.mount.compose and steps 3/4
@@ -255,7 +278,15 @@
 
    Returns map of {:registered [keys...] :total count :sources {...}}."
   []
-  (let [;; Step 1: Scan classpath for addon manifests
+  (let [;; Step 0: host protocols first. See host-protocol-namespaces — an
+        ;; addon that reifies one cannot COMPILE until it is in the image, and
+        ;; the composer reports the result as an ordinary mount failure.
+        missing-protocols (preload-host-protocols!)
+        _ (when (seq missing-protocols)
+            (log/error "Host protocol namespaces failed to load — every addon that reifies them will be skipped"
+                       {:ns missing-protocols}))
+
+        ;; Step 1: Scan classpath for addon manifests
         {:keys [ordered init-ns-set]}
         (discover-addon-manifests)
 

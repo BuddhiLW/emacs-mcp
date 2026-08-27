@@ -33,14 +33,12 @@
           old-scope-tag (scope/make-scope-tag old-project-id)
           new-scope-tag (scope/make-scope-tag new-project-id)]
       (doseq [entry entries]
-        (let [new-tags (if update-scopes
-                         (mapv (fn [tag]
-                                 (if (= tag old-scope-tag)
-                                   (do (swap! updated-scopes inc)
-                                       new-scope-tag)
-                                   tag))
-                               (:tags entry))
-                         (:tags entry))]
+        (let [old-tags (vec (:tags entry))
+              new-tags (if update-scopes
+                         (scope/retag-scope old-tags old-scope-tag new-scope-tag)
+                         old-tags)]
+          (when (not= old-tags new-tags)
+            (swap! updated-scopes inc))
           (with-resilience
             (mem-proto/update-entry! store (:id entry) {:project-id new-project-id
                                                         :tags new-tags}))
@@ -135,11 +133,8 @@
           (when-not dry-run
             (doseq [entry found-entries]
               (try
-                (let [new-tags (mapv (fn [tag]
-                                       (if (= tag old-scope-tag)
-                                         new-scope-tag
-                                         tag))
-                                     (:tags entry))]
+                (let [new-tags (scope/retag-scope (:tags entry)
+                                                  old-scope-tag new-scope-tag)]
                   (with-resilience
                     (mem-proto/update-entry! store (:id entry)
                                              {:project-id new-project-id

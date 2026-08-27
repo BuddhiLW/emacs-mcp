@@ -56,7 +56,47 @@ if [[ -f "$PROJECT_DIR/local.deps.edn" ]]; then
   echo "hive-mcp: merging local.deps.edn"
 fi
 
+# ── AOT boot classes (opt-in) ───────────────────────────────────────
+# HIVE_FAST_BOOT=1 puts target/boot-classes on the classpath, so the addon
+# constructor namespaces load as .class files instead of being compiled at
+# boot. Build them with:
+#
+#   clojure -Sdeps "$(cat local.deps.edn)" -X:aot-boot
+#
+# Clojure loads a .class only when it is newer than its .clj, so a partly
+# stale directory boots a MIXED image — edited namespaces from source, the
+# protocols they were compiled against from class files. Staleness therefore
+# DECLINES the optimization instead of warning past it: the env var asks for
+# a faster boot, never for a different program.
+ALIASES=":mcp"
+STAMP="$PROJECT_DIR/target/boot-classes/.aot-stamp.edn"
+
+fast_boot_requested() {
+  [[ "${HIVE_FAST_BOOT:-}" == "1" || "${HIVE_FAST_BOOT:-}" == "true" ]]
+}
+
+source_newer_than() {
+  find "$PROJECT_DIR/src" "$PROJECT_DIR"/../*/src -type f \
+       \( -name '*.clj' -o -name '*.cljc' \) -newer "$1" -print -quit 2>/dev/null
+}
+
+if fast_boot_requested; then
+  if [[ ! -f "$STAMP" ]]; then
+    echo "hive-mcp: HIVE_FAST_BOOT set but no AOT classes — booting from source"
+    echo "hive-mcp:   build them: clojure -Sdeps \"\$(cat local.deps.edn)\" -X:aot-boot"
+  else
+    STALE="$(source_newer_than "$STAMP" || true)"
+    if [[ -n "$STALE" ]]; then
+      echo "hive-mcp: AOT classes are stale ($STALE is newer) — booting from source"
+      echo "hive-mcp:   rebuild them: clojure -Sdeps \"\$(cat local.deps.edn)\" -X:aot-boot"
+    else
+      ALIASES=":mcp:fast-boot"
+      echo "hive-mcp: fast boot — AOT classes from target/boot-classes"
+    fi
+  fi
+fi
+
 # ── Launch ──────────────────────────────────────────────────────────
 cd "$PROJECT_DIR"
 
-exec clj "${SDEPS_ARG[@]}" -M:mcp "${PASSTHROUGH_ARGS[@]}"
+exec clj "${SDEPS_ARG[@]}" -M"$ALIASES" "${PASSTHROUGH_ARGS[@]}"

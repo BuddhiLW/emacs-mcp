@@ -59,6 +59,20 @@
   [project-id]
   (kg-scope/scope->tag project-id))
 
+(defn retag-scope
+  "TAGS with the scope moved from OLD-SCOPE-TAG to NEW-SCOPE-TAG.
+
+   A migration that only REPLACES loses the scope for an entry that never
+   carried the old tag: its :project-id moves while it keeps no scope tag, and
+   `matches-scope?` reads TAGS, not the field — so the entry becomes invisible
+   to every scoped query while appearing migrated.
+
+   The new tag is therefore ENSURED and appears exactly once, whether or not the
+   old one was there. Pure."
+  [tags old-scope-tag new-scope-tag]
+  (-> (into [] (remove #(or (= % old-scope-tag) (= % new-scope-tag))) tags)
+      (conj new-scope-tag)))
+
 (defn matches-scope?
   "Check if entry matches the given scope filter with hierarchical support.
    Accepts either a ScopeFilter ADT value or a legacy string/set/nil value."

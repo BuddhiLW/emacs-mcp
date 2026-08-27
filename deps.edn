@@ -123,7 +123,7 @@
         ;; git tag (== master head) so CI and the Clojars jar build resolve it
         ;; without a sibling checkout; sibling co-dev goes through a gitignored
         ;; local.deps.edn :local/root override.
-        io.github.hive-agi/hive-spi {:mvn/version "0.1.20"}
+        io.github.hive-agi/hive-spi {:mvn/version "0.2.0"}
 
         ;; NO CONCRETE BACKEND BELONGS HERE. hive-milvus / hive-qdrant /
         ;; clj-qdrant depend on hive-mcp for their addon surface, so declaring
@@ -137,7 +137,7 @@
         ;; hive-help — required directly by hive-mcp.embeddings.routing. It used
         ;; to arrive transitively through hive-milvus; once the backend left
         ;; :deps that route vanished, so the real dependency is declared here.
-        io.github.hive-agi/hive-help {:mvn/version "0.1.1"}
+        io.github.hive-agi/hive-help {:mvn/version "0.1.0"}
 
         ;; hive-addon — standalone IAddon contract (leaf lib) + plug/mount/compose.
         ;; hive-mcp.addons.protocol re-exports it via def-aliases so the ~30
@@ -434,6 +434,15 @@
   :build
   {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.10"}}
    :ns-default hive-build.api}
+  :aot-boot {:extra-paths ["target/boot-classes"]
+             :exec-fn hive-mcp.scripts.aot-boot/compile-boot-closure!
+             :exec-args {}
+             :jvm-opts ["-Xmx12g"
+                        "-XX:+UseG1GC"
+                        "--add-modules=jdk.incubator.vector"
+                        "--add-opens=java.base/jdk.internal.misc=ALL-UNNAMED"
+                        "--add-opens=java.base/java.nio=ALL-UNNAMED"]}
+  :fast-boot {:extra-paths ["target/boot-classes"]}
 
   ;; Sibling :local/root overrides go in a gitignored local.deps.edn, merged
   ;; by the launcher via `clj -Sdeps` at startup. Use the top-level :deps key.
