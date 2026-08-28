@@ -272,6 +272,38 @@ HINT: Pass an integer value:
        ok))))
 
 ;; =============================================================================
+;; Per-call Emacs timeout (one definition, N tool schemas)
+;; =============================================================================
+
+(def emacs-timeout-ms-property
+  "The `timeout_ms` inputSchema property for every Emacs-backed tool.
+
+   Spliced into a tool's :properties rather than restated, so the parameter a
+   caller sees is described in one place across git, magit, cider and any tool
+   that later routes through emacsclient."
+  {"timeout_ms"
+   {:type "integer"
+    :description (str "Per-call timeout in milliseconds for the Emacs round-trip. "
+                      "Omit for the 5000ms default; raise it for a command that "
+                      "legitimately takes longer — a push to a slow remote, a large "
+                      "diff, a fetch. Capped at 30000 by the client.")}})
+
+(defn emacs-timeout-ms
+  "The caller's per-call Emacs timeout from `params`, or nil when none was passed.
+
+   nil means 'use the callee's default' — it is NOT an error to omit it.
+   A malformed value THROWS (via `coerce-int!`) rather than falling back to the
+   default: a caller who asked for 60s and silently got 5s cannot tell that from
+   a command that was simply slow.
+
+   Nothing is clamped here. `hive-emacs.client` applies `*max-timeout-ms*` as the
+   last line of defense, and a second ceiling in this namespace would be a second
+   place the limit lives."
+  [{:keys [timeout_ms]}]
+  (when (some? timeout_ms)
+    (coerce-int! timeout_ms :timeout_ms)))
+
+;; =============================================================================
 ;; Vector/Array Coercion (ELM Principle)
 ;; =============================================================================
 
