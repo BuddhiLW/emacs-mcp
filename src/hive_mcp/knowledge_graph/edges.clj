@@ -68,6 +68,9 @@
 ;; =============================================================================
 
 (def add-edge! write/add-edge!)
+
+(def add-edges! write/add-edges!)
+(def edge-tx-data write/edge-tx-data)
 (def update-edge-confidence! write/update-edge-confidence!)
 (def verify-edge! write/verify-edge!)
 (def increment-confidence! write/increment-confidence!)

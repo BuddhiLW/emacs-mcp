@@ -6,11 +6,14 @@
             [hive-mcp.tools.kg.batch :as kg-batch]))
 
 (def handle-batch-edge
-  "Batch edge creation via the `Batchable` protocol (decision
-   20260429230453-7e7627cc). Returns the legacy `{:results :summary}`
-   envelope so existing CLI callers stay compatible."
-  (bca/cli-batch-handler {:run-fn kg-batch/run-batch
-                          :cmd-kw :edge}))
+  "Batch edge creation. Every op in a batch-edge call is an `edge` op by
+   construction, so this goes straight to the bulk writer: ONE datahike
+   transaction and ONE flush for the whole batch, instead of the generic
+   runner's N of each.
+
+   Returns the same `{:results :summary}` envelope as before (decision
+   20260429230453-7e7627cc)."
+  kg-handlers/handle-kg-add-edges)
 
 (def handle-batch-traverse
   "Batch traversal via the `Batchable` protocol."
