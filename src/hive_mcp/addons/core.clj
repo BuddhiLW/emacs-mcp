@@ -11,7 +11,8 @@
             [hive-addon.protocol :as proto]
             [hive-mcp.dns.result :as r]
             [hive-mcp.extensions.registry :as ext]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.addons.runtime-ports :as runtime-ports]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -94,6 +95,16 @@
        :addon-name id
        :errors [(str "Addon " id " is not registered")]})))
 
+(defn- config-with-ports
+  "Addon init config: `opts` with `:runtime/ports` filled in when it carries
+   none. An explicit `:runtime/ports` in `opts` wins; nil `opts` yields a
+   ports-only config."
+  [opts]
+  (let [opts (or opts {})]
+    (if (contains? opts :runtime/ports)
+      opts
+      (assoc opts :runtime/ports (runtime-ports/runtime-ports)))))
+
 (defn init-addon!
   "Initialize a registered addon.
 
@@ -110,7 +121,7 @@
       (let [init-result
             (r/try-effect* :addon/init-exception
                            (let [start-time (System/nanoTime)
-                                 result (proto/initialize! addon (or opts {}))
+                                 result (proto/initialize! addon (config-with-ports opts))
                                  elapsed-ms (/ (- (System/nanoTime) start-time) 1e6)]
                              (if (:success? result)
                                (do
