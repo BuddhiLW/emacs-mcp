@@ -20,7 +20,7 @@
   {:openrouter-api-key  ["OPENROUTER_API_KEY"  "openrouter/hive-mcp"]
    :openai-api-key      ["OPENAI_API_KEY"      "openai/hive-mcp"]
    :anthropic-api-key   ["ANTHROPIC_API_KEY"    "Anthropic/api-key"]
-   :venice-api-key      ["VENICE_API_KEY"       "Venice/api-key"]
+   :venice-api-key      ["VENICE_API_KEY"       "Venice/key"]
    :groq-api-key        ["GROQ_API_KEY"         "groq/hive-mcp"]
    :together-api-key    ["TOGETHER_API_KEY"     "together/hive-mcp"]
    :fireworks-api-key   ["FIREWORKS_API_KEY"    "fireworks/hive-mcp"]})
@@ -29,11 +29,26 @@
 ;; Pass Integration
 ;; =============================================================================
 
+(defn- password-store-dir
+  "Root of the pass(1) store.
+
+   `pass` defaults to ~/.password-store. An XDG install lives under
+   ~/.local/share/password-store and is invisible to a process that
+   inherits no PASSWORD_STORE_DIR, so every lookup resolves to nil and the
+   secret reads as absent rather than as unreachable."
+  []
+  (or (System/getenv "PASSWORD_STORE_DIR")
+      (let [xdg (str (System/getProperty "user.home") "/.local/share/password-store")]
+        (when (.isDirectory (java.io.File. xdg)) xdg))
+      (str (System/getProperty "user.home") "/.password-store")))
+
 (defn pass-show
   "Shell out to `pass show <path>`, return first line trimmed, nil on failure."
   [path]
   (rescue nil
-    (let [{:keys [exit out]} (shell/sh "pass" "show" path)]
+    (let [env (assoc (into {} (System/getenv))
+                     "PASSWORD_STORE_DIR" (password-store-dir))
+          {:keys [exit out]} (shell/sh "pass" "show" path :env env)]
       (when (zero? exit)
         (let [line (str/trim (first (str/split-lines (str out))))]
           (when-not (str/blank? line)
