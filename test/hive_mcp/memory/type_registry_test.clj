@@ -84,3 +84,82 @@
       ;; auto-registered.
       (is (= "overflowtype" (tr/ensure-type! "overflowtype")))
       (is (not (tr/known-type? "overflowtype"))))))
+
+;; =============================================================================
+;; Write gate (human review queue)
+;; =============================================================================
+
+(deftest gate-declaration-test
+  (testing ":axiom is gated; ordinary types are not"
+    (is (tr/gated-type? "axiom"))
+    (is (tr/gated-type? :axiom))
+    (is (not (tr/gated-type? "principle")))
+    (is (not (tr/gated-type? "note")))
+    (is (not (tr/gated-type? "my-custom-type"))))
+  (testing "the queue type is itself ungated — otherwise parking would recurse"
+    (is (not (tr/gated-type? "axiom-candidate"))))
+  (testing "the gate names where a request is parked"
+    (is (= "axiom-candidate" (tr/queue-target "axiom")))
+    (is (nil? (tr/queue-target "principle")))))
+
+(deftest resolve-write-type-test
+  (testing "a gated request is parked, and the original request is preserved"
+    (let [r (tr/resolve-write-type "axiom")]
+      (is (= "axiom-candidate" (:type r)))
+      (is (= "axiom" (:requested r)))
+      (is (:queued? r))
+      (is (string? (:reason (:gate r))) "gate carries a reason to show the agent")))
+  (testing "parking is insensitive to case and surrounding space"
+    (is (= "axiom-candidate" (:type (tr/resolve-write-type "  AXIOM ")))))
+  (testing "ungated types pass through untouched"
+    (is (= {:type "principle" :requested "principle" :queued? false :gate nil}
+           (tr/resolve-write-type "principle")))
+    (is (= {:type "my-custom-type" :requested "my-custom-type" :queued? false :gate nil}
+           (tr/resolve-write-type "my-custom-type"))))
+  (testing "unsafe input returns nil so the caller rejects rather than parks"
+    (is (nil? (tr/resolve-write-type "bad type!")))
+    (is (nil? (tr/resolve-write-type nil)))
+    (is (nil? (tr/resolve-write-type "   ")))))
+
+(deftest gate-bypass-test
+  (testing "the review path can land the gated type verbatim"
+    (binding [tr/*gate-bypass?* true]
+      (is (= {:type "axiom" :requested "axiom" :queued? false :gate nil}
+             (tr/resolve-write-type "axiom")))))
+  (testing "the bypass does not leak past its binding"
+    (is (:queued? (tr/resolve-write-type "axiom")))))
+
+(deftest queue-tag-algebra-test
+  (let [gate (:gate (tr/resolve-write-type "axiom"))]
+    (testing "parking stamps the queue tag and records what was requested"
+      (is (= ["testing" "axiom-pending" "requested-type:axiom"]
+             (tr/queued-tags ["testing"] gate "axiom"))))
+    (testing "re-parking an already-parked entry duplicates nothing"
+      (is (= ["testing" "axiom-pending" "requested-type:axiom"]
+             (tr/queued-tags (tr/queued-tags ["testing"] gate "axiom") gate "axiom"))))
+    (testing "works from no tags at all"
+      (is (= ["axiom-pending" "requested-type:axiom"]
+             (tr/queued-tags [] gate "axiom"))))
+    (testing "resolving strips every trace of pendingness"
+      (is (= ["testing" "scope:global"]
+             (tr/strip-queue-tags
+              ["testing" "axiom-pending" "requested-type:axiom" "scope:global"]))))
+    (testing "stripping clean tags is a no-op"
+      (is (= ["testing" "scope:global"]
+             (tr/strip-queue-tags ["testing" "scope:global"]))))
+    (testing "the requested type survives the round trip"
+      (is (= "axiom" (tr/requested-type-of (tr/queued-tags [] gate "axiom"))))
+      (is (nil? (tr/requested-type-of ["testing"]))))))
+
+(deftest queue-type-catchup-wiring-test
+  (testing "candidates are hidden from the MCP enum — they are never requested directly"
+    (is (not (contains? (set (tr/mcp-types)) "axiom-candidate")))
+    (is (contains? (set (tr/mcp-types)) "axiom")))
+  (testing "candidates are a registered type with intent-level abstraction"
+    (is (tr/known-type? "axiom-candidate"))
+    (is (= 4 (tr/abstraction-level "axiom-candidate"))))
+  (testing "the review queue leads the catchup order"
+    (is (= "axiom-candidate" (:type-str (first (tr/catchup-categories))))))
+  (testing "a nomination is NOT piggybacked — it is not law until approved"
+    (is (not (contains? (tr/piggyback-types) :axiom-candidate)))
+    (is (contains? (tr/piggyback-types) :axiom))))

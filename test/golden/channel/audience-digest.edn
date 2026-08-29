@@ -1,0 +1,12 @@
+{:burst-of-21 [{:n 21, :m "turn 21", :e "progress", :a "vt-billing"}],
+ :empty [],
+ :interleaved
+ [{:a "b", :e "completed", :m "done"}
+  {:a "a", :e "progress", :m "a2", :n 2}],
+ :lifecycle-kept
+ [{:a "a", :e "progress", :m "t2", :n 2}
+  {:a "a", :e "error", :m "boom"}],
+ :single [{:a "a", :e "progress", :m "only"}],
+ :two-agents
+ [{:n 3, :m "turn 3", :e "progress", :a "a"}
+  {:n 2, :m "turn 2", :e "progress", :a "b"}]}

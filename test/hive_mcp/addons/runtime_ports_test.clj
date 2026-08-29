@@ -12,6 +12,7 @@
     :kg/resolve-project-id
     :kg/query
     :extension/get
+    :extension/keys
     :extension/register!
     :extension/contribute-commands!
     :extension/retract-contributions!})

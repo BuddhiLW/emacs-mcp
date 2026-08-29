@@ -153,6 +153,56 @@
 ;; Response Builder Tests
 ;; =============================================================================
 
+;; =============================================================================
+;; Axiom review queue (write-gated type nominations)
+;; =============================================================================
+
+(deftest entry->review-meta-test
+  (testing "carries what a reviewer needs to decide, plus the resolving calls"
+    (let [entry {:id "cand-1" :type "axiom-candidate"
+                 :content "Never retype a form you have not read."
+                 :tags ["axiom-pending" "requested-type:axiom" "editing" "scope:global"]}
+          m (fmt/entry->review-meta entry)]
+      (is (= "cand-1" (:id m)))
+      (is (= "axiom" (:requested m)) "reads the requested type back off the tags")
+      (is (re-find #"Never retype" (:preview m)))
+      (is (re-find #"verdict approve" (:approve m)))
+      (is (re-find #"verdict reject" (:reject m)))
+      (is (not-any? #(re-find #"^scope:" %) (:tags m))
+          "scope tags are noise in a review list")))
+  (testing "long content is truncated — the queue is a to-do list, not a lane"
+    (let [long-content (apply str (repeat 400 "x"))
+          m (fmt/entry->review-meta {:id "cand-2" :content long-content :tags []})]
+      (is (<= (count (:preview m)) (+ fmt/review-preview-cap 2)))
+      (is (re-find #"…$" (:preview m)))))
+  (testing "falls back to axiom when no requested-type marker survives"
+    (is (= "axiom" (:requested (fmt/entry->review-meta {:id "c" :content "x" :tags []}))))))
+
+(deftest review-block-test
+  (let [base {:project-name "p" :project-id "p" :scopes [] :git-info {}
+              :permeation {} :axioms-meta [] :priority-meta [] :sessions-meta []
+              :decisions-meta [] :conventions-meta [] :snippets-meta []
+              :expiring-meta [] :kg-insights {} :project-tree-scan {} :disc-decay {}}
+        blocks-of (fn [resp] (mapv #(json/read-str (:text %) :key-fn keyword) resp))]
+    (testing "an empty queue emits no block — an empty queue is not news"
+      (let [bs (blocks-of (fmt/build-catchup-response base))]
+        (is (not-any? #(= "axiom-review" (:_block %)) bs))))
+    (testing "a pending nomination surfaces a review block right after the header"
+      (let [resp (fmt/build-catchup-response
+                  (assoc base :axiom-candidates-meta
+                         [{:id "cand-1" :requested "axiom" :preview "Never X"
+                           :approve "memory review :id cand-1 :verdict approve"
+                           :reject  "memory review :id cand-1 :verdict reject :as principle"}]))
+            bs (blocks-of resp)
+            review (first (filter #(= "axiom-review" (:_block %)) bs))]
+        (is (some? review) "review block present")
+        (is (= "header" (:_block (first bs))))
+        (is (= "axiom-review" (:_block (second bs))) "queue leads, right after the header")
+        (is (= 1 (:awaiting-human-review review)))
+        (is (= 1 (count (:candidates review))))
+        (is (re-find #"human" (:note review)))
+        (is (= 1 (get-in (first bs) [:counts :axiom-candidates])))))))
+
 (deftest build-catchup-response-test
   (testing "returns a vector of 4 content blocks (axioms/priority via memory piggyback)"
     (let [resp (fmt/build-catchup-response

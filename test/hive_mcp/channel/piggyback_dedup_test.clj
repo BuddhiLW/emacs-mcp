@@ -87,13 +87,13 @@
   (testing "Messages with different shout-ids are NOT deduped (distinct shouts)"
     (let [now (System/currentTimeMillis)
           msg-a {:agent-id "ling-a"
-                 :event-type :progress
+                 :event-type :started
                  :message "First shout"
                  :timestamp now
                  :project-id "test-project"
                  :shout-id (str (random-uuid))}
           msg-b {:agent-id "ling-a"
-                 :event-type :progress
+                 :event-type :completed
                  :message "Second shout"
                  :timestamp (inc now)
                  :project-id "test-project"
@@ -102,9 +102,24 @@
       (pb/register-message-source! (constantly [msg-a msg-b]))
 
       (let [msgs (pb/get-messages "coordinator:test"
-                                   :project-id "test-project")]
+                                  :project-id "test-project")]
         (is (= 2 (count msgs))
-            "Distinct shout-ids should NOT be deduped")))))
+            "Distinct shout-ids should NOT be deduped"))))
+
+  (testing "the progress DIGEST collapses a burst without losing the count —
+            distinct from dedup, which would have dropped a shout outright"
+    (pb/reset-all-cursors!)
+    (let [now (System/currentTimeMillis)
+          shout (fn [ts m] {:agent-id "ling-a" :event-type :progress
+                            :message m :timestamp ts
+                            :project-id "test-project"
+                            :shout-id (str (random-uuid))})]
+      (pb/register-message-source!
+       (constantly [(shout now "turn 1") (shout (inc now) "turn 2")]))
+      (let [msgs (pb/get-messages "coordinator:test" :project-id "test-project")]
+        (is (= 1 (count msgs)) "one rollup row, not two turns")
+        (is (= 2 (:n (first msgs))) "the burst count survives the collapse")
+        (is (= "turn 2" (:m (first msgs))) "and it reports the LATEST turn")))))
 
 (deftest backbone-buffer-preserves-shout-id-test
   (testing "buffer-backbone-event! preserves :shout-id through normalization"

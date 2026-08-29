@@ -45,6 +45,12 @@
    branch with no project filter. Kept small because axiom cardinality is low."
   200)
 
+(def ^:private bundle-axiom-candidates-limit
+  "Cap on the cross-project pull of axiom nominations awaiting review. Same
+   global reasoning as axioms; much smaller because a review queue that has
+   grown past this is itself the signal that reviewing has fallen behind."
+  25)
+
 (def ^:private bundle-principles-limit
   "Cap on cross-project principle pull. Like axioms, principles are visible
    regardless of authoring scope, so a dedicated fetch catches sibling/parent
@@ -250,6 +256,18 @@
                                              :limit bundle-axioms-limit
                                              :output-fields hier/metadata-projection})))
                           []]
+                         ;; Nominations are global for the same reason axioms
+                         ;; are: one queued in a sibling repo still needs the
+                         ;; reviewer's eyes. Low cardinality — capped at 25.
+                         [:axiom-candidates-global
+                          (timed-query "axiom-candidates-global"
+                                       #(with-resilience
+                                          (mem-proto/query-entries
+                                            store
+                                            {:type "axiom-candidate"
+                                             :limit bundle-axiom-candidates-limit
+                                             :output-fields hier/metadata-projection})))
+                          []]
                          [:principles-global
                           (timed-query "principles-global"
                                        #(with-resilience
@@ -303,7 +321,8 @@
                                             :limit bundle-global-limit
                                             :output-fields hier/metadata-projection})))
                          []]))
-          {:keys [hierarchy global axioms-global principles-global principles-priority
+          {:keys [hierarchy global axioms-global axiom-candidates-global
+                  principles-global principles-priority
                   sessions-fresh recent-wraps-global]}
           (apply wpar/fork-join {:budget-ms scoped-branch-budget-ms} tasks)
           full-scope-tags (sf/compute-full-scope-tags project-id)
@@ -313,6 +332,9 @@
                     (sf/scope-pierce-entries (or global []) project-id))
           axioms-all (warn-if-saturated "axioms-global" bundle-axioms-limit
                                         (or axioms-global []))
+          axiom-candidates-all (warn-if-saturated "axiom-candidates-global"
+                                                  bundle-axiom-candidates-limit
+                                                  (or axiom-candidates-global []))
           principles-all (warn-if-saturated "principles-global" bundle-principles-limit
                                             (or principles-global []))
           principles-priority-all (warn-if-saturated "principles-priority"
@@ -328,6 +350,7 @@
           sessions-fresh-all (sf/scope-filter-entries (or sessions-fresh []) full-scope-tags all-visible-ids)
           recent-wraps-all   (sf/scope-filter-entries (or recent-wraps-global []) full-scope-tags all-visible-ids)
           merged (sf/distinct-by :id (concat scoped pierced axioms-all
+                                             axiom-candidates-all
                                              principles-priority-all principles-all
                                              sessions-fresh-all recent-wraps-all))
           sorted (sf/newest-first merged)]
@@ -343,6 +366,9 @@
                                (filter #(hydr/has-tag? % tag) (get by-type t [])))))
         prio-principles (tagged "principle" "catchup-priority" 50)]
     {:axioms               (take-type "axiom" 100)
+     ;; Nominations awaiting human review. Small cap on purpose: this is a
+     ;; to-do list for a person, not a context lane for an agent.
+     :axiom-candidates     (take-type "axiom-candidate" 25)
      :priority-principles  (if (seq prio-principles)
                              prio-principles
                              (take-type "principle" 50))

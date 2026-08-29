@@ -9,7 +9,8 @@
    Result DSL: Internal logic returns Result maps ({:ok val} or {:error category}).
    Single try-result boundary at each handler level. Zero nested try-catch."
   (:require [hive-mcp.dns.result :as result]
-            [hive-mcp.tools.core :refer [mcp-success mcp-error addon-available?]]
+            [hive-mcp.tools.core :refer [mcp-success mcp-error addon-available?
+                                         emacs-timeout-ms]]
             [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.emacs-ext.elisp :as el]
             [hive-mcp.agent.context :as ctx]
@@ -48,12 +49,18 @@
 
 (defn- elisp->result
   "Execute elisp and convert response to Result.
-   {:success true :result r} -> (ok r), {:success false :error e} -> (err ...)"
-  [elisp]
-  (let [{:keys [success result error]} (ec/eval-elisp elisp)]
-    (if success
-      (result/ok result)
-      (result/err :magit/elisp-failed {:message (str error)}))))
+   {:success true :result r} -> (ok r), {:success false :error e} -> (err ...)
+
+   `timeout-ms` nil takes the client's default; a number is the caller's own
+   budget for this one call, clamped by the client's ceiling."
+  ([elisp] (elisp->result elisp nil))
+  ([elisp timeout-ms]
+   (let [{:keys [success result error]} (if timeout-ms
+                                          (ec/eval-elisp-with-timeout elisp timeout-ms)
+                                          (ec/eval-elisp elisp))]
+     (if success
+       (result/ok result)
+       (result/err :magit/elisp-failed {:message (str error)})))))
 
 (defn- try-result
   "Execute thunk f returning Result; catch unexpected exceptions as error Result.
@@ -76,9 +83,12 @@
 
 (defn- handle-elisp
   "Common handler: execute elisp via try-result boundary, return MCP response.
-   DRYs the repeated pattern: eval-elisp -> if success -> mcp-success/mcp-error."
-  [category elisp]
-  (result->mcp (try-result category #(elisp->result elisp))))
+   DRYs the repeated pattern: eval-elisp -> if success -> mcp-success/mcp-error.
+
+   `timeout-ms` nil takes the client's default."
+  ([category elisp] (handle-elisp category elisp nil))
+  ([category elisp timeout-ms]
+   (result->mcp (try-result category #(elisp->result elisp timeout-ms)))))
 
 (defn- with-default
   "Provide default value when Result ok value is nil.
@@ -152,32 +162,35 @@
 
 (defn handle-magit-status
   "Get comprehensive git repository status via magit addon."
-  [{:keys [directory]}]
+  [{:keys [directory] :as params}]
   (let [dir (resolve-directory directory)]
     (log/info "magit-status" {:directory dir})
     (handle-elisp :magit/status-failed
-                  (el/require-and-call-json 'hive-mcp-magit 'hive-mcp-magit-api-status dir))))
+                  (el/require-and-call-json 'hive-mcp-magit 'hive-mcp-magit-api-status dir)
+                  (emacs-timeout-ms params))))
 
 (defn handle-magit-branches
   "Get branch information including current, upstream, local and remote branches."
-  [{:keys [directory]}]
+  [{:keys [directory] :as params}]
   (let [dir (resolve-directory directory)]
     (log/info "magit-branches" {:directory dir})
     (handle-elisp :magit/branches-failed
-                  (el/require-and-call-json 'hive-mcp-magit 'hive-mcp-magit-api-branches dir))))
+                  (el/require-and-call-json 'hive-mcp-magit 'hive-mcp-magit-api-branches dir)
+                  (emacs-timeout-ms params))))
 
 (defn handle-magit-log
   "Get recent commit log."
-  [{:keys [count directory]}]
+  [{:keys [count directory] :as params}]
   (let [dir (resolve-directory directory)
         n (if-let [c count] c 10)]
     (log/info "magit-log" {:count n :directory dir})
     (handle-elisp :magit/log-failed
-                  (el/require-and-call-json 'hive-mcp-magit 'hive-mcp-magit-api-log n dir))))
+                  (el/require-and-call-json 'hive-mcp-magit 'hive-mcp-magit-api-log n dir)
+                  (emacs-timeout-ms params))))
 
 (defn handle-magit-diff
   "Get diff for staged, unstaged, or all changes."
-  [{:keys [target directory]}]
+  [{:keys [target directory] :as params}]
   (let [dir (resolve-directory directory)
         target-sym (case target
                      "staged" 'staged
@@ -186,55 +199,68 @@
                      'staged)]
     (log/info "magit-diff" {:target target :directory dir})
     (handle-elisp :magit/diff-failed
-                  (el/require-and-call-text 'hive-mcp-magit 'hive-mcp-magit-api-diff target-sym dir))))
+                  (el/require-and-call-text 'hive-mcp-magit 'hive-mcp-magit-api-diff target-sym dir)
+                  (emacs-timeout-ms params))))
 
 (defn handle-magit-stage
   "Stage files for commit. Use 'all' to stage all modified files."
-  [{:keys [files directory]}]
+  [{:keys [files directory] :as params}]
   (let [dir (resolve-directory directory)
         file-arg (case files "all" 'all files)
-        elisp (el/require-and-call 'hive-mcp-magit 'hive-mcp-magit-api-stage file-arg dir)]
+        elisp (el/require-and-call 'hive-mcp-magit 'hive-mcp-magit-api-stage file-arg dir)
+        timeout-ms (emacs-timeout-ms params)]
     (log/info "magit-stage" {:files files :directory dir})
     (result->mcp
      (try-result :magit/stage-failed
-                 #(with-default "Staged files" (elisp->result elisp))))))
+                 #(with-default "Staged files" (elisp->result elisp timeout-ms))))))
 
 (defn handle-magit-commit
   "Create a commit with the given message."
-  [{:keys [message all directory]}]
+  [{:keys [message all directory] :as params}]
   (let [dir (resolve-directory directory)]
     (log/info "magit-commit" {:message-len (count message) :all all :directory dir})
-    (handle-elisp :magit/commit-failed (build-commit-elisp message all dir))))
+    (handle-elisp :magit/commit-failed
+                  (build-commit-elisp message all dir)
+                  (emacs-timeout-ms params))))
 
 (defn handle-magit-push
-  "Push to remote. Optionally set upstream tracking."
-  [{:keys [set_upstream directory]}]
+  "Push to remote. Optionally set upstream tracking.
+
+   A push is the magit command most likely to outrun the client's default
+   timeout — it waits on a remote. Pass `timeout_ms` to give it a longer budget."
+  [{:keys [set_upstream directory] :as params}]
   (let [dir (resolve-directory directory)]
     (log/info "magit-push" {:set_upstream set_upstream :directory dir})
-    (handle-elisp :magit/push-failed (build-push-elisp set_upstream dir))))
+    (handle-elisp :magit/push-failed
+                  (build-push-elisp set_upstream dir)
+                  (emacs-timeout-ms params))))
 
 (defn handle-magit-pull
   "Pull from upstream."
-  [{:keys [directory]}]
+  [{:keys [directory] :as params}]
   (let [dir (resolve-directory directory)]
     (log/info "magit-pull" {:directory dir})
     (handle-elisp :magit/pull-failed
-                  (el/require-and-call-text 'hive-mcp-magit 'hive-mcp-magit-api-pull dir))))
+                  (el/require-and-call-text 'hive-mcp-magit 'hive-mcp-magit-api-pull dir)
+                  (emacs-timeout-ms params))))
 
 (defn handle-magit-fetch
   "Fetch from remote(s)."
-  [{:keys [remote directory]}]
+  [{:keys [remote directory] :as params}]
   (let [dir (resolve-directory directory)]
     (log/info "magit-fetch" {:remote remote :directory dir})
     (handle-elisp :magit/fetch-failed
-                  (el/require-and-call-text 'hive-mcp-magit 'hive-mcp-magit-api-fetch remote dir))))
+                  (el/require-and-call-text 'hive-mcp-magit 'hive-mcp-magit-api-fetch remote dir)
+                  (emacs-timeout-ms params))))
 
 (defn handle-magit-feature-branches
   "Get list of feature/fix/feat branches (for /ship and /ship-pr skills)."
-  [{:keys [directory]}]
+  [{:keys [directory] :as params}]
   (let [dir (resolve-directory directory)]
     (log/info "magit-feature-branches" {:directory dir})
-    (handle-elisp :magit/feature-branches-failed (build-feature-branches-elisp dir))))
+    (handle-elisp :magit/feature-branches-failed
+                  (build-feature-branches-elisp dir)
+                  (emacs-timeout-ms params))))
 
 ;; Tool definitions for magit handlers
 

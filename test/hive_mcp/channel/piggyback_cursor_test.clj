@@ -25,6 +25,12 @@
     ;; piggyback/get-messages uses [agent-id project-id] as cursor key.
     ;; When middleware passes different agent-ids (from dispatch targets),
     ;; each creates an independent cursor starting from 0.
+    ;;
+    ;; Both readers here are COORDINATOR lanes. Since the audience filter
+    ;; landed (hive-mcp.channel.audience) a reader that is neither the
+    ;; shouter's spawner nor a coordinator receives nothing at all, so
+    ;; probing cursor independence with an arbitrary ling id would now
+    ;; measure routing rather than the cursor.
     (let [messages (atom [{:agent-id "ling-1"
                            :event-type :progress
                            :message "working"
@@ -43,7 +49,7 @@
       ;; DIFFERENT agent-id reads: gets the message AGAIN (fresh cursor!)
       ;; This is the ROOT CAUSE — if middleware uses target agent-id,
       ;; every dispatch to a new target re-reads all messages.
-      (let [r3 (pb/get-messages "swarm-target-ling-1" :project-id "proj-A")]
+      (let [r3 (pb/get-messages "coordinator-other" :project-id "proj-A")]
         (is (= 1 (count r3)) "different agent-id = fresh cursor = re-delivery")))))
 
 (deftest stable-cursor-key-prevents-re-delivery-test
@@ -80,6 +86,10 @@
     ;; Scenario: coordinator dispatches to 3 different lings.
     ;; With the bug, each dispatch used the TARGET agent-id as cursor key,
     ;; so each got ALL accumulated shouts from timestamp 0.
+    ;;
+    ;; The three "wrong behavior" readers are coordinator-lane ids so this
+    ;; keeps measuring the CURSOR. Routing is a separate axis, covered by
+    ;; hive-mcp.channel.audience-test.
     (let [shouts (atom [{:agent-id "ling-scout" :event-type :progress
                          :message "scouting" :timestamp 100
                          :project-id "hive-mcp"}
@@ -92,16 +102,16 @@
       (pb/register-message-source! (fn [] @shouts))
 
       ;; WRONG behavior (before fix): each target-id creates fresh cursor
-      ;; Dispatch 1: using target "swarm-orchestrator" as cursor key
-      (let [r1 (pb/get-messages "swarm-orchestrator" :project-id "hive-mcp")]
+      ;; Dispatch 1: using target "coordinator-orchestrator" as cursor key
+      (let [r1 (pb/get-messages "coordinator-orchestrator" :project-id "hive-mcp")]
         (is (= 3 (count r1)) "fresh cursor → all 3 shouts"))
 
-      ;; Dispatch 2: using target "swarm-permissions" as cursor key
-      (let [r2 (pb/get-messages "swarm-permissions" :project-id "hive-mcp")]
+      ;; Dispatch 2: using target "coordinator-permissions" as cursor key
+      (let [r2 (pb/get-messages "coordinator-permissions" :project-id "hive-mcp")]
         (is (= 3 (count r2)) "DIFFERENT cursor key → all 3 AGAIN"))
 
-      ;; Dispatch 3: using target "swarm-session" as cursor key
-      (let [r3 (pb/get-messages "swarm-session" :project-id "hive-mcp")]
+      ;; Dispatch 3: using target "coordinator-session" as cursor key
+      (let [r3 (pb/get-messages "coordinator-session" :project-id "hive-mcp")]
         (is (= 3 (count r3)) "ANOTHER cursor key → all 3 AGAIN"))
 
       ;; CORRECT behavior: using STABLE coordinator ID for all reads
@@ -113,11 +123,7 @@
 
       ;; Read 2: same coordinator key — nothing new
       (let [r2 (pb/get-messages "coordinator-hive-mcp" :project-id "hive-mcp")]
-        (is (nil? r2) "same cursor key: nothing to re-deliver"))
-
-      ;; Read 3: still nothing (cursor stable)
-      (let [r3 (pb/get-messages "coordinator-hive-mcp" :project-id "hive-mcp")]
-        (is (nil? r3) "cursor remains stable across reads")))))
+        (is (nil? r2) "no re-delivery with stable cursor key")))))
 
 ;; =============================================================================
 ;; Cross-Session Stale Messages

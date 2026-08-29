@@ -4,6 +4,7 @@
             [clojure.data.json :as json]
             [clojure.string :as str]
             [taoensso.timbre :as log]
+            [hive-mcp.memory.type-registry :as type-registry]
             [hive-mcp.tools.catchup.outcome :as outcome]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -30,6 +31,27 @@
    :tags (vec (or (:tags entry) []))
    :content (:content entry)
    :severity "INVIOLABLE"})
+
+(def review-preview-cap
+  "Max chars of a nomination shown in the review queue. Enough to judge the
+   claim, short enough that a backed-up queue cannot flood the response."
+  240)
+
+(defn entry->review-meta
+  "Convert a parked nomination to review-queue metadata: enough to decide,
+   plus the exact call that resolves it. Preview only — never full content,
+   because the queue is a to-do list, not a context lane."
+  [entry]
+  (let [content   (str (:content entry))
+        tags      (vec (or (:tags entry) []))
+        requested (or (type-registry/requested-type-of tags) "axiom")]
+    {:id        (:id entry)
+     :requested requested
+     :tags      (vec (remove #(str/starts-with? (str %) "scope:") tags))
+     :preview   (cond-> (subs content 0 (min (count content) review-preview-cap))
+                  (> (count content) review-preview-cap) (str " …"))
+     :approve   (str "memory review :id " (:id entry) " :verdict approve")
+     :reject    (str "memory review :id " (:id entry) " :verdict reject :as principle")}))
 
 (defn entry->priority-meta
   "Convert entry to priority convention metadata with full content."
@@ -128,7 +150,8 @@
 
 (defn build-catchup-response
   [{:keys [project-name project-id scopes git-info permeation
-           axioms-meta principles-meta priority-principles-meta priority-meta sessions-meta decisions-meta
+           axioms-meta axiom-candidates-meta
+           principles-meta priority-principles-meta priority-meta sessions-meta decisions-meta
            conventions-meta snippets-meta expiring-meta recent-wraps kg-insights
            project-tree-scan disc-decay carto-status kanban-summary context-refs
            memory-status]}]
@@ -140,6 +163,7 @@
                             (count priority-meta)))
         counts (when memory-available?
                  {:axioms (count axioms-meta)
+                  :axiom-candidates (count axiom-candidates-meta)
                   :principles (count principles-meta)
                   :priority-principles (count priority-principles-meta)
                   :priority-conventions (count priority-meta)
@@ -169,6 +193,22 @@
                 :memory-status memory-status
                 :memory-piggyback piggyback}
          memory-available? (assoc :counts counts)))
+      ;; Review queue first after the header: a pending nomination is a
+      ;; decision only the human can make, and it blocks nothing else.
+      ;; Omitted entirely when the queue is empty — an empty queue is not news.
+      (when (and memory-available? (seq axiom-candidates-meta))
+        (make-block
+         "axiom-review"
+         {:_block "axiom-review"
+          :awaiting-human-review (count axiom-candidates-meta)
+          :candidates axiom-candidates-meta
+          :note (str "These were nominated as :axiom by an agent and PARKED — "
+                     "they are not in force and are not piggybacked. A human "
+                     "decides: `memory review :id <id> :verdict approve` makes "
+                     "it an axiom; `:verdict reject :as <type>` files it as a "
+                     "principle/note/convention instead. `memory review` with "
+                     "no id lists the queue. Do not self-approve a nomination "
+                     "unless the user asked you to.")}))
       (make-block
        "context"
        {:_block "context"
