@@ -75,18 +75,21 @@
 
 (defn list-synthetic-source-nodes
   "Return distinct source node IDs from `:kg-edge/from` whose ID starts
-   with `synth-`. Single Datalog query + client-side prefix filter.
+   with `synth-`. The prefix test runs as a Datalog predicate clause, so
+   the engine filters during the join instead of shipping every
+   `:kg-edge/from` value to the client.
 
    Returns a sorted vector of strings for deterministic per-cycle
    ordering."
   []
   (let [q '[:find [?from ...]
+            :in $ ?prefix
             :where
-            [?e :kg-edge/from ?from]]
-        all-from (conn/query q)]
-    (->> (or all-from [])
+            [?e :kg-edge/from ?from]
+            [(clojure.string/starts-with? ?from ?prefix)]]
+        synth-from (conn/query q synth-id-prefix)]
+    (->> (or synth-from [])
          (filter string?)
-         (filter #(.startsWith ^String % synth-id-prefix))
          distinct
          sort
          vec)))
@@ -104,6 +107,29 @@
     (some? (mem-proto/get-entry store entry-id))
     (catch Exception _ false)))
 
+(defn- live-target-ids
+  "Return the subset of `target-ids` that resolve to a live memory entry.
+
+   Uses the store's batched read (IMemoryStoreBatch, projected to `id`)
+   when available: one round-trip for the whole target set instead of one
+   per target. Falls back to per-id reads when the store is not batched,
+   and also when a batch read throws, so a transport failure can never be
+   read as 'every target is dead'.
+
+   Returns #{} when no store is registered."
+  [store target-ids]
+  (let [ids (vec (distinct target-ids))]
+    (cond
+      (nil? store)  #{}
+      (empty? ids)  #{}
+      (mem-proto/batch-store? store)
+      (or (try (into #{} (keep #(or (:id %) (get % "id")))
+                     (mem-proto/get-entries-projected store ids ["id"]))
+               (catch Exception _ nil))
+          (into #{} (filter #(memory-entry-live? store %)) ids))
+      :else
+      (into #{} (filter #(memory-entry-live? store %)) ids))))
+
 (defn- classify-synthetic
   "Inspect outgoing `:projects-to` edges for a synthetic node and compute
    live stats.
@@ -114,6 +140,9 @@
    evidence?'. The 2026-04-23 emergent-pattern review framed synthetic
    freshness specifically in terms of the projection onto raw memories,
    and this function enforces that contract.
+
+   Target liveness resolves through `live-target-ids`, one batched store
+   read per synthetic rather than one read per target.
 
    `:edges` in the returned map is the filtered vector (what demote acts
    on); `:edge-count` is the count of those filtered edges. Callers that
@@ -126,7 +155,7 @@
         ;; Distinct targets — a synth may repeat a target via separate
         ;; edges; we only care about unique raw-memory ids for the ratio.
         targets       (distinct (map :kg-edge/to projects-edges))
-        live          (count (filter #(memory-entry-live? store %) targets))
+        live          (count (live-target-ids store targets))
         target-ct     (count targets)
         ratio         (if (zero? target-ct) 0.0 (double (/ live target-ct)))]
     {:synth-id     synth-id
@@ -213,6 +242,11 @@
       :dry-run? bool :action kw :threshold f :limit n
       :details [{...per-synth stats...}]}
 
+   Refuses to run when no memory store is registered: liveness would be
+   unresolvable for every target, every synthetic would score 0.0, and
+   the whole layer would be classified as dead scaffolding. Returns an
+   :error tally instead.
+
    Bounded per cycle. Idempotent. Errors are tallied — never thrown."
   [& [{:keys [threshold action limit dry-run?]
        :or {threshold default-threshold
@@ -223,41 +257,47 @@
   ;; authoritative state. No-op if writer isn't running.
   (conn/drain-writer!)
   (let [store (try (mem-proto/get-store) (catch Exception _ nil))
-        details (atom [])
         action-kw (keyword action)
-        tally (edge-cycle/run-cycle!
-               {:fetch        list-synthetic-source-nodes
-                :sort-key     identity ;; stable order on ID string
-                :limit        limit
-                :outcome-keys [:pruned :demoted :preserved]
-                :step!        #(step! {:threshold    threshold
-                                       :action       action-kw
-                                       :dry-run?     (boolean dry-run?)
-                                       :store        store
-                                       :details-atom details}
-                                      %)
-                :error-log-fn (fn [synth-id err]
-                                (log/debug "cleanup-synthetics step failed for"
-                                           synth-id ":" (:message err)))
-                :log-fn       (fn [t]
-                                (when (or (pos? (:pruned t)) (pos? (:demoted t)))
-                                  (log/info "cleanup-synthetics:"
-                                            (:pruned t) "pruned,"
-                                            (:demoted t) "demoted,"
-                                            (:preserved t) "preserved"
-                                            (when dry-run? " (dry-run)"))))})]
-    ;; Flush post-cycle mutations so callers see committed state.
-    (conn/drain-writer!)
-    {:scanned    (:evaluated tally)
-     :pruned     (:pruned tally)
-     :demoted    (:demoted tally)
-     :preserved  (:preserved tally)
-     :errors     (:errors tally)
-     :dry-run?   (boolean dry-run?)
-     :action     action-kw
-     :threshold  threshold
-     :limit      limit
-     :details    @details}))
+        base {:dry-run?  (boolean dry-run?)
+              :action    action-kw
+              :threshold threshold
+              :limit     limit}]
+    (if (nil? store)
+      (do (log/warn "cleanup-synthetics: no memory store registered, refusing to classify")
+          (merge base {:scanned 0 :pruned 0 :demoted 0 :preserved 0 :errors 1
+                       :details []
+                       :error "no memory store registered"}))
+      (let [details (atom [])
+            tally (edge-cycle/run-cycle!
+                   {:fetch        list-synthetic-source-nodes
+                    :sort-key     identity ;; stable order on ID string
+                    :limit        limit
+                    :outcome-keys [:pruned :demoted :preserved]
+                    :step!        #(step! {:threshold    threshold
+                                           :action       action-kw
+                                           :dry-run?     (boolean dry-run?)
+                                           :store        store
+                                           :details-atom details}
+                                          %)
+                    :error-log-fn (fn [synth-id err]
+                                    (log/debug "cleanup-synthetics step failed for"
+                                               synth-id ":" (:message err)))
+                    :log-fn       (fn [t]
+                                    (when (or (pos? (:pruned t)) (pos? (:demoted t)))
+                                      (log/info "cleanup-synthetics:"
+                                                (:pruned t) "pruned,"
+                                                (:demoted t) "demoted,"
+                                                (:preserved t) "preserved"
+                                                (when dry-run? " (dry-run)"))))})]
+        ;; Flush post-cycle mutations so callers see committed state.
+        (conn/drain-writer!)
+        (merge base
+               {:scanned   (:evaluated tally)
+                :pruned    (:pruned tally)
+                :demoted   (:demoted tally)
+                :preserved (:preserved tally)
+                :errors    (:errors tally)
+                :details   @details})))))
 
 ;; =============================================================================
 ;; MCP Handler
