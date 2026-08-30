@@ -235,18 +235,29 @@
    relation. Falls back to the static `tool-def` (core enum) if the KG schema
    ns is unresolvable (KG addon absent).
 
+   Folds in the advertised params of every subdomain `canonical-handlers`
+   delegates to (kg, migration), so a subdomain param survives the MCP
+   boundary instead of being dropped and silently defaulted. Memory's own
+   declarations win on conflict.
+
    requiring-resolve, not a static :require — memory.clj lazily resolves the KG
    namespace by design (DIP; see canonical-handlers)."
   []
-  (try
-    (let [relation-names (mapv name ((requiring-resolve 'hive-mcp.knowledge-graph.schema/relation-types)))]
-      [(-> tool-def
-           (assoc-in [:inputSchema :properties "relation" :enum] relation-names)
-           (assoc-in [:inputSchema :properties "predicate"]
-                     {:type "string"
-                      :description (str "[kg edge] Free-text semantic predicate for an OPEN `relates` edge "
-                                        "(e.g. \"causes\", \"part-of\", \"motivates\"). Use with relation=\"relates\"; "
-                                        "normalized to kebab-case; ignored for structural relations.")}))])
-    (catch Exception _ [tool-def])))
+  (let [subdomain-props (merge (composite/lazy-resolve-schema-props
+                                'hive-mcp.tools.consolidated.kg/tool-def)
+                               (composite/lazy-resolve-schema-props
+                                'hive-mcp.tools.consolidated.migration/tool-def))
+        base (update-in tool-def [:inputSchema :properties]
+                        #(merge subdomain-props %))]
+    (try
+      (let [relation-names (mapv name ((requiring-resolve 'hive-mcp.knowledge-graph.schema/relation-types)))]
+        [(-> base
+             (assoc-in [:inputSchema :properties "relation" :enum] relation-names)
+             (assoc-in [:inputSchema :properties "predicate"]
+                       {:type "string"
+                        :description (str "[kg edge] Free-text semantic predicate for an OPEN `relates` edge "
+                                          "(e.g. \"causes\", \"part-of\", \"motivates\"). Use with relation=\"relates\"; "
+                                          "normalized to kebab-case; ignored for structural relations.")}))])
+      (catch Exception _ [base]))))
 
 (def tools [tool-def])
