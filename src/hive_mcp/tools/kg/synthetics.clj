@@ -50,6 +50,14 @@
    2026-04-23 emergent-pattern review observation)."
   0.2)
 
+(def ^:const default-min-live-members
+  "Minimum LIVE `:projects-to` targets a synthetic must retain to still be
+   a cluster. Below this it names fewer than two things that exist, which
+   is not a pattern regardless of what fraction of the original set
+   survived. Matches the rule `retract-dangling-synthetics!` already
+   applies to registered synthetics."
+  2)
+
 (def ^:const default-limit
   "Maximum synthetics to evaluate per cycle. Bounded to prevent
    unbounded scans on large graphs."
@@ -196,11 +204,19 @@
 (defn- step!
   "Per-synthetic step invoked by `edge-cycle/run-cycle!`.
    Returns :pruned, :demoted, or :preserved. When dry-run? is true
-   never mutates — just classifies."
-  [{:keys [threshold action dry-run? store details-atom]} synth-id]
-  (let [{:keys [edge-count target-count live-count live-ratio edges]
-         :as classification} (classify-synthetic store synth-id)
-        below? (< live-ratio threshold)
+   never mutates — just classifies.
+
+   A synthetic is dead scaffolding when it retains fewer than
+   `:min-live-members` live targets, or (when `:threshold` is given) when
+   its live-RATIO falls below it. The count rule is primary: a cluster
+   that names fewer than two surviving entries is not a pattern, whatever
+   fraction of its original members that represents."
+  [{:keys [threshold min-live-members action dry-run? store details-atom]} synth-id]
+  (let [{:keys [edge-count target-count live-count live-ratio edges]}
+        (classify-synthetic store synth-id)
+        min-live (or min-live-members default-min-live-members)
+        below? (or (< live-count min-live)
+                   (and threshold (< live-ratio threshold)))
         outcome (cond
                   (not below?)               :preserved
                   (= action :demote)         :demoted
@@ -217,6 +233,7 @@
             :target-count target-count
             :live-count   live-count
             :live-ratio   live-ratio
+            :min-live     min-live
             :outcome      outcome
             :effect-count effect-count
             :dry-run?     dry-run?})
@@ -227,41 +244,47 @@
 ;; =============================================================================
 
 (defn cleanup-synthetics!
-  "Scan synthetic-pattern nodes and act on those whose outgoing edges
-   mostly target missing/expired raw memory entries.
+  "Scan synthetic-pattern nodes and act on those that no longer name a
+   cluster of live raw memory entries.
 
    Options:
-     :threshold  - Live-ratio below which to act (default 0.2)
-     :action     - :delete (remove node + all edges) or :demote (set
-                   edge confidence to 0.1). Default :delete.
-     :limit      - Max synthetics per cycle (default 50).
-     :dry-run?   - When true, classify only; no mutations. Default false.
+     :min-live-members - Act when a synthetic retains fewer than this many
+                         LIVE :projects-to targets (default 2). Primary
+                         criterion, scale-free.
+     :threshold        - Additional live-RATIO criterion; act when the
+                         ratio falls below it (default 0.2).
+     :action           - :delete (remove node + all edges) or :demote (set
+                         edge confidence to 0.1). Default :delete.
+     :limit            - Max synthetics per cycle (default 50).
+     :dry-run?         - When true, classify only; no mutations. Default false.
 
    Returns:
      {:scanned N :pruned N :demoted N :preserved N :errors N
-      :dry-run? bool :action kw :threshold f :limit n
+      :dry-run? bool :action kw :threshold f :min-live-members n :limit n
       :details [{...per-synth stats...}]}
 
    Refuses to run when no memory store is registered: liveness would be
-   unresolvable for every target, every synthetic would score 0.0, and
-   the whole layer would be classified as dead scaffolding. Returns an
-   :error tally instead.
+   unresolvable for every target, every synthetic would score 0 live
+   members, and the whole layer would be classified as dead scaffolding.
+   Returns an :error tally instead.
 
    Bounded per cycle. Idempotent. Errors are tallied — never thrown."
-  [& [{:keys [threshold action limit dry-run?]
-       :or {threshold default-threshold
-            action    :delete
-            limit     default-limit
-            dry-run?  false}}]]
+  [& [{:keys [threshold min-live-members action limit dry-run?]
+       :or {threshold        default-threshold
+            min-live-members default-min-live-members
+            action           :delete
+            limit            default-limit
+            dry-run?         false}}]]
   ;; Drain any pending write-coalesced edges so the scan sees the
   ;; authoritative state. No-op if writer isn't running.
   (conn/drain-writer!)
   (let [store (try (mem-proto/get-store) (catch Exception _ nil))
         action-kw (keyword action)
-        base {:dry-run?  (boolean dry-run?)
-              :action    action-kw
-              :threshold threshold
-              :limit     limit}]
+        base {:dry-run?         (boolean dry-run?)
+              :action           action-kw
+              :threshold        threshold
+              :min-live-members min-live-members
+              :limit            limit}]
     (if (nil? store)
       (do (log/warn "cleanup-synthetics: no memory store registered, refusing to classify")
           (merge base {:scanned 0 :pruned 0 :demoted 0 :preserved 0 :errors 1
@@ -273,11 +296,12 @@
                     :sort-key     identity ;; stable order on ID string
                     :limit        limit
                     :outcome-keys [:pruned :demoted :preserved]
-                    :step!        #(step! {:threshold    threshold
-                                           :action       action-kw
-                                           :dry-run?     (boolean dry-run?)
-                                           :store        store
-                                           :details-atom details}
+                    :step!        #(step! {:threshold        threshold
+                                           :min-live-members min-live-members
+                                           :action           action-kw
+                                           :dry-run?         (boolean dry-run?)
+                                           :store            store
+                                           :details-atom     details}
                                           %)
                     :error-log-fn (fn [synth-id err]
                                     (log/debug "cleanup-synthetics step failed for"
@@ -317,9 +341,10 @@
 (defn handle-kg-cleanup-synthetics
   "MCP boundary handler. Accepts MCP-style params (strings/ints/booleans)
    and returns an MCP JSON response."
-  [{:keys [threshold action limit dry_run]}]
+  [{:keys [threshold action limit dry_run min_live_members]}]
   (log/info "kg_cleanup_synthetics"
-            {:threshold threshold :action action :limit limit :dry-run dry_run})
+            {:threshold threshold :action action :limit limit
+             :dry-run dry_run :min-live-members min_live_members})
   (try
     (let [action-kw (parse-action action)]
       (cond
@@ -335,12 +360,17 @@
         (and limit (or (not (integer? limit)) (neg? limit)))
         (mcp-error "limit must be a non-negative integer")
 
+        (and min_live_members
+             (or (not (integer? min_live_members)) (neg? min_live_members)))
+        (mcp-error "min_live_members must be a non-negative integer")
+
         :else
         (let [result (cleanup-synthetics!
                       (cond-> {:action action-kw
                                :dry-run? (boolean dry_run)}
-                        threshold (assoc :threshold threshold)
-                        limit     (assoc :limit limit)))]
+                        threshold        (assoc :threshold threshold)
+                        limit            (assoc :limit limit)
+                        min_live_members (assoc :min-live-members min_live_members)))]
           (mcp-json (assoc result :success true)))))
     (catch Exception e
       (log/error e "kg_cleanup_synthetics failed")
@@ -349,15 +379,17 @@
 (def tool-def
   {:name "kg_cleanup_synthetics"
    :description (str "Scan synthetic-pattern nodes (IDs prefixed 'synth-') "
-                     "and delete or demote those whose outgoing edges "
-                     "mostly target missing/expired memory entries. "
+                     "and delete or demote those that no longer name a "
+                     "cluster of live memory entries. "
                      "Dead-scaffolding cleanup for KG insights.")
    :inputSchema {:type "object"
-                 :properties {"threshold" {:type "number"
-                                           :description "Live-ratio below which to act (default 0.2)"}
+                 :properties {"min_live_members" {:type "integer"
+                                                  :description "Act when fewer than this many targets are still live (default 2)"}
+                              "threshold" {:type "number"
+                                           :description "Additional live-ratio criterion; act below it (default 0.2)"}
                               "action" {:type "string"
                                         :enum ["delete" "demote"]
-                                        :description "Action on synthetics below threshold (default 'delete')"}
+                                        :description "Action on sub-threshold synthetics (default 'delete')"}
                               "limit" {:type "integer"
                                        :description "Max synthetics per cycle (default 50)"}
                               "dry_run" {:type "boolean"

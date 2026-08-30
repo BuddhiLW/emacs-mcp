@@ -103,8 +103,10 @@
                                             :description "Array of {command, ...} objects for batch-edge/batch-traverse. Each op needs its own :command ('edge' or 'traverse') plus per-op params."}
                               "parallel" {:type "boolean"
                                           :description "Run batch operations in parallel (default: false)"}
+                              "min_live_members" {:type "integer"
+                                                  :description "cleanup-synthetics: act when fewer than this many targets are still live (default: 2)"}
                               "threshold" {:type "number"
-                                           :description "cleanup-synthetics: live-ratio below which to act (default: 0.2)"}
+                                           :description "cleanup-synthetics: additional live-ratio criterion; act below it (default: 0.2)"}
                               "action" {:type "string"
                                         :enum ["delete" "demote"]
                                         :description "cleanup-synthetics: action on sub-threshold synthetics (default: delete)"}
