@@ -108,9 +108,11 @@
         (throw e)))))
 
 (defn- get-embeddings-batch
-  "Get embeddings for multiple texts from Ollama.
-   Ollama doesn't have native batch API, so we parallelize requests.
-   Bounded by shared IO pool — no unbounded thread fan-out."
+  "Embeddings for TEXTS, one request per text, fanned out over the shared IO
+   pool. Returns a vector aligned with TEXTS.
+
+   Ollama's /api/embed DOES accept an `input` array; the fan-out is measured
+   faster than one array request, not a workaround for a missing API."
   [host model texts num-ctx]
   (let [futures (mapv (fn [text] (pool/with-io (get-embedding host model text num-ctx))) texts)]
     (mapv deref futures)))
