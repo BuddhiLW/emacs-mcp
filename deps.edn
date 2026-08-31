@@ -1,4 +1,9 @@
-{:paths ["src" "resources"]
+;; "testing" ships shared TEST-SUPPORT namespaces (store fixtures, the recall
+;; golden corpus). They live on :paths, not under test/, because consumers need
+;; them and a jar carries :paths only. Kept in step with :src-dirs in
+;; version.edn: a path listed in one and not the other is on the classpath here
+;; and absent from the artifact, which fails only in the consumer.
+{:paths ["src" "resources" "testing"]
 
  :deps {org.clojure/clojure {:mvn/version "1.12.5"}
         org.clojure/data.json {:mvn/version "2.5.2"}
