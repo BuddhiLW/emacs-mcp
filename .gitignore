@@ -24,9 +24,11 @@ target/
 # Logs
 *.log
 
-# JVM heap dumps
+# JVM heap dumps and crash artifacts
 *.hprof
 java_pid*.hprof
+hs_err_pid*
+*.jfr
 
 # Compiled Elisp
 *.elc

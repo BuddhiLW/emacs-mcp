@@ -421,12 +421,12 @@
   :test-backends
   {:extra-paths ["test-backends"]}
 
-  ;; Build via hive-build: uberjar (server) + source jar /
-  ;; Clojars deploy. deps-deploy pushes the library jar; version autobumps.
-  ;; Usage: clj -T:build uber            ; runnable server uberjar
-  ;;        clj -T:build uber :profile k8s-headless
-  ;;        clj -T:build print-version   ; computed 0.{minor}.{patch}
+  ;; Build via hive-build: source jar + Clojars deploy. Version comes from
+  ;; VERSION + version.edn (:minor); there is no uberjar task, the server
+  ;; runs from source (see bin/hive-mcp-foss and Dockerfile).
+  ;; Usage: clj -T:build jar             ; library jar under target/
   ;;        clj -T:build deploy          ; jar -> Clojars (needs CLOJARS_* env)
+  ;;        clj -T:build kondo           ; lint gate used by CI
   :build
   {:deps {io.github.hive-agi/hive-build {:mvn/version "0.1.10"}}
    :ns-default hive-build.api}
