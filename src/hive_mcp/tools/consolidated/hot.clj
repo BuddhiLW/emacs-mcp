@@ -77,8 +77,16 @@
 ;; hive-hot initialization — the dirs matter
 ;; =============================================================================
 
+(defn- jvm-start-ms
+  "When this JVM started. Everything on disk newer than that is newer than the
+   image — the baseline a first reload should measure change against, not the
+   moment somebody first ran `hot`."
+  []
+  (try (.getStartTime (java.lang.management.ManagementFactory/getRuntimeMXBean))
+       (catch Throwable _ nil)))
+
 (defn ensure-hot-init!
-  "Initialize hive-hot with THIS system's addon source dirs, once.
+  "Initialize hive-hot with THIS system's addon source dirs, or extend it.
 
    Without this, the first reload calls `hive-hot.core/reload!` on an
    uninitialized clj-reload, which self-initializes with its default
@@ -90,22 +98,45 @@
    The dirs come from `hive-addon.hot/plan`, which derives them from where each
    addon's constructor namespace physically resolves — so only `:local/root`
    addons contribute, which is exactly the set whose bytes can change.
-   `:no-reload` carries the protocol interlock.
+   `:no-reload` carries the protocol interlock. `:since` is the JVM start time:
+   an edit made after boot but before the first `hot` call is a change, not
+   the baseline (hive-hot >= 0.1.9 honours it; older versions ignore it).
+
+   With hive-hot's `ensure-init!` (>= 0.1.9) an already-initialized registry is
+   EXTENDED with any new dirs instead of reset, so a `hot inject` adds its
+   source root without discarding pending changes.
 
    Returns {:initialized? bool :dirs [...] :already? bool}. Never throws."
   [plan]
-  (let [status (soft 'hive-hot.core/status)
-        init!  (soft 'hive-hot.core/init!)]
+  (let [status  (soft 'hive-hot.core/status)
+        init!   (soft 'hive-hot.core/init!)
+        ensure! (soft 'hive-hot.core/ensure-init!)
+        opts    (cond-> {:dirs (vec (:hot/dirs plan))
+                         :no-reload (:hot/no-reload plan)}
+                  (jvm-start-ms) (assoc :since (jvm-start-ms)))]
     (cond
       (nil? init!) {:initialized? false :dirs [] :reason :hive-hot-absent}
+
+      ensure!
+      (try
+        (let [r (ensure! opts)]
+          (when (:fresh? r)
+            (log/info "hive-hot initialized for addon hot-reload"
+                      {:dirs (count (:dirs opts))}))
+          (when (seq (:added r))
+            (log/info "hive-hot extended with addon dirs" {:added (:added r)}))
+          {:initialized? true :already? (not (:fresh? r))
+           :dirs (vec (:dirs r)) :added (vec (:added r))})
+        (catch Throwable t
+          (log/warn "hive-hot init failed" {:error (ex-message t)})
+          {:initialized? false :dirs [] :reason (ex-message t)}))
 
       (:initialized? (status)) {:initialized? true :already? true
                                 :dirs (vec (:hot/dirs plan))}
 
       :else
       (try
-        (init! {:dirs (vec (:hot/dirs plan))
-                :no-reload (:hot/no-reload plan)})
+        (init! opts)
         (log/info "hive-hot initialized for addon hot-reload"
                   {:dirs (count (:hot/dirs plan))})
         {:initialized? true :already? false :dirs (vec (:hot/dirs plan))}
@@ -162,12 +193,25 @@
 (defn- summarize
   "Trim a RemountReport to what is worth reading in a terminal."
   [report]
-  (cond-> (select-keys report [:hot/strategy :hot/seeds :hot/affected
-                               :hot/torn-down :hot/cycles :hot/ns-reloaded :ok? :errors
-                               :teardown/data-preserved?])
+  (cond-> (select-keys report [:hot/strategy :hot/seeds :hot/roots :hot/affected
+                               :hot/torn-down :hot/cycles :hot/widened
+                               :hot/ns-reloaded :hot/ns-skipped :hot/ns-dragged
+                               :hot/ns-unchanged? :hot/multi-file :hot/stale-ctors
+                               :ok? :errors :teardown/data-preserved?])
     (seq (:mounted report))
     (assoc :mounted (mapv #(select-keys % [:addon/id :success? :phase :errors])
                           (:mounted report)))))
+
+(defn- surface-refreshed!
+  "After a remount or an injection the addon's contributions are live in
+   dispatch but the advertised surface — composites, tools/list, schema
+   extensions — was assembled earlier. Bring it up to date. Never throws."
+  []
+  (when-let [refresh! (soft 'hive-mcp.extensions.reactive/refresh-surface!)]
+    (try (refresh! nil)
+         (catch Throwable t
+           (log/warn "surface refresh after hot op failed" {:error (ex-message t)})
+           nil))))
 
 ;; =============================================================================
 ;; Handlers
@@ -188,11 +232,12 @@
         (let [specs  (override-strategy specs addon strategy)
               report (if namespace
                        ((soft 'hive-addon.hot/reload-namespace!) host specs namespace (reload-opts))
-                       ((soft 'hive-addon.hot/reload-addon!) host specs addon (reload-opts)))]
+                       ((soft 'hive-addon.hot/reload-addon!) host specs addon (reload-opts)))
+              surface (surface-refreshed!)]
           (log/info "hot reload" {:addon addon :namespace namespace
                                   :ok? (:ok? report)
                                   :affected (:hot/affected report)})
-          (mcp-json (assoc (summarize report) :hive-hot hot-init)))))))
+          (mcp-json (assoc (summarize report) :hive-hot hot-init :surface surface)))))))
 
 (defn handle-reload-all
   "Reload every mounted addon, in dependency order."
@@ -202,8 +247,58 @@
     (let [{:keys [specs host hot-init error]} (prepared)]
       (if error
         error
-        (mcp-json (assoc (summarize ((soft 'hive-addon.hot/reload-all!) host specs (reload-opts)))
-                         :hive-hot hot-init))))))
+        (let [report  ((soft 'hive-addon.hot/reload-all!) host specs (reload-opts))
+              surface (surface-refreshed!)]
+          (mcp-json (assoc (summarize report) :hive-hot hot-init :surface surface)))))))
+
+(defn handle-inject
+  "Mount an addon that was NOT on the classpath at boot.
+
+   `path` is a project dir (its deps.edn :paths become classpath entries), a
+   plain source dir, or a jar. Its manifests — and only its — are discovered,
+   solved against the mounted addons, mounted through the ordinary pipeline
+   with the same config resolver the boot used, registered with hive-hot, and
+   advertised on the MCP surface. An addon already mounted is left alone.
+
+   The classpath is extended on the highest DynamicClassLoader above this
+   thread; a thread without one refuses rather than mounting code the next
+   require could not find."
+  [{:keys [path resolve_deps]}]
+  (cond
+    (not (bridge-available?)) (mcp-error unavailable-msg)
+
+    (nil? path)
+    (mcp-error "path is required — a project dir (deps.edn :paths), a source dir, or a jar")
+
+    :else
+    (if-let [inject! (soft 'hive-addon.hot.inject/inject!)]
+      (let [specs (effective-specs)
+            h     (host)]
+        (if (nil? h)
+          (mcp-error "mount-host adapter unavailable")
+          (let [hot-init (when (seq specs)
+                           (ensure-hot-init! ((soft 'hive-addon.hot/plan) h specs)))
+                opts     (cond-> (reload-opts)
+                           resolve_deps (assoc :resolve-deps? true))
+                report   (inject! h specs path opts)
+                surface  (surface-refreshed!)]
+            (log/info "hot inject" {:path path
+                                    :ok? (:ok? report)
+                                    :injected (:hot/injected report)
+                                    :already (:hot/already-mounted report)})
+            (mcp-json (-> (select-keys report [:hot/path :hot/paths :hot/classpath
+                                               :hot/discovered :hot/already-mounted
+                                               :hot/injected :hot/affected :hot/torn-down
+                                               :hot/missing :hot/dirs-added :hot/registered
+                                               :hot/deps :discovery-errors :ok? :errors
+                                               :teardown/data-preserved?])
+                          (assoc :mounted (mapv #(select-keys % [:addon/id :success? :phase :errors])
+                                                (:mounted report))
+                                 :hive-hot hot-init
+                                 :surface surface))))))
+      (mcp-error (str "hive-addon.hot.inject is not on the classpath — injection ships in "
+                      "hive-addon >= 0.3.8; bump the pin (or point local.deps.edn at "
+                      "../hive-addon) and restart the server.")))))
 
 (defn handle-list
   "Per-addon hot-reload readiness: strategy, where its source lives, and whether
@@ -299,6 +394,7 @@
 (def canonical-handlers
   {:reload     handle-reload
    :reload-all handle-reload-all
+   :inject     handle-inject
    :watch      handle-watch
    :unwatch    handle-unwatch
    :list       handle-list
@@ -311,26 +407,33 @@
   {:name "hot"
    :consolidated true
    :description
-   (str "Hot-reload mounted IAddon instances via hive-hot. reload (rebuild one "
+   (str "Hot-reload and inject IAddon instances via hive-hot. reload (rebuild one "
         "addon from its mount manifest and cascade to every addon holding its "
-        "instance), reload-all (every mounted addon in dependency order), watch/"
-        "unwatch (file-watcher: edit an addon's source and it remounts itself), "
-        "list (per-addon strategy + source-kind + whether it is reloadable at "
-        "all), status, strategies. Only addons wired as :local/root deps have "
-        "reloadable source; jar-backed addons report :restart-required. "
+        "instance; the namespace reload is scoped to the addon's own source roots "
+        "and reports what it declined under :hot/ns-skipped), reload-all (every "
+        "mounted addon in dependency order), inject (mount an addon that was NOT on "
+        "the classpath at boot: a project dir, source dir or jar), watch/unwatch "
+        "(file-watcher: edit an addon's source and it remounts itself), list "
+        "(per-addon strategy + source-kind + whether it is reloadable at all), "
+        "status, strategies. Only addons wired as :local/root deps have reloadable "
+        "source; jar-backed addons report :restart-required. "
         "Use command='help' to list all.")
    :inputSchema
    {:type "object"
     :properties
     {"command" {:type "string"
-                :enum ["reload" "reload-all" "watch" "unwatch" "list" "status" "strategies" "help"]
+                :enum ["reload" "reload-all" "inject" "watch" "unwatch" "list" "status" "strategies" "help"]
                 :description "Hot-reload operation to perform"}
      "addon" {:type "string"
               :description "[reload] Addon id to reload, e.g. \"hive.carto\". Dependents cascade automatically."}
      "namespace" {:type "string"
                   :description "[reload] Constructor namespace to reload instead of an addon id — seeds every addon built from it."}
      "strategy" {:type "string"
-                 :description "[reload] Override the reload strategy for this addon (e.g. \"remount\", \"in-place\", \"inert\"). Omit to let the chain select."}}
+                 :description "[reload] Override the reload strategy for this addon (e.g. \"remount\", \"in-place\", \"inert\"). Omit to let the chain select."}
+     "path" {:type "string"
+             :description "[inject] Absolute path of the addon to mount: a project dir (its deps.edn :paths go on the classpath), a source dir, or a jar. Its META-INF/hive-addons manifests are discovered and mounted; addons already mounted are left alone."}
+     "resolve_deps" {:type "boolean"
+                     :description "[inject] Also hand the project's deps.edn :deps to clojure.repl.deps/add-libs before mounting (needs a tools.deps basis in the running image). Default false."}}
     :required ["command"]}
    :handler (composite/build-merged-handler "hot" canonical-handlers)})
 

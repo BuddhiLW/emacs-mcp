@@ -38,6 +38,11 @@
 ;; Shape: {"analysis" {"lint" {:handler fn :params {...} :description "..." :addon :kondo} ...}}
 (defonce ^:private command-contributions (atom {}))
 
+;; Listeners notified after a command contribution or retraction, so the
+;; advertised surface can follow a contribution made AFTER boot.
+;; Shape: {listener-id (fn [{:type :contribute|:retract :tool-name .. :addon-id ..}])}
+(defonce ^:private contribution-listeners (atom {}))
+
 ;; =============================================================================
 ;; Public API
 ;; =============================================================================
@@ -148,30 +153,65 @@
 ;; Composite Tool Command Contributions
 ;; =============================================================================
 
+(defn add-contribution-listener!
+  "Register `f` to be called with {:type :contribute|:retract :tool-name s
+   :addon-id a :commands [..]} after every contribute-commands! /
+   retract-commands! / retract-all-by-addon!. Idempotent by id. A listener that
+   throws is ignored — it must never break a contribution."
+  [listener-id f]
+  {:pre [(keyword? listener-id) (ifn? f)]}
+  (swap! contribution-listeners assoc listener-id f)
+  listener-id)
+
+(defn remove-contribution-listener!
+  "Drop a contribution listener. Returns the id."
+  [listener-id]
+  (swap! contribution-listeners dissoc listener-id)
+  listener-id)
+
+(defn- notify-contribution!
+  [event]
+  (doseq [[_ f] @contribution-listeners]
+    (try (f event) (catch Throwable _ nil))))
+
 (defn contribute-commands!
   "Register commands that compose into a named composite tool.
    tool-name: \"analysis\", addon-id: :kondo
-   commands: {\"lint\" {:handler fn :params {\"path\" {...}} :description \"...\"}}"
+   commands: {\"lint\" {:handler fn :params {\"path\" {...}} :description \"...\"}}
+   Notifies the contribution listeners afterwards."
   [tool-name addon-id commands]
-  (swap! command-contributions update tool-name merge
-         (->> commands
-              (map (fn [[cmd spec]] [(name cmd) (assoc spec :addon addon-id)]))
-              (into {}))))
+  (let [result (swap! command-contributions update tool-name merge
+                      (->> commands
+                           (map (fn [[cmd spec]] [(name cmd) (assoc spec :addon addon-id)]))
+                           (into {})))]
+    (notify-contribution! {:type :contribute :tool-name tool-name :addon-id addon-id
+                           :commands (mapv name (keys commands))})
+    result))
 
 (defn retract-commands!
-  "Remove all commands contributed by an addon from a tool."
+  "Remove all commands contributed by an addon from a tool. Notifies the
+   contribution listeners afterwards."
   [tool-name addon-id]
-  (swap! command-contributions update tool-name
-         (fn [m] (into {} (remove #(= addon-id (:addon (val %))) m)))))
+  (let [result (swap! command-contributions update tool-name
+                      (fn [m] (into {} (remove #(= addon-id (:addon (val %))) m))))]
+    (notify-contribution! {:type :retract :tool-name tool-name :addon-id addon-id})
+    result))
 
 (defn retract-all-by-addon!
-  "Remove all contributions from an addon across all tools (for shutdown)."
+  "Remove all contributions from an addon across all tools (for shutdown).
+   Notifies the contribution listeners once per tool the addon had touched."
   [addon-id]
-  (swap! command-contributions
-         (fn [m]
-           (into {} (map (fn [[tn cmds]]
-                           [tn (into {} (remove #(= addon-id (:addon (val %))) cmds))])
-                         m)))))
+  (let [touched (into [] (keep (fn [[tn cmds]]
+                                 (when (some #(= addon-id (:addon (val %))) cmds) tn)))
+                      @command-contributions)
+        result  (swap! command-contributions
+                       (fn [m]
+                         (into {} (map (fn [[tn cmds]]
+                                         [tn (into {} (remove #(= addon-id (:addon (val %))) cmds))])
+                                       m))))]
+    (doseq [tn touched]
+      (notify-contribution! {:type :retract :tool-name tn :addon-id addon-id}))
+    result))
 
 (defn get-contributed-commands
   "Get contributed commands for a composite tool name."
