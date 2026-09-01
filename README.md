@@ -232,9 +232,12 @@ namespace from core is the smell that says the boundary broke.
 hive-mcp uses a plugin architecture based on the **IAddon protocol** with automatic classpath discovery. Creating a new addon takes one command:
 
 ```bash
-clojure -Sdeps '{:deps {io.github.hive-agi/hive-mcp {:git/tag "vX.Y.Z" :git/sha "..."}}}' \
+clojure -Sdeps '{:deps {io.github.hive-agi/hive-mcp {:mvn/version "0.19.0"}}}' \
   -Tnew create :template hive-agi/addon :name com.example/my-addon
 ```
+
+hive-mcp publishes to Clojars, so the released coordinate is all you need — no `:git/sha`
+pinning. Latest version: see the [releases page](https://github.com/hive-agi/hive-mcp/releases).
 
 This generates a complete project with:
 - **IAddon protocol implementation** (defrecord with 8 lifecycle methods)

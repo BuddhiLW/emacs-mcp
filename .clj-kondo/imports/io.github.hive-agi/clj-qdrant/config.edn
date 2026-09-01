@@ -1,0 +1,2 @@
+;; clj-kondo config exported by clj-qdrant.
+{:lint-as {clj-qdrant.client/with-client clojure.core/let}}

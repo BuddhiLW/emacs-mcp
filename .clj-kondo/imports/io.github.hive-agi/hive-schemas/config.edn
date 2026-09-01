@@ -1,0 +1,9 @@
+;; clj-kondo config exported by hive-schemas.
+{:lint-as {hive-schemas.proven/deftrifecta-proven   clojure.test/deftest
+           hive-schemas.proven/deftrifecta-csimp    clojure.test/deftest
+           hive-schemas.verified/deftrifecta-verified clojure.test/deftest}
+ :hooks
+ {:analyze-call
+  {hive-schemas.test/deftrifecta-from-schema hive-schemas.hooks.test/deftrifecta-from-schema
+   hive-schemas.test/deftrifecta-predicate   hive-schemas.hooks.test/deftrifecta-predicate
+   hive-schemas.test/deftriad-from-schema    hive-schemas.hooks.test/deftriad-from-schema}}}

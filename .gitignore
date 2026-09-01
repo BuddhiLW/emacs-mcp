@@ -9,11 +9,11 @@ target/
 .idea/
 *.iml
 .vscode/
-# clj-kondo: track config.edn, ignore generated files
+# clj-kondo: track config.edn, hooks/ and imports/ (clojure-lsp resolves
+# library macros through the imported configs); ignore regenerable state only.
 .clj-kondo/.cache/
 **/.clj-kondo/.cache/
 .clj-kondo/.lock
-.clj-kondo/imports/
 .clj-kondo/inline-configs/
 .lsp/
 
@@ -23,6 +23,10 @@ target/
 
 # Logs
 *.log
+
+# ...but *.log above also matches DIRECTORIES, and clj-kondo imports vendor
+# configs into dirs named after the artifact (io.pedestal/pedestal.log/).
+!.clj-kondo/imports/**
 
 # JVM heap dumps and crash artifacts
 *.hprof
