@@ -20,7 +20,8 @@
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.memory.type-registry :as type-registry]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.memory.write-events :as write-events]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -115,7 +116,7 @@
   "Apply a single edit to whichever registered store holds the entry. Returns a
    result map describing the outcome, or nil when no store has the id. Does not
    build MCP-shaped responses — leaves that to the caller so batch ops can
-   aggregate cleanly."
+   aggregate cleanly. Announces a successful write through write-events."
   [{:keys [id reason] :as params}]
   (when-let [[store existing] (store-holding id)]
     (let [[updates content-changed?] (build-updates existing params)]
@@ -132,6 +133,11 @@
                     "fields:" (vec (keys updates))
                     (when content-changed? "[re-embed]")
                     (when reason (str "reason:" reason)))
+          (write-events/notify! :updated {:id          id
+                                          :memory-type (:type updated)
+                                          :tags        (:tags updated)
+                                          :project-id  (:project-id updated)
+                                          :fields      (vec (keys updates))})
           {:id               id
            :updated          updated
            :fields-changed   (vec (keys updates))

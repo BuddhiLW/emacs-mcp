@@ -11,7 +11,8 @@
    chroma used keyword args) so resolve-site swaps are zero-change for callers."
   (:require [hive-mcp.protocols.memory :as proto]
             [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]
-            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]
+            [hive-mcp.memory.write-events :as write-events]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -22,15 +23,21 @@
 ;;; ============================================================================
 
 (defn index-memory-entry!
-  "Index a memory entry via the active backend. Returns entry ID."
+  "Index a memory entry via the active backend. Returns entry ID.
+   Announces the write through write-events when the backend returned an id."
   [entry]
-  (with-resilience
-    (proto/add-entry! (proto/get-store) entry)))
+  (let [id (with-resilience
+             (proto/add-entry! (proto/get-store) entry))]
+    (when (string? id)
+      (write-events/notify! :added {:id id :memory-type (:type entry)
+                                    :tags (:tags entry) :project-id (:project-id entry)}))
+    id))
 
 (defn index-memory-entries!
   "Batch-index multiple memory entries via the active backend.
    Each entry is indexed through the store's add-entry! protocol method,
-   which handles embedding and metadata persistence internally.
+   which handles embedding and metadata persistence internally, and is
+   announced through write-events when the backend returned an id.
 
    Arguments:
      entries - sequential collection of entry maps (same shape as index-memory-entry!)
@@ -45,7 +52,11 @@
   (let [store (proto/get-store)]
     (mapv (fn [entry]
             (try
-              (with-resilience (proto/add-entry! store entry))
+              (let [id (with-resilience (proto/add-entry! store entry))]
+                (when (string? id)
+                  (write-events/notify! :added {:id id :memory-type (:type entry)
+                                                :tags (:tags entry) :project-id (:project-id entry)}))
+                id)
               (catch Exception e
                 (log/warn "index-memory-entries!: entry failed:"
                           (:id entry) (ex-message e))
@@ -150,16 +161,22 @@
 ;;; ============================================================================
 
 (defn update-entry!
-  "Update an existing entry's attributes via the active backend."
+  "Update an existing entry's attributes via the active backend and announce
+   the write through write-events."
   [id updates]
-  (with-resilience
-    (proto/update-entry! (proto/get-store) id updates)))
+  (let [result (with-resilience
+                 (proto/update-entry! (proto/get-store) id updates))]
+    (write-events/notify! :updated {:id id :fields (vec (keys updates))})
+    result))
 
 (defn delete-entry!
-  "Delete an entry from the active backend."
+  "Delete an entry from the active backend and announce the write through
+   write-events."
   [id]
-  (with-resilience
-    (proto/delete-entry! (proto/get-store) id)))
+  (let [result (with-resilience
+                 (proto/delete-entry! (proto/get-store) id))]
+    (write-events/notify! :deleted {:id id})
+    result))
 
 ;;; ============================================================================
 ;;; Utilities

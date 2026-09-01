@@ -24,7 +24,8 @@
             [hive-mcp.agent.context :as ctx]
             [clojure.data.json :as json]
             [taoensso.timbre :as log]
-            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]
+            [hive-mcp.memory.write-events :as write-events]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -97,6 +98,8 @@
                   :op         :cleanup
                   :data       {:reason "expired"}})
                deleted-ids)))
+      (doseq [did deleted-ids]
+        (write-events/notify! :deleted {:id did}))
       (when (pos? (or edges-removed 0))
         (log/info "Cleaned up" edges-removed "KG edges for" count "deleted entries"))
       {:type "text" :text (json/write-str {:deleted count
@@ -120,6 +123,10 @@
         :project-id     (:project-id entry)})
       (with-resilience
         (mem-proto/delete-entry! (mem-proto/get-store) id))
+      (write-events/notify! :deleted {:id          id
+                                      :memory-type (:type entry)
+                                      :tags        (:tags entry)
+                                      :project-id  (:project-id entry)})
       (when (pos? edges-removed)
         (log/info "Cleaned up" edges-removed "KG edges for expired entry" id))
       {:type "text" :text (json/write-str {:expired id

@@ -20,7 +20,8 @@
             [hive-weave.parallel :as wpar]
             [clojure.tools.logging :as log]
             [clojure.set :as set]
-            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]
+            [hive-mcp.tools.catchup.bundle-cache :as bc]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -391,12 +392,18 @@
   "Single-pull catchup bundle: replaces 7 per-type Milvus RPCs with 2.
    Returns the map shape catchup.clj needs, pre-split + pre-trimmed.
 
-   Two-phase pipeline:
+   Served through `bundle-cache/cached-bundle`, so concurrent and near-time
+   catchups for one project share a single computation.
+
+   Two-phase pipeline (the cached computation):
      phase-1  query-all-scoped    → metadata-only scan (fast, big)
      phase-2  split-by-type       → trim to display/piggyback caps
      phase-3  hydr/hydrate-buckets → one batch-get for content on survivors"
   [project-id]
-  (let [{:keys [by-type all]} (or (query-all-scoped project-id)
-                                  {:by-type {} :all []})]
-    (-> (split-by-type by-type all)
-        hydr/hydrate-buckets)))
+  (bc/cached-bundle
+   project-id
+   (fn []
+     (let [{:keys [by-type all]} (or (query-all-scoped project-id)
+                                     {:by-type {} :all []})]
+       (-> (split-by-type by-type all)
+           hydr/hydrate-buckets)))))

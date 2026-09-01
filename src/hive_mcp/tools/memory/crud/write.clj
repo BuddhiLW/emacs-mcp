@@ -22,7 +22,8 @@
             [taoensso.timbre :as log]
             [hive-mcp.vectordb.resilience :refer [with-resilience]]
             [hive-mcp.memory.type-registry :as type-registry]
-            [hive-weave.core :as weave]))
+            [hive-weave.core :as weave]
+            [hive-mcp.memory.write-events :as write-events]))
 
 (def ^:const ^:private memory-write-timeout-ms
   "Timeout budget for a single memory write (Chroma add + KG tx + fetch).
@@ -272,7 +273,7 @@
                   (recur (inc attempt)))))))
 
 (defn- finalize-entry!
-  "Wire KG edges, fetch created entry, notify channel, and format response.
+  "Wire KG edges, fetch created entry, notify the write, and format response.
 
    `:store-key` (passed via `entry-ctx`) routes the read-after-write +
    `:kg-outgoing` link write to the same slot the entry was indexed in.
@@ -304,11 +305,8 @@
     (log/info "Created memory entry:" entry-id
               (when (seq edge-ids) (str " with " (count edge-ids) " KG edges"))
               (when (seq knowledge-gaps) (str " gaps:" (count knowledge-gaps))))
-    (try
-      (when-let [publish-fn (requiring-resolve 'hive-mcp.channel.core/publish!)]
-        (publish-fn {:type :memory-added :id entry-id :memory-type type
-                     :tags tags-with-scope :project-id project-id}))
-      (catch Exception e (log/debug "[memory] Channel publish failed for entry" entry-id (.getMessage e))))
+    (write-events/notify! :added {:id entry-id :memory-type type
+                                  :tags tags-with-scope :project-id project-id})
     (if created
       ;; The gate notice is DERIVED from the entry's own tags, so the response
       ;; cannot disagree with what was stored.
@@ -371,6 +369,9 @@
                 updated (with-resilience
                           (mem-proto/update-entry! store (:id existing) {:tags merged-tags}))]
             (log/info "Duplicate found, merged tags:" (:id existing))
+            (write-events/notify! :updated {:id (:id existing) :memory-type type
+                                            :tags merged-tags :project-id project-id
+                                            :fields [:tags]})
             (mcp-json (fmt/entry->json-alist updated)))
           (let [_ (when (= type "plan") (validate-plan-gate! content))
                 _ (when (= type "role") (validate-role-gate! content))
