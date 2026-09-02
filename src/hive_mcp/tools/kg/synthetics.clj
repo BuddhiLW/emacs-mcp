@@ -132,7 +132,7 @@
       (empty? ids)  #{}
       (mem-proto/batch-store? store)
       (or (try (into #{} (keep #(or (:id %) (get % "id")))
-                     (mem-proto/get-entries-projected store ids ["id"]))
+                     (mem-proto/get-entries-projected store ids {:output-fields ["id"]}))
                (catch Exception _ nil))
           (into #{} (filter #(memory-entry-live? store %)) ids))
       :else
