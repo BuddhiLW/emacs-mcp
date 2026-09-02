@@ -17,7 +17,8 @@
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.vectordb.facade :as facade]
             [hive-mcp.agent.context :as ctx]
-            [hive-mcp.dns.result :as result]))
+            [hive-mcp.dns.result :as result]
+            [clojure.string]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

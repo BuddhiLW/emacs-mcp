@@ -7,7 +7,8 @@
    - IServiceConsumer protocol (safe accessors, dependency checking)
    - Addon Pipeline (nil-railway behavior)"
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
-            [hive-mcp.addons.di :as di]))
+            [hive-mcp.addons.di :as di]
+            [clojure.string]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

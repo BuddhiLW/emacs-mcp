@@ -17,7 +17,8 @@
         (run-tests 'hive-mcp.workflows.saa-workflow-test)"
   (:require [clojure.test :refer [deftest testing is are]]
             [hive-mcp.workflows.saa-workflow :as sut]
-            [hive.events.fsm :as fsm]))
+            [hive.events.fsm :as fsm]
+            [clojure.edn]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

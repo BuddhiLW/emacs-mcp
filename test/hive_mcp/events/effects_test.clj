@@ -5,7 +5,9 @@
    API instead of with-redefs for memory tests."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.events.effects :as effects]
-            [hive-mcp.events.core :as ev]))
+            [hive-mcp.events.core :as ev]
+            [hive-mcp.channel.core]
+            [hive-mcp.swarm.coordinator]))
 
 ;; =============================================================================
 ;; Test fixture: Reset registration before each test

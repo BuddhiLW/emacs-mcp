@@ -10,7 +10,8 @@
 
    These tests use the protocol directly without touching DataScript or Emacs."
   (:require [clojure.test :refer [deftest is testing]]
-            [hive-mcp.protocols.dispatch :as dispatch]))
+            [hive-mcp.protocols.dispatch :as dispatch]
+            [clojure.string]))
 
 ;;; ============================================================================
 ;;; ensure-context in dispatch path (unit-level integration)

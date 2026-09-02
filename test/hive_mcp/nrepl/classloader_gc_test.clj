@@ -8,7 +8,8 @@
    4. Session rotation occurs at the configured threshold
    5. The status API reports correct state"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [hive-mcp.nrepl.classloader-gc :as classloader-gc]))
+            [hive-mcp.nrepl.classloader-gc :as classloader-gc]
+            [nrepl.transport]))
 
 ;; =============================================================================
 ;; Test Helpers

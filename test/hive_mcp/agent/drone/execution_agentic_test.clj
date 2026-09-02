@@ -27,7 +27,8 @@
             [hive-mcp.agent.drone.execution.finalize :as exec-fin]
             [hive-mcp.events.core :as ev]
             [hive-mcp.hivemind.core :as hivemind]
-            [hive-mcp.agent.drone.ext-router :as ext-router]))
+            [hive-mcp.agent.drone.ext-router :as ext-router]
+            [clojure.string]))
 
 ;;; ============================================================
 ;;; Test Backend (implements IDroneExecutionBackend)

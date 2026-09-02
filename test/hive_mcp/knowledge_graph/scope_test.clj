@@ -12,7 +12,8 @@
    - Up (child→parent): NOT automatic - requires explicit promotion
    - Across (sibling→sibling): Via common ancestor only"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [hive-mcp.knowledge-graph.scope :as scope]))
+            [hive-mcp.knowledge-graph.scope :as scope]
+            [clojure.set]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

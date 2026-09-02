@@ -4,7 +4,8 @@
    CLARITY: T - Telemetry first (comprehensive test coverage)
    SOLID: SRP - Tests only addon utilities"
   (:require [clojure.test :refer [deftest is testing]]
-            [hive-mcp.tools.core :as core]))
+            [hive-mcp.tools.core :as core]
+            [hive-mcp.emacs-ext.client]))
 
 ;; =============================================================================
 ;; addon-available? Tests

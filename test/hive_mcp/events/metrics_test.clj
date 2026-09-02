@@ -12,7 +12,8 @@
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.string :as str]
             [hive-mcp.events.core :as ev]
-            [hive-mcp.telemetry.prometheus :as prom]))
+            [hive-mcp.telemetry.prometheus :as prom]
+            [hive-mcp.events.metrics]))
 
 ;; =============================================================================
 ;; Test fixture: Reset metrics and config before each test

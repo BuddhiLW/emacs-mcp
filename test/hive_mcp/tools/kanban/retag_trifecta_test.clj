@@ -12,7 +12,8 @@
             [clojure.test.check.properties :as prop]
             [hive-test.trifecta :refer [deftrifecta]]
             [hive-mcp.tools.kanban.events :as events]
-            [hive-mcp.tools.kanban.transitions :as kt]))
+            [hive-mcp.tools.kanban.transitions :as kt]
+            [clojure.string]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 

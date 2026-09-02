@@ -13,7 +13,10 @@
             [clojure.java.io :as io]
             [hive-mcp.tools.migration :as migration]
             [hive-mcp.migration.core :as core]
-            [hive-mcp.migration.adapter :as adapter]))
+            [hive-mcp.migration.adapter :as adapter]
+            [clojure.edn]
+            [hive-mcp.chroma.core]
+            [hive-mcp.knowledge-graph.migration]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

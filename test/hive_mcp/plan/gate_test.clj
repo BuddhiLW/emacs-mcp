@@ -8,7 +8,8 @@
         (run-tests 'hive-mcp.plan.gate-test)"
   (:require [clojure.test :refer [deftest testing is]]
             [hive-mcp.plan.gate :as sut]
-            [hive-mcp.plan.schema :as schema]))
+            [hive-mcp.plan.schema :as schema]
+            [clojure.string]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

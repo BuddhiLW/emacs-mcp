@@ -31,7 +31,8 @@
             [hive-mcp.tools.memory-kanban :as mem-kanban]
             [hive-test.isolation :as iso]
             [hive-mcp.isolation-methods]
-            [hive-mcp.test.stub.memory-store :as mem-stub]))
+            [hive-mcp.test.stub.memory-store :as mem-stub]
+            [clojure.data.json]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

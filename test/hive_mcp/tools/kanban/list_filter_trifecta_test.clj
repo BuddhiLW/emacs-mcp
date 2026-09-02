@@ -22,7 +22,8 @@
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.properties :as tc-prop]
             [hive-test.trifecta :refer [deftrifecta]]
-            [hive-mcp.tools.kanban.transitions :as kt]))
+            [hive-mcp.tools.kanban.transitions :as kt]
+            [clojure.string]))
 
 ;; =============================================================================
 ;; Adapter helpers — collapse multi-arg subjects into unary case-map fns

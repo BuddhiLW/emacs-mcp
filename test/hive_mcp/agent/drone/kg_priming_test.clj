@@ -7,7 +7,8 @@
   (:require [clojure.test :refer [deftest testing is]]
             [hive-mcp.agent.drone.kg-priming :as priming]
             [hive-mcp.extensions.registry :as ext]
-            [hive-mcp.protocols.kg :as kg-proto]))
+            [hive-mcp.protocols.kg :as kg-proto]
+            [hive-mcp.knowledge-graph.connection]))
 
 ;; =============================================================================
 ;; Availability Check Tests

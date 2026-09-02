@@ -7,7 +7,8 @@
             [clojure.set :as set]
             [hive-mcp.agent.core]
             [hive-mcp.agent.drone.tools :as drone-tools]
-            [hive-mcp.server.permissions :as permissions]))
+            [hive-mcp.server.permissions :as permissions]
+            [hive-mcp.agent.drone]))
 
 ;; =============================================================================
 ;; Test Data

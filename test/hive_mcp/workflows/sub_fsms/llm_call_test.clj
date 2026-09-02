@@ -6,7 +6,8 @@
   (:require [clojure.test :refer [deftest is testing]]
             [hive-mcp.workflows.sub-fsms.llm-call :as llm-call]
             [hive-mcp.agent.protocol :as proto]
-            [hive.events.fsm :as fsm]))
+            [hive.events.fsm :as fsm]
+            [clojure.string]))
 
 ;; =============================================================================
 ;; Test Helpers

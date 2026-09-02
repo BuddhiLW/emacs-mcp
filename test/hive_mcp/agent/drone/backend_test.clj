@@ -8,7 +8,8 @@
    - Custom backend registration via defmethod
    - Protocol contract compliance for test implementations"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [hive-mcp.agent.drone.backend :as backend]))
+            [hive-mcp.agent.drone.backend :as backend]
+            [clojure.string]))
 
 ;; =============================================================================
 ;; Test Fixtures

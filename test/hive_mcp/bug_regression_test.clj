@@ -5,7 +5,8 @@
             [clojure.string :as str]
             [hive-mcp.tools.registry :as tools]
             [hive-mcp.tools.consolidated.kanban :as kanban]
-            [hive-mcp.tools.swarm :as swarm]))
+            [hive-mcp.tools.swarm :as swarm]
+            [clojure.data.json]))
 
 ;; =============================================================================
 ;; BUG #3: list-prompts returns nil for some entry fields (MEDIUM)
