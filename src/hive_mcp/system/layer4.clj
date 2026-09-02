@@ -88,11 +88,14 @@
 (defmethod ig/init-key :hive/a2a-gateway
   [_ config]
   (log/info ":hive/a2a-gateway init — starting A2A gateway" config)
-  (let [enabled? (:enabled config)]
-    (when enabled?
-      (a2a-gw/start-a2a-gateway!))
-    {:enabled enabled?
-     :status  (if enabled? :running :disabled)}))
+  ;; Status comes from what the start returned. Deriving it from (:enabled
+  ;; config) reported :running for a gateway that had bound nothing, because
+  ;; the start consulted a different config store and declined.
+  (let [started (result/rescue nil
+                  (a2a-gw/start-a2a-gateway! config))]
+    {:enabled (:enabled config)
+     :port    (:port started (:port config))
+     :status  (:status started :disabled)}))
 
 (defmethod ig/halt-key! :hive/a2a-gateway
   [_ state]

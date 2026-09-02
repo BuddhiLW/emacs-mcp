@@ -10,20 +10,36 @@
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 (defn start-a2a-gateway!
-  "Start A2A JSON-RPC gateway for external agent interoperability.
-   Opt-in via config :a2a :enabled or HIVE_MCP_A2A_ENABLED=true."
-  []
-  (when (config/get-service-value :a2a :enabled
-                                  :env "HIVE_MCP_A2A_ENABLED"
-                                  :parse #(= "true" %)
-                                  :default false)
-    (result/rescue nil
-                   (require 'hive-mcp.transport.a2a)
-                   ((resolve 'hive-mcp.transport.a2a/start!)
-                    {:port (config/get-service-value :a2a :port
-                                                     :env "HIVE_MCP_A2A_PORT"
-                                                     :parse parse-long
-                                                     :default 7912)
-                     :api-key (config/get-service-value :a2a :api-key
-                                                        :env "HIVE_MCP_A2A_API_KEY")})
-                   (log/info "A2A gateway started"))))
+  "Start the A2A JSON-RPC gateway.
+
+   Enabled when the system component config says so, or when the runtime
+   config / HIVE_MCP_A2A_ENABLED does. Port and api-key come from the
+   component config first, the runtime config second.
+
+   Returns nil when not enabled, {:status :running :port n} when the gateway
+   is listening, {:status :failed :port n} when the start threw. Never throws."
+  ([] (start-a2a-gateway! nil))
+  ([component-config]
+   (let [enabled? (or (:enabled component-config)
+                      (config/get-service-value :a2a :enabled
+                                                :env "HIVE_MCP_A2A_ENABLED"
+                                                :parse #(= "true" %)
+                                                :default false))
+         port     (or (:port component-config)
+                      (config/get-service-value :a2a :port
+                                                :env "HIVE_MCP_A2A_PORT"
+                                                :parse parse-long
+                                                :default 7912))]
+     (when enabled?
+       (let [started (result/rescue ::failed
+                                    (require 'hive-mcp.transport.a2a)
+                                    ((resolve 'hive-mcp.transport.a2a/start!)
+                                     {:port    port
+                                      :api-key (config/get-service-value :a2a :api-key
+                                                                         :env "HIVE_MCP_A2A_API_KEY")})
+                                    :started)]
+         (if (= ::failed started)
+           (do (log/warn "A2A gateway failed to start, NOT listening" {:port port})
+               {:status :failed :port port})
+           (do (log/info "A2A gateway started" {:port port})
+               {:status :running :port port})))))))

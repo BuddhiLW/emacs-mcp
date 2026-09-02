@@ -59,12 +59,15 @@
 (defmethod ig/init-key :hive/websocket-mcp
   [_ config]
   (log/info ":hive/websocket-mcp init — starting WebSocket MCP server" config)
+  ;; The component config decides, so a profile that sets :enabled true is
+  ;; obeyed. Status comes from what the start returned, never from the config
+  ;; that asked for it.
   (let [result (result/rescue nil
-                 (ws-mcp/start-websocket-server!))]
-    {:port    (:port config)
+                 (ws-mcp/start-websocket-server! config))]
+    {:port    (:port result (:port config))
      :enabled (:enabled config)
      :result  result
-     :status  (if result :running :disabled)}))
+     :status  (:status result :disabled)}))
 
 (defmethod ig/halt-key! :hive/websocket-mcp
   [_ state]
