@@ -7,7 +7,7 @@
  ;; as a file path.
  ;;
  ;; Every coordinate below is on this list because a cold boot of the host
- ;; with this file merged was measured to mount or load it (2026-09-01). An
+ ;; with this file merged was measured to mount or load it (2026-09-02). An
  ;; addon whose host tool is missing degrades with a logged reason; it does
  ;; not block the boot.
  :deps
@@ -21,36 +21,51 @@
   ;; unconfigured boot persists into. To switch, set :kg-backend :datalevin
   ;; in .hive-project.edn (or -Dhive.kg.backend=datalevin) and swap in
   ;; io.github.hive-agi/hive-datalevin {:mvn/version "0.1.6"}.
-  io.github.hive-agi/hive-datahike {:mvn/version "0.1.2"}}
+  io.github.hive-agi/hive-datahike {:mvn/version "0.1.2"}
 
- ;; --- pending: on Clojars, but not loadable by this host yet -------------
- ;; Measured 2026-09-02 (dev/foss_compliance.clj + dev/addon_boot_probe.clj).
- ;; Two independent faults kept every entry below out of :deps, and both are
- ;; fixed in the checkouts but NOT yet released:
+  ;; --- code intelligence ------------------------------------------------
+  ;; Each contributes subcommands into the consolidated `code` supertool.
+  ;; Measured 2026-09-02 with dev/addon_boot_probe.clj against these exact
+  ;; published jars, no local roots and no hive-mcp on the addon's own
+  ;; classpath: all four report :active.
+  io.github.hive-agi/lsp-mcp         {:mvn/version "0.6.5"}
+  io.github.hive-agi/clj-kondo-mcp   {:mvn/version "0.2.5"}
+  io.github.hive-agi/scc-mcp         {:mvn/version "0.1.7"}
+  io.github.hive-agi/basic-tools-mcp {:mvn/version "0.3.14"}}
+
+ ;; --- pending: not in :deps yet, with the measured reason ----------------
+ ;; Two faults used to keep the code-intelligence addons out of this list, and
+ ;; both are now fixed and released, which is why they moved up:
  ;;
  ;;   1. The host discovers an addon only through its META-INF/hive-addons
- ;;      manifest, and the published jars ship none: version.edn declared
+ ;;      manifest, and the published jars shipped none: version.edn declared
  ;;      :src-dirs ["src"], so hive-build never copied the resources root.
  ;;   2. Each addon reified hive-mcp.addons.protocol/IAddon. reify resolves
  ;;      at compile time, so the namespace only loaded when the host had
- ;;      already required that namespace: the jar was unmountable anywhere
- ;;      else. They now reify hive-addon.protocol/IAddon.
+ ;;      already required it: the jar was unmountable anywhere else. They now
+ ;;      reify hive-addon.protocol/IAddon.
  ;;
- ;; The four code-intelligence addons are proven to construct an IAddon with
- ;; no hive-mcp on the classpath; move each up once its release is cut.
- ;; The two vessels are not ready: more companion protocols (IVessel,
- ;; IHeadlessBackend, ...) are still defined in the host, tracked by
- ;; [VESSEL-CONTRACT-MIGRATION]. An earlier note here blamed hive-tmux's
- ;; constructor for returning a legacy {:registered :total} map; that was
- ;; wrong, it has a conforming addon-ctor and failed for reason 2.
- ;; Cards: [ADDON-MANIFEST-RELEASE], [VESSEL-CONTRACT-MIGRATION].
+ ;; What remains, each measured 2026-09-02 rather than assumed:
  ;;
- ;;  io.github.hive-agi/hive-tmux        {:git/url "https://github.com/hive-agi/hive-tmux.git"
- ;;                                       :git/tag "v0.1.0"
- ;;                                       :git/sha "2f31a7b7ef79687473d964a8452783d937a114d4"}
- ;;  io.github.hive-agi/hive-claude      {:mvn/version "0.1.16"}
- ;;  io.github.hive-agi/lsp-mcp          {:mvn/version "0.6.3"}
- ;;  io.github.hive-agi/clj-kondo-mcp    {:mvn/version "0.2.4"}
- ;;  io.github.hive-agi/scc-mcp          {:mvn/version "0.1.6"}
- ;;  io.github.hive-agi/basic-tools-mcp  {:mvn/version "0.3.11"}
+ ;; hive-overarch 0.1.9 IS released and its jar ships the manifest, but the
+ ;; boot probe reports ctor-unresolved: org.soulspace.overarch.domain.model is
+ ;; not on the classpath. It consumes upstream overarch as a :git/sha coord,
+ ;; and a published Maven pom cannot carry a git dependency, so the artifact
+ ;; is unusable by a consumer even though the release is green. It returns
+ ;; here when upstream overarch ships a thin jar to Maven.
+ ;;
+ ;; hive-proximum 0.1.18 mounts clean (:active). It is left out because it
+ ;; registers a SECOND memory store under :proximum, which is a storage
+ ;; choice, not part of a default harness. Add it deliberately.
+ ;;
+ ;; hive-tmux cannot be released at all: version.edn declares :publish :none
+ ;; and :license "UNDECLARED", and the repo has no release workflow. It needs
+ ;; a licensing decision before a coordinate can exist.
+ ;;
+ ;; hive-claude is blocked on hive-spi shipping the headless capability
+ ;; contracts it reifies. Card [VESSEL-CONTRACT-MIGRATION].
+ ;;
+ ;;  io.github.hive-agi/hive-overarch  {:mvn/version "0.1.9"}
+ ;;  io.github.hive-agi/hive-proximum  {:mvn/version "0.1.18"}
+ ;;  io.github.hive-agi/hive-claude    {:mvn/version "0.1.16"}
  }

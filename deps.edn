@@ -148,7 +148,7 @@
         ;; hive-mcp.addons.protocol re-exports it via def-aliases so the ~30
         ;; monorepo addon implementors can depend on hive-addon instead of
         ;; compile-depending on hive-mcp.
-        io.github.hive-agi/hive-addon {:mvn/version "0.3.7"}
+        io.github.hive-agi/hive-addon {:mvn/version "0.3.12"}
 
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
