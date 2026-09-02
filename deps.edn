@@ -96,8 +96,10 @@
 
         ;; hive-events - re-frame inspired event system for JVM
         ;; v0.4.0 adds sub-FSM composition + multi-dispatch
+        ;; 0.5.10 publishes the router registry API (get-event, get-interceptors,
+        ;; append-interceptor!, get-fx) that hive-mcp.events.registry delegates to.
         io.github.hive-agi/hive-events
-        {:mvn/version "0.5.8"}
+        {:mvn/version "0.5.10"}
 
         ;; hive-hot - unified hot-reload with events integration
         io.github.hive-agi/hive-hot
@@ -419,6 +421,21 @@
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:includes [:integration]}}
+
+  ;; Line/form coverage over the unit gate. Composes with :test-unit rather
+  ;; than replacing it, so the measured suite is the CI suite:
+  ;;
+  ;;   clojure -M:test-unit:coverage --ns-regex 'hive-mcp\.addons\..*'
+  ;;
+  ;; --ns-regex is not optional at this size. cloverage instruments every
+  ;; namespace it loads and holds the whole instrumented tree, so an
+  ;; unscoped run over all 428 unit namespaces is a multi-gigabyte JVM.
+  ;; Scope it, or run it where the heap is yours alone.
+  :coverage
+  {:extra-deps {cloverage/cloverage {:mvn/version "1.2.4"}}
+   :main-opts ["-m" "cloverage.coverage"
+               "-p" "src" "-s" "test"
+               "--text" "--no-html"]}
 
   ;; Backend-coupled tests, classpath-isolated off the default cold-CI path.
   ;; Compose with :test for shared infra + supply drivers via local.deps.edn:
