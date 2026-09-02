@@ -28,9 +28,38 @@ do not promise it.
   not.
 - `CONTRIBUTING.md`, including the four rules an addon must follow to be
   mountable by any host.
+- CI job `boot`: loads the server closure from the committed `deps.edn`, both
+  bare core and starter overlay. The existing `deps` job runs `clojure -P`,
+  which resolves a tree without ever compiling against it, and every
+  workstation hides the difference behind a gitignored `local.deps.edn`. This
+  job is the only check in the repo that runs without those overrides.
+- `:coverage` alias (cloverage), composing with `:test-unit` so the measured
+  suite is the CI suite. Scope it with `--ns-regex`: instrumenting all 428 unit
+  namespaces in one JVM is a multi-gigabyte run. First measurement, the
+  `hive-mcp.addons.*` slice: 70.15% forms, 79.97% lines.
 
 ### Fixed
 
+- The container built and then died on boot. `hive-mcp.events.registry`
+  delegates to `hive.events.router/get-event`, `get-interceptors` and
+  `append-interceptor!`, none of which existed in a published hive-events jar
+  (0.5.8 and 0.5.9 ship a byte-identical `router.cljc` defining none of them).
+  Fixed by publishing hive-events 0.5.10 and pinning it.
+- The unit gate aborted at load on a clean checkout: the store-contract runners
+  require `hive-test.memory.store-contract`, which no published hive-test
+  carried. Fixed by publishing hive-test 0.3.19 and raising the three pins from
+  0.3.15.
+- `StdioBridge` and `NoopMcpBridge` declared `IAddon` while omitting
+  `excluded-tools` and `hooks`. Both threw `AbstractMethodError`, which the
+  host's `rescue` at the call sites turned into "this addon contributes
+  nothing" with no error surfaced anywhere: a bridge addon's hooks were never
+  registered and its tool exclusions never applied.
+- Nine namespaces called `clojure.string/*` or `taoensso.timbre/*` fully
+  qualified without requiring them, resolving only by load-order luck.
+- `hive-mcp.tools.kanban.events/edit-fx` was defined twice, byte-identically.
+- Namespaces defining `reset!` or `run!` now declare the `:refer-clojure
+  :exclude`, so the shadowing is intentional in the source instead of a warning
+  on every boot.
 - `hive-mcp.addons.terminal` is now a re-export of `hive-addon.terminal`
   rather than the definition site of `ITerminalAddon`. Defining a companion
   protocol in the host left vessel addons with no contract to depend on, so
