@@ -16,6 +16,7 @@
 #   HIVE_NATS=1 bin/hive-mcp-foss      # + NATS (also set :nats :enabled true in config.edn)
 #   HIVE_TELEMETRY=1 bin/hive-mcp-foss # + Prometheus/Grafana/Loki
 #   HIVE_SKIP_COMPOSE=1 ...            # services already running elsewhere
+#   HIVE_STARTER=0 bin/hive-mcp-foss   # bare core, without starter.deps.edn
 #
 # Knobs (all optional, all defaulted):
 #   CHROMA_HOST/CHROMA_PORT   default localhost:8000
@@ -139,6 +140,18 @@ log "starting nREPL on :$HIVE_NREPL_PORT"
 log "register with your MCP client, e.g.:"
 log "  claude mcp add hive -- $REPO_ROOT/bin/hive-mcp-foss"
 
+# --- starter pack ----------------------------------------------------------
+#
+# starter.deps.edn carries the FOSS addons: vessels, harness bridge, code
+# tools, KG store. It is merged through -Sdeps, the seam bin/hive-mcp uses
+# for local.deps.edn. HIVE_STARTER=0 boots the bare core instead.
+
+SDEPS_ARG=()
+if [ "${HIVE_STARTER:-1}" != "0" ] && [ -f "$REPO_ROOT/starter.deps.edn" ]; then
+  SDEPS_ARG=(-Sdeps "$(cat "$REPO_ROOT/starter.deps.edn")")
+  log "merging starter.deps.edn (HIVE_STARTER=0 to skip)"
+fi
+
 # The :nrepl alias pins --port in its :main-opts; nrepl.cmdline takes the LAST
 # --port it is given, so appending here is what makes HIVE_NREPL_PORT effective.
-exec clojure -M:dev:nrepl --port "$HIVE_NREPL_PORT"
+exec clojure ${SDEPS_ARG[@]+"${SDEPS_ARG[@]}"} -M:dev:nrepl --port "$HIVE_NREPL_PORT"

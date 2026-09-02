@@ -1,0 +1,42 @@
+{;; hive-mcp starter pack: the FOSS addons that turn the bare core into a
+ ;; working harness. Merged on top of deps.edn through -Sdeps by
+ ;; bin/hive-mcp-foss (HIVE_STARTER=0 opts out) and by the Dockerfile.
+ ;; deps.edn itself stays free of every backend coordinate; this file is the
+ ;; composition seam, the same one local.deps.edn uses for a personal setup.
+ ;; It must start with "{": the clojure CLI reads any other -Sdeps argument
+ ;; as a file path.
+ ;;
+ ;; Every coordinate below is on this list because a cold boot of the host
+ ;; with this file merged was measured to mount or load it (2026-09-01). An
+ ;; addon whose host tool is missing degrades with a logged reason; it does
+ ;; not block the boot.
+ :deps
+ {;; --- vessel: where lings run ------------------------------------------
+  ;; Emacs vessel + CIDER bridge. Mounts when an Emacs daemon is reachable
+  ;; and stays dormant otherwise.
+  io.github.hive-agi/hive-emacs {:mvn/version "0.5.4"}
+
+  ;; --- knowledge graph persistence ------------------------------------
+  ;; Datahike is the core's default :kg-backend, so this store is what the
+  ;; unconfigured boot persists into. To switch, set :kg-backend :datalevin
+  ;; in .hive-project.edn (or -Dhive.kg.backend=datalevin) and swap in
+  ;; io.github.hive-agi/hive-datalevin {:mvn/version "0.1.6"}.
+  io.github.hive-agi/hive-datahike {:mvn/version "0.1.2"}}
+
+ ;; --- pending: on Clojars, but not loadable by this host yet -------------
+ ;; The host discovers an addon only through its META-INF/hive-addons
+ ;; manifest. The published jars below ship none (their checkouts do), and
+ ;; hive-tmux's constructor still returns the legacy {:registered :total}
+ ;; map instead of an IAddon, so mount-compose skips it. Move an entry up
+ ;; into :deps once its release carries the manifest; kanban cards
+ ;; [ADDON-MANIFEST-RELEASE] and [HIVE-TMUX-IADDON] track that.
+ ;;
+ ;;  io.github.hive-agi/hive-tmux        {:git/url "https://github.com/hive-agi/hive-tmux.git"
+ ;;                                       :git/tag "v0.1.0"
+ ;;                                       :git/sha "2f31a7b7ef79687473d964a8452783d937a114d4"}
+ ;;  io.github.hive-agi/hive-claude      {:mvn/version "0.1.16"}
+ ;;  io.github.hive-agi/lsp-mcp          {:mvn/version "0.6.3"}
+ ;;  io.github.hive-agi/clj-kondo-mcp    {:mvn/version "0.2.4"}
+ ;;  io.github.hive-agi/scc-mcp          {:mvn/version "0.1.6"}
+ ;;  io.github.hive-agi/basic-tools-mcp  {:mvn/version "0.3.11"}
+ }
