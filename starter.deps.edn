@@ -24,12 +24,26 @@
   io.github.hive-agi/hive-datahike {:mvn/version "0.1.2"}}
 
  ;; --- pending: on Clojars, but not loadable by this host yet -------------
- ;; The host discovers an addon only through its META-INF/hive-addons
- ;; manifest. The published jars below ship none (their checkouts do), and
- ;; hive-tmux's constructor still returns the legacy {:registered :total}
- ;; map instead of an IAddon, so mount-compose skips it. Move an entry up
- ;; into :deps once its release carries the manifest; kanban cards
- ;; [ADDON-MANIFEST-RELEASE] and [HIVE-TMUX-IADDON] track that.
+ ;; Measured 2026-09-02 (dev/foss_compliance.clj + dev/addon_boot_probe.clj).
+ ;; Two independent faults kept every entry below out of :deps, and both are
+ ;; fixed in the checkouts but NOT yet released:
+ ;;
+ ;;   1. The host discovers an addon only through its META-INF/hive-addons
+ ;;      manifest, and the published jars ship none: version.edn declared
+ ;;      :src-dirs ["src"], so hive-build never copied the resources root.
+ ;;   2. Each addon reified hive-mcp.addons.protocol/IAddon. reify resolves
+ ;;      at compile time, so the namespace only loaded when the host had
+ ;;      already required that namespace: the jar was unmountable anywhere
+ ;;      else. They now reify hive-addon.protocol/IAddon.
+ ;;
+ ;; The four code-intelligence addons are proven to construct an IAddon with
+ ;; no hive-mcp on the classpath; move each up once its release is cut.
+ ;; The two vessels are not ready: more companion protocols (IVessel,
+ ;; IHeadlessBackend, ...) are still defined in the host, tracked by
+ ;; [VESSEL-CONTRACT-MIGRATION]. An earlier note here blamed hive-tmux's
+ ;; constructor for returning a legacy {:registered :total} map; that was
+ ;; wrong, it has a conforming addon-ctor and failed for reason 2.
+ ;; Cards: [ADDON-MANIFEST-RELEASE], [VESSEL-CONTRACT-MIGRATION].
  ;;
  ;;  io.github.hive-agi/hive-tmux        {:git/url "https://github.com/hive-agi/hive-tmux.git"
  ;;                                       :git/tag "v0.1.0"

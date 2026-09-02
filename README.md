@@ -85,13 +85,15 @@ turn the bare core into a working harness, merged over `deps.edn` at boot
 |---|---|---|---|
 | Vessel, where lings run | hive-emacs | an Emacs daemon | shipped |
 | Knowledge graph store | hive-datahike | nothing, embedded | shipped |
-| Vessel, headless | hive-tmux | tmux, Python 3 with libtmux | pending: needs an IAddon constructor |
-| Harness bridge | hive-claude | Claude Code | pending: release with manifest |
-| Code intelligence | lsp-mcp, clj-kondo-mcp, scc-mcp, basic-tools-mcp | clojure-lsp, clj-kondo, scc | pending: release with manifest |
+| Code intelligence | lsp-mcp, clj-kondo-mcp, scc-mcp, basic-tools-mcp | clojure-lsp, clj-kondo, scc | fixed, pending release |
+| Vessel, headless | hive-tmux | tmux, Python 3 with libtmux | pending: host-defined IVessel |
+| Harness bridge | hive-claude | Claude Code | pending: host-defined headless protocols |
 
 Every shipped row was measured to mount or load in a cold boot; the pending rows sit
-commented in the file with their coordinates and move up as each addon ships a
-`META-INF/hive-addons` manifest. A missing host tool degrades that one addon with a
+commented in the file with their coordinates. A row moves up when its release both
+ships a `META-INF/hive-addons` manifest and constructs an `IAddon` with no hive-mcp
+on the classpath, which is what `dev/foss_compliance.clj` and
+`dev/addon_boot_probe.clj` check. A missing host tool degrades that one addon with a
 logged reason; the boot still completes. No private registry, no VPN, no credential
 store. The knobs
 (`HIVE_TELEMETRY=1`, `HIVE_NATS=1`, remote Chroma/Ollama hosts) are in the
