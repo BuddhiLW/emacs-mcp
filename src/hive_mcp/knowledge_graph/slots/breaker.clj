@@ -30,6 +30,7 @@
    cooldown clock elapses. `:half-open` admits exactly one probe; if
    that succeeds the slot is healthy again, if it fails the cooldown
    doubles (capped at `max-cooldown-ms`)."
+  (:refer-clojure :exclude [reset!])
   (:require [taoensso.timbre :as log]))
 
 ;; -----------------------------------------------------------------------------

@@ -37,8 +37,7 @@
    - `StreamingBatchable`: adds per-op streaming via an `on-event` callback.
 
    Impls may satisfy just `Batchable` (sequential, no deps) or layer the
-   extensions without breaking substitutability."
-  (:refer-clojure :exclude [satisfies?]))
+   extensions without breaking substitutability.")
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

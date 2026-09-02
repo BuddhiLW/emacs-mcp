@@ -11,6 +11,7 @@
      :state          → file at hive-mcp.tools.migrate.kanban.state/default-path
 
    Override any slot to swap stores (test stubs, alternate backends)."
+  (:refer-clojure :exclude [run! reset!])
   (:require [hive-dsl.result :as r]
             [hive-mcp.protocols.memory :as proto]
             [hive-mcp.tools.migrate.kanban.events :as mig-events]

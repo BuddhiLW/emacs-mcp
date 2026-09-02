@@ -15,6 +15,7 @@
    read. `store-lookup` is the only IO here and it runs at report time.
 
    Bounded: 4000 ids, 12h TTL, LRU."
+  (:refer-clojure :exclude [reset!])
   (:require [hive-dsl.bounded-atom :refer [bounded-atom bput! bget bclear!
                                            register-sweepable!]]
             [hive-spi.memory.ports :as ports]

@@ -10,6 +10,7 @@
       :target-reader  IEntryReader  ; e.g. qdrant
       :writer         IEntryWriter  ; e.g. qdrant
       :state          IState}"
+  (:refer-clojure :exclude [run!])
   (:require [hive-dsl.result :as r]
             [hive-mcp.tools.migrate.kanban.events :as mig-events]
             [hive-mcp.tools.migrate.kanban.ports :as ports]

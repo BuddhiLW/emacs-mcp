@@ -7,7 +7,7 @@
    coarse lock is free.
 
    Eviction: LRU when size exceeds cap, lazy TTL check on lookup."
-  (:import [java.util LinkedHashMap Map$Entry]))
+  (:import [java.util LinkedHashMap]))
 
 (def ^:private default-cap 2048)
 (def ^:private default-ttl-ms (* 5 60 1000))

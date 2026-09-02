@@ -14,6 +14,7 @@
    the plan map, tagged `multi-plan`. They decay along normal memory rules.
 
    Decision: 20260429230453-7e7627cc"
+  (:refer-clojure :exclude [run!])
   (:require [hive.events.multi :as ev-multi]
             [hive-mcp.multi.registry :as registry]
             [hive-dsl.result :as r :refer [rescue]]
