@@ -273,15 +273,25 @@
         (verdict :fail (str "README names missing paths: " (str/join ", " gone)))
         (verdict :pass (str (count refs) " referenced path(s) exist"))))))
 
+(defn- escaping-root?
+  "True when a :local/root cannot be resolved from a fresh clone: it points
+   outside the repo, or at a path the checkout does not contain. A vendored
+   jar committed under the repo resolves everywhere and is not a violation."
+  [dir root]
+  (or (str/starts-with? root "/")
+      (str/starts-with? root "..")
+      (not (fs/exists? (fs/path dir root)))))
+
 (defn- deps-hygiene
-  "A published deps.edn names public coordinates only."
-  [{:keys [deps.edn]}]
+  "A published deps.edn names coordinates a fresh clone can resolve."
+  [{:keys [dir deps.edn]}]
   (let [locals (for [[lib coord] (:deps deps.edn)
-                     :when (:local/root coord)]
+                     :let [root (:local/root coord)]
+                     :when (and root (escaping-root? dir root))]
                  (str lib))
         repos  (remove #{"central" "clojars"} (keys (:mvn/repos deps.edn)))]
     (cond
-      (seq locals) (verdict :fail (str ":local/root deps: " (str/join ", " locals)))
+      (seq locals) (verdict :fail (str "unresolvable :local/root deps: " (str/join ", " locals)))
       (seq repos)  (verdict :warn (str "extra :mvn/repos: " (str/join ", " repos)))
       :else        (verdict :pass (str (count (:deps deps.edn)) " public coordinate(s)")))))
 
