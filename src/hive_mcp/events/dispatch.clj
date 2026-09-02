@@ -12,7 +12,8 @@
             [hive-mcp.events.schemas :as schemas]
             [hive-mcp.telemetry.prometheus :as prom]
             [taoensso.timbre :as log]
-            [hive.events.observer :as observer]))
+            [hive.events.observer :as observer]
+            [hive.events.router :as router]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -94,28 +95,47 @@
                  "remove the emitter (ENGINE-L0.4)"))
     n))
 
-(defn do-fx
-  "Execute all effects in the context's :effects map.
+(defn effect-executor
+  "This host's effect-invocation policy, installed on hive.events.fx.
 
-   Uses hive.events.fx/get-fx for handler lookup (unified registry).
-   Tracks effect execution via metrics/record-effect-executed! and
-   metrics/record-effect-error!. Missing handlers are counted per
-   effect-id; the WARN escalates to ERROR after
-   `unhandled-effect-warn-threshold` misses (ENGINE-L0.4).
+   Looks the handler up in the unified fx registry, runs it, and records
+   execution and error counts. A missing handler is counted per effect-id and
+   the WARN escalates to ERROR after `unhandled-effect-warn-threshold` misses
+   (ENGINE-L0.4).
+
+   TOTAL: never throws. do-fx runs after the interceptor chain has committed,
+   so a throw here would report work that already happened as a failure."
+  [effect-id effect-data]
+  (if-let [handler (fx/get-fx effect-id)]
+    (try
+      (handler effect-data)
+      (metrics/record-effect-executed!)
+      (catch Throwable e
+        (metrics/record-effect-error!)
+        (log/error "Effect" effect-id "failed:" (.getMessage e))))
+    (record-unhandled-effect! effect-id)))
+
+(defonce ^:private effect-executor-installed
+  ^{:doc "Installs `effect-executor` once, at load. Held in a defonce so a
+          namespace reload does not reinstall over a test's own policy."}
+  (fx/set-fx-executor! effect-executor))
+
+(defn do-fx
+  "Execute all effects in the context's :effects map, returning the context.
+
+   Delegates to hive.events.fx/do-fx, which routes every effect through the
+   installed executor (`effect-executor`), so metrics and the ENGINE-L0.4
+   unhandled-effect counter apply whether effects are run from here or by
+   hive.events.router. There is one effect-execution path, not two.
+
+   `:db` now runs before the other effects (re-frame ordering, which
+   hive.events.fx has always applied). It previously ran in map order.
 
    Arities:
    - [context]              - Uses hive.events global fx registry
    - [context _fx-handlers] - Legacy 2-arity (uses global registry)"
   ([context]
-   (doseq [[effect-id effect-data] (:effects context)]
-     (if-let [handler (fx/get-fx effect-id)]
-       (try
-         (handler effect-data)
-         (metrics/record-effect-executed!)
-         (catch Throwable e
-           (metrics/record-effect-error!)
-           (log/error "Effect" effect-id "failed:" (.getMessage e))))
-       (record-unhandled-effect! effect-id)))
+   (fx/do-fx (:effects context))
    context)
   ([context _fx-handlers]
    (do-fx context)))
@@ -127,41 +147,39 @@
 (defn dispatch
   "Dispatch an event through its registered handler chain.
 
-   Wraps interceptor execution with:
-   1. Malli schema validation at boundary
+   Delegates the chain to hive.events.router/dispatch-sync, which owns the ONE
+   registry, builds the handler interceptor, executes the chain, runs effects
+   and notifies observers. This namespace contributes only what is the host's:
+
+   1. malli schema validation at the boundary
    2. Prometheus telemetry
+   3. effect metrics and the ENGINE-L0.4 unhandled-effect counter, contributed
+      as an fx executor (see `effect-executor`) rather than as a second do-fx
 
-   Uses hive.events.interceptor/execute for chain processing and
-   hive.events.fx/get-fx for effect handler lookup.
+   Because those are contributed rather than wrapped, an addon that dispatches
+   through the published hive-events library gets them too. That is what makes
+   moving an addon off hive-mcp.events.core a decoupling instead of a silent
+   loss of validation and telemetry.
 
-   Registered observers (hive.events.observer) are notified after the
-   effects are applied, and also for an event that has no handler.
+   Registered observers (hive.events.observer) are notified after the effects
+   are applied, and also for an event that has no handler.
 
-   Throws ExceptionInfo if event is invalid or no handler registered."
+   Throws ExceptionInfo if the event is invalid or no handler is registered.
+   The router logs and returns nil for an unhandled event; this host treats
+   that as an error, which is the behaviour its callers have always had."
   [event]
   (schemas/validate-event! event)
   (let [event-id (first event)
         start-ns (System/nanoTime)]
     (prom/inc-events-total! event-id :info)
-    (if-let [{:keys [interceptors handler]} (registry/get-handler-entry event-id)]
-      (let [handler-interceptor
-            (interceptor/->interceptor
-             :id :handler
-             :before (fn [context]
-                       (let [coeffects (:coeffects context)
-                             ctx-event (:event coeffects)]
-                         (update context :effects merge (handler coeffects ctx-event)))))
-            full-chain (conj (vec interceptors) handler-interceptor)
-            result (execute event full-chain)
-            elapsed-sec (/ (- (System/nanoTime) start-ns) 1e9)]
-        (prom/observe-request-duration! (str "event-dispatch-" (name event-id)) elapsed-sec)
-        (do-fx result)
-        (observer/notify! event-id result)
-        result)
+    (if-let [result (router/dispatch-sync event)]
       (do
-        (observer/notify! event-id {:coeffects {:event event}})
-        (throw (ex-info (str "No handler registered for event: " event-id)
-                        {:event event}))))))
+        (prom/observe-request-duration!
+         (str "event-dispatch-" (name event-id))
+         (/ (- (System/nanoTime) start-ns) 1e9))
+        result)
+      (throw (ex-info (str "No handler registered for event: " event-id)
+                      {:event event})))))
 
 (defn dispatch-sync
   "Synchronous dispatch — same as dispatch for now.
