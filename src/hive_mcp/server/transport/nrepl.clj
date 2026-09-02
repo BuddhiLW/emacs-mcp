@@ -25,12 +25,36 @@
       true)))
 
 (defn- resolve-cider-middleware
-  "Collect CIDER middleware if available. Returns vec or empty."
+  "Collect the CIDER middleware that actually resolves in THIS image.
+
+   cider.nrepl/cider-middleware names its middleware by symbol. An entry whose
+   namespace is absent from the running classpath resolves to nil, and a single
+   nil makes nrepl.server/default-handler throw NullPointerException on
+   with-meta, which loses the entire nREPL server. Unresolvable entries are
+   dropped and counted in a warning rather than allowed to do that.
+
+   Returns a vector of vars/fns, empty when CIDER is not present."
   []
   (result/rescue []
     (require 'cider.nrepl)
-    (when-let [mw-var (resolve 'cider.nrepl/cider-middleware)]
-      (or @mw-var []))))
+    (if-let [mw-var (resolve 'cider.nrepl/cider-middleware)]
+      (let [declared (or @mw-var [])
+            resolved (into []
+                           (keep (fn [mw]
+                                   (cond
+                                     (var? mw)    mw
+                                     (symbol? mw) (result/rescue nil (requiring-resolve mw))
+                                     (ifn? mw)    mw
+                                     :else        nil)))
+                           declared)
+            dropped  (- (count declared) (count resolved))]
+        (when (pos? dropped)
+          (log/warn "CIDER middleware did not resolve in this image and was dropped"
+                    {:declared (count declared)
+                     :resolved (count resolved)
+                     :dropped  dropped}))
+        resolved)
+      [])))
 
 (defn- build-nrepl-handler
   "Build nREPL handler with classloader-gc + optional CIDER middleware."

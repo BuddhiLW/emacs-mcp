@@ -49,6 +49,17 @@ do not promise it.
   require `hive-test.memory.store-contract`, which no published hive-test
   carried. Fixed by publishing hive-test 0.3.19 and raising the three pins from
   0.3.15.
+- The k8s-headless container booted clean and opened three of its five ports.
+  A2A (7912) and WebSocket MCP (7920) were decided by a config store other
+  than the one the system handed the component: Integrant merged the
+  profile's `:enabled true`, printed it, and the start function then asked
+  `config/get-service-value`, which defaults to false and has no `config.edn`
+  to read in a container. Both statuses were derived from the request rather
+  than the result, so neither could report it. nREPL (7910) died on a
+  `NullPointerException` in `nrepl.server/default-handler`: CIDER lists its
+  middleware by symbol, those namespaces are not loaded in the container, and
+  one nil in the middleware vector loses the whole server. Ports now measured
+  bound and the container reports healthy.
 - `StdioBridge` and `NoopMcpBridge` declared `IAddon` while omitting
   `excluded-tools` and `hooks`. Both threw `AbstractMethodError`, which the
   host's `rescue` at the call sites turned into "this addon contributes
