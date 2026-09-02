@@ -190,6 +190,36 @@
       (verdict :warn (str (count rows) " manifest(s) resolve; ctor return type is a boot claim: "
                           (str/join ", " (map :id rows)))))))
 
+(def ^:private hard-host-ref
+  "A hive-mcp qualified symbol NOT preceded by a quote. A quoted symbol handed
+   to requiring-resolve is the blessed soft-resolution seam; an unquoted one is
+   resolved at compile time and makes the host a build dependency."
+  #"(?<!['`])\bhive-mcp\.[a-z0-9.-]+/[A-Za-z!?*<>=+-][^\s()\[\]{},;]*")
+
+(defn- strip-noise
+  "Source with string literals and line comments blanked out. A namespace named
+   in a docstring is prose, not a dependency, and counting it as one is how a
+   checker starts crying wolf."
+  [src]
+  (-> src
+      (str/replace #"(?s)\"(?:\\.|[^\"\\])*\"" "\"\"")
+      (str/replace #";[^\n]*" "")))
+
+(defn- host-coupling
+  "An addon must compile against the contract libs, never against the host."
+  [{:keys [dir manifests]}]
+  (let [files (when (seq manifests)
+                (concat (fs/glob dir "src/**.{clj,cljc}")))
+        hits  (for [f files
+                    :let [body (some-> (slurp-file f) strip-noise)]
+                    :when body
+                    m (re-seq hard-host-ref body)]
+                {:file (str (fs/relativize dir f)) :sym m})]
+    (if (seq hits)
+      (verdict :fail (str (count hits) " compile-time host reference(s): "
+                          (str/join ", " (distinct (map :sym (take 4 hits))))))
+      (verdict :pass "no compile-time hive-mcp reference"))))
+
 (defn- version-truth
   "VERSION, the newest git tag and the latest Clojars release must agree."
   [{:keys [version git-tag clojars]}]
@@ -202,13 +232,18 @@
       :else                   (verdict :fail (str "VERSION=" version " tag=" (or tag "-")
                                                   " clojars=" (or clojars "-"))))))
 
+(def ^:private test-invocation
+  "A shell command that actually runs a suite. Matching the bare word 'test'
+   is not enough: `cli: latest` contains it."
+  #"(?m)-M:[\w:.-]*test|-X:[\w:.-]*test|-T:build\s+test|kaocha|bb\s+test|make\s+test|lein\s+test")
+
 (defn- ci
   "A workflow must exist, and a release workflow must run the suite."
   [{:keys [workflows release-yml]}]
   (cond
     (empty? workflows) (verdict :fail "no .github/workflows")
-    (and release-yml (not (re-find #"(?m)test|kondo|suite" release-yml)))
-    (verdict :fail "release.yml does not gate on the test suite")
+    (and release-yml (not (re-find test-invocation release-yml)))
+    (verdict :fail "release.yml deploys without running a suite")
     :else (verdict :pass (str/join ", " workflows))))
 
 (defn- license
@@ -267,6 +302,7 @@
    repo that ships no addon is not failed for shipping no manifest."
   [{:id :packaging      :applies? (comp seq :manifests)      :run packaging}
    {:id :mount-contract :applies? (comp seq :manifests)      :run mount-contract}
+   {:id :host-coupling  :applies? (comp seq :manifests)      :run host-coupling}
    {:id :version-truth  :applies? :version.edn               :run version-truth}
    {:id :ci             :applies? (constantly true)          :run ci}
    {:id :license        :applies? :version.edn               :run license}
