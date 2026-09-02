@@ -11,10 +11,15 @@
  ;; addon whose host tool is missing degrades with a logged reason; it does
  ;; not block the boot.
  :deps
- {;; --- vessel: where lings run ------------------------------------------
-  ;; Emacs vessel + CIDER bridge. Mounts when an Emacs daemon is reachable
-  ;; and stays dormant otherwise.
+ {;; --- vessels: where lings run -----------------------------------------
+  ;; Each mounts when its host environment is reachable and stays dormant
+  ;; otherwise, so having all three costs nothing when only one is present.
+  ;; Emacs vessel + CIDER bridge.
   io.github.hive-agi/hive-emacs {:mvn/version "0.5.4"}
+  ;; tmux vessel: IVessel + ITerminalAddon, panes through libtmux.
+  io.github.hive-agi/hive-tmux {:mvn/version "0.1.1"}
+  ;; Claude vessel: terminal + headless backends.
+  io.github.hive-agi/hive-claude {:mvn/version "0.1.19"}
 
   ;; --- knowledge graph persistence ------------------------------------
   ;; Datahike is the core's default :kg-backend, so this store is what the
@@ -58,14 +63,6 @@
  ;; registers a SECOND memory store under :proximum, which is a storage
  ;; choice, not part of a default harness. Add it deliberately.
  ;;
- ;; hive-tmux cannot be released at all: version.edn declares :publish :none
- ;; and :license "UNDECLARED", and the repo has no release workflow. It needs
- ;; a licensing decision before a coordinate can exist.
- ;;
- ;; hive-claude is blocked on hive-spi shipping the headless capability
- ;; contracts it reifies. Card [VESSEL-CONTRACT-MIGRATION].
- ;;
  ;;  io.github.hive-agi/hive-overarch  {:mvn/version "0.1.9"}
  ;;  io.github.hive-agi/hive-proximum  {:mvn/version "0.1.18"}
- ;;  io.github.hive-agi/hive-claude    {:mvn/version "0.1.16"}
  }
