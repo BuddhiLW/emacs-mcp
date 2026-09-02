@@ -64,23 +64,11 @@ Both are plain requests to the model, not slash commands — it reaches for the 
 
 ### 1. Install
 
-**Option A: Automated with [hive-mcp-cli](https://github.com/hive-agi/hive-mcp-cli) (Recommended)**
+**Option A: Batteries included, fully FOSS (recommended)**
 
-```bash
-# Requires Go 1.21+
-go install github.com/hive-agi/hive-mcp-cli/cmd/hive@latest
-go install github.com/hive-agi/hive-mcp-cli/cmd/hive-setup-mcp@latest
-
-# Register and let Claude guide setup
-claude mcp add hive-setup --scope user -- hive-setup-mcp
-claude
-# Ask: "Help me setup hive-mcp"
-```
-
-**Option B: Batteries-included, fully FOSS**
-
-One command brings up the open-source stack — Chroma for memory, Ollama for embeddings,
-optional LSP sidecar — waits until each is genuinely reachable, then starts the nREPL:
+One command starts the open-source services (Chroma for memory, the clojure-lsp
+sidecar), waits until each is actually reachable, merges the starter pack and boots
+the host on nREPL:
 
 ```bash
 git clone https://github.com/hive-agi/hive-mcp.git && cd hive-mcp
@@ -89,21 +77,45 @@ bin/hive-mcp-foss
 claude mcp add hive -- "$PWD/bin/hive-mcp-foss"
 ```
 
-No private registry, no VPN, no credential store. See
-[FOSS Quickstart](https://github.com/hive-agi/hive-mcp/wiki/FOSS-Quickstart) for the knobs
-(`HIVE_TELEMETRY=1`, `HIVE_NATS=1`, remote Chroma/Ollama hosts).
+The **starter pack** is [`starter.deps.edn`](starter.deps.edn): the FOSS addons that
+turn the bare core into a working harness, merged over `deps.edn` at boot
+(`HIVE_STARTER=0` boots the bare core instead).
 
-**Option C: Manual**
+| Role | Addon | Needs on the host | Status |
+|---|---|---|---|
+| Vessel, where lings run | hive-emacs | an Emacs daemon | shipped |
+| Knowledge graph store | hive-datahike | nothing, embedded | shipped |
+| Vessel, headless | hive-tmux | tmux, Python 3 with libtmux | pending: needs an IAddon constructor |
+| Harness bridge | hive-claude | Claude Code | pending: release with manifest |
+| Code intelligence | lsp-mcp, clj-kondo-mcp, scc-mcp, basic-tools-mcp | clojure-lsp, clj-kondo, scc | pending: release with manifest |
+
+Every shipped row was measured to mount or load in a cold boot; the pending rows sit
+commented in the file with their coordinates and move up as each addon ships a
+`META-INF/hive-addons` manifest. A missing host tool degrades that one addon with a
+logged reason; the boot still completes. No private registry, no VPN, no credential
+store. The knobs
+(`HIVE_TELEMETRY=1`, `HIVE_NATS=1`, remote Chroma/Ollama hosts) are in the
+[FOSS Quickstart](https://github.com/hive-agi/hive-mcp/wiki/FOSS-Quickstart).
+
+**Option B: Container**
 
 ```bash
-export HIVE_MCP_DIR="$HOME/hive-mcp"
-export BB_MCP_DIR="$HOME/bb-mcp"
-
-git clone https://github.com/hive-agi/hive-mcp.git "$HIVE_MCP_DIR"
-git clone https://github.com/hive-agi/bb-mcp.git "$BB_MCP_DIR"
-
-claude mcp add hive --scope user -- "$HIVE_MCP_DIR/start-bb-mcp.sh"
+docker build -t hive-mcp .                 # bakes the starter pack into the image
+docker run -p 7910:7910 -e HIVE_PROFILE=k8s-headless hive-mcp
 ```
+
+The image runs the server from source with the same starter pack. Build with
+`--build-arg DEPS_OVERLAY=` for the bare core; `HIVE_HEAP` sets the JVM cap (default 2g).
+
+**Option C: By hand**
+
+```bash
+docker compose up -d chroma lsp-sidecar                    # services
+clojure -Sdeps "$(cat starter.deps.edn)" -M:dev:nrepl      # host + starter pack
+```
+
+Drop the `-Sdeps` argument for the bare core, or point it at your own overlay the
+way `bin/hive-mcp` merges a gitignored `local.deps.edn`.
 
 ### 2. Verify
 
@@ -114,8 +126,7 @@ claude mcp list | grep -q "hive" && echo "OK" || echo "FAILED"
 ### 3. Optional: Semantic Search
 
 ```bash
-ollama pull nomic-embed-text      # Local embeddings
-docker compose up -d chroma       # Chroma vector DB
+ollama pull nomic-embed-text      # local embeddings; Chroma is already up
 ```
 
 ### Prerequisites
@@ -123,12 +134,15 @@ docker compose up -d chroma       # Chroma vector DB
 | Requirement | Version | Install |
 |---|---|---|
 | Claude Code | Latest | [claude.ai/download](https://claude.ai/download) |
-| Babashka | 1.3+ | [babashka.org](https://babashka.org) |
-| Java | 17+ | `apt install openjdk-17-jdk` |
+| Java | 21 | `apt install openjdk-21-jdk` (CI and the image run 21) |
+| Clojure CLI | 1.12+ | [clojure.org/guides/install_clojure](https://clojure.org/guides/install_clojure) |
+| Docker | recent | Chroma and the LSP sidecar; `HIVE_SKIP_COMPOSE=1` if they run elsewhere |
 
-**Optional**: 
-- Emacs 28.1+ for swarm vterm UI and buffer integration. See [Emacs Configuration](https://github.com/hive-agi/hive-mcp/wiki/Emacs-Configuration). 
-- Headless mode works without Emacs (but WIP for stability of headless - recommended to use Emacs as a dependency).
+**Optional**:
+- tmux for the headless vessel, or Emacs 28.1+ for the Emacs vessel, swarm vterm UI and
+  buffer integration. See [Emacs Configuration](https://github.com/hive-agi/hive-mcp/wiki/Emacs-Configuration).
+  The Emacs vessel is the most exercised path; headless runs through hive-tmux.
+- Ollama for semantic search over memory.
 
 ---
 

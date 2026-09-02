@@ -39,7 +39,26 @@ config/
 .mcp.json
 .claude/
 .hive-project.edn
+local.deps.edn
 deps.local.edn
+
+# Local state and caches: the KG/vector stores under data/ can be hundreds
+# of GB and must never enter a build context
+data/
+backups/
+.worktrees/
+.lsp/
+.codanna/
+.fastembed_cache/
+arxiv/
+pdfs/
+plans/
+melpa/
+overarch/
+hs_err_pid*
+*.hprof
+*.jfr
+*.log
 
 # Python tooling (not needed in JVM container)
 python/

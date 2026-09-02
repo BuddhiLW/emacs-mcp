@@ -182,9 +182,10 @@
       (Thread/sleep 10)
       (hivemind/shout! "agent-x" :progress {:task "x-done" :message "x finished" :directory "/projects/x"})
 
-      ;; Get messages for project-x only
+      ;; Get messages for project-x only. A :progress burst from one agent is
+      ;; digested into a single row whose :n counts the rows it stands for.
       (let [msgs (piggyback/get-messages "coordinator-x" :project-id "project-x")]
-        (is (= 2 (count msgs)) "Should have 2 messages from project-x")
+        (is (= 2 (reduce + (map #(:n % 1) msgs))) "Should have 2 messages from project-x")
         (is (every? #(= "agent-x" (:a %)) msgs) "All should be from agent-x")))))
 
 (deftest piggyback-includes-global-messages-for-all-projects-test
@@ -194,7 +195,7 @@
       (hivemind/shout! "global-agent" :progress {:task "global" :message "for everyone"})
 
       ;; Get messages with project filter
-      (let [msgs (piggyback/get-messages "any-coordinator" :project-id "some-project")]
+      (let [msgs (piggyback/get-messages "coordinator-any" :project-id "some-project")]
         (is (= 1 (count msgs)))
         (is (= "global-agent" (:a (first msgs))))))))
 
@@ -212,16 +213,16 @@
       (hivemind/shout! "p2-agent" :progress {:task "p2" :message "msg2" :directory "/projects/p2"})
 
       ;; Coordinator-A reads project-1
-      (let [msgs-a (piggyback/get-messages "coord-a" :project-id "project-1")]
+      (let [msgs-a (piggyback/get-messages "coordinator-a" :project-id "project-1")]
         (is (= 1 (count msgs-a))))
 
       ;; Coordinator-B reads project-2 (should see p2 messages, not affected by A's cursor)
-      (let [msgs-b (piggyback/get-messages "coord-b" :project-id "project-2")]
+      (let [msgs-b (piggyback/get-messages "coordinator-b" :project-id "project-2")]
         (is (= 1 (count msgs-b)))
         (is (= "p2-agent" (:a (first msgs-b)))))
 
       ;; Coordinator-A reads project-1 again (cursor advanced, no new messages)
-      (let [msgs-a2 (piggyback/get-messages "coord-a" :project-id "project-1")]
+      (let [msgs-a2 (piggyback/get-messages "coordinator-a" :project-id "project-1")]
         (is (nil? msgs-a2) "Should have no new messages after cursor advanced")))))
 
 ;;; =============================================================================
@@ -267,7 +268,7 @@
                        {:task "secret" :message "mission complete" :directory "/secret"})
 
       ;; Secret coordinator SHOULD see their messages
-      (let [secret-msgs (piggyback/get-messages "secret-coord" :project-id "secret-project")]
+      (let [secret-msgs (piggyback/get-messages "coordinator-secret" :project-id "secret-project")]
         (is (= 1 (count secret-msgs)))
         (is (= "secret-agent" (:a (first secret-msgs))))))))
 
@@ -329,7 +330,7 @@
             child-pids (child-pids-fn "proj-coord")]
 
         ;; With additional-project-ids, coordinator sees the cross-project shout
-        (let [msgs (piggyback/get-messages "coord-main"
+        (let [msgs (piggyback/get-messages "coordinator-main"
                                             :project-id "proj-coord"
                                             :additional-project-ids child-pids)]
           (is (some #(= "ling-worker-1" (:a %)) msgs)
@@ -337,7 +338,7 @@
 
         ;; Without additional-project-ids (old behavior), coordinator misses it
         (piggyback/reset-all-cursors!)
-        (let [msgs-old (piggyback/get-messages "coord-main-old" :project-id "proj-coord")]
+        (let [msgs-old (piggyback/get-messages "coordinator-main-old" :project-id "proj-coord")]
           (is (not (some #(= "ling-worker-1" (:a %)) msgs-old))
               "Without fix, coordinator should NOT see cross-project shout"))))))
 

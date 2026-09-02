@@ -47,6 +47,24 @@
            (catch Throwable _ nil))
       {}))
 
+(defn lazy-resolve-schema-props
+  "Lazily resolve a consolidated tool's advertised inputSchema :properties by
+   fully-qualified symbol of its `tool-def` (a map) or `tool-defs` (a 0-arity
+   fn returning a vector of them), triggering ns load on first access (DIP).
+
+   Returns the properties map on success, `{}` on miss.
+
+   Sibling of `lazy-resolve-handlers`: a domain root that folds a subdomain's
+   HANDLERS must fold that subdomain's PARAMS too. The MCP layer forwards only
+   params the called tool declares, so an undeclared one is dropped and the
+   subdomain handler runs on its default instead."
+  [sym]
+  (or (try (let [v  (some-> (requiring-resolve sym) deref)
+                 td (if (fn? v) (first (v)) v)]
+             (get-in td [:inputSchema :properties]))
+           (catch Throwable _ nil))
+      {}))
+
 ;; =============================================================================
 ;; Composite Handler Builder
 ;; =============================================================================

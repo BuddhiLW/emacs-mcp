@@ -6,11 +6,14 @@
             [hive-mcp.tools.kg.batch :as kg-batch]))
 
 (def handle-batch-edge
-  "Batch edge creation via the `Batchable` protocol (decision
-   20260429230453-7e7627cc). Returns the legacy `{:results :summary}`
-   envelope so existing CLI callers stay compatible."
-  (bca/cli-batch-handler {:run-fn kg-batch/run-batch
-                          :cmd-kw :edge}))
+  "Batch edge creation. Every op in a batch-edge call is an `edge` op by
+   construction, so this goes straight to the bulk writer: ONE datahike
+   transaction and ONE flush for the whole batch, instead of the generic
+   runner's N of each.
+
+   Returns the same `{:results :summary}` envelope as before (decision
+   20260429230453-7e7627cc)."
+  kg-handlers/handle-kg-add-edges)
 
 (def handle-batch-traverse
   "Batch traversal via the `Batchable` protocol."
@@ -100,8 +103,10 @@
                                             :description "Array of {command, ...} objects for batch-edge/batch-traverse. Each op needs its own :command ('edge' or 'traverse') plus per-op params."}
                               "parallel" {:type "boolean"
                                           :description "Run batch operations in parallel (default: false)"}
+                              "min_live_members" {:type "integer"
+                                                  :description "cleanup-synthetics: act when fewer than this many targets are still live (default: 2)"}
                               "threshold" {:type "number"
-                                           :description "cleanup-synthetics: live-ratio below which to act (default: 0.2)"}
+                                           :description "cleanup-synthetics: additional live-ratio criterion; act below it (default: 0.2)"}
                               "action" {:type "string"
                                         :enum ["delete" "demote"]
                                         :description "cleanup-synthetics: action on sub-threshold synthetics (default: delete)"}

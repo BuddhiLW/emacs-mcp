@@ -194,16 +194,28 @@
         (is (= 5 (count (edges/get-edges-from sid))))))))
 
 (deftest cleanup-prunes-80pct-dead-test
-  (testing "Synthetic with 1/5 live (ratio 0.2) — at boundary, NOT below,
-            so preserved (matches observed 2026-04-23 review)"
+  (testing "Synthetic with 1/5 live sits AT the 0.2 ratio boundary but names
+            only one surviving member, so the member floor (2) prunes it"
     (let [targets (repeatedly 5 raw-id)
           live    (take 1 targets)
           sid     (wire-synth! targets)]
       (set-live! live)
       (let [result (synthetics/cleanup-synthetics!)]
-        ;; ratio 0.2 == threshold 0.2 → NOT strictly below → preserved
-        (is (= 1 (:preserved result)) "0.2 at boundary stays")
-        (is (= 5 (count (edges/get-edges-from sid))))))))
+        (is (= 1 (:pruned result)) "one live member is not a cluster")
+        (is (= 0 (:preserved result)))
+        (is (empty? (edges/get-edges-from sid)))))))
+
+(deftest cleanup-member-floor-boundary-test
+  (testing "Synthetic with 2/10 live sits at BOTH boundaries (ratio 0.2, two
+            live members); neither rule fires, so it is preserved"
+    (let [targets (repeatedly 10 raw-id)
+          live    (take 2 targets)
+          sid     (wire-synth! targets)]
+      (set-live! live)
+      (let [result (synthetics/cleanup-synthetics!)]
+        (is (= 1 (:preserved result)) "two live members at ratio 0.2 stay")
+        (is (= 0 (:pruned result)))
+        (is (= 10 (count (edges/get-edges-from sid))))))))
 
 (deftest cleanup-prunes-just-below-threshold-test
   (testing "Synthetic with 0/5 live or 1/6 (~0.167) gets pruned"
@@ -312,7 +324,7 @@
 (deftest cleanup-details-report-test
   (testing "Details include per-synth stats"
     (let [targets (repeatedly 4 raw-id)
-          live    (take 1 targets)
+          live    (take 2 targets)
           sid     (wire-synth! targets)]
       (set-live! live)
       (let [result (synthetics/cleanup-synthetics! {:dry-run? true})
@@ -320,9 +332,10 @@
         (is (= sid (:synth-id d)))
         (is (= 4 (:edge-count d)))
         (is (= 4 (:target-count d)))
-        (is (= 1 (:live-count d)))
-        (is (== 0.25 (:live-ratio d)))
-        (is (= :preserved (:outcome d)) "0.25 >= 0.2 threshold")
+        (is (= 2 (:live-count d)))
+        (is (== 0.5 (:live-ratio d)))
+        (is (= 2 (:min-live d)) "the member floor is reported with the stats")
+        (is (= :preserved (:outcome d)) "two live members at ratio 0.5 is a cluster")
         (is (true? (:dry-run? d)))))))
 
 ;; =============================================================================
@@ -337,10 +350,10 @@
           ;; Live
           live-tgts (repeatedly 3 raw-id)
           s-live (wire-synth! live-tgts)
-          ;; Borderline: 1/3 live ≈ 0.33 → preserved (above 0.2)
+          ;; Partial: 2/3 live clears both the member floor and the ratio
           mixed (repeatedly 3 raw-id)
           s-mixed (wire-synth! mixed)
-          mixed-live (take 1 mixed)]
+          mixed-live (take 2 mixed)]
       (set-live! (concat live-tgts mixed-live))
       (let [result (synthetics/cleanup-synthetics!)]
         (is (= 3 (:scanned result)))
@@ -404,12 +417,15 @@
 ;; =============================================================================
 
 (deftest cleanup-without-memory-store-test
-  (testing "When no memory store is registered, all targets treated as not-live"
+  (testing "When no memory store is registered, cleanup refuses to classify
+            rather than treating every target as dead"
     ;; Temporarily remove the stub
     (mem-proto/reset-registry!)
     (let [targets (repeatedly 3 raw-id)
           sid (wire-synth! targets)]
       (let [result (synthetics/cleanup-synthetics!)]
-        ;; No store -> ratio 0.0 -> pruned (below 0.2)
-        (is (= 1 (:pruned result)))
-        (is (empty? (edges/get-edges-from sid)))))))
+        (is (= 0 (:scanned result)))
+        (is (= 0 (:pruned result)))
+        (is (= 1 (:errors result)))
+        (is (string? (:error result)))
+        (is (= 3 (count (edges/get-edges-from sid))) "nothing is mutated on refusal")))))

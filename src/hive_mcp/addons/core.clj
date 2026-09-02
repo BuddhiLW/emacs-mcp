@@ -11,7 +11,8 @@
             [hive-addon.protocol :as proto]
             [hive-mcp.dns.result :as r]
             [hive-mcp.extensions.registry :as ext]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.addons.runtime-ports :as runtime-ports]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -94,6 +95,36 @@
        :addon-name id
        :errors [(str "Addon " id " is not registered")]})))
 
+(defn addon-declared-config
+  "Declarative config for addon `id`, read from the global config's `:addons`
+   map. Returns {} when absent, non-map, or unreadable.
+
+   requiring-resolve rather than a static :require: hive-mcp.config.core pulls
+   in the whole config stack, and this namespace sits on the addon boot path."
+  [id]
+  (or (try
+        (when-let [get-in-config (requiring-resolve 'hive-mcp.config.core/get-in-config)]
+          (let [m (get-in-config [:addons id])]
+            (when (map? m) m)))
+        (catch Throwable _ nil))
+      {}))
+
+(defn- init-config
+  "Addon init config, composed at start-time from three layers, weakest first:
+
+     1. the addon's declared config under `:addons <id>` in the global config
+     2. `opts` handed in by the caller
+     3. `:runtime/ports`, filled in when neither layer carries one
+
+   Later layers win. An addon mounted programmatically therefore receives the
+   same declared configuration as one mounted from a manifest, so a setting is
+   not silently lost by choosing one mount path over the other."
+  [id opts]
+  (let [merged (merge (addon-declared-config id) (or opts {}))]
+    (if (contains? merged :runtime/ports)
+      merged
+      (assoc merged :runtime/ports (runtime-ports/runtime-ports)))))
+
 (defn init-addon!
   "Initialize a registered addon.
 
@@ -110,7 +141,7 @@
       (let [init-result
             (r/try-effect* :addon/init-exception
                            (let [start-time (System/nanoTime)
-                                 result (proto/initialize! addon (or opts {}))
+                                 result (proto/initialize! addon (init-config id opts))
                                  elapsed-ms (/ (- (System/nanoTime) start-time) 1e6)]
                              (if (:success? result)
                                (do

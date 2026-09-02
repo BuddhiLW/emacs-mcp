@@ -92,6 +92,19 @@
   ([] (reset! axioms-cache {}))
   ([project-id] (swap! axioms-cache dissoc project-id)))
 
+(defn evict-stale!
+  "Drop cached axiom results whose `:stored-at` is older than 30 minutes.
+   Returns the number evicted. Registered with the stale-cache sweeper."
+  []
+  (let [now       (System/currentTimeMillis)
+        max-age   (* 30 60 1000)
+        [old new] (swap-vals! axioms-cache
+                              (fn [m]
+                                (into {}
+                                      (filter (fn [[_ v]] (< (- now (:stored-at v)) max-age)))
+                                      m)))]
+    (- (count old) (count new))))
+
 (defn- deref-with-deadline
   "Block on `fut` up to `deadline-ms` wall-clock. On timeout, cancel(true)
    and log under `label`; on exception, log and return []. Never throws."

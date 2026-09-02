@@ -61,6 +61,10 @@
    (fn [k]
      (call 'hive-mcp.extensions.registry/get-extension k))
 
+   :extension/keys
+   (fn []
+     (call 'hive-mcp.extensions.registry/registered-keys))
+
    :extension/register!
    (fn [k value]
      (call 'hive-mcp.extensions.registry/register! k value))

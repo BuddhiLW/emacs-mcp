@@ -1,0 +1,8 @@
+{:broadcast-to-anyone true,
+ :coordinator-skips-gc false,
+ :root-not-to-ling false,
+ :root-to-coordinator true,
+ :self-echo false,
+ :sibling-ling false,
+ :spawner-coordinator true,
+ :spawner-ling true}

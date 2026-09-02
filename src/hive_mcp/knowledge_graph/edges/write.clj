@@ -34,6 +34,67 @@
                  (.getMessage e))
       (fallback!))))
 
+(defn edge-tx-data
+  "Validate one edge spec and return its transaction map. Pure apart from the
+   generated id and timestamp; throws ex-info on any validation failure.
+
+   Shared by `add-edge!` and `add-edges!` so the two cannot disagree about what
+   a valid edge is."
+  [{:keys [from to relation scope confidence created-by source-type last-verified predicate]
+    :or {confidence 1.0}}]
+  (when-not (and (schema/valid-node-id? from) (schema/valid-node-id? to))
+    (throw (ex-info "Edge requires non-blank string :from and :to node IDs"
+                    {:from from :to to})))
+  (when-not (schema/valid-relation? relation)
+    (throw (ex-info "Invalid relation type"
+                    {:relation relation
+                     :valid-relations (schema/relation-types)})))
+  (when-not (schema/valid-confidence? confidence)
+    (throw (ex-info "Invalid confidence score (must be 0.0-1.0)"
+                    {:confidence confidence})))
+  (when (and source-type (not (schema/valid-source-type? source-type)))
+    (throw (ex-info "Invalid source type"
+                    {:source-type source-type
+                     :valid-source-types schema/source-types})))
+  (when (and predicate (not= relation :relates))
+    (log/warn "kg add-edge: :predicate ignored for non-:relates relation"
+              {:relation relation :predicate predicate}))
+  (let [now       (java.util.Date.)
+        norm-pred (when (= relation :relates) (schema/normalize-predicate predicate))]
+    (cond-> {:kg-edge/id            (ids/generate-edge-id)
+             :kg-edge/from          from
+             :kg-edge/to            to
+             :kg-edge/relation      relation
+             :kg-edge/confidence    confidence
+             :kg-edge/created-at    now
+             :kg-edge/last-verified (or last-verified now)}
+      scope       (assoc :kg-edge/scope scope)
+      created-by  (assoc :kg-edge/created-by created-by)
+      source-type (assoc :kg-edge/source-type source-type)
+      norm-pred   (assoc :kg-edge/predicate norm-pred))))
+
+(defn add-edges!
+  "Create every edge in EDGE-SPECS in ONE transaction. Returns a vector of edge
+   ids in the order given.
+
+   `add-edge!` transacts per edge, and at the tool boundary each call also pays a
+   `flush-pending!` durability barrier. Synthesis writes edges in groups of tens
+   — one ingest run issued thousands — so the per-edge transaction, not the edge
+   itself, is the cost. Validation happens for ALL specs before anything is
+   transacted, so a bad spec in the batch writes nothing.
+
+   Empty input transacts nothing and returns []."
+  [edge-specs]
+  (if (empty? edge-specs)
+    []
+    (let [tx-data (mapv edge-tx-data edge-specs)]
+      (conn/transact! tx-data)
+      (doseq [d tx-data]
+        (emit-stats-event! :kg.edges/added
+                           {:relation (:kg-edge/relation d) :scope (:kg-edge/scope d)}
+                           #(stats/apply-delta! (:kg-edge/relation d) (:kg-edge/scope d) 1)))
+      (mapv :kg-edge/id tx-data))))
+
 (defn add-edge!
   "Create a new edge between two knowledge nodes.
 
@@ -55,48 +116,10 @@
 
    :from and :to must be non-blank strings (schema/valid-node-id?).
 
-   Returns the edge ID on success, throws on validation failure."
-  [{:keys [from to relation scope confidence created-by source-type last-verified predicate]
-    :or {confidence 1.0}}]
-  ;; Validate required fields
-  (when-not (and (schema/valid-node-id? from) (schema/valid-node-id? to))
-    (throw (ex-info "Edge requires non-blank string :from and :to node IDs"
-                    {:from from :to to})))
-  (when-not (schema/valid-relation? relation)
-    (throw (ex-info "Invalid relation type"
-                    {:relation relation
-                     :valid-relations (schema/relation-types)})))
-  (when-not (schema/valid-confidence? confidence)
-    (throw (ex-info "Invalid confidence score (must be 0.0-1.0)"
-                    {:confidence confidence})))
-  (when (and source-type (not (schema/valid-source-type? source-type)))
-    (throw (ex-info "Invalid source type"
-                    {:source-type source-type
-                     :valid-source-types schema/source-types})))
-  ;; Predicate is meaningful only on the open :relates relation.
-  (when (and predicate (not= relation :relates))
-    (log/warn "kg add-edge: :predicate ignored for non-:relates relation"
-              {:relation relation :predicate predicate}))
-
-  (let [edge-id (ids/generate-edge-id)
-        now (java.util.Date.)
-        norm-pred (when (= relation :relates) (schema/normalize-predicate predicate))
-        edge-data (cond-> {:kg-edge/id edge-id
-                           :kg-edge/from from
-                           :kg-edge/to to
-                           :kg-edge/relation relation
-                           :kg-edge/confidence confidence
-                           :kg-edge/created-at now
-                           :kg-edge/last-verified (or last-verified now)}
-                    scope (assoc :kg-edge/scope scope)
-                    created-by (assoc :kg-edge/created-by created-by)
-                    source-type (assoc :kg-edge/source-type source-type)
-                    norm-pred (assoc :kg-edge/predicate norm-pred))]
-    (conn/transact! [edge-data])
-    (emit-stats-event! :kg.edges/added
-                       {:relation relation :scope scope}
-                       #(stats/apply-delta! relation scope 1))
-    edge-id))
+   Returns the edge ID on success, throws on validation failure. Writing many
+   edges? Use `add-edges!` — it transacts once for the whole batch."
+  [edge-spec]
+  (first (add-edges! [edge-spec])))
 
 (defn update-edge-confidence!
   "Update the confidence score of an edge.

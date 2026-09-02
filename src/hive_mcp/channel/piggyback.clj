@@ -11,7 +11,8 @@
   (:require [clojure.spec.alpha :as s]
             [hive-mcp.channel.instruction-store :as istore]
             [hive-mcp.server.guards :as guards]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.channel.audience :as audience]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -103,8 +104,11 @@
   "Buffer an event received from the NATS backbone for piggyback delivery.
    Normalizes to the same shape as message-source-fn output.
    Events with nil agent-id (e.g. coordinator tool-executed) are silently dropped.
-   Preserves :shout-id for cross-path dedup when present."
-  [{:keys [agent-id event-type message task timestamp project-id shout-id]}]
+   Preserves :shout-id for cross-path dedup when present, and :parent-id /
+   :broadcast? so hive-mcp.channel.audience can route the remote path exactly
+   as it routes the local one."
+  [{:keys [agent-id event-type message task timestamp project-id shout-id
+           parent-id broadcast?]}]
   (when agent-id
     (let [normalized (cond-> {:agent-id    agent-id
                               :event-type  event-type
@@ -112,7 +116,9 @@
                               :task        task
                               :timestamp   (or timestamp (System/currentTimeMillis))
                               :project-id  (or project-id "global")}
-                      shout-id (assoc :shout-id shout-id))]
+                       shout-id (assoc :shout-id shout-id)
+                       parent-id (assoc :parent-id parent-id)
+                       broadcast? (assoc :broadcast? true))]
       (swap! backbone-buffer
              (fn [buf]
                (let [updated (conj buf normalized)]
@@ -179,9 +185,42 @@
                :kwargs (s/keys* :opt-un [::project-id ::additional-project-ids]))
   :ret ::messages)
 
+(defn- config-value
+  "Read a config path, nil on any failure. Lazy requiring-resolve keeps the
+   channel layer free of a load-time dep on config bootstrap."
+  [path]
+  (try
+    (when-let [f (requiring-resolve 'hive-mcp.config.core/get-in-config)]
+      (f path))
+    (catch Exception _ nil)))
+
+(defn spawner-routing?
+  "Is HIVEMIND delivery addressed to the SPAWNER (default) rather than
+   broadcast project-wide? Set [:hivemind :piggyback-routing] to :project —
+   or the string \"project\" — to restore the legacy broadcast."
+  []
+  (not (contains? #{:project "project"} (config-value [:hivemind :piggyback-routing]))))
+
+(defn progress-digest?
+  "Are :progress bursts collapsed into one row per agent? Default true;
+   [:hivemind :progress-digest] false renders every turn verbatim."
+  []
+  (not (false? (config-value [:hivemind :progress-digest]))))
+
 (defn get-messages
   "Get new hivemind messages since last call for this agent+project.
    Dual-path: merges messages from atom-based source and backbone buffer.
+
+   Four stages, in order: cursor -> project -> audience -> digest.
+
+   AUDIENCE is what keeps one ling's turns out of every other ling's context:
+   a shout reaches the agent that spawned its author and nobody else (see
+   hive-mcp.channel.audience). Set config [:hivemind :piggyback-routing] to
+   :project to restore the legacy project-wide broadcast.
+
+   DIGEST collapses a burst of per-turn :progress rows from one agent into a
+   single row carrying the count, so the reader learns the state without
+   reading the transcript. Disable via [:hivemind :progress-digest] false.
 
    Options:
      :project-id              - Primary project scope for filtering
@@ -206,8 +245,14 @@
                                          (contains? accepted-pids (:project-id msg)))))
                           (sort-by :timestamp)
                           vec)
+            ;; Cursor advances over everything the project filter accepted, NOT
+            ;; only over what this reader is addressed by — otherwise a shout
+            ;; dropped by the audience filter would be re-examined forever.
             max-ts (when (seq new-msgs)
                      (apply max (map :timestamp new-msgs)))
+            addressed (if (spawner-routing?)
+                        (audience/filter-messages agent-id new-msgs)
+                        new-msgs)
             formatted-msgs (mapv (fn [{:keys [agent-id event-type message task]}]
                                    (cond-> {:a agent-id
                                             :e (if (keyword? event-type)
@@ -215,11 +260,14 @@
                                                  event-type)
                                             :m message}
                                      task (assoc :t task)))
-                                 new-msgs)]
+                                 addressed)
+            digested (if (progress-digest?)
+                       (audience/digest formatted-msgs)
+                       formatted-msgs)]
         (when max-ts
           (swap! agent-read-cursors assoc cursor-key max-ts))
-        (when (seq formatted-msgs)
-          formatted-msgs)))))
+        (when (seq digested)
+          digested)))))
 
 (defn fetch-history
   "Get hivemind messages without marking as read.

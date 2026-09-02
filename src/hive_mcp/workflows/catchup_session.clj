@@ -140,7 +140,9 @@
   [[:priority-conventions "convention" ["catchup-priority"] 50]
    [:sessions            "note"       ["session-summary"]  10]
    [:decisions           "decision"   nil                  50]
-   [:snippets            "snippet"    nil                  20]])
+   [:snippets            "snippet"    nil                  20]
+   ;; Axiom nominations awaiting human review (write-gated type queue).
+   [:axiom-candidates    "axiom-candidate" nil             25]])
 
 (def ^:private context-categories
   "Categories to cache in context-store during delivery."
@@ -150,6 +152,7 @@
   "Entry metadata transforms: [target-key source-key meta-fn-key].
    Applied in handle-transform to produce *-meta keys."
   [[:axioms-meta      :axioms              :axiom]
+   [:axiom-candidates-meta :axiom-candidates :axiom-candidate]
    [:priority-meta    :priority-conventions :priority]
    [:sessions-meta    :sessions            :catchup]
    [:snippets-meta    :snippets            :catchup]
@@ -538,6 +541,7 @@
       :query-expiring-fn catchup-scope/query-expiring-entries
       :git-fn           catchup-git/gather-git-info
       :entry->meta-fns  {:axiom fmt/entry->axiom-meta
+                          :axiom-candidate fmt/entry->review-meta
                           :priority fmt/entry->priority-meta
                           :catchup #(fmt/entry->catchup-meta % 80)}
       ;; :addon-fn — optional

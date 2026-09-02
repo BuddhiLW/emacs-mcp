@@ -32,7 +32,8 @@
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.tools.memory.duration :as dur]
             [taoensso.timbre :as log]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [hive-mcp.memory.write-events :as write-events]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -83,8 +84,9 @@
       (not (str/blank? project-id)) (assoc :project-id project-id))))
 
 (defn- persist-one!
-  "Write a single normalised entry through `mem-proto/add-entry!`.
-   Returns `{:pid :id :success?}` (id may be nil on failure)."
+  "Write a single normalised entry through `mem-proto/add-entry!` and announce
+   it through write-events. Returns `{:pid :id :success?}` (id may be nil on
+   failure)."
   [store {:keys [pid entry] :as _wrap}]
   (try
     (let [normalized (normalize-entry pid entry)
@@ -92,6 +94,11 @@
           id?        (and (string? raw-id) (not (str/blank? raw-id)))]
       (log/info "wrap-persist:" {:pid pid :project-id (:project-id normalized)
                                   :id raw-id :ok? id?})
+      (when id?
+        (write-events/notify! :added {:id          raw-id
+                                      :memory-type (:type normalized)
+                                      :tags        (:tags normalized)
+                                      :project-id  (:project-id normalized)}))
       {:pid pid
        :project-id (:project-id normalized)
        :id (when id? raw-id)

@@ -49,6 +49,14 @@
    ```"
   (fn [hook-type _payload] hook-type))
 
+(defmethod hook->event :memory-updated
+  [_hook-type payload]
+  [:memory/edited payload])
+
+(defmethod hook->event :memory-deleted
+  [_hook-type payload]
+  [:memory/deleted payload])
+
 ;; Default: unknown hooks return nil (no-op)
 (defmethod hook->event :default
   [_hook-type _payload]

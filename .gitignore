@@ -28,9 +28,11 @@ target/
 # configs into dirs named after the artifact (io.pedestal/pedestal.log/).
 !.clj-kondo/imports/**
 
-# JVM heap dumps
+# JVM heap dumps and crash artifacts
 *.hprof
 java_pid*.hprof
+hs_err_pid*
+*.jfr
 
 # Compiled Elisp
 *.elc

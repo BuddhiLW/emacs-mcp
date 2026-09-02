@@ -20,7 +20,8 @@
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.memory.type-registry :as type-registry]
             [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.memory.write-events :as write-events]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -49,7 +50,18 @@
   "Compute the partial-update map from the incoming edit params against the
    existing entry. Returns [updates content-changed?]."
   [existing {:keys [type content tags duration abstraction_level]}]
-  (let [new-type         (normalize-type type)
+  (let [;; Same write gate as the add path: an edit may not launder an entry
+        ;; into a human-gated type either. Parking rewrites BOTH the type and
+        ;; the tags, merging onto the entry's existing tags when the edit did
+        ;; not supply its own.
+        {eff-type :type :keys [queued? gate requested]}
+        (when type (type-registry/resolve-write-type type))
+
+        new-type         (normalize-type (or eff-type type))
+        gated-tags       (when queued?
+                           (type-registry/queued-tags
+                            (if (some? tags) tags (:tags existing))
+                            gate requested))
         content-changed? (and (some? content) (not= content (:content existing)))
         requested-updates
         (cond-> {}
@@ -57,6 +69,8 @@
           content-changed?  (assoc :content content
                                    :content-hash (mem-proto/content-hash content))
           (some? tags)      (assoc :tags tags)
+          ;; after the caller's tags, so parking always wins
+          gated-tags        (assoc :tags gated-tags)
           duration          (assoc :duration duration
                                    :expires (or (duration/calculate-expires duration) ""))
           abstraction_level (assoc :abstraction-level abstraction_level))
@@ -102,7 +116,7 @@
   "Apply a single edit to whichever registered store holds the entry. Returns a
    result map describing the outcome, or nil when no store has the id. Does not
    build MCP-shaped responses — leaves that to the caller so batch ops can
-   aggregate cleanly."
+   aggregate cleanly. Announces a successful write through write-events."
   [{:keys [id reason] :as params}]
   (when-let [[store existing] (store-holding id)]
     (let [[updates content-changed?] (build-updates existing params)]
@@ -119,6 +133,11 @@
                     "fields:" (vec (keys updates))
                     (when content-changed? "[re-embed]")
                     (when reason (str "reason:" reason)))
+          (write-events/notify! :updated {:id          id
+                                          :memory-type (:type updated)
+                                          :tags        (:tags updated)
+                                          :project-id  (:project-id updated)
+                                          :fields      (vec (keys updates))})
           {:id               id
            :updated          updated
            :fields-changed   (vec (keys updates))

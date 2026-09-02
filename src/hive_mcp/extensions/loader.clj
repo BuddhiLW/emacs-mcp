@@ -12,7 +12,8 @@
             [hive-mcp.dns.result :refer [rescue]]
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.tools.composite :as composite]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [hive-mcp.extensions.reactive :as reactive]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -272,6 +273,9 @@
    3. Try extension self-registration (init! functions) — preferred path
    4. For manifests whose init-ns failed, try init-from-manifest! (constructor)
    5. Core overrides — hive-mcp-owned handlers that must win over addons
+   6. Build the composite tools from what was contributed, then subscribe the
+      reactive surface so a contribution made AFTER this point (hot inject,
+      hot reload, a live contribute!) is advertised without a restart
 
    Addons self-register all capabilities via their init! functions.
    No fallback manifest gap-fill — core has zero knowledge of addon internals.
@@ -368,10 +372,10 @@
             (when-let [install! (resolve 'hive-mcp.tools.clojure-discover/install!)]
               (install!)))
 
-    ;; Build composite tools from addon command contributions
+    ;; Step 6: Build composite tools from addon command contributions, then
+    ;; subscribe the reactive surface for everything contributed after this.
     (let [composite-tools (composite/build-all-composite-tools
-                           {"analysis" "Code analysis"
-                            "overarch" "Architecture model"})]
+                           reactive/composite-descriptions)]
       (doseq [t composite-tools]
         (ext/register-tool! t)
         ;; Also register in agent registry for drone agentic loop
@@ -380,6 +384,7 @@
                   (reg-fn [t]))))
       (when (seq composite-tools)
         (log/info "Built composite tools:" (mapv :name composite-tools))))
+    (rescue nil (reactive/install!))
 
     {:registered (vec (ext/registered-keys))
      :total total-registered

@@ -11,7 +11,8 @@
             [hive-mcp.tools.catchup.scope-filter :as sf]
             [hive-weave.parallel :as wpar]
             [clojure.tools.logging :as log]
-            [hive-mcp.vectordb.resilience :refer [with-resilience]]))
+            [hive-mcp.vectordb.resilience :refer [with-resilience]]
+            [hive-mcp.tools.catchup.bundle-cache :as bc]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -107,15 +108,16 @@
     meta-entry))
 
 (defn- hydrate-content
-  "Phase-2 content re-hydration. Takes metadata-only entries, batch-fetches
-   full content in one RPC, returns hydrated entries in the same order.
-   Called after phase-1 trimming so we only pay content-transport cost for
-   the small, display-bound subset."
+  "Phase-2 content re-hydration. Takes metadata-only entries, resolves full
+   content through the bundle-cache content tier (ids it already holds are
+   answered from memory; the rest go to one batch-get), returns hydrated
+   entries in the same order. Called after phase-1 trimming so we only pay
+   content-transport cost for the small, display-bound subset."
   [entries]
   (if-not (seq entries)
     entries
     (rescue entries
-      (let [by-id (-> (mapv :id entries) batch-fetch-content index-by-id)]
+      (let [by-id (bc/cached-entries (mapv :id entries) batch-fetch-content)]
         (mapv #(merge-hydrated % (get by-id (:id %))) entries)))))
 
 (defn hydrate-buckets

@@ -90,6 +90,71 @@
    with-kg-flush (read-your-writes at the tool boundary)."
   (with-kg-flush add-edge*))
 
+(defn- op->edge-spec
+  "Project one batch op onto an add-edges! spec. MCP sends snake_case and
+   string relations; the write layer wants kebab-case and keywords."
+  [{:keys [from to relation scope confidence created_by predicate]}]
+  (cond-> {:from from
+           :to   to
+           :relation (if (keyword? relation) relation (keyword relation))}
+    scope       (assoc :scope scope)
+    confidence  (assoc :confidence confidence)
+    created_by  (assoc :created-by created_by)
+    predicate   (assoc :predicate predicate)))
+
+(defn- classify-op
+  "Return [:ok spec] or [:error message] for one op, without transacting."
+  [op]
+  (let [spec (op->edge-spec op)]
+    (or (some->> (or (q/validate-node-id (:from spec) "from")
+                     (q/validate-node-id (:to spec) "to")
+                     (validate-relation (:relation op)))
+                 :error
+                 (vector :error))
+        (try
+          (edges/edge-tx-data spec)
+          [:ok spec]
+          (catch Exception e [:error (.getMessage e)])))))
+
+(defn handle-kg-add-edges
+  "Create every edge in :operations in ONE transaction, then flush ONCE.
+
+   The generic batch runner dispatches each op to handle-kg-add-edge, so an
+   N-edge batch paid N datahike transactions AND N flush-pending! barriers —
+   measured as a write storm during corpus synthesis, where a single ingest
+   issues thousands of edges. Validation is per-op so one bad spec is reported
+   against itself rather than failing the batch.
+
+   Returns the same {:results :summary} envelope as the generic batch path."
+  [{:keys [operations]}]
+  (if (empty? operations)
+    (mcp-error "operations is required (array of {command, ...} objects) for batch-edge")
+    (let [classified (mapv classify-op operations)
+          valid      (into [] (keep (fn [[k v]] (when (= k :ok) v)) classified))
+          edge-ids   (try (edges/add-edges! valid)
+                          (catch Exception e
+                            (log/error e "kg batch-edge bulk write failed")
+                            nil))
+          _          (conn/flush-pending!)
+          ids        (volatile! (seq edge-ids))
+          results    (mapv (fn [[k v]]
+                             (if (= k :error)
+                               {:success false :command "edge" :error v}
+                               (if-let [id (first @ids)]
+                                 (do (vswap! ids next)
+                                     {:success true :command "edge"
+                                      :result {:success true :edge-id id}})
+                                 {:success false :command "edge"
+                                  :error "bulk edge write failed"})))
+                           classified)
+          succeeded  (count (filter :success results))]
+      (log/info "kg_batch_add_edges"
+                {:ops (count operations) :written succeeded :transactions 1})
+      (mcp-json {:results results
+                 :summary {:total (count operations)
+                           :success succeeded
+                           :failed (- (count operations) succeeded)}}))))
+
 (defn- promote*
   "Promote knowledge edge to a broader scope, preserving the original. Raw impl
    — the public handle-kg-promote wraps this with with-kg-flush so the newly

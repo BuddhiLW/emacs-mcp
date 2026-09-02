@@ -138,6 +138,33 @@
   (testing "nil for unknown tool name"
     (is (nil? (ext/get-schema-extensions "nonexistent")))))
 
+;; =============================================================================
+;; Contribution listeners — the seam a late contribution reaches the surface through
+;; =============================================================================
+
+(deftest contribution-listeners-see-every-contribute-and-retract
+  (let [seen (atom [])]
+    (ext/add-contribution-listener! :probe-listener (fn [e] (swap! seen conj e)))
+    (try
+      (ext/contribute-commands! "analysis" :probe {"lint" {:handler identity}})
+      (ext/retract-commands! "analysis" :probe)
+      (ext/contribute-commands! "code" :probe {"x" {:handler identity} "y" {:handler identity}})
+      (ext/retract-all-by-addon! :probe)
+      (is (= [[:contribute "analysis"] [:retract "analysis"] [:contribute "code"] [:retract "code"]]
+             (mapv (juxt :type :tool-name) @seen)))
+      (is (= ["lint"] (:commands (first @seen))))
+      (is (every? #(= :probe (:addon-id %)) @seen))
+      (finally
+        (ext/remove-contribution-listener! :probe-listener)))))
+
+(deftest a-throwing-listener-does-not-break-a-contribution
+  (ext/add-contribution-listener! :boom (fn [_] (throw (ex-info "boom" {}))))
+  (try
+    (is (map? (ext/contribute-commands! "analysis" :probe {"lint" {:handler identity}})))
+    (is (contains? (ext/get-contributed-commands "analysis") "lint"))
+    (finally
+      (ext/remove-contribution-listener! :boom))))
+
 (deftest clear-all-schemas-resets-only-schemas
   (ext/register! :fn/test identity)
   (ext/register-schema! "tool" {"p" {:type "string"}})

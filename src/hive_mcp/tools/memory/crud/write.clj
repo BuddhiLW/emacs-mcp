@@ -22,7 +22,8 @@
             [taoensso.timbre :as log]
             [hive-mcp.vectordb.resilience :refer [with-resilience]]
             [hive-mcp.memory.type-registry :as type-registry]
-            [hive-weave.core :as weave]))
+            [hive-weave.core :as weave]
+            [hive-mcp.memory.write-events :as write-events]))
 
 (def ^:const ^:private memory-write-timeout-ms
   "Timeout budget for a single memory write (Chroma add + KG tx + fetch).
@@ -272,7 +273,7 @@
                   (recur (inc attempt)))))))
 
 (defn- finalize-entry!
-  "Wire KG edges, fetch created entry, notify channel, and format response.
+  "Wire KG edges, fetch created entry, notify the write, and format response.
 
    `:store-key` (passed via `entry-ctx`) routes the read-after-write +
    `:kg-outgoing` link write to the same slot the entry was indexed in.
@@ -304,14 +305,19 @@
     (log/info "Created memory entry:" entry-id
               (when (seq edge-ids) (str " with " (count edge-ids) " KG edges"))
               (when (seq knowledge-gaps) (str " gaps:" (count knowledge-gaps))))
-    (try
-      (when-let [publish-fn (requiring-resolve 'hive-mcp.channel.core/publish!)]
-        (publish-fn {:type :memory-added :id entry-id :memory-type type
-                     :tags tags-with-scope :project-id project-id}))
-      (catch Exception e (log/debug "[memory] Channel publish failed for entry" entry-id (.getMessage e))))
+    (write-events/notify! :added {:id entry-id :memory-type type
+                                  :tags tags-with-scope :project-id project-id})
     (if created
-      (mcp-json (cond-> (fmt/entry->json-alist created)
-                  (seq edge-ids) (assoc :kg_edges_created edge-ids)))
+      ;; The gate notice is DERIVED from the entry's own tags, so the response
+      ;; cannot disagree with what was stored.
+      (let [requested (type-registry/requested-type-of tags-with-scope)]
+        (mcp-json (cond-> (fmt/entry->json-alist created)
+                    (seq edge-ids) (assoc :kg_edges_created edge-ids)
+                    requested
+                    (assoc :queued_for_review
+                           {:requested_type requested
+                            :parked_as      type
+                            :reason         (:reason (type-registry/gate-of requested))}))))
       (mcp-error (str "Entry indexed as " entry-id " but retrieval failed. Check memory store connectivity.")))))
 
 (defn- do-add!
@@ -363,6 +369,9 @@
                 updated (with-resilience
                           (mem-proto/update-entry! store (:id existing) {:tags merged-tags}))]
             (log/info "Duplicate found, merged tags:" (:id existing))
+            (write-events/notify! :updated {:id (:id existing) :memory-type type
+                                            :tags merged-tags :project-id project-id
+                                            :fields [:tags]})
             (mcp-json (fmt/entry->json-alist updated)))
           (let [_ (when (= type "plan") (validate-plan-gate! content))
                 _ (when (= type "role") (validate-role-gate! content))
@@ -410,9 +419,18 @@
       (mcp-error (str "Invalid abstraction_level: " abstraction_level))
 
       :else
-      (let [;; Canonicalize + auto-register the (possibly novel) type with sane
+      (let [;; Write gate: a request for a human-gated type (:axiom) is PARKED
+            ;; as the gate's queue type and tagged pending, never honoured
+            ;; outright and never dropped. Ungated types pass through untouched.
+            {eff-type :type :keys [queued? gate requested]}
+            (type-registry/resolve-write-type type)
+
+            args (cond-> args
+                   queued? (update :tags type-registry/queued-tags gate requested))
+
+            ;; Canonicalize + auto-register the (possibly novel) type with sane
             ;; defaults, so unknown-but-safe types persist and stay consistent.
-            args (assoc args :type (type-registry/ensure-type! type))
+            args (assoc args :type (type-registry/ensure-type! eff-type))
             timeout-sentinel ::timeout
             result (wpool/await!
                     (pool/memory-pool)

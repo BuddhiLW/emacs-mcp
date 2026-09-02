@@ -665,3 +665,37 @@
 
 (deftest test-addon-registered-returns-false-for-unknown
   (is (false? (addons/addon-registered? :nonexistent))))
+
+;; =============================================================================
+;; Runtime ports reach EVERY addon, not only manifest-mounted ones
+;; =============================================================================
+
+(deftest an-addon-mounted-without-opts-still-receives-the-runtime-ports
+  (testing "a post-init hook mounts its addon with (init-addon! id) and no
+            opts; without injection here that addon can never reach the host"
+    (let [addon (->test-addon :ports-no-opts)]
+      (addons/register-addon! addon)
+      (addons/init-addon! :ports-no-opts)
+      (let [ports (get-in @(.state addon) [:opts :runtime/ports])]
+        (is (map? ports)
+            "no :runtime/ports reached a programmatically mounted addon")
+        (is (ifn? (:extension/keys ports))
+            "the port a guard needs to DISCOVER what vendors published")
+        (is (ifn? (:extension/get ports)))))))
+
+(deftest caller-opts-survive-the-port-injection
+  (let [addon (->test-addon :ports-with-opts)]
+    (addons/register-addon! addon)
+    (addons/init-addon! :ports-with-opts {:config {:db "test"}})
+    (let [opts (:opts @(.state addon))]
+      (is (= {:db "test"} (:config opts)))
+      (is (map? (:runtime/ports opts))))))
+
+(deftest an-explicit-runtime-ports-is-never-overwritten
+  (testing "prepare-config already injects ports for manifest addons — that
+            config must reach the addon exactly as built"
+    (let [addon (->test-addon :ports-explicit)
+          sentinel {:extension/keys (fn [] [:sentinel/key])}]
+      (addons/register-addon! addon)
+      (addons/init-addon! :ports-explicit {:runtime/ports sentinel})
+      (is (= sentinel (get-in @(.state addon) [:opts :runtime/ports]))))))

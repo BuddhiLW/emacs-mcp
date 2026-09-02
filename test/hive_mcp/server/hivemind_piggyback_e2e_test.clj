@@ -227,17 +227,18 @@
       (is (= 10 stored-count)
           "Ring buffer should keep only last 10 messages"))
 
-    ;; Coordinator should see only the last 10 (0 and 1 evicted)
+    ;; The coordinator receives the surviving 10 as ONE digested :progress row:
+    ;; :n counts the rows it stands for, :m carries the newest message.
     (let [wrapped (routes/wrap-handler-piggybacks dummy-handler)
           result (call-with-context wrapped {})
           block-text (extract-hivemind-block result)
           msgs (clojure.edn/read-string block-text)]
-      (is (= 10 (count msgs))
-          "Piggyback should deliver 10 messages (2 evicted by ring buffer)")
-      (is (= "Message 2" (:m (first msgs)))
-          "Oldest delivered should be Message 2 (0 and 1 evicted)")
-      (is (= "Message 11" (:m (last msgs)))
-          "Newest should be Message 11"))))
+      (is (= 1 (count msgs))
+          "Piggyback should deliver one digested row for the burst")
+      (is (= 10 (:n (first msgs)))
+          "Digest should stand for 10 messages (0 and 1 evicted by ring buffer)")
+      (is (= "Message 11" (:m (first msgs)))
+          "Digest row should carry the newest message"))))
 
 (deftest e2e-empty-registry-no-hivemind-block-test
   (testing "No ---HIVEMIND--- block when no shouts exist"

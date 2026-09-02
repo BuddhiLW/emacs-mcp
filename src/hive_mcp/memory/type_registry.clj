@@ -35,13 +35,36 @@
      - :meta-trim   Character limit for metadata preview
      - :enrich?     Whether to run KG enrichment on results
      - :piggyback?  Whether to include in memory piggyback delivery
-     - :meta-fn     Keyword selecting metadata conversion (:axiom, :priority, :default)"
+     - :meta-fn     Keyword selecting metadata conversion (:axiom, :priority, :default)
+   - :gate          Write gate, nil = directly writable. Present = a write
+                    requesting this type is PARKED as :queue-as instead.
+     - :queue-as    Type keyword the request is redirected to
+     - :queue-tag   Tag stamped on the parked entry (marks it pending review)
+     - :reason      Human-readable why, surfaced to the agent that was gated"
   (array-map
    ;; === Intent level (abstraction 4) ===
    :axiom      {:description "Foundational, inviolable principles (loaded first by catchup)"
                 :abstraction 4 :duration :permanent
+                :gate {:queue-as :axiom-candidate
+                       :queue-tag "axiom-pending"
+                       :reason (str "`:axiom` is human-gated. The entry was parked as "
+                                    ":axiom-candidate and will be listed for review at the "
+                                    "next catchup. `memory review` promotes it to :axiom or "
+                                    "demotes it to another type.")}
                 :catchup {:order 1 :limit 100 :meta-trim 80 :enrich? false
                           :piggyback? true :meta-fn :axiom}}
+
+   :axiom-candidate
+   {:description (str "Proposed axiom awaiting human review. Written here automatically "
+                      "when an agent requests :axiom — never requested directly. Surfaced "
+                      "as a review queue by catchup; `memory review` resolves it.")
+    :abstraction 4 :duration :permanent
+    :mcp? false
+    ;; Not piggybacked: a candidate is not law, so it must never drain into an
+    ;; agent's context as though it were. It is rendered in the catchup response
+    ;; for the HUMAN to act on.
+    :catchup {:order 0 :limit 25 :meta-trim 120 :enrich? false
+              :piggyback? false :meta-fn :axiom-candidate}}
 
    :principle  {:description "Architectural design principles (intent-level, evolvable)"
                 :abstraction 4 :duration :permanent
@@ -340,6 +363,96 @@
                                          :description
                                          (str "Auto-registered memory type '" s "'."))))
       s)))
+
+;; =============================================================================
+;; Write gates (human review queue)
+;; =============================================================================
+;;
+;; A gated type cannot be written directly. A write requesting it is PARKED as
+;; the gate's :queue-as type and stamped with :queue-tag, so the request is
+;; preserved, visible, and resolvable — never silently dropped and never
+;; silently honoured. The gate is declared on the type entry itself, so every
+;; write seam that resolves a type through here inherits it from one definition.
+
+(def ^:dynamic *gate-bypass?*
+  "When true, resolve-write-type honours a gated type verbatim. Bound ONLY by
+   the review path, which is the authority that resolves a queued entry. Read
+   through the var at call time so the binding is visible to the seam."
+  false)
+
+(defn gate-of
+  "Write gate map for a type, or nil when the type is directly writable."
+  [t]
+  (:gate (type-def t)))
+
+(defn gated-type?
+  "True when writing `t` directly is gated behind review."
+  [t]
+  (some? (gate-of t)))
+
+(defn queue-target
+  "Canonical type string a gated write is parked as, or nil when `t` is not
+   gated (or the gate names no target)."
+  [t]
+  (when-let [g (gate-of t)]
+    (sanitize-type (:queue-as g))))
+
+(defn resolve-write-type
+  "Resolve the type a write should actually land as.
+
+   Returns nil for an unsafe type (caller rejects). Otherwise:
+     {:type       canonical type string the entry must be stored as
+      :requested  canonical type string the caller asked for
+      :queued?    true when the request was parked behind a gate
+      :gate       the gate map when queued, else nil}
+
+   Pure: registers nothing and reads no mutable state beyond the registry.
+   Honours *gate-bypass?* so the review path can land an approved type."
+  [t]
+  (when-let [requested (sanitize-type t)]
+    (when (safe-type? requested)
+      (let [gate   (when-not *gate-bypass?* (gate-of requested))
+            target (when gate (sanitize-type (:queue-as gate)))]
+        (if target
+          {:type target :requested requested :queued? true :gate gate}
+          {:type requested :requested requested :queued? false :gate nil})))))
+
+(def ^:const requested-type-tag-prefix
+  "Prefix of the tag recording which gated type a parked entry asked for."
+  "requested-type:")
+
+(defn queued-tags
+  "Tags for an entry parked behind `gate` after requesting `requested`:
+   the caller's tags plus the queue tag and a requested-type marker.
+   Order-preserving and idempotent — re-parking never duplicates a tag."
+  [tags gate requested]
+  (let [extra (cond-> []
+                (:queue-tag gate) (conj (:queue-tag gate))
+                requested         (conj (str requested-type-tag-prefix requested)))]
+    (reduce (fn [acc t] (if (some #{t} acc) acc (conj acc t)))
+            (vec tags)
+            extra)))
+
+(defn strip-queue-tags
+  "Remove the queue tag and any requested-type marker from `tags`. Used when a
+   review resolves an entry, so a promoted axiom carries no pending residue."
+  [tags]
+  (let [queue-tags (into #{} (keep #(get-in % [:gate :queue-tag])) (vals (registry)))]
+    (vec (remove (fn [t]
+                   (let [s (str t)]
+                     (or (contains? queue-tags s)
+                         (str/starts-with? s requested-type-tag-prefix))))
+                 tags))))
+
+(defn requested-type-of
+  "Read back the gated type a parked entry originally requested, from its tags.
+   Returns nil when no requested-type marker is present."
+  [tags]
+  (some (fn [t]
+          (let [s (str t)]
+            (when (str/starts-with? s requested-type-tag-prefix)
+              (subs s (count requested-type-tag-prefix)))))
+        tags))
 
 (defn abstraction-level
   "Get the abstraction level for a type (string or keyword). Default: 2."
