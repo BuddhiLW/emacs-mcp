@@ -56,9 +56,10 @@
   (router/append-interceptor! event-id interceptor))
 
 (defn get-interceptors
-  "Get the interceptor chain for an event. For debugging/verification."
+  "Get the interceptor chain for an event. For debugging/verification.
+   Delegates to hive.events.router, which owns the registry."
   [event-id]
-  (:interceptors (router/get-event event-id)))
+  (router/get-interceptors event-id))
 
 (defn handler-registered?
   "Check if a handler is registered for the given event-id."
