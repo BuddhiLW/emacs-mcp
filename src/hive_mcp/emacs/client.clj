@@ -7,7 +7,8 @@
 
    Dynamic vars kept for backward compat; real vars live in hive-emacs.client."
   (:require [taoensso.timbre :as log] [hive-dsl.result :refer [rescue]]
-            [hive-spi.editor.services :as svc]))
+            [hive-spi.editor.services :as svc]
+            [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

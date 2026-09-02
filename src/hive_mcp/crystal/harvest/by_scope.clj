@@ -38,7 +38,8 @@
    shapes, predicates, constructors. Trifecta tests in
    `hive-mcp.crystal.harvest.by-scope-test`."
   (:require [malli.core :as m]
-            [malli.error :as me]))
+            [malli.error :as me]
+            [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

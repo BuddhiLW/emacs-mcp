@@ -5,7 +5,8 @@
    Single-word commands remain backward compatible."
   (:require [hive-mcp.tools.core :refer [mcp-error]]
             [clojure.data.json :as json]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [taoensso.timbre :as log]))
 
 ;; =============================================================================
 ;; Command Normalization

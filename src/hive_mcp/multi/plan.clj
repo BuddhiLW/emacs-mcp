@@ -19,7 +19,8 @@
             [hive-dsl.result :as r :refer [rescue]]
             [clojure.edn :as edn]
             [taoensso.timbre :as log]
-            [hive-mcp.multi.util :as util]))
+            [hive-mcp.multi.util :as util]
+            [clojure.string :as str]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

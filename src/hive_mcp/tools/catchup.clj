@@ -41,7 +41,8 @@
             [taoensso.timbre :as log]
             [hive-mcp.tools.catchup.relevance :as relevance]
             [hive-mcp.vectordb.kanban-facade :as kanban-facade]
-            [hive-mcp.tools.catchup.outcome :as outcome]))
+            [hive-mcp.tools.catchup.outcome :as outcome]
+            [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
