@@ -2,89 +2,77 @@
   "Optional capability protocols for headless backends (ISP pattern).
 
    Small protocols that backends opt-in to via `satisfies?`. Core dispatch
-   checks protocol satisfaction before calling -- unsatisfied protocols
-   simply don't execute (NoOp by omission).
+   checks protocol satisfaction before calling: unsatisfied protocols simply
+   do not execute (NoOp by omission).
+
+   Every name here is a `def` ALIAS of hive-spi.addon.headless-caps, never a
+   `defprotocol`. A second defprotocol mints a DISTINCT protocol, so a backend
+   implementing the published contract would fail `satisfies?` here silently,
+   and the only way for it to be recognised would be to name a hive-mcp symbol
+   in its `reify`, which couples the backend to the host at COMPILE time. Same
+   rule, and the same reason, as hive-mcp.addons.protocol and
+   hive-mcp.addons.terminal.
 
    Usage in hive-mcp core (e.g. forge-strike hook injection):
      (when (satisfies? IHookable backend)
        (headless-caps/register-hooks! backend ling-id {...}))
 
    Protocols:
-   - IHookable         — Pre/post tool-use hook injection
-   - ICheckpointable   — Session checkpoint/rewind
-   - ISubagentHost     — Native subagent definitions
-   - IBudgetGuardable  — Per-session cost budgeting
+   - IHookable         Pre/post tool-use hook injection
+   - ICheckpointable   Session checkpoint/rewind
+   - ISubagentHost     Native subagent definitions
+   - IBudgetGuardable  Per-session cost budgeting
 
    See also:
+   - hive-spi.addon.headless-caps -- the published originals
    - hive-mcp.addons.headless  -- IHeadlessBackend (required protocol)
-   - hive-mcp.agent.headless-capability -- HeadlessCapability ADT")
+   - hive-mcp.agent.headless-capability -- HeadlessCapability ADT"
+  (:require [hive-spi.addon.headless-caps :as caps]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
 ;; =============================================================================
-;; IHookable — Pre/post tool-use hook injection
+;; IHookable -- re-export from hive-spi.addon.headless-caps
 ;; =============================================================================
 
-(defprotocol IHookable
-  "Optional protocol for backends that support hook injection.
-   Enables SAA gating hooks, pre-tool-use validation, and post-tool-use logging."
+(def IHookable caps/IHookable)
 
-  (register-hooks! [this ling-id hooks-map]
-    "Register hooks for a ling session.
-     hooks-map keys: :pre-tool-use, :post-tool-use, :on-error, :on-complete
-     Each value is a function (fn [hook-context] ...).
-     Returns: {:registered? bool :hook-count int}")
-
-  (active-hooks [this ling-id]
-    "Return the currently active hooks map for a ling session, or nil."))
+(def register-hooks! caps/register-hooks!)
+(def active-hooks    caps/active-hooks)
 
 ;; =============================================================================
-;; ICheckpointable — Session checkpoint/rewind
+;; ICheckpointable -- re-export
 ;; =============================================================================
 
-(defprotocol ICheckpointable
-  "Optional protocol for backends that support session checkpointing.
-   Enables saving session state and rewinding to a previous checkpoint."
+(def ICheckpointable caps/ICheckpointable)
 
-  (checkpoint! [this ling-id]
-    "Create a checkpoint of the current session state.
-     Returns: {:checkpoint-id str :created-at long}")
-
-  (rewind! [this ling-id checkpoint-id]
-    "Rewind session to a previous checkpoint.
-     Returns: {:rewound? bool :checkpoint-id str}"))
+(def checkpoint! caps/checkpoint!)
+(def rewind!     caps/rewind!)
 
 ;; =============================================================================
-;; ISubagentHost — Native subagent definitions
+;; ISubagentHost -- re-export
 ;; =============================================================================
 
-(defprotocol ISubagentHost
-  "Optional protocol for backends that support native subagent definitions.
-   Enables Claude Agent SDK-style nested agent hierarchies."
+(def ISubagentHost caps/ISubagentHost)
 
-  (register-subagents! [this ling-id agent-defs]
-    "Register subagent definitions for a ling session.
-     agent-defs: map of agent-name -> {:description str :prompt str :tools [str] :model str}
-     Returns: {:registered? bool :agent-count int}")
-
-  (list-subagents [this ling-id]
-    "Return the registered subagent definitions for a ling, or nil."))
+(def register-subagents! caps/register-subagents!)
+(def list-subagents      caps/list-subagents)
 
 ;; =============================================================================
-;; IBudgetGuardable — Per-session cost budgeting
+;; IBudgetGuardable -- re-export
 ;; =============================================================================
 
-(defprotocol IBudgetGuardable
-  "Optional protocol for backends that support per-session cost budgeting.
-   Enables hard spending limits that interrupt sessions when exceeded."
+(def IBudgetGuardable caps/IBudgetGuardable)
 
-  (set-budget! [this ling-id max-usd]
-    "Set maximum USD budget for a ling session.
-     Returns: {:budget-set? bool :max-usd number}")
+(def set-budget!   caps/set-budget!)
+(def budget-status caps/budget-status)
 
-  (budget-status [this ling-id]
-    "Get current budget status for a ling session.
-     Returns: {:max-usd number :spent-usd number :remaining-usd number :exceeded? bool}
-     or nil if no budget set."))
+;; =============================================================================
+;; Capability registry -- re-export
+;; =============================================================================
+
+(def capability-protocols caps/capability-protocols)
+
+(def provided-capabilities caps/provided-capabilities)
