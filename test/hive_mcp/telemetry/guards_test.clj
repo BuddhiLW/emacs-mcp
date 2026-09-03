@@ -10,7 +10,7 @@
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [datascript.core]
             [hive-mcp.channel.core]
-            [hive-mcp.crystal.hooks :as hooks]
+            [hive-mcp.crystal.harvest.collect :as collect]
             [hive-mcp.crystal.recall :as recall]
             [hive-mcp.events.schemas :as schemas]
             [hive-mcp.events.effects :as effects]
@@ -72,7 +72,7 @@
   (testing "harvest-session-progress returns error map instead of throwing"
     (with-failing-emacs "Emacs unreachable"
       (fn []
-        (let [result (hooks/harvest-session-progress)]
+        (let [result (collect/harvest-session-progress)]
           (is (map? result) "Should return a map, not throw")
           (is (= [] (:notes result)) "Should have empty notes on error")
           (is (= 0 (:count result)) "Should have zero count on error")
@@ -86,7 +86,7 @@
                   (throwing ds/get-completed-tasks-this-session "DataScript error")]
       (with-failing-emacs "Emacs unreachable"
         (fn []
-          (let [result (hooks/harvest-completed-tasks)]
+          (let [result (collect/harvest-completed-tasks)]
             (is (map? result) "Should return a map, not throw")
             (is (= [] (:tasks result)) "Should have empty tasks on error")
             (is (= 0 (:count result)) "Should have zero count on error")
@@ -96,7 +96,7 @@
   (testing "harvest-git-commits returns error map instead of throwing"
     (with-failing-emacs "Shell execution failed"
       (fn []
-        (let [result (hooks/harvest-git-commits)]
+        (let [result (collect/harvest-git-commits)]
           (is (map? result) "Should return a map, not throw")
           (is (= [] (:commits result)) "Should have empty commits on error")
           (is (= 0 (:count result)) "Should have zero count on error")
@@ -110,7 +110,7 @@
                   (throwing recall/get-buffered-recalls "Recall buffer error")]
       (with-failing-emacs "Complete failure"
         (fn []
-          (let [result (hooks/harvest-all)]
+          (let [result (collect/harvest-all)]
             (is (map? result) "Should return a map, not throw")
             (is (contains? result :progress-notes) "Should have progress-notes key")
             (is (contains? result :completed-tasks) "Should have completed-tasks key")
@@ -121,7 +121,7 @@
   (testing "Harvest error maps include structured metadata for telemetry"
     (with-failing-emacs "Connection refused"
       (fn []
-        (let [result (hooks/harvest-session-progress)
+        (let [result (collect/harvest-session-progress)
               error (:error result)]
           (is (map? error) "Error should be a map with structured data")
           (is (contains? error :type) "Error should have :type")
@@ -239,7 +239,7 @@
                         (swap! dispatched conj data)
                         {}))
         (with-failing-emacs "Emacs down"
-          (fn [] (reset! harvested (hooks/harvest-session-progress)))))
+          (fn [] (reset! harvested (collect/harvest-session-progress)))))
       (let [data (first @dispatched)]
         (is (= 1 (count @dispatched))
             "Should dispatch exactly one :system/error event on harvest failure")

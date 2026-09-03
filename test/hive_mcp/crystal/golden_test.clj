@@ -12,7 +12,7 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [hive-test.golden :refer [deftest-golden]]
-            [hive-mcp.crystal.hooks :as hooks]
+            [hive-mcp.crystal.harvest.collect :as collect]
             [hive-mcp.crystal.synthesis :as synthesis]
             [hive-mcp.crystal.core :as crystal]
             [hive-mcp.crystal.recall :as recall]
@@ -179,7 +179,7 @@
        :created-ids  []
        :hivemind     []
        :session-start nil}
-      (let [result (hooks/harvest-all {:directory "/tmp/golden-test"
+      (let [result (collect/harvest-all {:directory "/tmp/golden-test"
                                        :agent-id "golden-agent"})
             golden (load-golden "golden/crystal/crystal-harvest-empty.edn")]
         ;; Key set must match exactly
@@ -235,7 +235,7 @@
        :hivemind     [{:from "agent-a" :content "Starting deploy" :timestamp "2026-01-15T11:00:00Z"}
                       {:from "agent-b" :content "Tests passing" :timestamp "2026-01-15T11:30:00Z"}
                       {:from "golden-agent" :content "Feature complete" :timestamp "2026-01-15T11:45:00Z"}]}
-      (let [result (hooks/harvest-all {:directory "/tmp/golden-test"
+      (let [result (collect/harvest-all {:directory "/tmp/golden-test"
                                        :agent-id "golden-agent"})
             golden (load-golden "golden/crystal/crystal-harvest-rich.edn")]
         ;; Key set must match
@@ -299,7 +299,7 @@
                                :kanban-completed 0
                                :created-count 0
                                :accessed-count 0}}]
-      (hooks/crystallize-session harvested))))
+      (synthesis/synthesize harvested))))
 
 ;; =============================================================================
 ;; Golden: crystallize-session output shape — content path
@@ -329,7 +329,7 @@
                                :kanban-completed 0
                                :created-count 1
                                :accessed-count 1}}]
-      (hooks/crystallize-session harvested))))
+      (synthesis/synthesize harvested))))
 
 ;; =============================================================================
 ;; Golden: synthesis shape structural contract (keys + types)
@@ -341,7 +341,7 @@
       ;; No-content path — always-store contract (no :skipped branch)
       (with-synthesis-mocks
         {:summary nil}
-        (let [result (hooks/crystallize-session
+        (let [result (synthesis/synthesize
                       {:progress-notes []
                        :completed-tasks []
                        :git-commits []
@@ -383,7 +383,7 @@
       (with-synthesis-mocks
         {:summary {:content "Summary content" :tags ["wrap"]}
          :entry-id "entry-golden-001"}
-        (let [result (hooks/crystallize-session
+        (let [result (synthesis/synthesize
                       {:progress-notes [{:content "work"}]
                        :completed-tasks []
                        :git-commits []

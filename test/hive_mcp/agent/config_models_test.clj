@@ -137,36 +137,20 @@
             (is (string? (:reason testing-route)))))))))
 
 ;; =============================================================================
-;; hive_agent_bridge.clj — default-model reads from config
+;; drone default model reads from config
 ;; =============================================================================
 
-(deftest test-bridge-default-model
-  (testing "hive-agent-bridge default-model reads from config"
-    (require 'hive-mcp.agent.hive-agent-bridge :reload)
-    (let [default-model-fn @(ns-resolve 'hive-mcp.agent.hive-agent-bridge 'default-model)]
-      (is (some? default-model-fn) "default-model fn should exist")
-      (when default-model-fn
-        ;; The bridge delegates to `config/default-drone-model`, which resolves
-        ;; services.drone.default-model (env DRONE_DEFAULT_MODEL, fallback
-        ;; "devstral-small:24b") — NOT models.default-model. This suite asserted
-        ;; the latter, so it could only pass on a machine whose drone service
-        ;; happened to be unset AND whose models key happened to say kimi.
-        (let [baseline (default-model-fn)]
-          (is (= (config/default-drone-model) baseline)
-              "bridge resolves through default-drone-model")
-          (with-config-override "services.drone.default-model" "test/bridge-model"
-            (fn []
-              (is (= "test/bridge-model" (default-model-fn))
-                  "override of the drone service key takes effect")))
-          (is (= baseline (default-model-fn))
-              "override is restored"))))))
-
-;; =============================================================================
-;; drone/backend/hive_agent.clj — config-driven default model
-;; =============================================================================
-
-(deftest test-backend-hive-agent-config-require
-  (testing "drone backend hive-agent requires hive-mcp.config.core"
-    (require 'hive-mcp.agent.drone.backend.hive-agent :reload)
-    ;; If it loads without error, the require is valid
-    (is true)))
+(deftest test-drone-default-model-resolves-through-the-service-key
+  (testing "default-drone-model reads services.drone.default-model"
+    ;; The drone path resolves services.drone.default-model (env
+    ;; DRONE_DEFAULT_MODEL, fallback "devstral-small:24b"), NOT
+    ;; models.default-model. This suite once asserted the latter, so it could
+    ;; only pass on a machine whose drone service happened to be unset AND
+    ;; whose models key happened to say kimi.
+    (let [baseline (config/default-drone-model)]
+      (with-config-override "services.drone.default-model" "test/bridge-model"
+        (fn []
+          (is (= "test/bridge-model" (config/default-drone-model))
+              "override of the drone service key takes effect")))
+      (is (= baseline (config/default-drone-model))
+          "override is restored"))))

@@ -1,12 +1,15 @@
 (ns hive-mcp.crystal.hooks-test
-  "Tests for crystal/hooks.clj crystallize-session xpoll wiring (P2.7).
+  "Tests for the synthesize xpoll wiring (P2.7) and the harvest-all
+   composition, reached through crystal.synthesis and crystal.harvest.collect
+   directly since crystal.hooks stopped re-exporting them at 1.0.0.
 
    Verifies:
    - xpoll-stats appears in return map for both no-content and content paths
    - Xpoll failure does NOT block crystallization
    - Correct args passed to lifecycle/run-xpoll-cycle!"
   (:require [clojure.test :refer [deftest testing is are]]
-            [hive-mcp.crystal.hooks :as hooks]
+            [hive-mcp.crystal.harvest.collect :as collect]
+            [hive-mcp.crystal.synthesis :as synthesis]
             [hive-mcp.crystal.core :as crystal]
             [hive-mcp.crystal.recall :as recall]
             [hive-mcp.tools.memory.scope :as scope]
@@ -115,7 +118,7 @@
           (with-crystallize-mocks
             {:summary nil
              :xpoll {:promoted 0 :candidates 0 :total-scanned 50}}
-            (hooks/crystallize-session base-harvested))]
+            (synthesis/synthesize base-harvested))]
       (is (:summary-id result)
           "No-content path persists a minimal wrap summary")
       (is (contains? result :xpoll-stats) "Return map must include :xpoll-stats")
@@ -129,7 +132,7 @@
           (with-crystallize-mocks
             {:summary nil
              :xpoll {:promoted 3 :candidates 5 :total-scanned 100}}
-            (hooks/crystallize-session base-harvested))]
+            (synthesis/synthesize base-harvested))]
       (is (:summary-id result)
           "No-content path persists a minimal wrap summary")
       (is (= 3 (:promoted (:xpoll-stats result))))
@@ -142,7 +145,7 @@
           (with-crystallize-mocks
             {:summary nil
              :xpoll-fn (fn [_] (throw (Exception. "Chroma connection refused")))}
-            (hooks/crystallize-session base-harvested))]
+            (synthesis/synthesize base-harvested))]
       (is (:summary-id result)
           "No-content path persists a minimal wrap summary")
       (is (contains? result :xpoll-stats) "Must still have :xpoll-stats key")
@@ -154,7 +157,7 @@
     (let [{:keys [xpoll-calls]}
           (with-crystallize-mocks
             {:summary nil}
-            (hooks/crystallize-session
+            (synthesis/synthesize
              (assoc base-harvested :directory "/home/test/my-project")))]
       (is (= 1 (count xpoll-calls)) "xpoll should be called exactly once")
       (is (= "/home/test/my-project" (:directory (first xpoll-calls)))
@@ -173,7 +176,7 @@
             {:summary {:content "Session summary" :tags ["wrap"]}
              :entry-id "entry-abc-123"
              :xpoll {:promoted 2 :candidates 4 :total-scanned 80}}
-            (hooks/crystallize-session
+            (synthesis/synthesize
              (assoc base-harvested
                     :progress-notes [{:content "did stuff"}]
                     :git-commits ["abc1234 feat: something"])))]
@@ -191,7 +194,7 @@
             {:summary {:content "Session summary" :tags ["wrap"]}
              :entry-id "entry-def-456"
              :xpoll-fn (fn [_] (throw (Exception. "Embedding model unavailable")))}
-            (hooks/crystallize-session
+            (synthesis/synthesize
              (assoc base-harvested
                     :progress-notes [{:content "work done"}])))]
       (is (= "entry-def-456" (:summary-id result))
@@ -206,7 +209,7 @@
           (with-crystallize-mocks
             {:summary {:content "Summary content" :tags ["wrap"]}
              :entry-id "entry-ghi-789"}
-            (hooks/crystallize-session
+            (synthesis/synthesize
              (assoc base-harvested
                     :directory "/home/user/other-project"
                     :progress-notes [{:content "progress"}])))]
@@ -225,7 +228,7 @@
             {:summary nil
              :xpoll {:promoted 1 :candidates 2 :total-scanned 10
                      :entries [{:id "x" :promoted true}]}}
-            (hooks/crystallize-session base-harvested))
+            (synthesis/synthesize base-harvested))
           no-content-keys (set (keys (:xpoll-stats result)))
 
           {content-result :result}
@@ -234,7 +237,7 @@
              :entry-id "eid-1"
              :xpoll {:promoted 1 :candidates 2 :total-scanned 10
                      :entries [{:id "x" :promoted true}]}}
-            (hooks/crystallize-session
+            (synthesis/synthesize
              (assoc base-harvested :progress-notes [{:content "x"}])))
           content-keys (set (keys (:xpoll-stats content-result)))]
       (is (= no-content-keys content-keys)
@@ -252,7 +255,7 @@
             {:summary nil
              :xpoll {:promoted 0 :candidates 0 :total-scanned 0
                      :error "chroma-not-configured"}}
-            (hooks/crystallize-session base-harvested))]
+            (synthesis/synthesize base-harvested))]
       (is (contains? (:xpoll-stats result) :error))
       (is (= "chroma-not-configured" (:error (:xpoll-stats result)))))))
 
@@ -276,7 +279,7 @@
                       crystal/session-id (fn [] "test-session")
                       scope/get-current-project-id (fn [_] "test-proj")
                       ctx/current-directory (fn [] "/tmp")]
-          (hooks/crystallize-session base-harvested))
+          (synthesis/synthesize base-harvested))
         (is (= #{:ch-a :ch-b :ch-c :ch-d} (set @call-order))
             "All four lifecycle extensions run")
         (is (= 4 (count @call-order))
@@ -297,7 +300,7 @@
           (with-crystallize-mocks
             {:summary nil
              :memory-decay {:decayed 5 :expired 2 :total-scanned 50}}
-            (hooks/crystallize-session base-harvested))]
+            (synthesis/synthesize base-harvested))]
       (is (:summary-id result)
           "No-content path persists a minimal wrap summary")
       (is (contains? result :memory-decay-stats) "Return map must include :memory-decay-stats")
@@ -312,7 +315,7 @@
             {:summary {:content "Session summary" :tags ["wrap"]}
              :entry-id "entry-decay-001"
              :memory-decay {:decayed 3 :expired 1 :total-scanned 30}}
-            (hooks/crystallize-session
+            (synthesis/synthesize
              (assoc base-harvested
                     :progress-notes [{:content "did stuff"}])))]
       (is (not (:skipped result)) "Should NOT be skipped (content path)")
@@ -326,7 +329,7 @@
           (with-crystallize-mocks
             {:summary nil
              :memory-decay-fn (fn [_] (throw (Exception. "Chroma timeout")))}
-            (hooks/crystallize-session base-harvested))]
+            (synthesis/synthesize base-harvested))]
       (is (:summary-id result)
           "No-content path persists a minimal wrap summary")
       (is (contains? result :memory-decay-stats) "Must still have :memory-decay-stats key")
@@ -338,7 +341,7 @@
     (let [{:keys [memory-decay-calls]}
           (with-crystallize-mocks
             {:summary nil}
-            (hooks/crystallize-session
+            (synthesis/synthesize
              (assoc base-harvested :directory "/home/test/my-project")))]
       (is (= 1 (count memory-decay-calls)) "memory-decay should be called exactly once")
       (is (= "/home/test/my-project" (:directory (first memory-decay-calls)))
@@ -353,7 +356,7 @@
             {:summary nil
              :memory-decay {:decayed 1 :expired 2 :total-scanned 10
                             :extra-field "should-not-leak"}}
-            (hooks/crystallize-session base-harvested))
+            (synthesis/synthesize base-harvested))
           no-content-keys (set (keys (:memory-decay-stats result)))
 
           {content-result :result}
@@ -362,7 +365,7 @@
              :entry-id "eid-2"
              :memory-decay {:decayed 1 :expired 2 :total-scanned 10
                             :extra-field "should-not-leak"}}
-            (hooks/crystallize-session
+            (synthesis/synthesize
              (assoc base-harvested :progress-notes [{:content "x"}])))
           content-keys (set (keys (:memory-decay-stats content-result)))]
       (is (= no-content-keys content-keys)
@@ -381,7 +384,7 @@
     (let [{:keys [result]}
           (with-crystallize-mocks
             {:summary nil}
-            (hooks/crystallize-session
+            (synthesis/synthesize
              (assoc base-harvested
                     :session-timing {:session-start "2026-02-11T10:00:00Z"
                                      :session-end "2026-02-11T11:30:00Z"
@@ -399,7 +402,7 @@
           (with-crystallize-mocks
             {:summary {:content "Session summary" :tags ["wrap"]}
              :entry-id "entry-timing-001"}
-            (hooks/crystallize-session
+            (synthesis/synthesize
              (assoc base-harvested
                     :progress-notes [{:content "work done"}]
                     :session-timing {:session-start "2026-02-11T14:00:00Z"
@@ -416,7 +419,7 @@
     (let [{:keys [result]}
           (with-crystallize-mocks
             {:summary nil}
-            (hooks/crystallize-session base-harvested))]
+            (synthesis/synthesize base-harvested))]
       (is (:summary-id result)
           "No-content path persists a minimal wrap summary")
       (is (contains? result :session-timing) "Must have :session-timing even without input")
@@ -517,7 +520,7 @@
                     scope/inject-project-scope (fn [tags _] tags)
                     dur/calculate-expires (fn [_] "2026-02-13T00:00:00Z")
                     ctx/current-directory (fn [] "/tmp/test")]
-        (hooks/crystallize-session
+        (synthesis/synthesize
          (assoc base-harvested
                 :progress-notes [{:content "work done"}]
                 :session-timing {:session-start "2026-02-11T10:00:00Z"
@@ -544,7 +547,7 @@
                     scope/inject-project-scope (fn [tags _] tags)
                     dur/calculate-expires (fn [_] "2026-02-13T00:00:00Z")
                     ctx/current-directory (fn [] "/tmp/test")]
-        (hooks/crystallize-session
+        (synthesis/synthesize
          (assoc base-harvested
                 :progress-notes [{:content "work"}]
                 :session-timing {:session-start "2026-02-11T10:00:00Z"
@@ -570,7 +573,7 @@
                     scope/inject-project-scope (fn [tags _] tags)
                     dur/calculate-expires (fn [_] "2026-02-13T00:00:00Z")
                     ctx/current-directory (fn [] "/tmp/test")]
-        (hooks/crystallize-session
+        (synthesis/synthesize
          (assoc base-harvested
                 :progress-notes [{:content "work"}]
                 :session-timing {:session-start "2026-02-11T10:00:00Z"
@@ -594,7 +597,7 @@
                     scope/inject-project-scope (fn [tags _] tags)
                     dur/calculate-expires (fn [_] "2026-02-13T00:00:00Z")
                     ctx/current-directory (fn [] "/tmp/test")]
-        (hooks/crystallize-session
+        (synthesis/synthesize
          (assoc base-harvested
                 :progress-notes [{:content "work"}]
                 :session-timing {:session-start "2026-02-11T10:00:00Z"
@@ -615,9 +618,9 @@
 (deftest harvest-all-includes-session-temporal
   (testing "harvest-all returns :session-temporal as alias for :session-timing"
     (with-redefs [ctx/current-directory (fn [] "/tmp/test")
-                  hooks/harvest-session-progress (fn [_] {:notes [] :count 0})
-                  hooks/harvest-completed-tasks (fn [_] {:tasks [] :count 0})
-                  hooks/harvest-git-commits (fn [_] {:commits [] :count 0})
+                  collect/harvest-session-progress (fn [_] {:notes [] :count 0})
+                  collect/harvest-completed-tasks (fn [_] {:tasks [] :count 0})
+                  collect/harvest-git-commits (fn [_] {:commits [] :count 0})
                   hive-mcp.crystal.recall/get-buffered-recalls (fn [] {})
                   hive-mcp.crystal.recall/flush-created-ids! (fn [& _] [])
                   crystal/get-session-start (fn [& _] (java.time.Instant/parse "2026-02-11T10:00:00Z"))
@@ -627,7 +630,7 @@
                      :session-end (.toString end)
                      :duration-minutes 90})
                   crystal/session-id (fn [] "test-session")]
-      (let [result (hooks/harvest-all {:directory "/tmp/test"})]
+      (let [result (collect/harvest-all {:directory "/tmp/test"})]
         (is (contains? result :session-temporal)
             "harvest-all must include :session-temporal")
         (is (= (:session-timing result) (:session-temporal result))
@@ -638,9 +641,9 @@
 (deftest harvest-all-includes-memory-ids-created
   (testing "harvest-all returns :memory-ids-created from flush-created-ids!"
     (with-redefs [ctx/current-directory (fn [] "/tmp/test")
-                  hooks/harvest-session-progress (fn [_] {:notes [] :count 0})
-                  hooks/harvest-completed-tasks (fn [_] {:tasks [] :count 0})
-                  hooks/harvest-git-commits (fn [_] {:commits [] :count 0})
+                  collect/harvest-session-progress (fn [_] {:notes [] :count 0})
+                  collect/harvest-completed-tasks (fn [_] {:tasks [] :count 0})
+                  collect/harvest-git-commits (fn [_] {:commits [] :count 0})
                   hive-mcp.crystal.recall/get-buffered-recalls (fn [] {})
                   hive-mcp.crystal.recall/flush-created-ids!
                   (fn [& _] [{:id "note-abc" :timestamp "2026-02-11T10:05:00Z"}
@@ -649,7 +652,7 @@
                   crystal/session-timing-metadata
                   (fn [_ end] {:session-start nil :session-end (.toString end) :duration-minutes 0})
                   crystal/session-id (fn [] "test-session")]
-      (let [result (hooks/harvest-all {:directory "/tmp/test"})]
+      (let [result (collect/harvest-all {:directory "/tmp/test"})]
         (is (contains? result :memory-ids-created)
             "harvest-all must include :memory-ids-created")
         (is (= 2 (count (:memory-ids-created result)))
@@ -662,9 +665,9 @@
 (deftest harvest-all-includes-memory-ids-accessed
   (testing "harvest-all returns :memory-ids-accessed from recall buffer keys"
     (with-redefs [ctx/current-directory (fn [] "/tmp/test")
-                  hooks/harvest-session-progress (fn [_] {:notes [] :count 0})
-                  hooks/harvest-completed-tasks (fn [_] {:tasks [] :count 0})
-                  hooks/harvest-git-commits (fn [_] {:commits [] :count 0})
+                  collect/harvest-session-progress (fn [_] {:notes [] :count 0})
+                  collect/harvest-completed-tasks (fn [_] {:tasks [] :count 0})
+                  collect/harvest-git-commits (fn [_] {:commits [] :count 0})
                   hive-mcp.crystal.recall/get-buffered-recalls
                   (fn [] {"entry-111" [{:context :explicit-reference}]
                           "entry-222" [{:context :cross-session}]
@@ -674,7 +677,7 @@
                   crystal/session-timing-metadata
                   (fn [_ end] {:session-start nil :session-end (.toString end) :duration-minutes 0})
                   crystal/session-id (fn [] "test-session")]
-      (let [result (hooks/harvest-all {:directory "/tmp/test"})]
+      (let [result (collect/harvest-all {:directory "/tmp/test"})]
         (is (contains? result :memory-ids-accessed)
             "harvest-all must include :memory-ids-accessed")
         (is (= 3 (count (:memory-ids-accessed result)))
@@ -690,16 +693,16 @@
 (deftest harvest-all-empty-buffers-return-empty-collections
   (testing "harvest-all returns empty collections when no IDs created/accessed"
     (with-redefs [ctx/current-directory (fn [] "/tmp/test")
-                  hooks/harvest-session-progress (fn [_] {:notes [] :count 0})
-                  hooks/harvest-completed-tasks (fn [_] {:tasks [] :count 0})
-                  hooks/harvest-git-commits (fn [_] {:commits [] :count 0})
+                  collect/harvest-session-progress (fn [_] {:notes [] :count 0})
+                  collect/harvest-completed-tasks (fn [_] {:tasks [] :count 0})
+                  collect/harvest-git-commits (fn [_] {:commits [] :count 0})
                   hive-mcp.crystal.recall/get-buffered-recalls (fn [] {})
                   hive-mcp.crystal.recall/flush-created-ids! (fn [& _] [])
                   crystal/get-session-start (fn [& _] nil)
                   crystal/session-timing-metadata
                   (fn [_ end] {:session-start nil :session-end (.toString end) :duration-minutes 0})
                   crystal/session-id (fn [] "test-session")]
-      (let [result (hooks/harvest-all {:directory "/tmp/test"})]
+      (let [result (collect/harvest-all {:directory "/tmp/test"})]
         (is (= [] (:memory-ids-created result))
             "Empty created buffer returns []")
         (is (= [] (:memory-ids-accessed result))
@@ -712,9 +715,9 @@
 (deftest harvest-all-flush-created-ids-failure-non-blocking
   (testing "flush-created-ids! failure returns [] via safe-effect"
     (with-redefs [ctx/current-directory (fn [] "/tmp/test")
-                  hooks/harvest-session-progress (fn [_] {:notes [] :count 0})
-                  hooks/harvest-completed-tasks (fn [_] {:tasks [] :count 0})
-                  hooks/harvest-git-commits (fn [_] {:commits [] :count 0})
+                  collect/harvest-session-progress (fn [_] {:notes [] :count 0})
+                  collect/harvest-completed-tasks (fn [_] {:tasks [] :count 0})
+                  collect/harvest-git-commits (fn [_] {:commits [] :count 0})
                   hive-mcp.crystal.recall/get-buffered-recalls (fn [] {})
                   hive-mcp.crystal.recall/flush-created-ids!
                   (fn [& _] (throw (Exception. "Atom corrupted")))
@@ -722,7 +725,7 @@
                   crystal/session-timing-metadata
                   (fn [_ end] {:session-start nil :session-end (.toString end) :duration-minutes 0})
                   crystal/session-id (fn [] "test-session")]
-      (let [result (hooks/harvest-all {:directory "/tmp/test"})]
+      (let [result (collect/harvest-all {:directory "/tmp/test"})]
         (is (= [] (:memory-ids-created result))
             "Should fall back to [] on exception")
         (is (= 0 (get-in result [:summary :created-count]))
@@ -731,7 +734,7 @@
 (deftest harvest-all-catastrophic-error-includes-defaults
   (testing "Catastrophic harvest-all error includes default values for new fields"
     (with-redefs [ctx/current-directory (fn [] (throw (Exception. "No directory")))]
-      (let [result (hooks/harvest-all nil)]
+      (let [result (collect/harvest-all nil)]
         (is (contains? result :session-temporal)
             "Error fallback must include :session-temporal")
         (is (= [] (:memory-ids-created result))

@@ -24,13 +24,8 @@
    layer.
 
    Sentinel usage: drain pending writes via `conn/flush-pending!`
-   before each assertion block. `flush-pending!` is the coalescing
-   sentinel API owned by sibling task 20260404134936 (write-
-   coalescing agent). We resolve it at call time — if the sibling
-   has shipped it (as of 2026-04-24, they have), we call it; if
-   it's absent, the stub throws `NotImplemented — expected from
-   sibling task` so CI surfaces the coordination gap instead of
-   silently passing on a racy sleep. See COORDINATION block below."
+   before each assertion block, so an assertion reads committed
+   state rather than racing the coalescing writer."
   (:require
    ;; NOTE(axiom 20260220155546-7a710da5): konserve pre-load order.
    ;; These requires MUST stay in this order, and MUST be listed
@@ -51,45 +46,11 @@
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
 
-;; =============================================================================
-;; COORDINATION — sibling task 20260404134936 owns `flush-pending!`
-;; =============================================================================
-;;
-;; The write-coalescing agent owns the sentinel API that deterministically
-;; drains the async transact queue. The target symbol is
-;; `hive-mcp.knowledge-graph.connection/flush-pending!` — a blocking
-;; sentinel that enqueues a marker, waits for the consumer loop to
-;; observe it, and returns only after all preceding tx-data has been
-;; flushed to the store.
-;;
-;; Until the sibling ships it, we resolve it dynamically:
-;;   - if present  → call it (real sentinel drain)
-;;   - if absent   → call the NotImplemented stub below, which throws
-;;                   so CI surfaces the missing coordination contract
-;;                   instead of silently passing with a racy sleep.
-;;
-;; We intentionally do NOT fall back to `drain-writer!` (the existing
-;; Thread/sleep 50 helper): that is the bug this follow-up exists to
-;; replace, and silently accepting it would hide regressions in the
-;; sibling's work.
-
-(defn- flush-pending-stub!
-  "Stub for the coalescing sentinel owned by sibling task 20260404134936.
-   Replace with a real `require`/alias once the sibling publishes
-   `hive-mcp.knowledge-graph.connection/flush-pending!`."
-  []
-  (throw (ex-info "NotImplemented — expected from sibling task"
-                  {:owner-task "20260404134936"
-                   :expected-symbol 'hive-mcp.knowledge-graph.connection/flush-pending!
-                   :contract "Blocking sentinel: enqueue marker, return after drain"})))
-
 (defn- flush-pending!
-  "Resolve the sibling-owned sentinel at call time; fall back to stub
-   so the test fails loudly (not silently) when the API is missing."
+  "Blocking sentinel: returns once the coalescing queue has drained, so an
+   assertion reads committed state rather than racing the writer."
   []
-  (if-let [v (resolve 'hive-mcp.knowledge-graph.connection/flush-pending!)]
-    (v)
-    (flush-pending-stub!)))
+  (conn/flush-pending!))
 
 ;; =============================================================================
 ;; Fixtures

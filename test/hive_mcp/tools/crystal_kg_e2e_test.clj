@@ -12,7 +12,8 @@
             [clojure.data.json :as json]
             [hive-mcp.knowledge-graph.connection :as kg-conn]
             [hive-mcp.knowledge-graph.edges :as kg-edges]
-            [hive-mcp.crystal.hooks :as crystal-hooks]
+            [hive-mcp.crystal.harvest.collect :as collect]
+            [hive-mcp.crystal.synthesis :as synthesis]
             [hive-mcp.tools.crystal]
             [hive-test.isolation :as iso]
             [hive-mcp.isolation-methods]
@@ -124,7 +125,7 @@
                         {:id source-id-3 :content "Another progress note"}]
                        [{:id source-id-2 :title "Completed task: write tests"}])]
 
-        (let [result (crystal-hooks/crystallize-session harvested)]
+        (let [result (synthesis/synthesize harvested)]
           (is (some? (:summary-id result)) "crystallize-session should return summary-id")
           (is (not (:error result)) "crystallize-session should not error")
 
@@ -177,7 +178,7 @@
                         {:title "Task without ID (should be ignored)"}])
 
             ;; Create summary
-            result (crystal-hooks/crystallize-session harvested)
+            result (synthesis/synthesize harvested)
             summary-id (:summary-id result)
 
             ;; Create edges
@@ -208,7 +209,7 @@
                      ;; Tasks without IDs
                      [{:title "Task without ID"}])
 
-          result (crystal-hooks/crystallize-session harvested)
+          result (synthesis/synthesize harvested)
           summary-id (:summary-id result)
 
           ;; Try to create edges with empty source list
@@ -231,7 +232,7 @@
   (testing "creating duplicate edges doesn't cause errors"
     (let [source-id (create-source-entry! "Source entry")
           harvested (mock-harvest-result [{:id source-id :content "Source entry"}] [])
-          result (crystal-hooks/crystallize-session harvested)
+          result (synthesis/synthesize harvested)
           summary-id (:summary-id result)]
 
       ;; Create edges first time
@@ -253,7 +254,7 @@
     (let [source-id-1 (create-source-entry! "Work note 1" :tags ["session-progress"])
           source-id-2 (create-source-entry! "Work note 2" :tags ["session-progress"])
           seen (promise)]
-      (with-redefs [crystal-hooks/harvest-all
+      (with-redefs [collect/harvest-all
                     (fn [_]
                       (mock-harvest-result
                        [{:id source-id-1 :content "Work note 1"}

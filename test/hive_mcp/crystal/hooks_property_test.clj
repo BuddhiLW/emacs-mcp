@@ -363,7 +363,7 @@
                                    :recalls {}
                                    :summary {:progress-count 0 :task-count 0
                                              :commit-count 0 :recall-count 0}}
-                        result (hooks/crystallize-session harvested)]
+                        result (synthesis/synthesize harvested)]
                     (every? #(contains? result %) lifecycle-stat-keys)))))
 
 ;; =============================================================================
@@ -381,7 +381,7 @@
                                    :recalls {}
                                    :summary {:progress-count 0 :task-count 0
                                              :commit-count 0 :recall-count 0}}
-                        result (hooks/crystallize-session harvested)]
+                        result (synthesis/synthesize harvested)]
                     (and (= "prop-test-session" (:session result))
                          (= "prop-test-project" (:project-id result)))))))
 

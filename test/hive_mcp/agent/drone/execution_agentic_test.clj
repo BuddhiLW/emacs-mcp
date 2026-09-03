@@ -21,7 +21,6 @@
             [hive-mcp.agent.drone.session-kg :as session-kg]
             [hive-mcp.agent.drone.kg-factory :as kg-factory]
             [hive-mcp.agent.drone.diff-mgmt :as diff-mgmt]
-            [hive-mcp.agent.hive-agent-bridge :as ha-bridge]
             [hive-mcp.agent.registry :as registry]
             [hive-mcp.tools.diff :as diff]
             [hive-mcp.agent.drone.execution.finalize :as exec-fin]

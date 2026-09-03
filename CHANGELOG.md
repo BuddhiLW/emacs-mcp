@@ -17,6 +17,32 @@ do not promise it.
 
 ## [Unreleased]
 
+### Removed
+
+Deprecations the host itself still called, resolved per site rather than left
+standing. A deprecation a host keeps calling never lands: callers feel no
+pressure to move and the var cannot be removed without breaking the host.
+
+- `hive-mcp.crystal.hooks/harvest-all`, `/harvest-session-progress`,
+  `/harvest-completed-tasks`, `/harvest-git-commits` and `/crystallize-session`.
+  These were backward-compat delegates from the harvest decomposition. Callers
+  use `hive-mcp.crystal.harvest.collect/*` and
+  `hive-mcp.crystal.synthesis/synthesize` directly, which is what the
+  deprecation notices said to do. `crystal.hooks` now holds only event handlers
+  and hook registration, as its own docstring claimed.
+- `hive-mcp.knowledge-graph.connection.writer/drain-writer!` and its re-export
+  on `connection`. It was a one-line alias for `flush-pending!`; the six call
+  sites now call `flush-pending!`.
+- `hive-mcp.agent.hive-agent-bridge` and
+  `hive-mcp.agent.drone.backend.hive-agent`, deprecated since 0.16.0. The
+  bridge dispatches through the `:ag/run` extension key, which no addon in the
+  ecosystem registers any more (hive-agent contributes `:ag/context`,
+  `:ag/tools`, `:ag/loop-factory`, `:ag/loop-backend`, `:ag/llm-router`), so
+  the backend could only ever answer "hive-agent is not available on
+  classpath". Nothing in `src` required either namespace: `ext-router` lists
+  only `:sdk-drone` and `:agentic-loop`. Selecting `:hive-agent` now falls to
+  the `resolve-backend` default, which names the registered backends.
+
 ### Added
 
 - `dev/foss_compliance.clj`: measures every public hive-agi repository against

@@ -32,10 +32,10 @@
    before we swap in a fresh store. Without this, a straggling tx
    lands in the NEW store and corrupts edge counts."
   [f]
-  (conn/drain-writer!)
+  (conn/flush-pending!)
   (fixtures/datascript-fixture
    (fn []
-     (conn/drain-writer!)
+     (conn/flush-pending!)
      (f))))
 
 (use-fixtures :each drain-then-reset-fixture)

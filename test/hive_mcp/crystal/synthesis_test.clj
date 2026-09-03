@@ -11,7 +11,6 @@
             [clojure.test.check.clojure-test :refer [defspec]]
             [hive-mcp.crystal.synthesis :as synthesis]
             [hive-mcp.crystal.core :as crystal]
-            [hive-mcp.crystal.hooks]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.tools.memory.duration :as dur]
             [hive-mcp.extensions.registry :as ext]
@@ -522,20 +521,20 @@
     (require '[hive-mcp.tools.crystal] :reload)
     (let [crystallize-session-result @(resolve 'hive-mcp.tools.crystal/crystallize-session-result)]
       ;; Case 1: Both :summary-id and :lifecycle-error → ok (entry stored)
-      (with-redefs [hive-mcp.crystal.hooks/crystallize-session
+      (with-redefs [hive-mcp.crystal.synthesis/synthesize
                     (fn [_] {:summary-id "entry-001" :session "test" :lifecycle-error "timeout"})]
         (let [r (crystallize-session-result {} "test-project")]
           (is (result/ok? r) "Partial success (stored + lifecycle-error) must be ok")
           (is (= "entry-001" (:summary-id (:ok r))))))
 
       ;; Case 2: :error WITHOUT :summary-id → err (total failure)
-      (with-redefs [hive-mcp.crystal.hooks/crystallize-session
+      (with-redefs [hive-mcp.crystal.synthesis/synthesize
                     (fn [_] {:error "store failed" :session "test"})]
         (let [r (crystallize-session-result {} "test-project")]
           (is (not (result/ok? r)) "Total failure (:error, no :summary-id) must be err")))
 
       ;; Case 3: :summary-id + legacy :error → ok (backward compat with old lifecycle key)
-      (with-redefs [hive-mcp.crystal.hooks/crystallize-session
+      (with-redefs [hive-mcp.crystal.synthesis/synthesize
                     (fn [_] {:summary-id "entry-002" :error "lifecycle-timeout" :session "test"})]
         (let [r (crystallize-session-result {} "test-project")]
           (is (result/ok? r) "When :summary-id present, :error should not cause failure"))))))

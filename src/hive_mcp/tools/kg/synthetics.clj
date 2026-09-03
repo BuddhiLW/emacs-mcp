@@ -277,7 +277,7 @@
             dry-run?         false}}]]
   ;; Drain any pending write-coalesced edges so the scan sees the
   ;; authoritative state. No-op if writer isn't running.
-  (conn/drain-writer!)
+  (conn/flush-pending!)
   (let [store (try (mem-proto/get-store) (catch Exception _ nil))
         action-kw (keyword action)
         base {:dry-run?         (boolean dry-run?)
@@ -314,7 +314,7 @@
                                                 (:preserved t) "preserved"
                                                 (when dry-run? " (dry-run)"))))})]
         ;; Flush post-cycle mutations so callers see committed state.
-        (conn/drain-writer!)
+        (conn/flush-pending!)
         (merge base
                {:scanned   (:evaluated tally)
                 :pruned    (:pruned tally)

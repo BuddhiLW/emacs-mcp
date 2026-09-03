@@ -320,8 +320,8 @@
    Example:
    ```clojure
    (run-wrap-session
-     {:harvest-fn     (fn [dir] (crystal-hooks/harvest-all {:directory dir}))
-      :crystallize-fn (fn [h] (crystal-hooks/crystallize-session h))
+     {:harvest-fn     (fn [dir] (collect/harvest-all {:directory dir}))
+      :crystallize-fn (fn [h] (synthesis/synthesize h))
       :kg-edge-fn     create-derived-from-edges!
       :notify-fn      emit-wrap-notify!
       :evict-fn       evict-agent-context!
