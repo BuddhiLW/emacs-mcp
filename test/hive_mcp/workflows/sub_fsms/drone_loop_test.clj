@@ -13,7 +13,8 @@
             [clojure.string :as str]
             [hive-mcp.workflows.sub-fsms.drone-loop :as drone-loop]
             [hive-mcp.workflows.sub-fsms.drone-loop-handlers :as handlers]
-            [hive.events.fsm :as fsm]))
+            [hive.events.fsm :as fsm]
+            [hive-mcp.agent.protocol]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

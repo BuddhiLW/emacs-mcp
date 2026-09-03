@@ -2,7 +2,7 @@
   "Event hooks for progressive crystallization — thin boundary layer.
 
    Delegates harvest to crystal.harvest.collect, synthesis to crystal.synthesis.
-   Keeps only: event handlers, hook registration, backward-compat delegates.
+   Keeps only: event handlers and hook registration.
 
    All error handling uses hive-mcp.dns.result DSL.
 
@@ -99,35 +99,6 @@
      :source source}))
 
 ;; =============================================================================
-;; Harvest + Synthesis Delegates (backward compatibility)
-;; =============================================================================
-
-(defn ^:deprecated harvest-all
-  "DEPRECATED: Use crystal.harvest.collect/harvest-all directly."
-  ([] (collect/harvest-all))
-  ([opts] (collect/harvest-all opts)))
-
-(defn ^:deprecated harvest-session-progress
-  "DEPRECATED: Use crystal.harvest.collect/harvest-session-progress directly."
-  ([] (collect/harvest-session-progress))
-  ([opts] (collect/harvest-session-progress opts)))
-
-(defn ^:deprecated harvest-completed-tasks
-  "DEPRECATED: Use crystal.harvest.collect/harvest-completed-tasks directly."
-  ([] (collect/harvest-completed-tasks))
-  ([opts] (collect/harvest-completed-tasks opts)))
-
-(defn ^:deprecated harvest-git-commits
-  "DEPRECATED: Use crystal.harvest.collect/harvest-git-commits directly."
-  ([] (collect/harvest-git-commits))
-  ([opts] (collect/harvest-git-commits opts)))
-
-(defn ^:deprecated crystallize-session
-  "DEPRECATED: Use crystal.synthesis/synthesize directly."
-  [harvested]
-  (synthesis/synthesize harvested))
-
-;; =============================================================================
 ;; Auto-Wrap Session-End Handler
 ;; =============================================================================
 
@@ -138,8 +109,8 @@
   (let [r (result/try-effect* :crystal/session-end-failed
             (let [dir (or (:directory event-ctx) (ctx/current-directory))
                   agent-id (or (:agent-id event-ctx) (ctx/current-agent-id))
-                  harvested (harvest-all {:directory dir :agent-id agent-id})
-                  result (crystallize-session harvested)]
+                  harvested (collect/harvest-all {:directory dir :agent-id agent-id})
+                  result (synthesis/synthesize harvested)]
               (when (channel/server-connected?)
                 (channel/broadcast! {:type "session-ended"
                                      :wrap-completed true

@@ -16,7 +16,6 @@
             [clojure.repl :refer [doc source]]
             [clojure.pprint :refer [pprint]]
             [clojure.tools.trace :as trace]
-            [clojure.java.io :as io]
             [clj-reload.core :as reload]
             [hive-mcp.server.core :as core]))
 
@@ -143,16 +142,3 @@
 (println "  (reload!)            - Hot-reload changed files (no system cycle)")
 (println "  (run-tests 'ns)      - Run tests for namespace")
 (println "================================\n")
-
-;; Auto-init: start Integrant synchronously before nREPL cmdline runs.
-;; user.clj loads first; main-opts (nrepl.cmdline) runs after, so the
-;; system is fully up by the time bb-mcp can connect — no race, no sleep.
-(try
-  (if (io/resource "hive/system.edn")
-    (do
-      (println "Auto-starting Integrant system...")
-      (go)
-      (println "Integrant system started."))
-    (println "WARN: system.edn not found on classpath."))
-  (catch Exception e
-    (println "Auto-init failed (non-fatal):" (.getMessage e))))

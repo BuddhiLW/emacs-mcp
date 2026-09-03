@@ -1,10 +1,9 @@
 (ns hive-mcp.tools.swarm.channel
   "Channel-based event management for swarm task tracking via core.async and NATS."
-  (:require [clojure.core.async :as async :refer [go-loop <! close!]]
-            [taoensso.timbre :as log]
+  (:require [clojure.core.async :as async :refer [go-loop <!]]
+            [hive-dsl.bounded-atom :refer [bounded-atom bput! bget bclear! register-sweepable!]]
             [hive-mcp.dns.result :refer [rescue]]
-            [hive-dsl.bounded-atom :refer [bounded-atom bput! bget bounded-swap!
-                                           bclear! register-sweepable!]]))
+            [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

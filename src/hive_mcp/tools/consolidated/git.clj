@@ -2,9 +2,9 @@
   "Consolidated Git CLI tool (renamed from magit).
 
    Delegates to magit handlers. Addons can extend via contribute-commands! \"git\"."
-  (:require [hive-mcp.tools.cli :refer [make-cli-handler make-batch-handler]]
-            [hive-mcp.tools.core :refer [mcp-error emacs-timeout-ms-property]]
+  (:require [hive-mcp.tools.cli :refer [make-batch-handler]]
             [hive-mcp.tools.composite :as composite]
+            [hive-mcp.tools.core :refer [mcp-error emacs-timeout-ms-property]]
             [hive-mcp.tools.magit :as magit-handlers]))
 
 (defn- handle-batch-commit

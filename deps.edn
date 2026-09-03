@@ -96,8 +96,10 @@
 
         ;; hive-events - re-frame inspired event system for JVM
         ;; v0.4.0 adds sub-FSM composition + multi-dispatch
+        ;; 0.5.10 publishes the router registry API (get-event, get-interceptors,
+        ;; append-interceptor!, get-fx) that hive-mcp.events.registry delegates to.
         io.github.hive-agi/hive-events
-        {:mvn/version "0.5.8"}
+        {:mvn/version "0.5.10"}
 
         ;; hive-hot - unified hot-reload with events integration
         io.github.hive-agi/hive-hot
@@ -128,7 +130,9 @@
         ;; git tag (== master head) so CI and the Clojars jar build resolve it
         ;; without a sibling checkout; sibling co-dev goes through a gitignored
         ;; local.deps.edn :local/root override.
-        io.github.hive-agi/hive-spi {:mvn/version "0.2.0"}
+        ;; 1.0.0: the ports carry a published stability promise, which is what
+        ;; lets this host make one of its own. See hive-spi's CHANGELOG.
+        io.github.hive-agi/hive-spi {:mvn/version "1.0.0"}
 
         ;; NO CONCRETE BACKEND BELONGS HERE. hive-milvus / hive-qdrant /
         ;; clj-qdrant depend on hive-mcp for their addon surface, so declaring
@@ -148,7 +152,7 @@
         ;; hive-mcp.addons.protocol re-exports it via def-aliases so the ~30
         ;; monorepo addon implementors can depend on hive-addon instead of
         ;; compile-depending on hive-mcp.
-        io.github.hive-agi/hive-addon {:mvn/version "0.3.7"}
+        io.github.hive-agi/hive-addon {:mvn/version "1.0.0"}
 
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
@@ -342,9 +346,10 @@
               "-XX:SoftMaxHeapSize=4g"
               "-XX:+ParallelRefProcEnabled"
               "-XX:-ExplicitGCInvokesConcurrent"]
-   :main-opts ["-m" "nrepl.cmdline"
-               "--port" "7910"
-               "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"]}
+   ;; Same main as the container. The system's :hive/nrepl component is the
+   ;; nREPL (HIVE_MCP_NREPL_PORT, default 7910); it resolves CIDER and
+   ;; refactor-nrepl from the classpath this alias supplies.
+   :main-opts ["-m" "hive-mcp.server.core"]}
 
   ;; Read-only, fixed-corpus embedding retrieval experiment.
   ;; Usage:
@@ -363,7 +368,7 @@
                 ;; Generative testing for spec validation
                 org.clojure/test.check {:mvn/version "1.1.3"}
                 ;; Trifecta macro: golden + property + mutation facets
-                io.github.hive-agi/hive-test {:mvn/version "0.3.15"}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.19"}
                 ;; hive-schemas.test — a malli schema drives hive-test property +
                 ;; mutation facets with no hand-written generator, oracle, or
                 ;; mutant. Must come from the JAR, not :local/root — the macros
@@ -391,7 +396,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.3"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.15"}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.19"}
                 ;; Must match :test. The runner LOADS every test namespace before
                 ;; it filters by selector, so a test ns requiring hive-schemas.test
                 ;; aborts this whole alias — all 405 namespaces — if the dep is
@@ -409,7 +414,7 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.3"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.15"}
+                io.github.hive-agi/hive-test {:mvn/version "0.3.19"}
                 ;; Same reason as :test-unit — this alias also puts test/ on the
                 ;; path, so it loads every test ns before selecting :integration.
                 io.github.hive-agi/hive-schemas {:mvn/version "0.1.26"}}
@@ -417,6 +422,21 @@
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
    :exec-args {:includes [:integration]}}
+
+  ;; Line/form coverage over the unit gate. Composes with :test-unit rather
+  ;; than replacing it, so the measured suite is the CI suite:
+  ;;
+  ;;   clojure -M:test-unit:coverage --ns-regex 'hive-mcp\.addons\..*'
+  ;;
+  ;; --ns-regex is not optional at this size. cloverage instruments every
+  ;; namespace it loads and holds the whole instrumented tree, so an
+  ;; unscoped run over all 428 unit namespaces is a multi-gigabyte JVM.
+  ;; Scope it, or run it where the heap is yours alone.
+  :coverage
+  {:extra-deps {cloverage/cloverage {:mvn/version "1.2.4"}}
+   :main-opts ["-m" "cloverage.coverage"
+               "-p" "src" "-s" "test"
+               "--text" "--no-html"]}
 
   ;; Backend-coupled tests, classpath-isolated off the default cold-CI path.
   ;; Compose with :test for shared infra + supply drivers via local.deps.edn:

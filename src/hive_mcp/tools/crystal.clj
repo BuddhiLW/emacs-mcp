@@ -11,7 +11,8 @@
             [hive-mcp.tools.core :refer [mcp-json mcp-error]]
             [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.crystal.core :as crystal]
-            [hive-mcp.crystal.hooks :as crystal-hooks]
+            [hive-mcp.crystal.harvest.collect :as collect]
+            [hive-mcp.crystal.synthesis :as synthesis]
             [hive-mcp.swarm.datascript :as ds]
             [hive-mcp.tools.memory.scope :as scope]
             [hive-mcp.events.core :as ev]
@@ -118,8 +119,8 @@
   ([effective-dir] (harvest effective-dir nil))
   ([effective-dir agent-id]
    (result/try-effect* :crystal/harvest-failed
-                       (crystal-hooks/harvest-all {:directory effective-dir
-                                                   :agent-id agent-id}))))
+                       (collect/harvest-all {:directory effective-dir
+                                             :agent-id agent-id}))))
 
 (defn- crystallize-session-result
   "Run crystallize-session, handling domain-level :error. Returns Result.
@@ -127,7 +128,7 @@
    success — the entry was stored but lifecycle ops had issues. Treat as ok."
   [harvested project-id]
   (try
-    (let [r (crystal-hooks/crystallize-session harvested)]
+    (let [r (synthesis/synthesize harvested)]
       (if (and (:error r) (not (:summary-id r)))
         (result/err :crystal/crystallize-failed
                     {:message (:error r) :project-id project-id})

@@ -35,10 +35,10 @@
 ;; =============================================================================
 
 (defn start-websocket-server!
-  "Start WebSocket MCP server if enabled via config.
+  "Start WebSocket MCP server if enabled via component or runtime config.
    Delegates to hive-mcp.server.transport.websocket-mcp."
-  []
-  (ws-mcp/start-websocket-server!))
+  ([] (ws-mcp/start-websocket-server!))
+  ([component-config] (ws-mcp/start-websocket-server! component-config)))
 
 ;; =============================================================================
 ;; WebSocket Channel (delegated to hive-mcp.server.transport.ws-channel)
@@ -67,8 +67,8 @@
 (defn start-a2a-gateway!
   "Start A2A JSON-RPC gateway for external agent interoperability.
    Delegates to hive-mcp.server.transport.a2a-gateway."
-  []
-  (a2a-gw/start-a2a-gateway!))
+  ([] (a2a-gw/start-a2a-gateway!))
+  ([component-config] (a2a-gw/start-a2a-gateway! component-config)))
 
 ;; =============================================================================
 ;; Legacy Channel (delegated to hive-mcp.server.transport.legacy)

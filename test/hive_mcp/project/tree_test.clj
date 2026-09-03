@@ -10,7 +10,8 @@
    - get-descendant-scope-tags: Convert descendant IDs to scope tags
    - get-descendant-scopes: Get raw descendant project IDs"
   (:require [clojure.test :refer [deftest is testing]]
-            [hive-mcp.project.tree :as tree]))
+            [hive-mcp.project.tree :as tree]
+            [clojure.set]))
 
 ;; =============================================================================
 ;; Test Data

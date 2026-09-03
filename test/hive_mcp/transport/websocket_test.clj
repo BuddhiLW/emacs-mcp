@@ -10,7 +10,10 @@
    Uses with-redefs for I/O mocking to keep tests fast (no actual network)."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.data.json :as json]
-            [hive-mcp.transport.websocket :as ws])
+            [hive-mcp.transport.websocket :as ws]
+            [aleph.http]
+            [aleph.netty]
+            [clojure.core.async])
   (:import [java.io File]))
 
 ;;; Test fixtures

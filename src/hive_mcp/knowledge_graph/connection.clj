@@ -17,7 +17,7 @@
             [hive-mcp.knowledge-graph.connection.strategy :as strategy]
             [hive-mcp.knowledge-graph.connection.temporal :as temporal]))
 
-(declare ensure-writer! stop-writer! writer-stats flush-pending! drain-writer! in-flight)
+(declare ensure-writer! stop-writer! writer-stats flush-pending! in-flight)
 
 (declare store-live? ensure-store! get-conn ensure-conn! ensure-conn reset-conn!
          delete-database! close! set-backend! backend-health)
@@ -248,8 +248,6 @@
 (def writer-stats hive-mcp.knowledge-graph.connection.writer/writer-stats)
 
 (def flush-pending! hive-mcp.knowledge-graph.connection.writer/flush-pending!)
-
-(def drain-writer! hive-mcp.knowledge-graph.connection.writer/drain-writer!)
 
 ;; in-flight: re-exported (^:private) because hive-ingestor's writer_guard
 ;; requiring-resolves connection/in-flight to observe queue depth; the canonical

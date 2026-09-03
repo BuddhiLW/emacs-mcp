@@ -105,7 +105,7 @@
                         :to tid
                         :relation relation
                         :confidence confidence}))
-    (conn/drain-writer!)
+    (conn/flush-pending!)
     sid))
 
 ;; =============================================================================
@@ -126,7 +126,7 @@
                         :to (raw-id)
                         :relation :depends-on
                         :confidence 0.5})
-      (conn/drain-writer!)
+      (conn/flush-pending!)
       (let [result (synthetics/list-synthetic-source-nodes)]
         (is (= 2 (count result)))
         (is (every? #(.startsWith ^String % "synth-") result))

@@ -126,3 +126,45 @@ jobs:
 
       - name: Print classpath (debug)
         run: clojure -Spath | tr ':' '\n' | head -30
+
+  boot:
+    # Resolution is not compilation. `clojure -P` succeeds against a jar that
+    # does not carry the var the source calls, and every workstation hides the
+    # gap behind a gitignored local.deps.edn full of :local/root siblings.
+    # This job loads the server closure from the COMMITTED deps.edn only.
+    name: Boot From Published Deps
+    runs-on: ubuntu-latest
+    needs: [deps]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Clojure
+        uses: DeLaGuardo/setup-clojure@13.2
+        with:
+          cli: '1.12.5.1664'
+
+      - name: Cache Maven deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          key: clj-${{ runner.os }}-${{ hashFiles('deps.edn') }}
+          restore-keys: |
+            clj-${{ runner.os }}-
+
+      - name: Load the bare core
+        run: clojure -J-Xmx2g -M:mcp -e "(require 'hive-mcp.server.core) (println :core-loaded)"
+
+      - name: Load the starter pack
+        run: |
+          clojure -Sdeps "$(cat starter.deps.edn)" -J-Xmx2g -M:mcp \
+            -e "(require 'hive-mcp.server.core) (println :starter-loaded)"

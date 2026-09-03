@@ -11,7 +11,8 @@
    - End-to-end mock execution"
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [hive-mcp.agent.drone.backend :as backend]
-            [hive-mcp.agent.drone.backend.fsm-agentic :as fsm-backend]))
+            [hive-mcp.agent.drone.backend.fsm-agentic :as fsm-backend]
+            [clojure.string]))
 
 ;; =============================================================================
 ;; Test Fixtures

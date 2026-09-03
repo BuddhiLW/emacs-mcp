@@ -8,7 +8,8 @@
             [hive-test.trifecta :refer [deftest-facets]]
             [hive-mcp.swarm.event-bridge :as bridge]
             [hive-mcp.protocols.event-backbone :as eb]
-            [hive-mcp.channel.core :as channel]))
+            [hive-mcp.channel.core :as channel]
+            [clojure.core.async]))
 
 ;; =============================================================================
 ;; FakeBackbone — records every call, pretends to be connected when asked.

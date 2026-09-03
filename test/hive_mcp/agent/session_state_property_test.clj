@@ -17,7 +17,8 @@
             [clojure.test.check.properties :as prop]
             [clojure.test.check.generators :as gen]
             [hive-dsl.adt :as adt :refer [adt-case]]
-            [hive-mcp.agent.session-state :as ss]))
+            [hive-mcp.agent.session-state :as ss]
+            [clojure.set]))
 
 ;; =============================================================================
 ;; Generators

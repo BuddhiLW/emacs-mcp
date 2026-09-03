@@ -4,7 +4,13 @@
             [hive-mcp.agent.hints :as hints]
             [hive-mcp.protocols.memory :as mem-proto]
             [hive-mcp.tools.catchup :as catchup]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [hive-mcp.knowledge-graph.disc]
+            [hive-mcp.knowledge-graph.edges]
+            [hive-mcp.knowledge-graph.queries]
+            [hive-mcp.tools.catchup.git]
+            [hive-mcp.tools.catchup.scope]
+            [hive-mcp.tools.memory.scope]))
 
 ;; Production code (hints.clj execute-hint-ids/execute-hint-queries/
 ;; generate-task-hints) fetches via the IMemoryStore protocol —

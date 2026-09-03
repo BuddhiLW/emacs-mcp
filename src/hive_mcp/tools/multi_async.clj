@@ -17,11 +17,10 @@
      4. cancel-async-batch: future-cancel a running batch
 
    Design decision: Phase 3 of Multi DSL plan (20260211212019-b8499942)"
-  (:require [hive-mcp.channel.context-store :as ctx]
+  (:require [hive-dsl.bounded-atom :refer [bounded-atom bput! bget bounded-swap! bclear! register-sweepable!]]
+            [hive-mcp.channel.context-store :as ctx]
             [hive-mcp.dns.result :as result]
-            [taoensso.timbre :as log]
-            [hive-dsl.bounded-atom :refer [bounded-atom bput! bget bounded-swap!
-                                           bclear! bkeys register-sweepable!]]))
+            [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

@@ -12,7 +12,8 @@
             [hive-mcp.channel.instruction-store :as istore]
             [hive-mcp.server.guards :as guards]
             [taoensso.timbre :as log]
-            [hive-mcp.channel.audience :as audience]))
+            [hive-mcp.channel.audience :as audience]
+            [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

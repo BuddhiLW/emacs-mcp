@@ -4,7 +4,8 @@
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
-            [hive-mcp.tools.consolidated.workflow.drone :as drone]))
+            [hive-mcp.tools.consolidated.workflow.drone :as drone]
+            [clojure.string]))
 
 ;; ── Generators ─────────────────────────────────────────────────────────────
 

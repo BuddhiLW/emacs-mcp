@@ -11,7 +11,8 @@
             [hive-mcp.swarm.datascript.connection :as conn]
             [hive-mcp.swarm.datascript.coordination :as coordination]
             [hive-test.isolation :as iso]
-            [hive-mcp.isolation-methods]))
+            [hive-mcp.isolation-methods]
+            [datascript.core]))
 
 ;;; =============================================================================
 ;;; Test Fixtures

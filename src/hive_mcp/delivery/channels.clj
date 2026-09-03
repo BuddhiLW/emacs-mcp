@@ -12,7 +12,8 @@
    All deliveries are non-fatal — failures log but don't propagate."
 
   (:require [hive-mcp.protocols.delivery-channel :as dc]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [clojure.string :as str]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

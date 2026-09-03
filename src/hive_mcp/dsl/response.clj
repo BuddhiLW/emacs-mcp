@@ -6,9 +6,7 @@
    Extension points are resolved via the extensions registry at startup.
    When no extensions are registered, all functions gracefully degrade
    to pass-through (input returned unchanged)."
-  (:require [hive-mcp.extensions.registry :as ext]
-            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
-            [taoensso.timbre :as log]))
+  (:require [hive-mcp.extensions.delegate :refer [delegate-or-noop]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

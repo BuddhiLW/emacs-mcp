@@ -4,15 +4,14 @@
    Project's own commands stay flat (info, files, search, etc.).
    Absorbed domains use nested prefixes: 'kanban list', 'config get', etc.
    Addons can extend via contribute-commands! \"project\"."
-  (:require [hive-mcp.tools.cli :refer [make-cli-handler]]
-            [hive-mcp.tools.composite :as composite]
-            [hive-mcp.tools.core :as tcore]
-            [hive-mcp.tools.result-bridge :as rb]
-            [hive-mcp.tools.projectile :as projectile-handlers]
-            [hive-mcp.project.tree :as tree]
+  (:require [clojure.string :as str]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.dns.result :as result]
-            [clojure.string :as str]
+            [hive-mcp.project.tree :as tree]
+            [hive-mcp.tools.composite :as composite]
+            [hive-mcp.tools.core :as tcore]
+            [hive-mcp.tools.projectile :as projectile-handlers]
+            [hive-mcp.tools.result-bridge :as rb]
             [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>

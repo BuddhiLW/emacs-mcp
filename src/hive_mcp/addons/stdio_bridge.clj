@@ -95,6 +95,10 @@
 
   (schema-extensions [_] {})
 
+  (excluded-tools [_] #{})
+
+  (hooks [_] {})
+
   (health [_]
     (if-let [s @state]
       {:status (if (.isAlive ^Process (:process s)) :ok :down)

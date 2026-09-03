@@ -7,7 +7,7 @@
    When Milvus is ready, create an analogous milvus-contract-runner-test
    that binds the same factory to MilvusMemoryStore/create-store."
   (:require [clojure.test :refer [deftest testing is use-fixtures]]
-            [hive-mcp.memory.store.contract-test :as contract]
+            [hive-test.memory.store-contract :as contract]
             [hive-mcp.memory.store.chroma :as chroma-store]
             [hive-mcp.protocols.memory :as proto]))
 

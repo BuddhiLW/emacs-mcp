@@ -5,7 +5,8 @@
   (:require [clojure.test :refer [deftest is testing]]
             [hive-mcp.events.handlers.task :as task]
             [hive-mcp.events.handlers.session :as session]
-            [hive-mcp.events.handlers.kanban :as kanban]))
+            [hive-mcp.events.handlers.kanban :as kanban]
+            [clojure.string]))
 
 ;; =============================================================================
 ;; P5-1: :task/shout-complete handler tests

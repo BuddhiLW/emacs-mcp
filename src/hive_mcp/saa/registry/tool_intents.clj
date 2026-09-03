@@ -11,8 +11,7 @@
 
    Storage:
      :by-intent  intent-kw → {owner-kw → #{tool ...}}
-     :by-owner   owner-kw  → #{intent-kw ...}"
-  (:require [taoensso.timbre :as log]))
+     :by-owner   owner-kw  → #{intent-kw ...}")
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

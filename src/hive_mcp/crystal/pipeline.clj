@@ -18,7 +18,7 @@
    Pure functions — no side effects beyond future execution for parallelism.
 
    DDD: Application service layer — composes harvest sources into synthesis input."
-  (:require [hive-dsl.adt :refer [defadt adt-case]]
+  (:require [hive-dsl.adt :refer [defadt]]
             [hive-mcp.dns.result :as result]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>

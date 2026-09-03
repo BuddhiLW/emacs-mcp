@@ -32,7 +32,8 @@
             [hive-mcp.crystal.core :as crystal]
             [hive-mcp.agent.context :as ctx]
             [hive-mcp.tools.memory.scope :as scope]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [clojure.java.shell]))
 
 ;; =============================================================================
 ;; Mock infrastructure — deterministic deps for all sources

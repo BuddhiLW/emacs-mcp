@@ -458,6 +458,10 @@
 
   (schema-extensions [_] {})
 
+  (excluded-tools [_] #{})
+
+  (hooks [_] {})
+
   (health [_]
     {:status :down
      :details {:version "0.0.0"

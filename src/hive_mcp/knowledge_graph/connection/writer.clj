@@ -6,7 +6,7 @@
             [hive-mcp.knowledge-graph.protocol :as proto]
             [taoensso.timbre :as log]))
 
-(declare coalesce-window-ms coalesce-max-batch writer-state writer-metrics in-flight flush-batch! start-writer-loop! ensure-writer! stop-writer! writer-stats flush-pending! drain-writer! offer-coalesced! write-sync-fallback!)
+(declare coalesce-window-ms coalesce-max-batch writer-state writer-metrics in-flight flush-batch! start-writer-loop! ensure-writer! stop-writer! writer-stats flush-pending! offer-coalesced! write-sync-fallback!)
 
 (def ^:private coalesce-window-ms
   "Time window to drain additional items before flushing batch.
@@ -175,13 +175,6 @@
            :else
            (do (Thread/sleep 5)
                (recur))))))))
-
-(defn drain-writer!
-  "Deprecated — prefer flush-pending!. Retained as alias for callers and tests
-   that still reference the old name."
-  {:deprecated "use flush-pending!"}
-  []
-  (flush-pending!))
 
 (defn offer-coalesced!
   "Enqueue tx-data on the write-coalescing channel. Pre-increments in-flight

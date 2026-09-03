@@ -4,7 +4,7 @@
    Pure formatting functions + effectful boundary for memory store storage
    and lifecycle operations (promotion, decay, xpoll, memory-decay, provenance).
 
-   Input:  harvested map (from hooks/harvest-all)
+   Input:  harvested map (from crystal.harvest.collect/harvest-all)
    Output: SessionSummary map
 
    SessionSummary shape (content path):

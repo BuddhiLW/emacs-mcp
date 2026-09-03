@@ -37,6 +37,7 @@
    failures) while still violating its allocation budget — health
    budgets are the layer that catches the slow leak before it
    manifests as the next OOM cascade."
+  (:refer-clojure :exclude [reset!])
   (:require [hive-dsl.result :refer [rescue]]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
@@ -47,7 +48,7 @@
 ;; Allocation source — late-resolved through ThreadMXBean
 ;; -----------------------------------------------------------------------------
 
-(defn- ^Long thread-allocated-bytes
+(defn- thread-allocated-bytes
   "Bytes allocated by the calling thread since it started, or nil if
    the JVM (e.g. non-HotSpot) doesn't expose
    `com.sun.management.ThreadMXBean/getThreadAllocatedBytes`. Cached

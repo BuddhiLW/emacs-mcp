@@ -14,12 +14,14 @@
    the plan map, tagged `multi-plan`. They decay along normal memory rules.
 
    Decision: 20260429230453-7e7627cc"
+  (:refer-clojure :exclude [run!])
   (:require [hive.events.multi :as ev-multi]
             [hive-mcp.multi.registry :as registry]
             [hive-dsl.result :as r :refer [rescue]]
             [clojure.edn :as edn]
             [taoensso.timbre :as log]
-            [hive-mcp.multi.util :as util]))
+            [hive-mcp.multi.util :as util]
+            [clojure.string :as str]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

@@ -22,7 +22,7 @@
 #   CHROMA_HOST/CHROMA_PORT   default localhost:8000
 #   NATS_HOST/NATS_PORT       default localhost:4222
 #   OLLAMA_HOST               default http://localhost:11434
-#   HIVE_NREPL_PORT           default 7910 (the :nrepl alias default)
+#   HIVE_NREPL_PORT           default 7910 (the embedded nREPL default)
 #   WAIT_TIMEOUT              seconds to wait per service, default 90
 
 set -euo pipefail
@@ -152,6 +152,7 @@ if [ "${HIVE_STARTER:-1}" != "0" ] && [ -f "$REPO_ROOT/starter.deps.edn" ]; then
   log "merging starter.deps.edn (HIVE_STARTER=0 to skip)"
 fi
 
-# The :nrepl alias pins --port in its :main-opts; nrepl.cmdline takes the LAST
-# --port it is given, so appending here is what makes HIVE_NREPL_PORT effective.
-exec clojure ${SDEPS_ARG[@]+"${SDEPS_ARG[@]}"} -M:dev:nrepl --port "$HIVE_NREPL_PORT"
+# The system's :hive/nrepl component binds the nREPL and reads
+# HIVE_MCP_NREPL_PORT; HIVE_NREPL_PORT is this launcher's public knob for it.
+export HIVE_MCP_NREPL_PORT="$HIVE_NREPL_PORT"
+exec clojure ${SDEPS_ARG[@]+"${SDEPS_ARG[@]}"} -M:dev:nrepl

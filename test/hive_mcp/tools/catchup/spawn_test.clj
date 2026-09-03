@@ -7,7 +7,12 @@
             [hive-mcp.tools.catchup.spawn :as spawn]
             [hive-mcp.channel.context-store :as ctx-store]
             [hive-mcp.test.stub.extensions :as ext-stub]
-            [hive-mcp.test.stub.memory-store :as stub]))
+            [hive-mcp.test.stub.memory-store :as stub]
+            [hive-mcp.agent.hints]
+            [hive-mcp.knowledge-graph.edges]
+            [hive-mcp.tools.catchup.git]
+            [hive-mcp.tools.catchup.scope]
+            [hive-mcp.tools.memory.scope]))
 
 ;; =============================================================================
 ;; Fixtures

@@ -6,7 +6,8 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [hive-mcp.tools.consolidated.workflow.forge-ops :as forge-ops]
-            [clojure.data.json :as json]))
+            [clojure.data.json :as json]
+            [clojure.string]))
 
 ;; ── Generators ─────────────────────────────────────────────────────────────
 

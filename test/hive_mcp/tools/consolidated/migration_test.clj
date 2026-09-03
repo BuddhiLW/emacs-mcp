@@ -15,7 +15,8 @@
             [hive-mcp.tools.consolidated.migration :as c-migration]
             [hive-mcp.tools.migration :as migration-handlers]
             [hive-mcp.migration.core :as core]
-            [hive-mcp.migration.adapter :as adapter]))
+            [hive-mcp.migration.adapter :as adapter]
+            [hive-mcp.knowledge-graph.migration]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

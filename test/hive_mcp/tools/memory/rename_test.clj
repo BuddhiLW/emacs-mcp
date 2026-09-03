@@ -22,7 +22,8 @@
             [hive-spi.memory.registry :as registry]
             [hive-test.isolation :as iso]
             [hive-mcp.isolation-methods]
-            [hive-mcp.test.stub.memory-store :as mem-stub]))
+            [hive-mcp.test.stub.memory-store :as mem-stub]
+            [hive-mcp.chroma.core]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

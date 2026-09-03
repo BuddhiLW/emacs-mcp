@@ -15,7 +15,7 @@
   (:require [clojure.test :refer [deftest testing is]]
             [clojure.data.json :as json]
             ;; Wrap path
-            [hive-mcp.crystal.hooks :as hooks]
+            [hive-mcp.crystal.harvest.collect :as collect]
             [hive-mcp.crystal.core :as crystal]
             [hive-mcp.crystal.recall :as recall]
             [hive-mcp.crystal.synthesis :as synthesis]
@@ -280,7 +280,7 @@
                       :project-id test-project})
 
                   ;; Run harvest-all (delegates to collect/harvest-all)
-                  harvested (hooks/harvest-all {:directory test-directory
+                  harvested (collect/harvest-all {:directory test-directory
                                                 :agent-id test-agent})
 
                   ;; Verify harvest captured the progress notes
@@ -292,7 +292,7 @@
                         "harvest directory should match")
 
                   ;; Run crystallize-session (synthesis/synthesize)
-                  crystal-result (hooks/crystallize-session harvested)
+                  crystal-result (synthesis/synthesize harvested)
 
                   ;; Verify crystallization produced a summary
                   _ (is (not (:skipped crystal-result))
@@ -398,9 +398,9 @@
             :project-id test-project})
 
           ;; Wrap: harvest + crystallize
-          (let [harvested (hooks/harvest-all {:directory test-directory
+          (let [harvested (collect/harvest-all {:directory test-directory
                                               :agent-id test-agent})
-                crystal-result (hooks/crystallize-session harvested)
+                crystal-result (synthesis/synthesize harvested)
                 summary-id (:summary-id crystal-result)]
 
             (is (some? summary-id) "wrap should produce a summary-id")
@@ -455,9 +455,9 @@
           (with-redefs [crystal/get-session-start (fn [& _] nil)]
 
             ;; Wrap with empty session (no progress notes, no tasks, no commits)
-            (let [harvested (hooks/harvest-all {:directory test-directory
+            (let [harvested (collect/harvest-all {:directory test-directory
                                                 :agent-id test-agent})
-                  crystal-result (hooks/crystallize-session harvested)]
+                  crystal-result (synthesis/synthesize harvested)]
 
               ;; No content => minimal breadcrumb, NOT a skip
               (is (not (:skipped crystal-result))

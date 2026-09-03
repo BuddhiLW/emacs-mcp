@@ -1,15 +1,14 @@
 (ns hive-mcp.tools.swarm.validated-wave
   "Validated wave execution with self-healing lint-and-retry loop."
-  (:require [hive-mcp.tools.swarm.wave :as wave]
-            [hive-mcp.analysis.resolve :as resolve]
-            [hive-mcp.tools.core :refer [mcp-error]]
-            [hive-mcp.agent.context :as ctx]
-            [hive-mcp.events.core :as ev]
-            [clojure.data.json :as json]
+  (:require [clojure.data.json :as json]
             [clojure.string :as str]
-            [taoensso.timbre :as log]
-            [hive-dsl.bounded-atom :refer [bounded-atom bput! bget bounded-swap!
-                                           bclear! register-sweepable!]]))
+            [hive-dsl.bounded-atom :refer [bounded-atom bput! bget register-sweepable!]]
+            [hive-mcp.agent.context :as ctx]
+            [hive-mcp.analysis.resolve :as resolve]
+            [hive-mcp.events.core :as ev]
+            [hive-mcp.tools.core :refer [mcp-error]]
+            [hive-mcp.tools.swarm.wave :as wave]
+            [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

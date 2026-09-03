@@ -1,2 +1,9 @@
 ;; clj-kondo config exported by hive-weave.
-{:lint-as {hive-weave.async/bound-go-loop clojure.core/loop}}
+;; Consumers pick it up with:
+;;   clj-kondo --lint "$(clojure -Spath)" --dependencies --parallel --copy-configs
+{:lint-as {hive-weave.async/bound-go-loop clojure.core/loop}
+
+ :hooks
+ {:analyze-call
+  {hive-weave.async/safe-go      hive-weave.hooks.async/safe-go
+   hive-weave.async/safe-go-loop hive-weave.hooks.async/safe-go-loop}}}

@@ -4,7 +4,8 @@
    Tests the consensus detection logic using mocked schema functions.
    The schema namespace is created by a separate ling."
   (:require [clojure.test :refer [deftest testing is are use-fixtures]]
-            [hive-mcp.agora.consensus :as consensus]))
+            [hive-mcp.agora.consensus :as consensus]
+            [hive-mcp.agora.schema]))
 
 ;; =============================================================================
 ;; Test Fixtures - Mock Schema Functions

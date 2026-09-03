@@ -6,7 +6,7 @@
    run. A stub that drifts from the contract stops being a valid substitute for
    a real backend in the tests that inject it."
   (:require [clojure.test :refer [deftest use-fixtures is testing]]
-            [hive-mcp.memory.store.contract-test :as contract]
+            [hive-test.memory.store-contract :as contract]
             [hive-mcp.protocols.memory :as proto]
             [hive-mcp.test.stub.memory-store :as stub]))
 

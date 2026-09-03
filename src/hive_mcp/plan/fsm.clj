@@ -25,7 +25,6 @@
    The FSM spec is compiled once and reused. Resources inject
    memory/kanban/KG clients for side effects during transitions."
 
-  (:refer-clojure :exclude [compile])
   (:require [hive.events.fsm :as fsm]
             [hive-mcp.plan.schema :as schema]
             [hive-mcp.plan.parser :as parser]
