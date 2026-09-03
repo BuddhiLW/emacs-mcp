@@ -4,18 +4,62 @@ Notable changes to hive-mcp. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-This file starts at 0.22.0. Earlier history is in the git log and the release
-tags.
+This file starts at 1.0.0, which absorbs the work that accumulated on
+`staging/v0.22.0`. Earlier history is in the git log and the release tags.
 
 ## What the version number promises
 
-Until 1.0.0 the public seam may still move between minor versions. The seam is
-the MCP tool surface, the addon manifest format, and the `IAddon` contract in
-`io.github.hive-agi/hive-addon`. 1.0.0 follows hive-addon and hive-spi reaching
-1.0, not the other way round: a host cannot promise stability over ports that
-do not promise it.
+From 1.0.0 the public seam does not move without a major bump. The seam is
+three things:
 
-## [Unreleased]
+1. **The MCP tool surface**: the tool root names, their `command` vocabulary
+   and the shape of a tool's arguments. Adding a root, a command or an optional
+   argument is minor. Removing or renaming one, or making an optional argument
+   required, is major.
+2. **The addon manifest format** and the `IAddon` contract in
+   `io.github.hive-agi/hive-addon`, which reached 1.0.0 alongside this release.
+   An addon that mounts against hive-mcp 1.x keeps mounting across 1.x.
+3. **The ports in `io.github.hive-agi/hive-spi`**, also 1.0.0. A host cannot
+   promise stability over ports that publish no promise of their own, which is
+   why those two went first.
+
+What is deliberately NOT promised: anything under an implementation namespace
+that the tool surface does not expose, the wire format of internal events, and
+the on-disk layout of the stores.
+
+One thing the artifact does promise that is easy to miss: hive-mcp 1.x ships
+the datalog backends (datahike, datalevin, datascript) as dependencies. Work is
+under way to move them behind ports into sibling libraries
+([DEVINCULATE-DATALOG]); when they leave the default tree, that is a major
+bump, not a quiet minor, because a consumer's storage would change under it.
+
+## [1.0.0]
+
+1.0.0 is not a feature release. It is the release where the seam stops moving,
+and the work below is what had to be true first: the committed tree boots and
+tests on a clean checkout, the shipped container binds every port it announces,
+the host no longer calls its own deprecated vars, and the two libraries the
+contract rests on (hive-spi, hive-addon) publish 1.0.0 promises of their own.
+
+Two large refactors stay open on purpose, because neither changes the seam:
+[MQ-ADOPT] (internal addon-loader cutover) and [DEVINCULATE-DATALOG] (moving
+the datalog drivers behind ports). Shipping 1.0 says the contract is stable,
+not that the roadmap is empty.
+
+### Changed
+
+- `io.github.hive-agi/hive-spi` 0.2.1 to **1.0.0** and
+  `io.github.hive-agi/hive-addon` 0.3.12 to **1.0.0**. Both gained a CHANGELOG
+  and a versioning statement saying what a major, minor and patch mean for an
+  implementor; neither changed a contract to get there. This pin is the
+  substance of hive-mcp's own promise, not a routine bump: a host cannot
+  promise stability over ports that publish none.
+- `clj-kondo` over `src`: 129 warnings to 67, 0 errors. Twenty-six files
+  carried a require or a refer nothing used. `tools/registry.clj` is the
+  opposite case and now states it: its twelve legacy consolidated requires are
+  loaded for their registration side effect, excluded by name in an ns-level
+  linter config rather than by switching the linter off, so a genuinely dead
+  require there still reports.
 
 ### Removed
 

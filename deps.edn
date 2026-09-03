@@ -130,9 +130,9 @@
         ;; git tag (== master head) so CI and the Clojars jar build resolve it
         ;; without a sibling checkout; sibling co-dev goes through a gitignored
         ;; local.deps.edn :local/root override.
-        ;; Floor 0.2.1: hive-mcp.addons.headless-caps re-exports
-        ;; hive-spi.addon.headless-caps, which 0.2.0 does not carry.
-        io.github.hive-agi/hive-spi {:mvn/version "0.2.1"}
+        ;; 1.0.0: the ports carry a published stability promise, which is what
+        ;; lets this host make one of its own. See hive-spi's CHANGELOG.
+        io.github.hive-agi/hive-spi {:mvn/version "1.0.0"}
 
         ;; NO CONCRETE BACKEND BELONGS HERE. hive-milvus / hive-qdrant /
         ;; clj-qdrant depend on hive-mcp for their addon surface, so declaring
@@ -152,7 +152,7 @@
         ;; hive-mcp.addons.protocol re-exports it via def-aliases so the ~30
         ;; monorepo addon implementors can depend on hive-addon instead of
         ;; compile-depending on hive-mcp.
-        io.github.hive-agi/hive-addon {:mvn/version "0.3.12"}
+        io.github.hive-agi/hive-addon {:mvn/version "1.0.0"}
 
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
