@@ -1,12 +1,13 @@
 (ns hive-mcp.tools.diff.batch
   "Multi-drone batch operations for diff review and approval."
-  (:require [hive-mcp.tools.core :refer [mcp-json]]
-            [hive-mcp.tools.diff.state :as state :refer [mcp-error-json]]
+  (:require [clojure.data.json :as json]
+            [hive-dsl.bounded-atom :refer [bget]]
+            [hive-dsl.result :refer [rescue]]
+            [hive-mcp.tools.core :refer [mcp-json]]
             [hive-mcp.tools.diff.auto-approve :as auto-approve]
             [hive-mcp.tools.diff.handlers :as handlers]
-            [clojure.data.json :as json]
-            [taoensso.timbre :as log]
-            [hive-dsl.bounded-atom :refer [bget bkeys]] [hive-dsl.result :refer [rescue]]))
+            [hive-mcp.tools.diff.state :as state :refer [mcp-error-json]]
+            [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

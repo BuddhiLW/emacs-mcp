@@ -1,15 +1,15 @@
 (ns hive-mcp.hivemind.status
   "Hivemind status queries and agent lifecycle management."
 
-  (:require [hive-mcp.hivemind.state :as state]
+  (:require [hive-dsl.bounded-atom :refer [bput! bget bounded-swap!]]
             [hive-mcp.channel.core :as channel]
             [hive-mcp.channel.websocket :as ws]
-            [hive-mcp.swarm.protocol :as proto]
+            [hive-mcp.hivemind.state :as state]
             [hive-mcp.swarm.datascript.registry :as registry]
             [hive-mcp.swarm.logic :as logic]
+            [hive-mcp.swarm.protocol :as proto]
             [hive-mcp.tools.memory.scope :as mem-scope]
-            [taoensso.timbre :as log]
-            [hive-dsl.bounded-atom :refer [bput! bget bounded-swap! bkeys]]))
+            [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

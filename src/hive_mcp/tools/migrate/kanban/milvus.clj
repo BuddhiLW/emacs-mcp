@@ -9,11 +9,10 @@
                          3 round-trips total instead of 150."
   (:require [clojure.string :as str]
             [hive-dsl.result :as r]
-            [hive-mcp.protocols.memory :as proto]
-            [hive-mcp.tools.migrate.kanban.pure :as pure]
             [hive-mcp.tools.migrate.kanban.ports :as ports]
-            [taoensso.timbre :as log]
-            [hive-mcp.tools.migrate.optional :as opt]))
+            [hive-mcp.tools.migrate.kanban.pure :as pure]
+            [hive-mcp.tools.migrate.optional :as opt]
+            [taoensso.timbre :as log]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

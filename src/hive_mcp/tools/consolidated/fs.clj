@@ -5,8 +5,7 @@
    Addons can override/extend via contribute-commands! targeting \"fs\".
 
    Commands: read, write, glob, grep"
-  (:require [hive-mcp.tools.composite :as composite]
-            [hive-mcp.tools.cli :as cli]))
+  (:require [hive-mcp.tools.composite :as composite]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

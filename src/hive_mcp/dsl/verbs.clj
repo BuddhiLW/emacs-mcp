@@ -22,10 +22,8 @@
 
    Design decision: 20260211212019-b8499942 (Multi DSL plan, Phase 2)"
   (:require [clojure.string :as str]
-            [hive-mcp.extensions.registry :as ext]
-            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
-            [taoensso.timbre :as log]
-            [hive-mcp.dsl.param-domain :as pd]))
+            [hive-mcp.dsl.param-domain :as pd]
+            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

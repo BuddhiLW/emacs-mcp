@@ -8,6 +8,27 @@
    (apply-visibility-gate + config [:tool-roots :visible]): non-allowlisted
    tools are marked :deprecated so tools/list hides them while tools/call
    keeps them callable (back-compat)."
+  ;; The legacy consolidated namespaces below are loaded for their
+  ;; REGISTRATION side effect: each registers its handlers at load time and
+  ;; multi routing resolves them by name, so nothing here calls them through
+  ;; their alias. Excluded by name rather than by switching the linter off, so
+  ;; a genuinely dead require in this ns still reports.
+  {:clj-kondo/config
+   '{:linters
+     {:unused-namespace
+      {:exclude [hive-mcp.tools.consolidated.agent
+                 hive-mcp.tools.consolidated.wave
+                 hive-mcp.tools.consolidated.hivemind
+                 hive-mcp.tools.consolidated.agora
+                 hive-mcp.tools.consolidated.olympus
+                 hive-mcp.tools.consolidated.kanban
+                 hive-mcp.tools.consolidated.config
+                 hive-mcp.tools.consolidated.session
+                 hive-mcp.tools.consolidated.workflow
+                 hive-mcp.tools.consolidated.kg
+                 hive-mcp.tools.consolidated.migration
+                 hive-mcp.tools.consolidated.magit
+                 hive-mcp.tools.composite]}}}}
   (:require [hive-mcp.channel.core :as channel]
    ;; Domain-grouped tool roots
             [hive-mcp.tools.consolidated.code :as c-code]
@@ -36,7 +57,6 @@
             [hive-mcp.tools.events.core :as c-events]
             [hive-mcp.tools.composite :as composite]
             [hive-mcp.extensions.registry :as ext]
-            [clojure.string :as str]
             [taoensso.timbre :as log]
             [hive-mcp.tools.consolidated.migrate-kanban :as c-migrate-kanban]
             [hive-mcp.tools.consolidated.hot :as c-hot]))

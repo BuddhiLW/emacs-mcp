@@ -1,15 +1,15 @@
 (ns hive-mcp.tools.diff.handlers
   "Core MCP handlers for diff propose, list, apply, reject, and details."
-  (:require [hive-mcp.tools.core :refer [mcp-json]]
-            [hive-mcp.tools.diff.state :as state :refer [mcp-error-json]]
-            [hive-mcp.tools.diff.compute :as compute]
-            [hive-mcp.tools.diff.validation :as validation]
-            [hive-mcp.tools.diff.auto-approve :as auto-approve]
-            [hive-mcp.agent.context :as ctx]
+  (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.java.io :as io]
-            [taoensso.timbre :as log]
-            [hive-dsl.bounded-atom :refer [bput! bget bounded-swap! bkeys]]))
+            [hive-dsl.bounded-atom :refer [bput! bget bounded-swap!]]
+            [hive-mcp.agent.context :as ctx]
+            [hive-mcp.tools.core :refer [mcp-json]]
+            [hive-mcp.tools.diff.auto-approve :as auto-approve]
+            [hive-mcp.tools.diff.compute :as compute]
+            [hive-mcp.tools.diff.state :as state :refer [mcp-error-json]]
+            [hive-mcp.tools.diff.validation :as validation]
+            [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

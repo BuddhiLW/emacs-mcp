@@ -1,10 +1,11 @@
 (ns hive-mcp.agent.drone.diff-mgmt
   "Diff lifecycle management during drone execution."
-  (:require [hive-mcp.tools.diff :as diff]
-            [clojure.data.json :as json]
+  (:require [clojure.data.json :as json]
             [clojure.set]
-            [taoensso.timbre :as log]
-            [hive-dsl.bounded-atom :refer [bget bput! bounded-swap! bkeys]] [hive-dsl.result :refer [rescue]]))
+            [hive-dsl.bounded-atom :refer [bget bput! bkeys]]
+            [hive-dsl.result :refer [rescue]]
+            [hive-mcp.tools.diff :as diff]
+            [taoensso.timbre :as log]))
 
 (defrecord DiffResults
            [applied failed proposed])

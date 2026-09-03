@@ -4,11 +4,11 @@
    Memory's own commands stay flat (add, query, search, etc.).
    Core subdomains use nested prefixes: 'kg edge', 'migration backup'.
    Addons extend via contribute-commands! \"memory\" (OCP)."
-  (:require [hive-mcp.tools.cli :refer [make-cli-handler make-batch-handler]]
-            [hive-mcp.tools.composite :as composite]
-            [hive-mcp.tools.memory :as mem]
+  (:require [hive-mcp.events.core :as ev]
             [hive-mcp.memory.type-registry :as type-registry]
-            [hive-mcp.events.core :as ev]))
+            [hive-mcp.tools.cli :refer [make-batch-handler]]
+            [hive-mcp.tools.composite :as composite]
+            [hive-mcp.tools.memory :as mem]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

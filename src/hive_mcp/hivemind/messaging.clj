@@ -5,20 +5,20 @@
    Fallback fanout uses IDeliveryChannel registry — no hardcoded transports.
    Local state (atom, DataScript) still updated synchronously for consistency."
 
-  (:require [hive-mcp.hivemind.state :as state]
-            [hive-mcp.hivemind.event-registry :as event-registry]
+  (:require [clojure.core.async :as async :refer [>!! chan timeout alt!!]]
+            [hive-dsl.bounded-atom :refer [bput! bget]]
             [hive-mcp.channel.core :as channel]
             [hive-mcp.channel.piggyback :as piggyback]
-            [hive-mcp.protocols.event-backbone :as eb]
+            [hive-mcp.hivemind.event-registry :as event-registry]
+            [hive-mcp.hivemind.state :as state]
             [hive-mcp.protocols.delivery-channel :as dc]
+            [hive-mcp.protocols.event-backbone :as eb]
             [hive-mcp.protocols.vessel :as vessel]
-            [hive-mcp.swarm.protocol :as proto]
-            [hive-mcp.swarm.datascript.registry :as registry]
             [hive-mcp.swarm.datascript.queries :as queries]
+            [hive-mcp.swarm.datascript.registry :as registry]
+            [hive-mcp.swarm.protocol :as proto]
             [hive-mcp.tools.memory.scope :as mem-scope]
-            [clojure.core.async :as async :refer [>!! chan timeout alt!!]]
-            [taoensso.timbre :as log]
-            [hive-dsl.bounded-atom :refer [bput! bget bounded-swap!]])
+            [taoensso.timbre :as log])
   (:import [java.lang Exception]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

@@ -1,9 +1,8 @@
 (ns hive-mcp.agent.mcp
   "MCP tool definitions for agent delegation."
-  (:require [hive-mcp.agent.config :as config]
-            [hive-mcp.tools.core :refer [mcp-error mcp-json]]
+  (:require [clojure.string :as str]
             [hive-mcp.telemetry.prometheus :as prom]
-            [clojure.string :as str]
+            [hive-mcp.tools.core :refer [mcp-error mcp-json]]
             [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;

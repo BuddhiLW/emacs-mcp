@@ -1,10 +1,9 @@
 (ns hive-mcp.tools.diff.state
   "Diff state management: atoms, error helpers, TDD status."
-  (:require [hive-mcp.server.guards :as guards]
-            [clojure.data.json :as json]
-            [taoensso.timbre :as log]
-            [hive-dsl.bounded-atom :refer [bounded-atom bput! bget bounded-swap!
-                                           bclear! register-sweepable!]]))
+  (:require [clojure.data.json :as json]
+            [hive-dsl.bounded-atom :refer [bounded-atom bput! bget bclear! register-sweepable!]]
+            [hive-mcp.server.guards :as guards]
+            [taoensso.timbre :as log]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later

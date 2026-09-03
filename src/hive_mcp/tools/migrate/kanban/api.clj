@@ -12,8 +12,7 @@
 
    Override any slot to swap stores (test stubs, alternate backends)."
   (:refer-clojure :exclude [run! reset!])
-  (:require [hive-dsl.result :as r]
-            [hive-mcp.protocols.memory :as proto]
+  (:require [hive-mcp.protocols.memory :as proto]
             [hive-mcp.tools.migrate.kanban.events :as mig-events]
             [hive-mcp.tools.migrate.kanban.milvus :as mig-milvus]
             [hive-mcp.tools.migrate.kanban.qdrant :as mig-qdrant]

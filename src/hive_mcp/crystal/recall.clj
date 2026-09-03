@@ -1,14 +1,12 @@
 (ns hive-mcp.crystal.recall
   "Recall tracking with context-aware weighting.
    Extension points resolved via extensions registry."
-  (:require [hive-mcp.crystal.core :as crystal]
-            [hive-mcp.extensions.registry :as ext]
-            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
-            [hive-mcp.engine.bounded.protocol :as bp]
-            [hive-mcp.engine.bounded.lru :as lru]
+  (:require [clojure.string :as str]
             [hive-dsl.adt :refer [defadt adt-case]]
-            [clojure.string :as str]
-            [taoensso.timbre :as log]))
+            [hive-mcp.crystal.core :as crystal]
+            [hive-mcp.engine.bounded.lru :as lru]
+            [hive-mcp.engine.bounded.protocol :as bp]
+            [hive-mcp.extensions.delegate :refer [delegate-or-noop]]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
