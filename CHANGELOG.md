@@ -40,6 +40,15 @@ do not promise it.
 
 ### Fixed
 
+- Every desktop launch (`-M:dev:nrepl`) died with `BindException: Address
+  already in use` on port 7910 as soon as the embedded nREPL actually started
+  (0b61a5e). `dev/user.clj` booted the system before `nrepl.cmdline` ran, so
+  the `:hive/nrepl` component bound 7910 first and the alias's second nREPL
+  had nothing left to bind. The `:nrepl` alias now runs
+  `hive-mcp.server.core`, the container's main, and the embedded server is
+  the only nREPL: it resolves refactor-nrepl beside CIDER when present and
+  writes `.nrepl-port`. `bin/hive-mcp-foss` passes `HIVE_NREPL_PORT` through
+  `HIVE_MCP_NREPL_PORT` instead of appending `--port`.
 - The container built and then died on boot. `hive-mcp.events.registry`
   delegates to `hive.events.router/get-event`, `get-interceptors` and
   `append-interceptor!`, none of which existed in a published hive-events jar

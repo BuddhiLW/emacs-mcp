@@ -50,6 +50,7 @@
         (let [stop-server (resolve 'nrepl.server/stop-server)]
           (stop-server server)
           (reset! server-atom nil)
+          (transport-nrepl/delete-port-file!)
           (log/info ":hive/nrepl stopped"))))))
 
 ;; =============================================================================

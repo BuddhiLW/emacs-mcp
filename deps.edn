@@ -346,9 +346,10 @@
               "-XX:SoftMaxHeapSize=4g"
               "-XX:+ParallelRefProcEnabled"
               "-XX:-ExplicitGCInvokesConcurrent"]
-   :main-opts ["-m" "nrepl.cmdline"
-               "--port" "7910"
-               "--middleware" "[cider.nrepl/cider-middleware,refactor-nrepl.middleware/wrap-refactor]"]}
+   ;; Same main as the container. The system's :hive/nrepl component is the
+   ;; nREPL (HIVE_MCP_NREPL_PORT, default 7910); it resolves CIDER and
+   ;; refactor-nrepl from the classpath this alias supplies.
+   :main-opts ["-m" "hive-mcp.server.core"]}
 
   ;; Read-only, fixed-corpus embedding retrieval experiment.
   ;; Usage:
