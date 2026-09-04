@@ -248,7 +248,7 @@ namespace from core is the smell that says the boundary broke.
 hive-mcp uses a plugin architecture based on the **IAddon protocol** with automatic classpath discovery. Creating a new addon takes one command:
 
 ```bash
-clojure -Sdeps '{:deps {io.github.hive-agi/hive-mcp {:mvn/version "1.0.0"}}}' \
+clojure -Sdeps '{:deps {io.github.hive-agi/hive-mcp {:mvn/version "1.1.0"}}}' \
   -Tnew create :template hive-agi/addon :name com.example/my-addon
 ```
 
