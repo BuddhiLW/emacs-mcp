@@ -323,7 +323,10 @@
    walked — a `$ref:` inside prose is quotation. A ref is `:broken` when:
 
      - the source op-id is missing from results (`ref-not-found`), OR
-     - the resolved value is literally `nil`.
+     - the resolved value is literally `nil`, OR
+     - no parser answered for it (`:unparsed`): without a `:bx/a` extension
+       the host cannot resolve any ref, and the literal string must not
+       reach a handler as a value.
 
    Returns `nil` when all refs OK (or no refs); otherwise
    `{:broken-refs [{:ref str :reason kw} ...]}`."
@@ -332,13 +335,18 @@
         walk! (fn walk! [v]
                 (cond
                   (ref? v)
-                  (when-let [parsed (parse-ref v)]
+                  (if-let [parsed (parse-ref v)]
                     (let [resolved (resolve-ref parsed results-by-id)]
                       (cond
                         (identical? resolved ref-not-found)
                         (swap! refs conj {:ref v :reason :unresolved})
                         (nil? resolved)
-                        (swap! refs conj {:ref v :reason :nil-resolved}))))
+                        (swap! refs conj {:ref v :reason :nil-resolved})))
+                    ;; No parser answered (no :bx/a extension, or a malformed
+                    ;; ref). A ref that cannot be parsed cannot be resolved
+                    ;; either, so the literal "$ref:..." string would reach the
+                    ;; handler as a value. That is a broken ref, not a pass-through.
+                    (swap! refs conj {:ref v :reason :unparsed}))
 
                   (map? v)
                   (run! walk! (vals v))

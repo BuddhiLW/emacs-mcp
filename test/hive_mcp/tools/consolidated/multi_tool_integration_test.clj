@@ -1322,8 +1322,11 @@
       (is (true? (:success parsed)))
       (is (true? (:dry_run parsed)))
       (is (= 2 (get-in parsed [:summary :total])))
-      ;; noop assign-waves: all ops land in wave 1
-      (is (= 1 (get-in parsed [:summary :waves]))))))
+      ;; the unextended host sorts waves: op2 depends on op1, so it lands
+      ;; in wave 2 (it used to be flattened into wave 1, which was the bug)
+      (is (= 2 (get-in parsed [:summary :waves])))
+      (is (= ["op1"] (mapv :id (:wave_1 (:plan parsed)))))
+      (is (= ["op2"] (mapv :id (:wave_2 (:plan parsed))))))))
 
 (deftest test-multi-batch-dry-run-resolves-directory
   (testing "batch dry run shows effective caller directory and preserves per-op override"
@@ -1360,9 +1363,11 @@
                                  {"id" "op3" "tool" "preset" "command" "help"}]
                    "dry_run" true})
           parsed (json/read-str (:text result) :key-fn keyword)]
-      ;; noop assign-waves: all ops land in wave 1
-      (is (= 1 (get-in parsed [:summary :waves])))
-      (is (= 3 (count (:wave_1 (:plan parsed))))))))
+      ;; the unextended host sorts waves: the two independent ops share
+      ;; wave 1 and the dependent one follows in wave 2
+      (is (= 2 (get-in parsed [:summary :waves])))
+      (is (= #{"op1" "op3"} (set (map :id (:wave_1 (:plan parsed))))))
+      (is (= ["op2"] (mapv :id (:wave_2 (:plan parsed))))))))
 
 (deftest test-multi-batch-single-dispatch-wins-when-tool-present
   (testing "when both tool and operations are present, single dispatch wins"

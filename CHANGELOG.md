@@ -51,6 +51,11 @@ correctly where a stub or an addon had been standing in for them.
   This survived a green suite because every multi test installed a stub that
   registered the correct implementation; the new tests force every `:bx/*`
   lookup to miss, which is the shape production has.
+- On that same unextended host, a `$ref:` the host cannot parse (no `:bx/a`
+  extension) is classified as a broken ref and the op is skipped, instead of
+  the literal `"$ref:..."` string reaching the handler as a value. The flat
+  wave had hidden this: every dependent op failed on its dependencies before
+  the classifier could be reached.
 - `memory migrate-scoped` puts the tag into the store query instead of
   enumerating a whole project and filtering in Clojure, and refuses a
   migration that resolves zero targets, naming the tag, the project and the
