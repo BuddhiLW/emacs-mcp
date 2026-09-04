@@ -699,3 +699,34 @@
       (addons/register-addon! addon)
       (addons/init-addon! :ports-explicit {:runtime/ports sentinel})
       (is (= sentinel (get-in @(.state addon) [:opts :runtime/ports]))))))
+
+;; =============================================================================
+;; :metadata :extensions is the host's channel for {keyword fn} registrations
+;; =============================================================================
+
+;; An addon whose init answer carries something else under that key: a set of
+;; FILE extensions, which is what a language-tier addon naturally reports.
+(defrecord FileExtensionsAddon [id]
+  proto/IAddon
+  (addon-id [_] id)
+  (addon-type [_] :native)
+  (capabilities [_] #{})
+  (initialize! [_ _opts]
+    {:success? true :errors [] :metadata {:extensions #{"go"}}})
+  (shutdown! [_] {:success? true :errors []})
+  (tools [_] [])
+  (schema-extensions [_] {})
+  (health [_] {:status :ok :details {}}))
+
+(deftest a-non-map-under-init-metadata-extensions-neither-registers-nor-throws
+  (let [addon (->FileExtensionsAddon :file-exts)]
+    (addons/register-addon! addon)
+    (testing "init lands: the loader skips the value instead of asserting on it
+              after the addon's own side effects have already happened"
+      (let [r (addons/init-addon! :file-exts)]
+        (is (true? (:success? r)))
+        (is (empty? (:errors r)))))
+    (testing "and shutdown does not walk it as map entries"
+      (let [r (addons/shutdown-addon! :file-exts)]
+        (is (true? (:success? r)))
+        (is (empty? (:errors r)))))))
