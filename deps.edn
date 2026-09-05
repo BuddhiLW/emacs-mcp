@@ -103,7 +103,7 @@
 
         ;; hive-hot - unified hot-reload with events integration
         io.github.hive-agi/hive-hot
-        {:mvn/version "0.1.7"}
+        {:mvn/version "0.1.9"}
 
         ;; Prometheus metrics - iapetos wrapper; hotspot collector adds
         ;; JVM metrics (memory, GC, threads).
@@ -123,7 +123,7 @@
 
         ;; hive-dsl — Result monad, rescue/guard DSL, error taxonomy
         io.github.hive-agi/hive-dsl
-        {:mvn/version "0.5.17"}
+        {:mvn/version "0.5.21"}
 
         ;; hive-spi — pure SPI contract leaf (protocols + schemas + ADTs).
         ;; Required at compile time by core namespaces. Pinned to the published
@@ -146,7 +146,7 @@
         ;; hive-help — required directly by hive-mcp.embeddings.routing. It used
         ;; to arrive transitively through hive-milvus; once the backend left
         ;; :deps that route vanished, so the real dependency is declared here.
-        io.github.hive-agi/hive-help {:mvn/version "0.1.0"}
+        io.github.hive-agi/hive-help {:mvn/version "0.1.1"}
 
         ;; hive-addon — standalone IAddon contract (leaf lib) + plug/mount/compose.
         ;; hive-mcp.addons.protocol re-exports it via def-aliases so the ~30
@@ -156,31 +156,31 @@
 
         ;; hive-di — declarative typed config resolution (defconfig/env/literal)
         ;; Used by hive-mcp.embeddings.env-config and downstream addons.
-        io.github.hive-agi/hive-di {:mvn/version "0.4.5"}
+        io.github.hive-agi/hive-di {:mvn/version "0.4.8"}
 
         ;; hive-weave — Parallel utilities (bounded-pmap) used by project/tree.clj;
         ;; hive-weave.retry/with-recovery used by knowledge-graph/store/datahike.clj
         ;; (first released in 0.2.6 — 0.2.5 does not contain the retry ns).
-        io.github.hive-agi/hive-weave {:mvn/version "0.3.3"}
+        io.github.hive-agi/hive-weave {:mvn/version "0.3.6"}
 
         ;; hive-schemas — pinned at the TOP level, not only in :test/:test-unit.
         ;; Transitive callers can pull 0.1.6, which exists on Gitea only (404 on
         ;; Clojars and Central), so the default tree cannot resolve from a public
         ;; runner. :use-top makes this pin win everywhere.
-        io.github.hive-agi/hive-schemas {:mvn/version "0.1.26"}
+        io.github.hive-agi/hive-schemas {:mvn/version "0.1.29"}
 
         ;; hive-proximum — temporal/bitemporal memory backend (IMemoryStore via IAddon).
         ;; Auto-discovered via its hive-addons manifest. Stub store until the
         ;; backend impl lands.
-        io.github.hive-agi/hive-proximum {:mvn/version "0.1.14"}
+        io.github.hive-agi/hive-proximum {:mvn/version "0.1.18"}
 
         ;; hive-ttracking — telemetry/timing (timed-query, track*, bench*).
         ;; Consumed by catchup.clj and siblings (bundle/hydration/hierarchy).
-        io.github.hive-agi/hive-ttracking {:mvn/version "0.1.10"}
+        io.github.hive-agi/hive-ttracking {:mvn/version "0.1.13"}
 
         ;; hive-system — system-level abstractions (IProcess, INetwork,
         ;; process liveness, secrets, shell, redaction).
-        io.github.hive-agi/hive-system {:mvn/version "0.3.7"}
+        io.github.hive-agi/hive-system {:mvn/version "0.3.10"}
 
         ;; Integrant — lifecycle framework for component-based systems
         ;; Replaces monolithic start! with declarative system map + profile merging
@@ -368,13 +368,13 @@
                 ;; Generative testing for spec validation
                 org.clojure/test.check {:mvn/version "1.1.3"}
                 ;; Trifecta macro: golden + property + mutation facets
-                io.github.hive-agi/hive-test {:mvn/version "0.3.19"}
+                io.github.hive-agi/hive-test {:mvn/version "0.4.0"}
                 ;; hive-schemas.test — a malli schema drives hive-test property +
                 ;; mutation facets with no hand-written generator, oracle, or
                 ;; mutant. Must come from the JAR, not :local/root — the macros
                 ;; live in src/synth, which ships but is not on the project's
                 ;; :paths.
-                io.github.hive-agi/hive-schemas {:mvn/version "0.1.26"}}
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.29"}}
                 ;; hive-spi now lives in :deps (core nses require it) — no
                 ;; :test-alias override needed.
    ;; Backend drivers are NOT here — the default cold-CI test path is
@@ -396,13 +396,13 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.3"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.19"}
+                io.github.hive-agi/hive-test {:mvn/version "0.4.0"}
                 ;; Must match :test. The runner LOADS every test namespace before
                 ;; it filters by selector, so a test ns requiring hive-schemas.test
                 ;; aborts this whole alias — all 405 namespaces — if the dep is
                 ;; only declared on :test. This is the CI alias; it is the one that
                 ;; must not be able to fail at load.
-                io.github.hive-agi/hive-schemas {:mvn/version "0.1.26"}}
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.29"}}
    :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
    :exec-fn cognitect.test-runner.api/test
@@ -414,10 +414,10 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                 org.clojure/test.check {:mvn/version "1.1.3"}
-                io.github.hive-agi/hive-test {:mvn/version "0.3.19"}
+                io.github.hive-agi/hive-test {:mvn/version "0.4.0"}
                 ;; Same reason as :test-unit — this alias also puts test/ on the
                 ;; path, so it loads every test ns before selecting :integration.
-                io.github.hive-agi/hive-schemas {:mvn/version "0.1.26"}}
+                io.github.hive-agi/hive-schemas {:mvn/version "0.1.29"}}
    :jvm-opts ["-Dhive.kg.backend=datascript"]
    :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
    :exec-fn cognitect.test-runner.api/test
