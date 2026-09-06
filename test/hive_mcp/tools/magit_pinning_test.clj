@@ -248,3 +248,38 @@
             "Should require hive-mcp-magit")
         (is (str/includes? elisp "hive-mcp-magit-api-branches")
             "Should call hive-mcp-magit-api-branches")))))
+
+;; =============================================================================
+;; Push Remote Targeting
+;; =============================================================================
+
+(deftest handle-magit-push-carries-remote-test
+  (testing "An explicit remote reaches api-push as :remote"
+    (se/with-stub-emacs [emacs {:default-response {:success true :result "{}" :duration-ms 10}}]
+      (tools/handle-magit-push {:remote "github" :directory "/some/repo"})
+      (let [elisp (first (se/evaluated emacs))]
+        (is (str/includes? elisp "hive-mcp-magit-api-push")
+            "Should call hive-mcp-magit-api-push")
+        (is (str/includes? elisp ":remote \"github\"")
+            "The remote the caller named must reach api-push"))))
+
+  (testing "set_upstream and remote travel together"
+    (se/with-stub-emacs [emacs {:default-response {:success true :result "{}" :duration-ms 10}}]
+      (tools/handle-magit-push {:remote "github" :set_upstream true})
+      (let [elisp (first (se/evaluated emacs))]
+        (is (str/includes? elisp ":set-upstream t"))
+        (is (str/includes? elisp ":remote \"github\"")))))
+
+  (testing "No remote emits the options the pre-remote call emitted"
+    (se/with-stub-emacs [emacs {:default-response {:success true :result "{}" :duration-ms 10}}]
+      (tools/handle-magit-push {})
+      (let [elisp (first (se/evaluated emacs))]
+        (is (str/includes? elisp "hive-mcp-magit-api-push nil")
+            "Absent remote and upstream emit bare nil options")
+        (is (not (str/includes? elisp ":remote"))))))
+
+  (testing "A blank remote is absent, not a remote named the empty string"
+    (se/with-stub-emacs [emacs {:default-response {:success true :result "{}" :duration-ms 10}}]
+      (tools/handle-magit-push {:remote "   "})
+      (let [elisp (first (se/evaluated emacs))]
+        (is (not (str/includes? elisp ":remote")))))))
