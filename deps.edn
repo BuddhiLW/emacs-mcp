@@ -268,7 +268,7 @@
               ;; Accurate async-profiler stacks (alloc/CPU flamegraphs).
               "-XX:+UnlockDiagnosticVMOptions"
               "-XX:+DebugNonSafepoints"
-              ;; JFR leak recording (settings=leak.jfc) is added at the production
+              ;; A JFR leak recording, when wanted, is added at the production
               ;; launch point instead, so it runs only for the live coordinator —
               ;; not ephemeral dev REPLs, which would collide on the singleton
               ;; recording and write junk .jfr files.
@@ -329,7 +329,7 @@
               ;; Accurate async-profiler stacks (alloc/CPU flamegraphs).
               "-XX:+UnlockDiagnosticVMOptions"
               "-XX:+DebugNonSafepoints"
-              ;; JFR leak recording (settings=leak.jfc) is added at the production
+              ;; A JFR leak recording, when wanted, is added at the production
               ;; launch point instead, so it runs only for the live coordinator —
               ;; not ephemeral dev REPLs, which would collide on the singleton
               ;; recording and write junk .jfr files.
