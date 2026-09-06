@@ -8,7 +8,7 @@
 ;; Open slots therefore need no file like this one. Exclusive slots did, and
 ;; the absence was the defect: before this file, `:memory-store` and
 ;; `:carto-store` had no enumeration ANYWHERE. `config/merge.clj` and
-;; `config/test-sandbox.config.edn` each name one CHOSEN backend per slot,
+;; `dev/test-sandbox.config.edn` each name one CHOSEN backend per slot,
 ;; which is evidence that a key is valid, not a list of what is available.
 ;; Anything downstream that wanted the list had to hand-copy it and hope.
 ;;

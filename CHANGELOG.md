@@ -33,6 +33,34 @@ under way to move them behind ports into sibling libraries
 ([DEVINCULATE-DATALOG]); when they leave the default tree, that is a major
 bump, not a quiet minor, because a consumer's storage would change under it.
 
+## [Unreleased]
+
+### Changed
+
+- The repository root is down to what a checkout needs. The presets moved from
+  `presets/` to `resources/presets/`, so they ship in the jar and the image; the
+  file fallback (`presets.dir`, `HIVE_MCP_PRESETS_DIR`) defaults to that path.
+  The shared test-support namespaces (`hive-mcp.knowledge-graph.store.fixtures`,
+  `.harness`, `hive-mcp.recall.golden`) moved from `testing/` to `src/` under the
+  same names, so consumers such as hive-knowledge see no change. The observability
+  stack configs moved from `config/` to `docker/observability/`, and the test
+  sandbox template to `dev/`.
+- One test tree. The backend-coupled suites moved from `test-backends/` into
+  `test/` under the namespace prefix `hive-mcp.backends`; the default runners
+  exclude that prefix by namespace regex and the `:test-backends` alias selects
+  exactly it, so `clj -Sdeps "$(cat local.deps.edn)" -M:test:test-backends`
+  still runs them and nothing else.
+
+### Removed
+
+- `python/` (the hive-tools Claude Agent SDK wrappers, never published and
+  referenced by nothing), `modules/clj-kondo-mcp` (a stale copy of the
+  clj-kondo-mcp repository), `recipes/` and the MELPA check (the elisp lives
+  in hive-emacs, which validates it), `seeds/` (its ten conventions now live in
+  hive memory), `k8s/ollama-embed` (a nomic-embed-text deployment nothing
+  referenced), and the root-level `test-int/`, `PLAN.md`, `leak.jfc` and
+  `fp-arg-order-convention.md`.
+
 ## [1.1.1]
 
 A patch release. The tool surface, the manifest format and the ports are

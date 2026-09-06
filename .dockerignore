@@ -34,8 +34,7 @@ Dockerfile
 docs/
 LICENSE
 
-# Config files (secrets should come from K8s ConfigMap/Secrets)
-config/
+# Secrets come from K8s ConfigMap/Secrets, never from the checkout
 .mcp.json
 .claude/
 .hive-project.edn
@@ -59,14 +58,6 @@ hs_err_pid*
 *.hprof
 *.jfr
 *.log
-
-# Python tooling (not needed in JVM container)
-python/
-requirements*.txt
-*.py
-
-# Elisp (desktop-only)
-elisp/
 
 # Test fixtures
 test/

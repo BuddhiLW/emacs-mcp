@@ -1,3 +1,0 @@
-(emacs-mcp :fetcher github
-           :repo "BuddhiLW/emacs-mcp"
-           :files ("elisp/emacs-mcp*.el" "elisp/addons/emacs-mcp*.el"))

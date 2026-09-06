@@ -1,9 +1,0 @@
-{:paths ["src"]
- :pods {clj-kondo/clj-kondo {:version "2026.01.12"}}
- :deps {org.babashka/cli {:mvn/version "0.8.62"}
-        cheshire/cheshire {:mvn/version "5.13.0"}}
- :tasks
- {server {:doc "Start the clj-kondo MCP server"
-          :task (exec 'clj-kondo-mcp.server/-main)}
-  test {:doc "Run tests"
-        :task (shell "bb --config bb.edn -m clj-kondo-mcp.test-runner")}}}

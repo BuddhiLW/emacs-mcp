@@ -57,7 +57,9 @@
 (defn- load-presets-content
   "Load preset content from preset .md files for headless backends.
    Claude CLI lings load presets from .claude/agents/ automatically;
-   headless backends need explicit injection.
+   headless backends need explicit injection. The presets ship under
+   resources/presets; `presets.dir` in config or HIVE_MCP_PRESETS_DIR
+   overrides that default.
    Returns concatenated preset markdown string, or nil."
   [preset-names]
   (r/rescue nil
@@ -66,7 +68,7 @@
         (let [preset-dir (or (r/rescue nil
                                (when-let [cfg-fn (requiring-resolve 'hive-mcp.config.core/get-service-value)]
                                  (cfg-fn :presets :dir :env "HIVE_MCP_PRESETS_DIR")))
-                             (str (System/getProperty "user.dir") "/presets"))
+                             (str (System/getProperty "user.dir") "/resources/presets"))
               contents (->> preset-names
                             (keep (fn [pname]
                                     (when-let [p (get-from-file preset-dir (name pname))]

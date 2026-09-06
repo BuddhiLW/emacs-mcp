@@ -5,17 +5,13 @@ on:
     branches: [main]
     paths-ignore:
       - '**.md'
-      - '**.el'
-      - 'elisp/**'
-      - 'presets/**'
+      - 'resources/presets/**'
       - 'docs/**'
   pull_request:
     branches: [main]
     paths-ignore:
       - '**.md'
-      - '**.el'
-      - 'elisp/**'
-      - 'presets/**'
+      - 'resources/presets/**'
       - 'docs/**'
   workflow_dispatch:
 

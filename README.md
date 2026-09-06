@@ -334,7 +334,7 @@ between machines, or publish for others** — no code, no rebuild, no host resta
 | Answers | *Who is this agent?* | *How should it work?* |
 | Format | Markdown + YAML frontmatter | Plain markdown |
 | Carries | Identity, tool allowlist, model, hooks | Methodology, constraints, output format |
-| Lives in | `.claude/agents/*.md` | `presets/*.md`, custom dirs, or the memory store |
+| Lives in | `.claude/agents/*.md` | `resources/presets/*.md`, custom dirs, or the memory store |
 | Composes by | Priority override — highest source wins | Concatenation — stack as many as you need |
 
 **An agent definition is a role; a preset is a skill.** One definition per agent, as many
