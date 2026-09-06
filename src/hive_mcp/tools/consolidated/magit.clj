@@ -1,7 +1,9 @@
 (ns hive-mcp.tools.consolidated.magit
   "Consolidated Magit/Git CLI tool."
   (:require [hive-mcp.tools.cli :refer [make-cli-handler make-batch-handler]]
-            [hive-mcp.tools.core :refer [mcp-error emacs-timeout-ms-property]]
+            [hive-mcp.tools.core
+ :refer
+ [mcp-error emacs-timeout-ms-property git-files-property]]
             [hive-mcp.tools.magit :as magit-handlers]))
 
 (defn- handle-batch-commit
@@ -40,8 +42,6 @@
                                           :description "Git operation to perform"}
                                "directory" {:type "string"
                                             :description "IMPORTANT: Pass your working directory to target YOUR project"}
-                               "files" {:type "string"
-                                        :description "File path to stage, or 'all' for all modified"}
                                "message" {:type "string"
                                           :description "Commit message"}
                                "all" {:type "boolean"
@@ -54,16 +54,17 @@
                                          :enum ["staged" "unstaged" "all"]
                                          :description "What to diff (default: staged)"}
                                "remote" {:type "string"
-                                         :description "Specific remote to fetch from"}
+                                         :description "Remote to act on: which remote `fetch` fetches from, and which remote `push` pushes the current branch to. Omitted or blank, git's own default remote is used"}
                                "operations" {:type "array"
                                              :items {:type "object"
                                                      :properties {"message" {:type "string"}
-                                                                  "files" {:type "string"}
+                                                                  "files" (get git-files-property "files")
                                                                   "all" {:type "boolean"}}
                                                      :required ["message"]}
-                                             :description "Array of commit operations for batch-commit. Each: {message, files?, all?}"}
+                                             :description "Array of commit operations for batch-commit. Each: {message, files?, all?}. Each operation stages its own `files` and is refused when they do not stage anything."}
                                "parallel" {:type "boolean"
                                            :description "Run batch operations in parallel (default: false)"}}
+                              git-files-property
                               emacs-timeout-ms-property)
                  :required ["command"]}
    :handler handle-magit})

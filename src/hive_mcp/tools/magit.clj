@@ -14,7 +14,8 @@
             [hive-mcp.emacs-ext.client :as ec]
             [hive-mcp.emacs-ext.elisp :as el]
             [hive-mcp.agent.context :as ctx]
-            [taoensso.timbre :as log]))
+            [taoensso.timbre :as log]
+            [clojure.string :as str]))
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
 ;; SPDX-License-Identifier: AGPL-3.0-or-later
@@ -124,17 +125,30 @@
           \"hive-mcp-magit not loaded\"))"
      (pr-str message) options (pr-str dir))))
 
+(defn- push-options-elisp
+  "Elisp plist literal for the push options, or \"nil\" when none apply.
+
+   A blank or absent REMOTE contributes no :remote key, so the emitted call is
+   byte-identical to the pre-remote one."
+  [set_upstream remote]
+  (let [remote (some-> remote str str/trim not-empty)
+        pairs  (cond-> []
+                 set_upstream (conj ":set-upstream t")
+                 remote       (conj (str ":remote " (pr-str remote))))]
+    (if (seq pairs)
+      (str "'(" (str/join " " pairs) ")")
+      "nil")))
+
 (defn- build-push-elisp
-  "Build elisp for push operation with optional set-upstream."
-  [set_upstream dir]
-  (let [options (if-let [_ set_upstream] "'(:set-upstream t)" "nil")]
-    (el/format-elisp
-     "(progn
-        (require 'hive-mcp-magit nil t)
-        (if (fboundp 'hive-mcp-magit-api-push)
-            (hive-mcp-magit-api-push %s %s)
-          \"hive-mcp-magit not loaded\"))"
-     options (pr-str dir))))
+  "Build elisp for push operation with optional set-upstream and explicit remote."
+  [set_upstream remote dir]
+  (el/format-elisp
+   "(progn
+      (require 'hive-mcp-magit nil t)
+      (if (fboundp 'hive-mcp-magit-api-push)
+          (hive-mcp-magit-api-push %s %s)
+        \"hive-mcp-magit not loaded\"))"
+   (push-options-elisp set_upstream remote) (pr-str dir)))
 
 (defn- build-feature-branches-elisp
   "Build elisp for feature branch listing with client-side filtering."
@@ -159,6 +173,117 @@
 ;;; =============================================================================
 ;;; Magit Handlers (thin wrappers over handle-elisp)
 ;;; =============================================================================
+
+(defn normalize-files
+  "Normalize the `files` tool parameter to :all or a vector of path strings.
+
+   Accepts a collection of paths, a single path, several paths in one
+   whitespace-separated string, or \"all\". Returns :all, a NON-EMPTY vector of
+   paths, or nil when nothing usable was given."
+  [files]
+  (cond
+    (nil? files)     nil
+    (keyword? files) (when (= :all files) :all)
+    (symbol? files)  (when (= 'all files) :all)
+    (string? files)  (let [ps (vec (remove str/blank? (str/split (str/trim files) #"\s+")))]
+                       (cond
+                         (empty? ps)    nil
+                         (= ["all"] ps) :all
+                         :else          ps))
+    (coll? files)    (let [ps (->> files (map str) (map str/trim) (remove str/blank?) vec)]
+                       (cond
+                         (empty? ps)    nil
+                         (= ["all"] ps) :all
+                         :else          ps))
+    :else            nil))
+
+(def ^:private stage-markers
+  "Sentinel strings the stage-and-verify elisp answers with.
+   :missing is a PREFIX — the offending path follows it."
+  {:ok      "hive-mcp:staged-ok"
+   :missing "hive-mcp:missing-path:"
+   :empty   "hive-mcp:nothing-staged"})
+
+(defn- paths->elisp-list
+  "PATHS as a quoted elisp list literal."
+  [paths]
+  (str "'(" (str/join " " (map pr-str paths)) ")"))
+
+(defn- build-stage-verify-elisp
+  "Elisp that refuses a path absent from the working tree, stages PATHS, and
+   reports whether the index actually carries any of them.
+
+   Evaluates to one of `stage-markers`: :ok, :missing prefixed to the offending
+   path, or :empty when `git diff --cached --name-only` restricted to PATHS is
+   blank."
+  [paths dir]
+  (el/format-elisp
+   "(progn
+      (require 'hive-mcp-magit nil t)
+      (if (fboundp 'hive-mcp-magit-api-stage)
+          (let ((default-directory %s)
+                (paths %s)
+                (missing nil))
+            (dolist (p paths)
+              (unless (file-exists-p p) (setq missing (or missing p))))
+            (if missing
+                (concat \"%s\" missing)
+              (progn
+                (hive-mcp-magit-api-stage paths default-directory)
+                (if (string-empty-p
+                     (string-trim
+                      (shell-command-to-string
+                       (concat \"git diff --cached --name-only -- \"
+                               (mapconcat #'shell-quote-argument paths \" \")
+                               \" 2>/dev/null\"))))
+                    \"%s\"
+                  \"%s\"))))
+        \"hive-mcp-magit not loaded\"))"
+   (pr-str dir)
+   (paths->elisp-list paths)
+   (:missing stage-markers)
+   (:empty stage-markers)
+   (:ok stage-markers)))
+
+(defn- missing-path
+  "The path named by a :missing marker inside elisp output OUT."
+  [out]
+  (or (second (re-find (re-pattern (str (:missing stage-markers) "([^\"\\s]+)")) out))
+      "(unnamed)"))
+
+(defn- stage-verify
+  "Stage PATHS in DIR and confirm the index carries at least one of them.
+
+   Result: (ok PATHS), or (err :magit/path-not-found | :magit/nothing-staged |
+   :magit/elisp-failed | :magit/stage-failed). Any answer that is not the
+   explicit ok marker is an error: a commit must never proceed on an index this
+   operation did not verify."
+  [paths dir timeout-ms]
+  (let [r (try-result :magit/stage-failed
+                      #(elisp->result (build-stage-verify-elisp paths dir) timeout-ms))
+        listed (str/join " " paths)]
+    (if-let [entry (find r :ok)]
+      (let [out (str (val entry))]
+        (cond
+          (str/includes? out (:missing stage-markers))
+          (result/err :magit/path-not-found
+                      {:message (str ":magit/path-not-found - no such path under "
+                                     dir ": " (missing-path out))})
+
+          (str/includes? out (:empty stage-markers))
+          (result/err :magit/nothing-staged
+                      {:message (str ":magit/nothing-staged - staging left the index empty for "
+                                     listed
+                                     "; refusing to commit what was already staged")})
+
+          (str/includes? out (:ok stage-markers))
+          (result/ok paths)
+
+          :else
+          (result/err :magit/stage-failed
+                      {:message (str ":magit/stage-failed - staging " listed
+                                     " returned no verdict: " out)})))
+      r)))
 
 (defn handle-magit-status
   "Get comprehensive git repository status via magit addon."
@@ -203,36 +328,59 @@
                   (emacs-timeout-ms params))))
 
 (defn handle-magit-stage
-  "Stage files for commit. Use 'all' to stage all modified files."
+  "Stage files for commit.
+
+   `files` takes a list of paths, a single path, several paths in one
+   whitespace-separated string, or 'all' for every modified file. An absent or
+   blank `files` is an error, never a silent no-op."
   [{:keys [files directory] :as params}]
   (let [dir (resolve-directory directory)
-        file-arg (case files "all" 'all files)
-        elisp (el/require-and-call 'hive-mcp-magit 'hive-mcp-magit-api-stage file-arg dir)
+        norm (normalize-files files)
         timeout-ms (emacs-timeout-ms params)]
-    (log/info "magit-stage" {:files files :directory dir})
-    (result->mcp
-     (try-result :magit/stage-failed
-                 #(with-default "Staged files" (elisp->result elisp timeout-ms))))))
+    (log/info "magit-stage" {:files norm :directory dir})
+    (if (nil? norm)
+      (mcp-error (str ":magit/no-files - files is required: a path, a list of paths, "
+                      "a whitespace-separated path string, or 'all'"))
+      (let [file-arg (if (= :all norm) 'all norm)
+            elisp (el/require-and-call 'hive-mcp-magit 'hive-mcp-magit-api-stage file-arg dir)]
+        (result->mcp
+         (try-result :magit/stage-failed
+                     #(with-default "Staged files" (elisp->result elisp timeout-ms))))))))
 
 (defn handle-magit-commit
-  "Create a commit with the given message."
-  [{:keys [message all directory] :as params}]
-  (let [dir (resolve-directory directory)]
-    (log/info "magit-commit" {:message-len (count message) :all all :directory dir})
-    (handle-elisp :magit/commit-failed
-                  (build-commit-elisp message all dir)
-                  (emacs-timeout-ms params))))
+  "Create a commit with the given message.
+
+   `files` restricts the commit to explicit paths: a list, a single path,
+   several paths in one whitespace-separated string, or 'all'. Named paths are
+   staged and VERIFIED before the commit runs; a path that does not exist, or a
+   stage that leaves the index empty for those paths, fails the operation
+   instead of committing whatever the index already held."
+  [{:keys [message all directory files] :as params}]
+  (let [dir (resolve-directory directory)
+        timeout-ms (emacs-timeout-ms params)
+        norm (normalize-files files)
+        stage-all (boolean (or all (= :all norm)))
+        staged (when (vector? norm) (stage-verify norm dir timeout-ms))]
+    (log/info "magit-commit" {:message-len (count message) :all stage-all
+                              :files norm :directory dir})
+    (if (and (some? staged) (nil? (find staged :ok)))
+      (result->mcp staged)
+      (handle-elisp :magit/commit-failed
+                    (build-commit-elisp message stage-all dir)
+                    timeout-ms))))
 
 (defn handle-magit-push
   "Push to remote. Optionally set upstream tracking.
 
-   A push is the magit command most likely to outrun the client's default
-   timeout — it waits on a remote. Pass `timeout_ms` to give it a longer budget."
-  [{:keys [set_upstream directory] :as params}]
+   `remote` selects the remote explicitly; omitted or blank, git's own default
+   remote is used. A push is the magit command most likely to outrun the
+   client's default timeout — it waits on a remote. Pass `timeout_ms` to give
+   it a longer budget."
+  [{:keys [set_upstream remote directory] :as params}]
   (let [dir (resolve-directory directory)]
-    (log/info "magit-push" {:set_upstream set_upstream :directory dir})
+    (log/info "magit-push" {:set_upstream set_upstream :remote remote :directory dir})
     (handle-elisp :magit/push-failed
-                  (build-push-elisp set_upstream dir)
+                  (build-push-elisp set_upstream remote dir)
                   (emacs-timeout-ms params))))
 
 (defn handle-magit-pull

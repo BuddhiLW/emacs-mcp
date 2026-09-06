@@ -288,6 +288,20 @@ HINT: Pass an integer value:
                       "legitimately takes longer — a push to a slow remote, a large "
                       "diff, a fetch. Capped at 30000 by the client.")}})
 
+(def git-files-property
+  "The `files` inputSchema property for every git-staging tool.
+
+   Spliced into a tool's :properties rather than restated, so the git and magit
+   tools cannot disagree about whether a path LIST is accepted."
+  {"files"
+   {:type ["string" "array"]
+    :items {:type "string"}
+    :description (str "Paths to stage: a LIST of paths, a single path, or several "
+                      "paths in one whitespace-separated string. 'all' stages every "
+                      "modified file. Listed paths are staged and verified before a "
+                      "commit — a path that does not exist, or a stage that leaves "
+                      "the index empty for those paths, fails the operation.")}})
+
 (defn emacs-timeout-ms
   "The caller's per-call Emacs timeout from `params`, or nil when none was passed.
 

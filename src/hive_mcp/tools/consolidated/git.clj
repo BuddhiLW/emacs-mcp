@@ -4,7 +4,9 @@
    Delegates to magit handlers. Addons can extend via contribute-commands! \"git\"."
   (:require [hive-mcp.tools.cli :refer [make-batch-handler]]
             [hive-mcp.tools.composite :as composite]
-            [hive-mcp.tools.core :refer [mcp-error emacs-timeout-ms-property]]
+            [hive-mcp.tools.core
+ :refer
+ [mcp-error emacs-timeout-ms-property git-files-property]]
             [hive-mcp.tools.magit :as magit-handlers]))
 
 (defn- handle-batch-commit
@@ -42,8 +44,6 @@
                                           :description "Git operation to perform"}
                                "directory" {:type "string"
                                             :description "IMPORTANT: Pass your working directory to target YOUR project"}
-                               "files" {:type "string"
-                                        :description "File path to stage, or 'all' for all modified"}
                                "message" {:type "string"
                                           :description "Commit message"}
                                "all" {:type "boolean"
@@ -60,12 +60,13 @@
                                "operations" {:type "array"
                                              :items {:type "object"
                                                      :properties {"message" {:type "string"}
-                                                                  "files" {:type "string"}
+                                                                  "files" (get git-files-property "files")
                                                                   "all" {:type "boolean"}}
                                                      :required ["message"]}
-                                             :description "Array of commit operations for batch-commit. Each: {message, files?, all?}"}
+                                             :description "Array of commit operations for batch-commit. Each: {message, files?, all?}. Each operation stages its own `files` and is refused when they do not stage anything."}
                                "parallel" {:type "boolean"
                                            :description "Run batch operations in parallel (default: false)"}}
+                              git-files-property
                               emacs-timeout-ms-property)
                  :required ["command"]}
    :handler (composite/build-merged-handler "git" canonical-handlers)})
