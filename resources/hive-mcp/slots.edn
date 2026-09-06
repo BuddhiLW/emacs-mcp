@@ -1,0 +1,56 @@
+;; The exclusive substitution slots, and every backend key each one accepts.
+;;
+;; An EXCLUSIVE slot is chosen by a config key and dispatched to one backend:
+;; you name one, the others are simply not constructed. That is the opposite of
+;; an OPEN slot (vessel, terminal, editor), where every addon declaring the
+;; capability is mounted and enumerating providers is just reading manifests.
+;;
+;; Open slots therefore need no file like this one. Exclusive slots did, and
+;; the absence was the defect: before this file, `:memory-store` and
+;; `:carto-store` had no enumeration ANYWHERE. `config/merge.clj` and
+;; `config/test-sandbox.config.edn` each name one CHOSEN backend per slot,
+;; which is evidence that a key is valid, not a list of what is available.
+;; Anything downstream that wanted the list had to hand-copy it and hope.
+;;
+;; :kg is different and is the model: it is CHECKED, not trusted. See
+;; slots/registry_test.clj, which asserts the :kg keys below are exactly the
+;; `defmethod backend->store` declarations in slots/factory.clj minus :default.
+;; Add a KG backend without adding it here and that test goes red.
+;;
+;; :memory-store and :carto-store have no equivalent dispatch table to check
+;; against: a memory backend claims the slot at runtime by calling
+;; `set-store!` from its addon's initialize!, so nothing static enumerates
+;; them. They are authored here, in the repo that owns the concept, which is
+;; the point: one home instead of a copy in every consumer.
+
+{:kg
+ {:name "Knowledge graph"
+  :config ":kg {:backend ...}"
+  :checked-against "hive-mcp.knowledge-graph.slots.factory/backend->store"
+  :options
+  {:datahike   {:by "hive-datahike"  :provider :addon}
+   :datalevin  {:by "hive-datalevin" :provider :addon}
+   :datascript {:by "hive-mcp"       :provider :core}
+   :proximum   {:by "hive-proximum"  :provider :addon}}}
+
+ :memory-store
+ {:name "Memory store"
+  :config ":memory-store {:backend ...}"
+  ;; No static dispatch table. `server/init.clj/wire-memory-store!` is a two
+  ;; arm case (milvus defers to its addon, anything else wires Chroma); every
+  ;; other backend arrives by an addon calling set-store! during Phase 4.5.
+  :checked-against nil
+  :options
+  {:chroma {:by "clojure-chroma-client" :provider :core
+            :note "wired directly by wire-memory-store! as the fallback"}
+   :qdrant {:by "hive-qdrant"           :provider :addon}
+   :milvus {:by "hive-milvus"           :provider :addon
+            :note "the one backend wire-memory-store! names explicitly"}}}
+
+ :carto-store
+ {:name "Carto store"
+  :config ":carto-store {:backend ...}"
+  :checked-against nil
+  :options
+  {:qdrant-carto {:by "hive-qdrant" :provider :addon
+                  :note "the default in config/merge.clj; falls back to :memory-store when unset"}}}}
