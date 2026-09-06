@@ -64,7 +64,26 @@ Both are plain requests to the model, not slash commands — it reaches for the 
 
 ### 1. Install
 
-**Option A: Batteries included, fully FOSS (recommended)**
+**Option A: One line (recommended)**
+
+```bash
+curl -fsSL https://hive-mcp.com/install.sh | sh
+```
+
+That installs the `hive` CLI, writes the setup skills into `~/.claude/skills`, and
+registers the setup helper with Claude Code. Then start Claude Code and say what you
+want:
+
+> help me set up the hive-mcp harness locally, I have a key
+
+> help me set up a FOSS build of the hive-mcp harness
+
+The skills carry the whole procedure (prerequisites, the starter pack, the store
+gateway, the two credentials, and what to check when a step fails), so the assistant
+drives it rather than guessing. To run the machine setup unattended in the same pass,
+pass the flag through: `| sh -s -- --setup`.
+
+**Option B: Batteries included, fully FOSS, by hand**
 
 One command starts the open-source services (Chroma for memory, the clojure-lsp
 sidecar), waits until each is actually reachable, merges the starter pack and boots
@@ -99,7 +118,7 @@ store. The knobs
 (`HIVE_TELEMETRY=1`, `HIVE_NATS=1`, remote Chroma/Ollama hosts) are in the
 [FOSS Quickstart](https://github.com/hive-agi/hive-mcp/wiki/FOSS-Quickstart).
 
-**Option B: Container**
+**Option C: Container**
 
 ```bash
 docker build -t hive-mcp .                 # bakes the starter pack into the image
@@ -109,7 +128,7 @@ docker run -p 7910:7910 -e HIVE_PROFILE=k8s-headless hive-mcp
 The image runs the server from source with the same starter pack. Build with
 `--build-arg DEPS_OVERLAY=` for the bare core; `HIVE_HEAP` sets the JVM cap (default 2g).
 
-**Option C: By hand**
+**Option D: From the parts**
 
 ```bash
 docker compose up -d chroma lsp-sidecar                    # services
@@ -248,7 +267,7 @@ namespace from core is the smell that says the boundary broke.
 hive-mcp uses a plugin architecture based on the **IAddon protocol** with automatic classpath discovery. Creating a new addon takes one command:
 
 ```bash
-clojure -Sdeps '{:deps {io.github.hive-agi/hive-mcp {:mvn/version "1.0.0"}}}' \
+clojure -Sdeps '{:deps {io.github.hive-agi/hive-mcp {:mvn/version "1.1.0"}}}' \
   -Tnew create :template hive-agi/addon :name com.example/my-addon
 ```
 
@@ -351,8 +370,13 @@ See [`CLAUDE.md`](CLAUDE.md) for project conventions, tool patterns, and memory 
 
 ## Documentation
 
-The **[Wiki](https://github.com/hive-agi/hive-mcp/wiki)** is the current, maintained
-documentation. Start with these four:
+**[docs.hive-mcp.com](https://docs.hive-mcp.com)** renders the current documentation as
+a site, generated from the same markdown as the
+**[Wiki](https://github.com/hive-agi/hive-mcp/wiki)**, which is where it is edited.
+Agents want [docs.hive-mcp.com/llms.txt](https://docs.hive-mcp.com/llms.txt), which
+indexes every page next to its canonical markdown.
+
+Start with these four:
 
 | Guide | Description |
 |---|---|

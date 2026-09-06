@@ -33,6 +33,50 @@ under way to move them behind ports into sibling libraries
 ([DEVINCULATE-DATALOG]); when they leave the default tree, that is a major
 bump, not a quiet minor, because a consumer's storage would change under it.
 
+## [1.1.0]
+
+The first release after the seam froze. Nothing here moves the tool surface,
+the manifest format or the ports; three of the changes are hosts behaving
+correctly where a stub or an addon had been standing in for them.
+
+### Fixed
+
+- `multi` on an unextended host now sorts waves and reports cycles instead of
+  flattening every op into wave 1. Without the batch addon, `assign-waves`
+  fell back to one flat wave, so a dependency chain succeeded at its root and
+  errored every dependent op with "dependencies failed", and `detect-cycles`
+  fell back to `[]`, so a real cycle validated. Both fall back to
+  `hive.events.multi` (Kahn's algorithm, a cycle-reporting validator), which
+  the plan namespace already required. A registered extension still wins.
+  This survived a green suite because every multi test installed a stub that
+  registered the correct implementation; the new tests force every `:bx/*`
+  lookup to miss, which is the shape production has.
+- On that same unextended host, a `$ref:` the host cannot parse (no `:bx/a`
+  extension) is classified as a broken ref and the op is skipped, instead of
+  the literal `"$ref:..."` string reaching the handler as a value. The flat
+  wave had hidden this: every dependent op failed on its dependencies before
+  the classifier could be reached.
+- `memory migrate-scoped` puts the tag into the store query instead of
+  enumerating a whole project and filtering in Clojure, and refuses a
+  migration that resolves zero targets, naming the tag, the project and the
+  query, where it used to report `{:migrated 0}` as success.
+- The addon loader registers an init answer's `:metadata :extensions` only
+  when it is a `{keyword fn}` map, and mirrors that on teardown. An addon
+  that reported something else there (a language tier's set of file
+  extensions) tripped the registry assert after its own side effects had
+  landed, and the teardown then walked the value as map entries; the same
+  assert was aborting the tool-registry refresh after a hot reload, leaving
+  MCP verbs on pre-reload handlers. A non-map is now logged and skipped.
+
+### Changed
+
+- `io.github.hive-agi/hive-hot` resolves from Clojars (0.1.7) instead of a
+  `:git/tag` coordinate. Same version; the last hive-agi library in `:deps`
+  that was not an `:mvn/version`.
+- The starter notes state what `hive-tmux` needs before it can mount (tmux,
+  Python 3, libtmux on the interpreter libpython-clj binds) and why its pin is
+  0.1.1.
+
 ## [1.0.0]
 
 1.0.0 is not a feature release. It is the release where the seam stops moving,
@@ -184,5 +228,7 @@ pressure to move and the var cannot be removed without breaking the host.
 
 - The Docker image runs the server from source; there is no uber task.
 
-[Unreleased]: https://github.com/hive-agi/hive-mcp/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/hive-agi/hive-mcp/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/hive-agi/hive-mcp/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/hive-agi/hive-mcp/compare/v0.22.0...v1.0.0
 [0.22.0]: https://github.com/hive-agi/hive-mcp/compare/v0.21.1...v0.22.0

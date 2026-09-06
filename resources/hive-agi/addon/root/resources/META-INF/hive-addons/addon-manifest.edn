@@ -8,4 +8,6 @@
  :addon/dependencies #{}
  :addon/description  "{{description}}"
  :addon/author       "{{developer}}"
- :addon/license      "AGPL-3.0-or-later"}
+ :addon/license      "AGPL-3.0-or-later"
+ :addon/maturity :experimental
+ :addon/trust-class :foss}

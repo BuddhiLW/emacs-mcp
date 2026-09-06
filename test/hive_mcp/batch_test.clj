@@ -195,6 +195,29 @@
               (false? (:success k1-result)))
           "either validation rejects or runtime classifier skips"))))
 
+(deftest a-ref-the-host-cannot-parse-is-broken-not-passed-through
+  (testing "with no :bx/a parser registered, a $ref to an EXISTING op is still
+            classified broken: the host cannot resolve it, so the literal
+            string would otherwise reach the handler as a value"
+    (let [seen     (atom [])
+          handlers {"memory" (fn [args]
+                               (swap! seen conj (:pinned-id args))
+                               {:type "text" :text "{\"id\": \"a\"}"})}
+          result   (batch/run-operations
+                    [{:id "m1" :tool "memory" :command "add" :content "x"}
+                     {:id "k1" :tool "memory" :command "add"
+                      :content "x" :pinned-id "$ref:m1.data.id"
+                      :depends_on ["m1"]}]
+                    {:resolve-handler (partial stub-handler handlers)})
+          k1       (->> (vals (:waves result))
+                        (mapcat :results)
+                        (filter #(= "k1" (:id %)))
+                        first)]
+      (is (false? (:success k1)))
+      (is (re-find #"unparsed" (or (:error k1) "")))
+      (is (not-any? #(and (string? %) (re-find #"^\$ref:" %)) @seen)
+          "no handler ever received the literal $ref string"))))
+
 (deftest nil-exec-result-normalized-to-failed
   (testing "nil entries returned by the wave executor become failed op-results
             keyed by the input op's id (no :total collision)"

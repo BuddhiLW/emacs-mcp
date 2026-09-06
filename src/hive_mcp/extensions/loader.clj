@@ -205,6 +205,23 @@
       :error (log/error "Addon mount lifecycle" payload)
       (log/info "Addon mount lifecycle" payload))))
 
+(defn- install-license-gate!
+  "Install the gate mount-compose consults for :proprietary specs.
+
+   Config :addons {:license-gate :open|:closed}, default :open.
+   :open permits every spec; :closed leaves hive-addon's own closed default,
+   which refuses them. Rationale: hive memory 20260906014652-0c7c1be6."
+  [svc-cfg]
+  (let [mode (get svc-cfg :license-gate :open)]
+    (when-let [install! (try-resolve 'hive-addon.mount.entitlement/install-gate!)]
+      (if (= :closed mode)
+        (when-let [reset! (try-resolve 'hive-addon.mount.entitlement/reset-gate!)]
+          (reset!)
+          (log/info "Licence gate: CLOSED, proprietary addons will be refused"))
+        (when-let [open (try-resolve 'hive-addon.mount.entitlement/open-gate)]
+          (install! (deref open))
+          (log/info "Licence gate: open, this host runs its own artifacts"))))))
+
 (defn load-extensions-via-mount!
   "Mount manifest-discovered addons through hive-addon.mount.compose (MQ-ADOPT).
 
@@ -229,6 +246,7 @@
                    (contains? #{"1" "true"} env-flag)
                    (boolean (:mount-compose? svc-cfg)))]
     (when enabled?
+      (install-license-gate! svc-cfg)
       (if-let [compose (try-resolve 'hive-addon.mount.compose/compose-classpath!)]
         (if-let [host-ctor (try-resolve 'hive-mcp.extensions.mount-host/addon-registry-host)]
           (let [opts   (cond-> {:resolve-config manifest/prepare-config

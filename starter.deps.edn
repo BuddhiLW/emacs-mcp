@@ -17,6 +17,11 @@
   ;; Emacs vessel + CIDER bridge.
   io.github.hive-agi/hive-emacs {:mvn/version "0.5.4"}
   ;; tmux vessel: IVessel + ITerminalAddon, panes through libtmux.
+  ;; Needs tmux, Python 3 and the libtmux package on the interpreter
+  ;; libpython-clj binds; without them it stays dormant like any other vessel
+  ;; whose host is unreachable. 0.1.1 is the first release whose manifest
+  ;; :addon/init-fn is a constructor returning an IAddon, so it is the first
+  ;; that mount-compose can mount at all.
   io.github.hive-agi/hive-tmux {:mvn/version "0.1.1"}
   ;; Claude vessel: terminal + headless backends.
   io.github.hive-agi/hive-claude {:mvn/version "0.1.19"}

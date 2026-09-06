@@ -77,6 +77,8 @@
      :new-project-id - Target project-id (required)
      :dry-run        - Preview without modifying (default: false)
 
+   Resolving zero targets is an ERROR, not a successful no-op.
+
    Returns:
      {:migrated N :ids [...] :from old-project :to new-project
       :kg-edges-migrated N :skipped-ids [...] :errors [...]}"
@@ -105,84 +107,93 @@
         (let [store          (mem-proto/get-store)
               old-scope-tag  (scope/make-scope-tag old-project-id)
               new-scope-tag  (scope/make-scope-tag new-project-id)
-              ;; Resolve target entries — by IDs or by tag filter
+              ;; Resolve target entries — by IDs or by tag filter.
+              ;; The tag goes INTO the query: a store may refuse to enumerate a
+              ;; whole project from :project-id alone, and post-filtering that
+              ;; empty seq cannot tell an unsupported query from a real miss.
               target-ids     (if (seq entry-ids)
                                (vec entry-ids)
-                               (let [all-entries (with-resilience
-                                                   (mem-proto/query-entries
-                                                    store {:project-id old-project-id
-                                                           :limit 10000}))]
-                                 (->> all-entries
+                               (let [matched (with-resilience
+                                               (mem-proto/query-entries
+                                                store {:project-id old-project-id
+                                                       :tags [tag-filter]
+                                                       :limit 10000}))]
+                                 (->> matched
                                       (filter (fn [e]
                                                 (some #(= % tag-filter) (:tags e))))
-                                      (mapv :id))))
-              ;; Fetch each entry, partition into found/not-found
-              resolved       (reduce
-                              (fn [acc eid]
-                                (if-let [entry (with-resilience
-                                                 (mem-proto/get-entry store eid))]
-                                  (update acc :found conj entry)
-                                  (update acc :not-found conj eid)))
-                              {:found [] :not-found []}
-                              target-ids)
-              found-entries  (:found resolved)
-              skipped-ids    (:not-found resolved)
-              migrated-ids   (atom [])
-              errors         (atom [])]
+                                      (mapv :id))))]
+          (if (empty? target-ids)
+            (mcp-error (str "tag-filter \"" tag-filter "\" matched no entries in project \""
+                            old-project-id "\". Nothing was migrated. Tags match exactly — "
+                            "no prefix or substring. Check what the tag actually selects with: "
+                            "memory query :tags [\"" tag-filter "\"] :project-id \"" old-project-id "\""))
+            (let [;; Fetch each entry, partition into found/not-found
+                  resolved       (reduce
+                                  (fn [acc eid]
+                                    (if-let [entry (with-resilience
+                                                     (mem-proto/get-entry store eid))]
+                                      (update acc :found conj entry)
+                                      (update acc :not-found conj eid)))
+                                  {:found [] :not-found []}
+                                  target-ids)
+                  found-entries  (:found resolved)
+                  skipped-ids    (:not-found resolved)
+                  migrated-ids   (atom [])
+                  errors         (atom [])]
 
-          (when-not dry-run
-            (doseq [entry found-entries]
-              (try
-                (let [new-tags (scope/retag-scope (:tags entry)
-                                                  old-scope-tag new-scope-tag)]
-                  (with-resilience
-                    (mem-proto/update-entry! store (:id entry)
-                                             {:project-id new-project-id
-                                              :tags new-tags}))
-                  ;; Temporal audit trail
-                  (temporal/record-mutation-silent!
-                   {:entry-id       (:id entry)
-                    :op             :migrate-scoped
-                    :data           {:old-project-id old-project-id
-                                     :new-project-id new-project-id}
-                    :previous-value {:project-id old-project-id}
-                    :project-id     new-project-id})
-                  (swap! migrated-ids conj (:id entry)))
-                (catch Exception e
-                  (log/warn "Failed to migrate entry" (:id entry) ":" (.getMessage e))
-                  (swap! errors conj {:id (:id entry) :error (.getMessage e)})))))
+              (when-not dry-run
+                (doseq [entry found-entries]
+                  (try
+                    (let [new-tags (scope/retag-scope (:tags entry)
+                                                      old-scope-tag new-scope-tag)]
+                      (with-resilience
+                        (mem-proto/update-entry! store (:id entry)
+                                                 {:project-id new-project-id
+                                                  :tags new-tags}))
+                      ;; Temporal audit trail
+                      (temporal/record-mutation-silent!
+                       {:entry-id       (:id entry)
+                        :op             :migrate-scoped
+                        :data           {:old-project-id old-project-id
+                                         :new-project-id new-project-id}
+                        :previous-value {:project-id old-project-id}
+                        :project-id     new-project-id})
+                      (swap! migrated-ids conj (:id entry)))
+                    (catch Exception e
+                      (log/warn "Failed to migrate entry" (:id entry) ":" (.getMessage e))
+                      (swap! errors conj {:id (:id entry) :error (.getMessage e)})))))
 
-          ;; Selectively migrate KG edge scopes for edges between migrated entries
-          (let [migrated-set    (set (if dry-run (mapv :id found-entries) @migrated-ids))
-                kg-edge-result  (if (or dry-run (< (count migrated-set) 2))
-                                  {:migrated 0}
-                                  (try
-                                    (let [edges    (kg-edges/find-edges-between migrated-set)
-                                          ;; Only migrate edges scoped to old-project-id
-                                          to-update (filter #(= old-project-id (:kg-edge/scope %))
-                                                            edges)
-                                          tx-data   (vec (for [edge to-update
-                                                               :let [eid (kg-conn/entid
-                                                                          [:kg-edge/id (:kg-edge/id edge)])]
-                                                               :when eid]
-                                                           [:db/add eid :kg-edge/scope new-project-id]))]
-                                      (when (seq tx-data)
-                                        (kg-conn/transact! tx-data))
-                                      {:migrated (count tx-data)})
-                                    (catch Exception e
-                                      (log/warn "KG edge scope migration failed (non-blocking):"
-                                                (.getMessage e))
-                                      {:migrated 0 :error (.getMessage e)})))]
+              ;; Selectively migrate KG edge scopes for edges between migrated entries
+              (let [migrated-set    (set (if dry-run (mapv :id found-entries) @migrated-ids))
+                    kg-edge-result  (if (or dry-run (< (count migrated-set) 2))
+                                      {:migrated 0}
+                                      (try
+                                        (let [edges    (kg-edges/find-edges-between migrated-set)
+                                              ;; Only migrate edges scoped to old-project-id
+                                              to-update (filter #(= old-project-id (:kg-edge/scope %))
+                                                                edges)
+                                              tx-data   (vec (for [edge to-update
+                                                                   :let [eid (kg-conn/entid
+                                                                              [:kg-edge/id (:kg-edge/id edge)])]
+                                                                   :when eid]
+                                                               [:db/add eid :kg-edge/scope new-project-id]))]
+                                          (when (seq tx-data)
+                                            (kg-conn/transact! tx-data))
+                                          {:migrated (count tx-data)})
+                                        (catch Exception e
+                                          (log/warn "KG edge scope migration failed (non-blocking):"
+                                                    (.getMessage e))
+                                          {:migrated 0 :error (.getMessage e)})))]
 
-            (mcp-json {:migrated          (if dry-run (count found-entries) (count @migrated-ids))
-                       :ids               (if dry-run (mapv :id found-entries) @migrated-ids)
-                       :skipped-ids       skipped-ids
-                       :errors            @errors
-                       :kg-edges-migrated (:migrated kg-edge-result)
-                       :kg-error          (:error kg-edge-result)
-                       :dry-run           dry-run
-                       :from              old-project-id
-                       :to                new-project-id})))))))
+                (mcp-json {:migrated          (if dry-run (count found-entries) (count @migrated-ids))
+                           :ids               (if dry-run (mapv :id found-entries) @migrated-ids)
+                           :skipped-ids       skipped-ids
+                           :errors            @errors
+                           :kg-edges-migrated (:migrated kg-edge-result)
+                           :kg-error          (:error kg-edge-result)
+                           :dry-run           dry-run
+                           :from              old-project-id
+                           :to                new-project-id})))))))))
 
 (defn handle-rename-project
   "Unified rename-project orchestrating Chroma, KG, .edn, and config migration."

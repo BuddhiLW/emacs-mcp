@@ -25,7 +25,8 @@
             [hive-mcp.extensions.registry :as ext]
             [hive-mcp.extensions.delegate :refer [delegate-or-noop]]
             [taoensso.timbre :as log]
-            [hive-mcp.dsl.param-domain :as pd]))
+            [hive-mcp.dsl.param-domain :as pd]
+            [hive.events.multi :as ev-multi]))
 
 ;; Copyright (C) 2026 Pedro Gomes Branquinho (BuddhiLW) <pedrogbranquinho@gmail.com>
 ;;
@@ -205,9 +206,25 @@
           ops)))
 
 (defn- detect-cycles
-  "Delegate to extension for cycle detection."
+  "Cycle errors for OPS, empty when acyclic. Delegates to the :bx/h extension
+   when one is registered; otherwise uses hive.events.multi/validate-ops and
+   keeps only its circular-dependency findings, since the other checks it
+   makes are already made here.
+
+   The fallback reports cycles. Returning [] unconditionally let a genuine
+   x <-> y cycle validate as {:valid true}.
+
+   Staged, not exhaustive: validate-ops short-circuits on its first error
+   class, so ops that are still missing :tool report that instead of the
+   cycle. The structural checks beside this one catch those, and the cycle
+   surfaces on the next pass once the ops are well-formed."
   [ops]
-  (delegate-or-noop :bx/h [] [ops]))
+  (if-let [f (ext/get-extension :bx/h)]
+    (f ops)
+    (let [{:keys [valid errors]} (ev-multi/validate-ops ops)]
+      (if valid
+        []
+        (into [] (filter #(str/includes? (str %) "Circular dependency")) errors)))))
 
 (defn validate-ops
   "Validate an operations vector.
@@ -229,10 +246,17 @@
 ;; =============================================================================
 
 (defn assign-waves
-  "Assign operations to execution waves. Delegates to extension.
-   Noop: all ops assigned to wave 1 (sequential execution)."
+  "Assign operations to execution waves, so independent ops share a wave and
+   dependents land in later ones. Delegates to the :bx/i extension when one is
+   registered; otherwise uses the in-core Kahn sort from hive.events.multi.
+
+   The fallback is a real topological sort, NOT a flat wave. Putting every op
+   in wave 1 makes check-deps-satisfied, which only consults prior-wave
+   results, fail every dependent op."
   [ops]
-  (delegate-or-noop :bx/i (mapv #(assoc % :wave 1) ops) [ops]))
+  (if-let [f (ext/get-extension :bx/i)]
+    (f ops)
+    (ev-multi/assign-waves ops)))
 
 ;; =============================================================================
 ;; Single-op execution (handler injected)
@@ -299,7 +323,10 @@
    walked — a `$ref:` inside prose is quotation. A ref is `:broken` when:
 
      - the source op-id is missing from results (`ref-not-found`), OR
-     - the resolved value is literally `nil`.
+     - the resolved value is literally `nil`, OR
+     - no parser answered for it (`:unparsed`): without a `:bx/a` extension
+       the host cannot resolve any ref, and the literal string must not
+       reach a handler as a value.
 
    Returns `nil` when all refs OK (or no refs); otherwise
    `{:broken-refs [{:ref str :reason kw} ...]}`."
@@ -308,13 +335,18 @@
         walk! (fn walk! [v]
                 (cond
                   (ref? v)
-                  (when-let [parsed (parse-ref v)]
+                  (if-let [parsed (parse-ref v)]
                     (let [resolved (resolve-ref parsed results-by-id)]
                       (cond
                         (identical? resolved ref-not-found)
                         (swap! refs conj {:ref v :reason :unresolved})
                         (nil? resolved)
-                        (swap! refs conj {:ref v :reason :nil-resolved}))))
+                        (swap! refs conj {:ref v :reason :nil-resolved})))
+                    ;; No parser answered (no :bx/a extension, or a malformed
+                    ;; ref). A ref that cannot be parsed cannot be resolved
+                    ;; either, so the literal "$ref:..." string would reach the
+                    ;; handler as a value. That is a broken ref, not a pass-through.
+                    (swap! refs conj {:ref v :reason :unparsed}))
 
                   (map? v)
                   (run! walk! (vals v))

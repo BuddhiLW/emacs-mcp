@@ -158,9 +158,12 @@
                                                 {:addon id :tools (keys schema-exts)})))
                     ;; Register extensions from init result metadata (opaque fn registry)
                                  (when-let [exts (:extensions (:metadata result))]
-                                   (ext/register-many! exts)
-                                   (log/debug "Addon registered extensions"
-                                              {:addon id :keys (keys exts)}))
+                                   (if (map? exts)
+                                     (do (ext/register-many! exts)
+                                         (log/debug "Addon registered extensions"
+                                                    {:addon id :keys (keys exts)}))
+                                     (log/warn "Addon init metadata :extensions is not a {keyword fn} map; nothing registered"
+                                               {:addon id :type (type exts)})))
                     ;; Register tools
                                  (doseq [t (proto/tools addon)]
                                    (ext/register-tool! t))
@@ -226,8 +229,9 @@
             (r/try-effect* :addon/shutdown-exception
               ;; Deregister extensions stored during init
                            (when-let [exts (:extensions (:metadata init-result))]
-                             (doseq [k (keys exts)] (ext/deregister! k))
-                             (log/debug "Addon deregistered extensions" {:addon id :keys (keys exts)}))
+                             (when (map? exts)
+                               (doseq [k (keys exts)] (ext/deregister! k))
+                               (log/debug "Addon deregistered extensions" {:addon id :keys (keys exts)})))
               ;; Deregister hooks (only those owned by this addon)
                            (when (seq hook-keys)
                              (doseq [k hook-keys]

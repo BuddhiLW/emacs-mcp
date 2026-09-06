@@ -190,6 +190,53 @@
       (verdict :warn (str (count rows) " manifest(s) resolve; ctor return type is a boot claim: "
                           (str/join ", " (map :id rows)))))))
 
+(defn- manifest-declarations
+  "Every manifest must STATE :addon/maturity and :addon/trust-class, and the
+   trust class must agree with where the artifact is published.
+
+   Both fields are schema-optional with a permissive default, so an omission
+   VALIDATES and then reads as the safe-looking answer. That is exactly how
+   the licence gate came to be bypassed fleet-wide: an absent
+   :addon/trust-class defaults to :foss, so hive-addon.mount.entitlement/gated?
+   answered false for every addon and the closed gate was never consulted.
+   Measuring the field's presence is the only thing that catches it."
+  [facts]
+  (let [vedn (:version.edn facts)
+        rows (for [m (:manifests facts)
+                   :let [manifest (read-edn m)]]
+               {:id (:addon/id manifest)
+                :status (:addon/maturity manifest)
+                :trust (:addon/trust-class manifest)})
+        undeclared (remove #(and (:status %) (:trust %)) rows)
+        expected (case (:publish vedn)
+                   :gitea :proprietary
+                   :clojars :foss
+                   nil)
+        mismatched (when expected (remove #(= expected (:trust %)) rows))]
+    (cond
+      (seq undeclared)
+      (verdict :fail (str "manifest omits :addon/maturity or :addon/trust-class: "
+                          (str/join ", " (map :id undeclared))))
+
+      (seq mismatched)
+      (verdict :fail (str "publish " (:publish vedn) " implies :addon/trust-class "
+                          expected ", manifest declares: "
+                          (str/join ", " (map #(str (:id %) "=" (pr-str (:trust %)))
+                                              mismatched))))
+
+      (nil? expected)
+      (verdict :warn (str "declared, but version.edn names no :publish target to "
+                          "cross-check the trust class against: "
+                          (str/join ", " (map #(str (:id %) " " (:status %)
+                                                    "/" (:trust %))
+                                              rows))))
+
+      :else
+      (verdict :pass (str (count rows) " manifest(s) declare maturity + trust-class: "
+                          (str/join ", " (map #(str (:id %) " " (:status %)
+                                                    "/" (:trust %))
+                                              rows)))))))
+
 (def ^:private hard-host-ref
   "A hive-mcp qualified symbol NOT preceded by a quote. A quoted symbol handed
    to requiring-resolve is the blessed soft-resolution seam; an unquoted one is
@@ -312,6 +359,7 @@
    repo that ships no addon is not failed for shipping no manifest."
   [{:id :packaging      :applies? (comp seq :manifests)      :run packaging}
    {:id :mount-contract :applies? (comp seq :manifests)      :run mount-contract}
+   {:id :declarations   :applies? (comp seq :manifests)      :run manifest-declarations}
    {:id :host-coupling  :applies? (comp seq :manifests)      :run host-coupling}
    {:id :version-truth  :applies? :version.edn               :run version-truth}
    {:id :ci             :applies? (constantly true)          :run ci}
