@@ -33,6 +33,53 @@ under way to move them behind ports into sibling libraries
 ([DEVINCULATE-DATALOG]); when they leave the default tree, that is a major
 bump, not a quiet minor, because a consumer's storage would change under it.
 
+## [1.1.1]
+
+A patch release. The tool surface, the manifest format and the ports are
+where 1.1.0 left them; one existing optional argument gained a second reader,
+and two defaults that were quietly costing a core or a model load are gone.
+
+### Fixed
+
+- A `git` or `magit` batch-commit operation whose `files` was a
+  space-separated string staged nothing and then committed whatever the index
+  already held under that operation's message. `files` now normalizes to
+  `:all` or a vector of paths (a list, a single path, or a whitespace-separated
+  string), and a commit that names paths stages them and verifies the
+  restricted index first: a path absent from the working tree, an empty
+  `git diff --cached --name-only` for those paths, or any unreadable verdict
+  fails the operation instead of falling through to the commit. The `files`
+  schema property is spliced from one definition in `tools.core` into both
+  tool-defs, so `git` and `magit` cannot disagree about whether a list is
+  accepted.
+- The lsp-sidecar image and `analyze.sh` run git non-interactively
+  (`GIT_TERMINAL_PROMPT=0`, SSH in batch mode with a bounded connect timeout),
+  so an uncached or private `:git/url` dependency met during `clojure -Spath`
+  fails fast instead of blocking the sidecar on a credential, host-key or
+  passphrase prompt.
+
+### Changed
+
+- The `remote` argument, which `fetch` already honoured, now also names the
+  remote `push` pushes the current branch to. Absent or blank it contributes
+  nothing, and the elisp emitted for a push is byte-identical to before.
+- Datalevin-backed slots are opened with `{:background-sampling? false}`. The
+  sampler picked a random attribute every 10 s and rescanned it whenever a
+  carto scan moved its count by 5%, pinning a core for the length of the
+  scan; the query planner samples lazily on first use, so queries are
+  unaffected.
+- Every legacy Ollama embedding default (config merge, server init,
+  `ollama-config`) named `nomic-embed-text`, which configured the memory
+  collection with a 768-dimension model at boot and loaded nomic into Ollama
+  next to the `qwen3-embedding:4b` lane that actually serves memory. The
+  defaults now name `qwen3-embedding:4b`, and the Ollama model table carries
+  its 2560 dimensions. A deployment that relied on the old implicit default
+  keeps it by setting `embeddings.ollama.model` explicitly.
+- The presets gain the v2 axes (carto-first, commit-hygiene, cppb-stratified,
+  ddd-ports, gitops-safety, malli-first, memory-crystallize, ocp-data,
+  repl-first, subtask-worker, trifecta), each stating one discipline, with
+  `ROLES-v2.md` naming the bundles.
+
 ## [1.1.0]
 
 The first release after the seam froze. Nothing here moves the tool surface,
@@ -228,7 +275,8 @@ pressure to move and the var cannot be removed without breaking the host.
 
 - The Docker image runs the server from source; there is no uber task.
 
-[Unreleased]: https://github.com/hive-agi/hive-mcp/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/hive-agi/hive-mcp/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/hive-agi/hive-mcp/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/hive-agi/hive-mcp/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/hive-agi/hive-mcp/compare/v0.22.0...v1.0.0
 [0.22.0]: https://github.com/hive-agi/hive-mcp/compare/v0.21.1...v0.22.0
