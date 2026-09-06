@@ -46,11 +46,12 @@
 
 (def ^:private ollama-models
   "Ollama embedding models with dimensions."
-  {"nomic-embed-text" 768
+  {"qwen3-embedding:4b" 2560
+   "qwen3-embedding:0.6b" 1024
+   "nomic-embed-text" 768
    "mxbai-embed-large" 1024
    "all-minilm" 384
-   "snowflake-arctic-embed" 1024
-   "qwen3-embedding:0.6b" 1024})
+   "snowflake-arctic-embed" 1024})
 
 (def ^:private openai-models
   "OpenAI embedding models with dimensions."
@@ -89,13 +90,14 @@
   "Create Ollama embedding configuration.
 
    Options:
-     :model - Embedding model (default: nomic-embed-text)
+     :model - Embedding model (default: qwen3-embedding:4b, the memory lane's
+              model; nomic-embed-text is retired)
      :host - Ollama server URL (default: from OLLAMA_HOST or localhost)
 
    Returns EmbeddingConfig record."
   ([] (ollama-config {}))
   ([{:keys [model host]
-     :or {model "nomic-embed-text"}}]
+     :or {model "qwen3-embedding:4b"}}]
    (let [host (or host
                   (global-config/get-service-value :ollama :host
                                                    :env "OLLAMA_HOST"

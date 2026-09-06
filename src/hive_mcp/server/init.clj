@@ -112,7 +112,7 @@
                                          (global-config/get-service-value :ollama :host
                                                                           :env "OLLAMA_HOST"
                                                                           :default "http://localhost:11434"))
-                         ollama-model (or (:model ollama-cfg) "nomic-embed-text")
+                         ollama-model (or (:model ollama-cfg) "qwen3-embedding:4b")
                          openrouter-model (or (:model openrouter-cfg) "qwen/qwen3-embedding-8b")]
 
         ;; Configure per-collection embedding providers

@@ -75,7 +75,7 @@
                      ;;            :port 50051}
                      }}
    :embeddings {:ollama {:host "http://localhost:11434"
-                         :model "nomic-embed-text"}
+                         :model "qwen3-embedding:4b"}
                 :openrouter {:model "qwen/qwen3-embedding-8b"}}
    :embedder {:default :ollama-qwen3-4b
               ;; Memory types that are structurally addressed (fetched by
@@ -92,7 +92,7 @@
                                             :dimension 2560
                                             :host "http://localhost:11434"}}}
    :services {:chroma {:mode :local :host "localhost" :port 8000}
-              :ollama {:mode :local :host "http://localhost:11434" :model "nomic-embed-text"}
+              :ollama {:mode :local :host "http://localhost:11434" :model "qwen3-embedding:4b"}
               :datahike {:mode :local :path "data/kg"}
               :nrepl {:mode :local :port 7910}
               :prometheus {:mode :local :url "http://localhost:9090"}
