@@ -11,7 +11,9 @@ on:
       - 'resources/**'
       - 'deps.edn'
       - 'VERSION'
-      - '.github/workflows/release.yml'
+  # A change to this file alone must not fire a release: VERSION is already
+  # published, so the run could only end red. Re-run a release by hand instead.
+  workflow_dispatch:
 
 concurrency:
   group: release-${{ github.ref }}
@@ -37,7 +39,22 @@ jobs:
       - name: Test
         run: clojure -M:test-unit
 
+      # A published coordinate is immutable, so a version already on Clojars
+      # makes Deploy a no-op rather than a 403. The tag step below still says
+      # whether this commit is the one that shipped it.
+      - name: Already on Clojars?
+        id: published
+        run: |
+          VER=$(tr -d '[:space:]' < VERSION)
+          if curl -fsS -o /dev/null "https://repo.clojars.org/io/github/hive-agi/hive-mcp/$VER/hive-mcp-$VER.pom"; then
+            echo "hive-mcp $VER is already on Clojars; Deploy is skipped."
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy
+        if: steps.published.outputs.published != 'true'
         env:
           CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
           CLOJARS_PASSWORD: ${{ secrets.CLOJARS_PASSWORD }}
@@ -62,3 +79,25 @@ jobs:
           fi
           git tag "v$VER" "$GITHUB_SHA"
           git push origin "refs/tags/v$VER"
+
+      # The Releases page lists Release objects, not tags. The body is this
+      # version's CHANGELOG section; GitHub appends its generated notes.
+      - name: Release notes from the changelog
+        id: notes
+        run: |
+          VER=$(tr -d '[:space:]' < VERSION)
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          awk -v v="$VER" '$0 ~ "^## \\[" v "\\]" {p=1; next} /^## \[/ {p=0} p' CHANGELOG.md \
+            > "$RUNNER_TEMP/release-notes.md"
+          if [ ! -s "$RUNNER_TEMP/release-notes.md" ]; then
+            echo "No CHANGELOG section for $VER; see the generated notes below." \
+              > "$RUNNER_TEMP/release-notes.md"
+          fi
+
+      - name: GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.notes.outputs.version }}
+          name: v${{ steps.notes.outputs.version }}
+          body_path: ${{ runner.temp }}/release-notes.md
+          generate_release_notes: true
