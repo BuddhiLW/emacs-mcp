@@ -83,8 +83,8 @@
     (let [cfg (config/ollama-config)]
       (is (config/valid-config? cfg))
       (is (= :ollama (:provider-type cfg)))
-      (is (= "nomic-embed-text" (:model cfg)))
-      (is (= 768 (:dimension cfg))))))
+      (is (= "qwen3-embedding:4b" (:model cfg)))
+      (is (= 2560 (:dimension cfg))))))
 
 (deftest test-config-ollama-custom-model
   (testing "Ollama config with custom model"
@@ -118,7 +118,7 @@
 (deftest test-config-describe
   (testing "Human-readable config description"
     (let [cfg (config/ollama-config)]
-      (is (= "ollama/nomic-embed-text (768 dims)" (config/describe cfg))))))
+      (is (= "ollama/qwen3-embedding:4b (2560 dims)" (config/describe cfg))))))
 
 ;; =============================================================================
 ;; Test: Per-Collection Configuration
@@ -185,7 +185,7 @@
 (deftest test-get-dimension-for-collection
   (testing "Get dimension for configured collection"
     (service/configure-collection! "dim-test" (config/ollama-config))
-    (is (= 768 (service/get-dimension-for "dim-test"))))
+    (is (= 2560 (service/get-dimension-for "dim-test"))))
 
   (testing "Get dimension for unconfigured collection (fallback)"
     ;; Fallback to global MockEmbedder (384)
@@ -196,14 +196,14 @@
     (service/configure-collection! "embed-test" (config/ollama-config))
     (let [embedding (service/embed-for-collection "embed-test" "test text")]
       (is (vector? embedding))
-      (is (= 768 (count embedding))))))
+      (is (= 2560 (count embedding))))))
 
 (deftest test-embed-batch-for-collection
   (testing "Batch embed using collection's provider"
     (service/configure-collection! "batch-test" (config/ollama-config))
     (let [embeddings (service/embed-batch-for-collection "batch-test" ["one" "two" "three"])]
       (is (= 3 (count embeddings)))
-      (is (every? #(= 768 (count %)) embeddings)))))
+      (is (every? #(= 2560 (count %)) embeddings)))))
 
 ;; =============================================================================
 ;; Test: Provider Availability
@@ -224,7 +224,7 @@
     (let [status (service/collection-embedding-status "status-test")]
       (is (= "status-test" (:collection status)))
       (is (:has-config? status))
-      (is (= 768 (:dimension status)))
+      (is (= 2560 (:dimension status)))
       (is (:provider-available? status)))))
 
 ;; =============================================================================
@@ -274,7 +274,7 @@
   (testing "chroma/embed-text-for uses collection's provider"
     (service/configure-collection! "embed-via-chroma" (config/ollama-config))
     (let [embedding (chroma/embed-text-for "embed-via-chroma" "test")]
-      (is (= 768 (count embedding))))))
+      (is (= 2560 (count embedding))))))
 
 (deftest test-chroma-get-dimension-for
   (testing "chroma/get-dimension-for returns collection's dimension"
@@ -292,7 +292,7 @@
     (service/configure-collection! "hive-mcp-presets" (config/ollama-config {:model "mxbai-embed-large"}))
 
     ;; Verify different dimensions from config (not from actual embedding)
-    (is (= 768 (:dimension (service/get-collection-config "hive-mcp-memory"))))
+    (is (= 2560 (:dimension (service/get-collection-config "hive-mcp-memory"))))
     (is (= 1024 (:dimension (service/get-collection-config "hive-mcp-presets")))))
 
   (testing "Unconfigured collections use fallback with consistent dimension"

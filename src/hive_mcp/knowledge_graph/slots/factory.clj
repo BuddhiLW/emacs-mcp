@@ -47,12 +47,17 @@
 
 (defn- datalevin-opts
   "Host-owned injection for the domain-agnostic datalevin sibling. Caller opts
-   win over resolved config defaults."
+   win over resolved config defaults.
+
+   `:conn-opts` turns off datalevin's background statistics sampler: the
+   sampler rescans whole attributes whenever a scan moves their counts, and
+   the query planner samples lazily on first use anyway."
   [opts]
   (let [cfg (let [res (dlc/resolve-DatalevinKGConfig)] (if (r/ok? res) (:ok res) {}))]
     (merge {:db-path     (:db-path cfg)
             :cache-limit (:cache-limit cfg)
-            :base-schema (schema/full-schema)}
+            :base-schema (schema/full-schema)
+            :conn-opts   {:background-sampling? false}}
            opts)))
 
 (defn- datahike-opts
