@@ -250,6 +250,7 @@
       (is (map? (:embeddings cfg)))
       (is (map? (get-in cfg [:embeddings :ollama])))
       (is (= "http://localhost:11434" (get-in cfg [:embeddings :ollama :host])))
-      (is (= "nomic-embed-text" (get-in cfg [:embeddings :ollama :model])))
+      (is (= "qwen3-embedding:4b" (get-in cfg [:embeddings :ollama :model]))
+          "the memory lane's model; nomic-embed-text is retired")
       (is (map? (get-in cfg [:embeddings :openrouter])))
       (is (= "qwen/qwen3-embedding-8b" (get-in cfg [:embeddings :openrouter :model]))))))
