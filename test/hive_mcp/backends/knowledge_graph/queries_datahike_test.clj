@@ -205,19 +205,14 @@
 
 (deftest flush-pending-sentinel-contract-test
   (testing "flush-pending! is the sibling-owned drain sentinel"
-    ;; This test documents the coordination contract: when sibling task
-    ;; 20260404134936 lands, resolve returns the real var and the stub is
-    ;; never reached. Until then, the stub throws `NotImplemented` so CI
-    ;; surfaces the coordination gap rather than letting downstream tests
-    ;; pass on a racy sleep.
+    ;; Sibling task 20260404134936 shipped connection/flush-pending!. Every
+    ;; other test in this namespace drains through it before asserting, so
+    ;; the var resolving to a fn is the contract they all stand on. The
+    ;; pre-shipping branch, which called a stub this file never defined,
+    ;; had been unreachable since the var landed.
     (let [resolved (resolve 'hive-mcp.knowledge-graph.connection/flush-pending!)]
-      (if resolved
-        (is (some? resolved)
-            "sibling task shipped flush-pending! — contract fulfilled")
-        (is (thrown-with-msg?
-             clojure.lang.ExceptionInfo #"NotImplemented — expected from sibling task"
-             (flush-pending-stub!))
-            "stub must throw until sibling task 20260404134936 lands")))))
+      (is (some? resolved) "connection/flush-pending! resolves")
+      (is (fn? @resolved) "and is a fn, not a placeholder value"))))
 
 ;; =============================================================================
 ;; Empty graph [datahike]
