@@ -1,9 +1,13 @@
-;; "testing" ships shared TEST-SUPPORT namespaces (store fixtures, the recall
-;; golden corpus). They live on :paths, not under test/, because consumers need
-;; them and a jar carries :paths only. Kept in step with :src-dirs in
-;; version.edn: a path listed in one and not the other is on the classpath here
-;; and absent from the artifact, which fails only in the consumer.
-{:paths ["src" "resources" "testing"]
+;; Shared TEST-SUPPORT namespaces (hive-mcp.knowledge-graph.store.fixtures and
+;; .harness, hive-mcp.recall.golden) live under src/, not test/: consumers such
+;; as hive-knowledge require them from the published jar, and a jar carries
+;; :paths only. :paths is kept in step with :src-dirs in version.edn.
+;;
+;; The test tree is ONE directory, test/. Suites that need a real backend
+;; driver (datahike, datalevin) sit under the namespace prefix
+;; hive-mcp.backends and are selected or excluded by that prefix; see the
+;; :test-backends alias.
+{:paths ["src" "resources"]
 
  :deps {org.clojure/clojure {:mvn/version "1.12.5"}
         org.clojure/data.json {:mvn/version "2.5.2"}
@@ -378,13 +382,15 @@
                 ;; hive-spi now lives in :deps (core nses require it) — no
                 ;; :test-alias override needed.
    ;; Backend drivers are NOT here — the default cold-CI test path is
-   ;; driver-free. Backend-coupled tests live under test-backends/ (the
-   ;; :test-backends alias) and get datalevin/datahike + the KG-store siblings
-   ;; from the user's local.deps.edn.
+   ;; driver-free. The runner REQUIRES every namespace it selects before any
+   ;; metadata filter runs, so the backend-coupled suites (namespace prefix
+   ;; hive-mcp.backends, under test/hive_mcp/backends) are kept out by
+   ;; namespace regex; the :test-backends alias selects exactly them.
    ;; KG test isolation: force ephemeral in-memory DataScript so a cold test
    ;; JVM never opens (and konserve-lock-contends) the prod datahike store.
    :jvm-opts ["-Dhive.kg.backend=datascript"]
-   :main-opts ["-m" "cognitect.test-runner"]}
+   :main-opts ["-m" "cognitect.test-runner"
+               "-r" "^(?!hive-mcp\\.backends\\.).*-test$"]}
 
   ;; CI-friendly: Run only unit tests (excludes tests requiring Emacs)
   ;; :extra-paths and :extra-deps MUST track :test. Anything :test can load, this
@@ -404,9 +410,11 @@
                 ;; must not be able to fail at load.
                 io.github.hive-agi/hive-schemas {:mvn/version "0.1.29"}}
    :jvm-opts ["-Dhive.kg.backend=datascript"]
-   :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"]
+   :main-opts ["-m" "cognitect.test-runner" "-e" ":integration"
+               "-r" "^(?!hive-mcp\\.backends\\.).*-test$"]
    :exec-fn cognitect.test-runner.api/test
-   :exec-args {:excludes [:integration]}}
+   :exec-args {:excludes [:integration]
+               :patterns ["^(?!hive-mcp\\.backends\\.).*-test$"]}}
 
   ;; Run only integration tests (requires Emacs with emacs-mcp loaded)
   :test-integration
@@ -419,9 +427,11 @@
                 ;; path, so it loads every test ns before selecting :integration.
                 io.github.hive-agi/hive-schemas {:mvn/version "0.1.29"}}
    :jvm-opts ["-Dhive.kg.backend=datascript"]
-   :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"]
+   :main-opts ["-m" "cognitect.test-runner" "-i" ":integration"
+               "-r" "^(?!hive-mcp\\.backends\\.).*-test$"]
    :exec-fn cognitect.test-runner.api/test
-   :exec-args {:includes [:integration]}}
+   :exec-args {:includes [:integration]
+               :patterns ["^(?!hive-mcp\\.backends\\.).*-test$"]}}
 
   ;; Line/form coverage over the unit gate. Composes with :test-unit rather
   ;; than replacing it, so the measured suite is the CI suite:
@@ -436,15 +446,19 @@
   {:extra-deps {cloverage/cloverage {:mvn/version "1.2.4"}}
    :main-opts ["-m" "cloverage.coverage"
                "-p" "src" "-s" "test"
+               "-x" "^(?!hive-mcp\\.backends\\.).*"
                "--text" "--no-html"]}
 
-  ;; Backend-coupled tests, classpath-isolated off the default cold-CI path.
-  ;; Compose with :test for shared infra + supply drivers via local.deps.edn:
+  ;; Backend-coupled suites: the hive-mcp.backends namespace prefix under test/.
+  ;; Compose with :test for the shared infra and supply the drivers through
+  ;; local.deps.edn; the later alias's :main-opts replace :test's, so only
+  ;; the backend suites are selected:
   ;;   clj -Sdeps "$(cat local.deps.edn)" -M:test:test-backends
   ;; Drivers (datalevin/datahike) + the KG-store siblings are NOT declared here
   ;; — the user's local.deps.edn brings whichever backend they run against.
   :test-backends
-  {:extra-paths ["test-backends"]}
+  {:main-opts ["-m" "cognitect.test-runner"
+               "-r" "^hive-mcp\\.backends\\..*-test$"]}
 
   ;; Build via hive-build (io.github.hive-agi/hive-build), the same release
   ;; path every other hive library uses. Version = the repo's VERSION file;

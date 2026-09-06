@@ -214,7 +214,7 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -232,7 +232,7 @@ services:
       - "3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/observability/grafana/provisioning:/etc/grafana/provisioning:ro
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=hivemcp
@@ -249,7 +249,7 @@ services:
     ports:
       - "3100:3100"
     volumes:
-      - ./config/loki.yml:/etc/loki/local-config.yaml:ro
+      - ./docker/observability/loki.yml:/etc/loki/local-config.yaml:ro
       - loki-data:/loki
     command: -config.file=/etc/loki/local-config.yaml
     restart: unless-stopped
@@ -259,7 +259,7 @@ services:
     image: grafana/promtail:2.9.0
     container_name: hive-mcp-promtail
     volumes:
-      - ./config/promtail.yml:/etc/promtail/config.yml:ro
+      - ./docker/observability/promtail.yml:/etc/promtail/config.yml:ro
       - ${HOME}/.config/hive-mcp:/var/log/hive-mcp:ro
     command: -config.file=/etc/promtail/config.yml
     depends_on:

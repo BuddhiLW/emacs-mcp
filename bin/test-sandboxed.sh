@@ -36,7 +36,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TEMPLATE="$PROJECT_DIR/config/test-sandbox.config.edn"
+TEMPLATE="$PROJECT_DIR/dev/test-sandbox.config.edn"
 
 die() { echo "test-sandboxed: FATAL: $*" >&2; exit 2; }
 

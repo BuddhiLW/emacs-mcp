@@ -20,10 +20,12 @@
 ;;; ============================================================
 
 (defn- file-fallback-preset
-  "Try to get a preset from file-based fallback."
+  "Try to get a preset from file-based fallback. The presets ship under
+   resources/presets, so a checkout and the unpacked image agree on the
+   default; `presets.dir` in config or HIVE_MCP_PRESETS_DIR overrides it."
   [name]
   (let [preset-dir (or (config/get-service-value :presets :dir :env "HIVE_MCP_PRESETS_DIR")
-                       (str (System/getProperty "user.dir") "/presets"))]
+                       (str (System/getProperty "user.dir") "/resources/presets"))]
     (presets/get-preset-from-file preset-dir name)))
 
 (defn- search* [{:keys [query limit category]}]
